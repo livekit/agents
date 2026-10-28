@@ -2,6 +2,9 @@ pub mod _input;
 pub mod _output;
 pub mod _pre_connect_audio;
 pub mod rooms;
+mod publication;
+#[cfg(test)]
+mod tests;
 
 use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Close, Driver, HostEvent};

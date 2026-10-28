@@ -1,13 +1,13 @@
 //! `voice/room_io/_output.py`: `_ParticipantAudioOutput`, the agent's audio on its published track,
 //! and its host object; the transcription output is [`transcription`].
 
-use crate::room_io::AudioOutputConfig;
+use crate::room_io::{AudioOutputConfig, publication::Publication};
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackFinished, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Monotone, Spawner, SpawnerExt, Ts};
+use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Spawner, SpawnerExt, Ts};
 use lk_agents_rtc::{AudioSource, PlaybackInfo, RtcRoom, frame_duration};
 use std::collections::VecDeque;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -163,8 +163,7 @@ fn playhead(info: PlaybackInfo) -> Duration {
 struct Playback {
     phase: Phase,
     paused: bool,
-    /// Frames accepted and not yet handed to the source (`_audio_buf`). Unbounded: the source's
-    /// queue is the backpressure, and dropping would cut words.
+    /// Frames accepted and not yet handed to the source. Capture waits at the configured bound.
     backlog: VecDeque<AudioFrame>,
     /// The pump holds a frame inside `capture`, so "drained" is honest.
     in_flight: bool,
@@ -179,6 +178,8 @@ struct Playback {
     bstream: AudioByteStream,
     pending: usize,
     source: Option<Arc<dyn AudioSource>>,
+    publication: Publication,
+    cleanup_finished: bool,
 }
 
 impl Playback {
@@ -207,10 +208,9 @@ struct Shared {
     state: Mutex<Playback>,
     /// One wake for every waiter; each re-checks its own condition.
     wake: Notify,
-    /// The track is published *and* a remote peer has subscribed. `_subscribed_fut`.
-    subscribed: Monotone<bool>,
     sample_rate: u32,
     num_channels: u16,
+    max_buffer_bytes: usize,
 }
 
 impl Shared {
@@ -459,7 +459,6 @@ impl Shared {
                     // A clear after everything played is still an interruption.
                     Phase::Cutting => true,
                 };
-                st.phase = Phase::Idle;
                 let run = st.ledger.report_run(playhead(info), self.clock.now(), None);
                 let played = std::mem::take(&mut st.ledger).played;
                 st.handed.clear();
@@ -470,6 +469,7 @@ impl Shared {
                     interrupted,
                     synchronized_transcript: None,
                 });
+                self.lock().phase = Phase::Idle;
                 // Idle again: held captures may retry.
                 self.wake.notify_waiters();
                 break;
@@ -514,6 +514,8 @@ impl ParticipantAudioOutput {
             bstream: AudioByteStream::new(sample_rate, num_channels, Some(sample_rate / 20), true),
             pending: 0,
             source: None,
+            publication: Publication::default(),
+            cleanup_finished: false,
         };
         Arc::new(ParticipantAudioOutput {
             room,
@@ -523,55 +525,187 @@ impl ParticipantAudioOutput {
                 tracker: Arc::new(PlaybackTracker::new()),
                 state: Mutex::new(state),
                 wake: Notify::new(),
-                subscribed: Monotone::new(false),
                 sample_rate,
                 num_channels,
+                // Leave room for a partial 50 ms frame and the next 50 ms write.
+                max_buffer_bytes: (sample_rate as usize * usize::from(num_channels) * 2)
+                    .saturating_mul(config.publish.queue_size_ms.max(100) as usize)
+                    / 1000,
             }),
             tasks: Mutex::new(Vec::new()),
             config,
         })
     }
 
-    pub async fn start(&self) -> Result<()> {
-        let pump = self.spawner.spawn_unboxed(self.shared.clone().forward_audio());
-        let watcher = self.spawner.spawn_unboxed(self.shared.clone().wait_for_playout());
-        let progress = self.spawner.spawn_unboxed(self.shared.clone().report_progress());
-        *self.tasks.lock().unwrap() = vec![pump, watcher, progress];
+    fn begin_start(&self) {
+        let mut tasks = self.tasks.lock().unwrap();
+        if self.shared.lock().publication.begin() {
+            tasks.push(self.spawner.spawn_unboxed(self.shared.clone().forward_audio()));
+            tasks.push(self.spawner.spawn_unboxed(self.shared.clone().wait_for_playout()));
+            tasks.push(self.spawner.spawn_unboxed(self.shared.clone().report_progress()));
+            let room = self.room.clone();
+            let shared = self.shared.clone();
+            let options = self.config.publish.clone();
+            // Creation belongs to the output, even when the caller abandons start(). Close drains
+            // this task before releasing its handles, so a late SID can always be unpublished.
+            tasks.push(self.spawner.spawn_unboxed(async move {
+                let (source, publication) = match room.local().publish_audio_track(options).await {
+                    Ok(published) => published,
+                    Err(error) => {
+                        shared.lock().publication.fail(error.into());
+                        shared.wake.notify_waiters();
+                        return;
+                    }
+                };
+                let adopted = {
+                    let mut state = shared.lock();
+                    if state.publication.adopt(publication.sid().clone()) {
+                        state.source = Some(source.clone());
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !adopted {
+                    retire_publication(room.as_ref(), source.as_ref(), publication.sid()).await;
+                    shared.lock().publication.creation_retired();
+                    shared.wake.notify_waiters();
+                    return;
+                }
+                shared.wake.notify_waiters();
+                match publication.wait_for_subscription().await {
+                    Ok(()) => shared.lock().publication.ready(),
+                    Err(error) => shared.lock().publication.fail(error.into()),
+                }
+                shared.wake.notify_waiters();
+            }));
+        }
+    }
 
-        let (source, publication) =
-            match self.room.local().publish_audio_track(self.config.publish.clone()).await {
-                Ok(published) => published,
-                Err(e) => {
-                    log::warn!(target: "livekit.agents", error = e.to_string().as_str();
-                        "failed to publish the agent's audio track");
-                    return Err(e.into());
+    pub async fn start(&self) -> Result<()> {
+        self.begin_start();
+        self.shared.wait_until(|s| s.publication.outcome().is_some()).await;
+        self.shared.lock().publication.outcome().expect("readiness settled")
+    }
+
+    async fn capture_chunk(&self, frame: &AudioFrame) -> Result<()> {
+        self.shared.wait_until(|s| s.publication.outcome().is_some()).await;
+        self.shared.lock().publication.outcome().expect("readiness settled")?;
+        loop {
+            let parked = self.shared.wake.notified();
+            tokio::pin!(parked);
+            parked.as_mut().enable();
+            let queued = {
+                let mut st = self.shared.lock();
+                if st.closed {
+                    return Err(lk_agents_abi::voice::io::IoError::Rtc(
+                        "room audio output is closed".into(),
+                    ));
+                }
+                match st.phase {
+                    Phase::Idle | Phase::Capturing => {
+                        let buffered = st.pending
+                            + st.backlog.iter().map(|frame| frame.data.len()).sum::<usize>();
+                        if frame.data.len() <= self.shared.max_buffer_bytes.saturating_sub(buffered)
+                        {
+                            st.phase = Phase::Capturing;
+                            Some(self.shared.enqueue(&mut st, frame))
+                        } else {
+                            None
+                        }
+                    }
+                    // Letting the frame in would land its playout in the previous segment's window:
+                    // held until the watcher finishes that segment.
+                    Phase::Flushed | Phase::Cutting => None,
                 }
             };
-        self.shared.lock().source = Some(source);
-
-        publication.wait_for_subscription().await?;
-        self.shared.subscribed.set(true);
-        Ok(())
+            match queued {
+                Some(woke) => {
+                    if woke {
+                        self.shared.wake.notify_waiters();
+                    }
+                    return Ok(());
+                }
+                None => parked.await,
+            }
+        }
     }
 
     pub async fn aclose(&self) {
-        let src = {
-            let mut st = self.shared.lock();
-            st.phase = Phase::Idle;
-            st.paused = false;
-            st.discard_backlog();
-            st.closed = true;
-            st.handed.clear();
-            st.source.clone()
+        let (first, captured) = {
+            let mut state = self.shared.lock();
+            let first = !state.closed;
+            let captured = state.phase != Phase::Idle;
+            state.closed = true;
+            state.publication.close();
+            state.phase = Phase::Idle;
+            state.paused = false;
+            state.discard_backlog();
+            state.handed.clear();
+            state.bstream.clear();
+            state.pending = 0;
+            (first, captured)
         };
         self.shared.wake.notify_waiters();
-        if let Some(src) = src {
-            let _ = src.close().await;
+        if first {
+            // Stop frame/progress producers before the terminal playback event. Creation keeps its
+            // separate obligation to deliver or retire the track, even if start() was cancelled.
+            {
+                let mut tasks = self.tasks.lock().unwrap();
+                let workers = tasks.len().min(3);
+                for handle in tasks.drain(..workers) {
+                    handle.abort();
+                }
+            }
+            let shared = self.shared.clone();
+            let room = self.room.clone();
+            self.spawner.spawn_unboxed(async move {
+                shared.wait_until(|s| !s.publication.creating()).await;
+                let (source, sid) = {
+                    let mut state = shared.lock();
+                    (state.source.take(), state.publication.retire())
+                };
+                if let Some(source) = source {
+                    if captured {
+                        shared.report(shared.clear_source(source.as_ref(), false).0);
+                    }
+                    if let Some(sid) = sid {
+                        retire_publication(room.as_ref(), source.as_ref(), &sid).await;
+                    } else {
+                        let _ = source.close().await;
+                    }
+                }
+                if captured {
+                    let played = shared.lock().ledger.played;
+                    shared.tracker.note_flush();
+                    shared.tracker.playback_finished(PlaybackFinished {
+                        playback_position: played,
+                        interrupted: true,
+                        synchronized_transcript: None,
+                    });
+                }
+                shared.lock().cleanup_finished = true;
+                shared.wake.notify_waiters();
+            });
         }
-        // The tasks return on `closed` by themselves; the abort is a bound on one that does not.
-        for h in self.tasks.lock().unwrap().drain(..) {
-            h.abort();
+        self.shared.wait_until(|s| s.cleanup_finished).await;
+        for handle in self.tasks.lock().unwrap().drain(..) {
+            handle.abort();
         }
+    }
+}
+
+async fn retire_publication(
+    room: &dyn RtcRoom,
+    source: &dyn AudioSource,
+    sid: &lk_agents_rtc::TrackSid,
+) {
+    // Each half is independently owned: failure closing the source must not skip unpublication.
+    if let Err(error) = source.close().await {
+        log::error!(target: "livekit.agents", "room audio source cleanup failed: {error}");
+    }
+    if let Err(error) = room.local().unpublish_track(sid).await {
+        log::error!(target: "livekit.agents", "room audio publication cleanup failed for {sid}: {error}");
     }
 }
 
@@ -594,33 +728,32 @@ impl AudioOutput for ParticipantAudioOutput {
     }
 
     async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        self.shared.subscribed.wait_for(|s| *s).await;
-        loop {
-            let parked = self.shared.wake.notified();
-            tokio::pin!(parked);
-            parked.as_mut().enable();
-            let queued = {
-                let mut st = self.shared.lock();
-                match st.phase {
-                    Phase::Idle | Phase::Capturing => {
-                        st.phase = Phase::Capturing;
-                        Some(self.shared.enqueue(&mut st, frame))
-                    }
-                    // Letting the frame in would land its playout in the previous segment's window:
-                    // held until the watcher finishes that segment.
-                    Phase::Flushed | Phase::Cutting => None,
-                }
-            };
-            match queued {
-                Some(woke) => {
-                    if woke {
-                        self.shared.wake.notify_waiters();
-                    }
-                    return Ok(());
-                }
-                None => parked.await,
-            }
+        if frame.sample_rate != self.shared.sample_rate
+            || frame.num_channels != self.shared.num_channels
+            || frame.num_channels == 0
+            || self.shared.max_buffer_bytes == 0
+            || frame.data.len()
+                != frame.samples_per_channel as usize * usize::from(frame.num_channels) * 2
+        {
+            return Err(lk_agents_abi::voice::io::IoError::Rtc(
+                "room audio frame must match the output format".into(),
+            ));
         }
+        let sample_bytes = usize::from(frame.num_channels) * 2;
+        let chunk_bytes = (frame.sample_rate as usize / 20).max(1) * sample_bytes;
+        if frame.data.len() <= chunk_bytes {
+            return self.capture_chunk(frame).await;
+        }
+        for bytes in frame.data.chunks(chunk_bytes) {
+            let chunk = AudioFrame::new(
+                bytes.to_vec(),
+                frame.sample_rate,
+                frame.num_channels,
+                (bytes.len() / sample_bytes) as u32,
+            );
+            self.capture_chunk(&chunk).await?;
+        }
+        Ok(())
     }
 
     fn flush_segment(&self) {
@@ -628,8 +761,7 @@ impl AudioOutput for ParticipantAudioOutput {
             let mut st = self.shared.lock();
             // The tail first, so the watcher sees it in the backlog when the segment closes.
             st.pending = 0;
-            let frames =
-                st.bstream.flush().into_iter().map(|f| self.shared.framed(f)).collect();
+            let frames = st.bstream.flush().into_iter().map(|f| self.shared.framed(f)).collect();
             let tail = st.extend_backlog(frames);
             // Nothing captured is no playout to wait for; a cut's measurement is the one that counts.
             let watch = st.phase == Phase::Capturing;
@@ -692,5 +824,160 @@ impl AudioOutput for ParticipantAudioOutput {
         if std::mem::replace(&mut self.shared.lock().paused, false) {
             self.shared.wake.notify_waiters();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_abi::TokioSpawner;
+    use lk_agents_rtc::{FakeRtc, RtcError};
+
+    #[tokio::test]
+    async fn publication_arriving_after_close_is_retired() {
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("late-publish");
+        let local = room.local_participant();
+        local.flow_publications(false);
+        let output = ParticipantAudioOutput::new(
+            room,
+            clock,
+            Arc::new(TokioSpawner::current()),
+            AudioOutputConfig::default(),
+        );
+        let mut start = Box::pin(output.start());
+        crate::room_io::tests::pending(start.as_mut()).await;
+        let mut close = Box::pin(output.aclose());
+        crate::room_io::tests::pending(close.as_mut()).await;
+        local.flow_publications(true);
+        close.await;
+        let result = start.await;
+        assert!(local.publications().is_empty(), "the late SID must be unpublished");
+        assert!(result.is_err(), "closed output must refuse adoption");
+        assert!(output.shared.lock().source.is_none());
+    }
+
+    #[tokio::test]
+    async fn publication_failure_releases_capture_waiters() {
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("failed-publish");
+        room.local_participant().fail_with(RtcError::host("publish failed"));
+        let output = ParticipantAudioOutput::new(
+            room,
+            clock,
+            Arc::new(TokioSpawner::current()),
+            AudioOutputConfig::default(),
+        );
+        assert!(output.start().await.is_err());
+        let result = lk_agents_abi::timeout(
+            &lk_agents_abi::RealClock::new(),
+            Duration::from_millis(50),
+            output.capture(&lk_agents_rtc::silence_frame(480, 24000, 1)),
+        )
+        .await;
+        assert!(matches!(result, Ok(Err(_))), "capture must receive the publication failure");
+        output.aclose().await;
+    }
+    #[tokio::test]
+    async fn paused_room_output_backpressures_capture() {
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("backpressure");
+        let output = ParticipantAudioOutput::new(
+            room,
+            clock,
+            Arc::new(TokioSpawner::current()),
+            AudioOutputConfig::default(),
+        );
+        output.start().await.unwrap();
+        output.pause();
+        let result = lk_agents_abi::timeout(
+            &lk_agents_abi::RealClock::new(),
+            Duration::from_millis(50),
+            async {
+                output.capture(&lk_agents_rtc::silence_frame(24000, 24000, 1)).await.unwrap();
+            },
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "a paused sink must bound accepted audio instead of buffering a second"
+        );
+        output.aclose().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_starts_share_one_publication() {
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("joined-start");
+        let local = room.local_participant();
+        let output = ParticipantAudioOutput::new(
+            room,
+            clock,
+            Arc::new(TokioSpawner::current()),
+            AudioOutputConfig::default(),
+        );
+        local.flow_publications(false);
+        let mut first = Box::pin(output.start());
+        let mut second = Box::pin(output.start());
+        crate::room_io::tests::pending(first.as_mut()).await;
+        crate::room_io::tests::pending(second.as_mut()).await;
+        local.flow_publications(true);
+        first.await.unwrap();
+        second.await.unwrap();
+        assert_eq!(local.publications().len(), 1, "start joins its existing creation");
+        output.aclose().await;
+        assert!(local.publications().is_empty());
+    }
+    #[tokio::test]
+    async fn close_finishes_a_captured_segment_as_interrupted() {
+        use lk_agents_abi::voice::io::AudioOutputExt;
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let output = ParticipantAudioOutput::new(
+            rtc.room("close-segment"),
+            clock,
+            Arc::new(TokioSpawner::current()),
+            AudioOutputConfig::default(),
+        );
+        output.start().await.unwrap();
+        output.pause();
+        output.capture_frame(&lk_agents_rtc::silence_frame(480, 24000, 1)).await.unwrap();
+        output.aclose().await;
+        let finished = lk_agents_abi::timeout(
+            &lk_agents_abi::RealClock::new(),
+            Duration::from_millis(50),
+            output.tracker().wait_for_playout(),
+        )
+        .await
+        .expect("close must settle the captured segment");
+        assert!(finished.interrupted);
+        assert_eq!(finished.playback_position, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn cancelled_start_keeps_ownership_of_the_created_track() {
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("cancel-start");
+        let local = room.local_participant();
+        local.flow_publications(false);
+        let output = ParticipantAudioOutput::new(
+            room,
+            clock,
+            Arc::new(TokioSpawner::current()),
+            AudioOutputConfig::default(),
+        );
+        let mut start = Box::pin(output.start());
+        crate::room_io::tests::pending(start.as_mut()).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            local.publications().len(),
+            1,
+            "the server has created the track before acknowledging it"
+        );
+        drop(start);
+        let mut close = Box::pin(output.aclose());
+        crate::room_io::tests::pending(close.as_mut()).await;
+        local.flow_publications(true);
+        close.await;
+        assert!(local.publications().is_empty(), "cancellation must not orphan a created SID");
     }
 }

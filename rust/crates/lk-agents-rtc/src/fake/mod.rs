@@ -257,7 +257,8 @@ impl FakeRoom {
     /// A SIP participant presses `digit` on the keypad.
     pub fn press_dtmf(&self, digit: &str) {
         // The SDK names the SIP participant who pressed it: here the room's first, if any.
-        let participant = self.state.lock().unwrap().participants.first().map(|p| p.identity.clone());
+        let participant =
+            self.state.lock().unwrap().participants.first().map(|p| p.identity.clone());
         self.bus.emit(RoomEvent::SipDtmf { digit: digit.to_owned(), participant });
     }
 
@@ -432,6 +433,7 @@ pub struct FakeLocalParticipant {
     state: Mutex<LocalState>,
     /// `false` holds every byte stream write, as a congested link does.
     byte_writes: tokio::sync::watch::Sender<bool>,
+    publications_flow: tokio::sync::watch::Sender<bool>,
     /// Everything sent over the data channel, in the order it went out.
     sent: Arc<SentLog>,
 }
@@ -488,8 +490,14 @@ impl FakeLocalParticipant {
             next_sid: AtomicU64::new(1),
             state: Mutex::new(LocalState::default()),
             byte_writes: tokio::sync::watch::channel(true).0,
+            publications_flow: tokio::sync::watch::channel(true).0,
             sent: Arc::default(),
         }
+    }
+
+    /// Hold a publish response, including across caller cancellation and room teardown.
+    pub fn flow_publications(&self, flowing: bool) {
+        self.publications_flow.send_replace(flowing);
     }
 
     /// Hold (`false`) or release byte stream writes: a write in flight awaits, as on a real link.
@@ -647,6 +655,7 @@ impl LocalParticipant for FakeLocalParticipant {
             state.sources.push(source.clone());
         }
         self.bus.emit(RoomEvent::LocalTrackPublished { publication: publication.clone() });
+        let _ = self.publications_flow.subscribe().wait_for(|flowing| *flowing).await;
         Ok((source, publication))
     }
 
@@ -688,9 +697,13 @@ impl LocalParticipant for FakeLocalParticipant {
         Ok(Box::new(FakeTextStreamWriter { recorded }))
     }
 
-    async fn stream_bytes(&self, opts: crate::StreamBytesOptions) -> Result<Box<dyn crate::ByteStreamWriter>> {
+    async fn stream_bytes(
+        &self,
+        opts: crate::StreamBytesOptions,
+    ) -> Result<Box<dyn crate::ByteStreamWriter>> {
         self.check()?;
-        let recorded = Arc::new(Mutex::new(RecordedByteStream { opts, chunks: Vec::new(), closed: false }));
+        let recorded =
+            Arc::new(Mutex::new(RecordedByteStream { opts, chunks: Vec::new(), closed: false }));
         let index = {
             let mut state = self.state.lock().unwrap();
             state.byte_streams.push(recorded.clone());
@@ -705,7 +718,12 @@ impl LocalParticipant for FakeLocalParticipant {
         }))
     }
 
-    async fn perform_rpc(&self, destination: ParticipantIdentity, method: String, payload: String) -> Result<(u32, String)> {
+    async fn perform_rpc(
+        &self,
+        destination: ParticipantIdentity,
+        method: String,
+        payload: String,
+    ) -> Result<(u32, String)> {
         self.check()?;
         let mut state = self.state.lock().unwrap();
         self.sent.push(Sent::Rpc {
