@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import aiohttp
 import httpx2 as httpx
+from pydantic import JsonValue, TypeAdapter
 from yarl import URL
 
 import openai
@@ -57,6 +58,7 @@ OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 _WS_HEARTBEAT = 30.0
 # max connections to try when a reused socket is stale, before the outer retry takes over
 _WS_SEND_MAX_ATTEMPTS = 6
+_WS_EVENT = TypeAdapter(dict[str, JsonValue])
 
 
 class _ResponsesWebsocket:
@@ -112,8 +114,11 @@ class _ResponsesWebsocket:
         await self._pool.aclose()
 
     async def generate_response(
-        self, msg: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> AsyncGenerator[dict, None]:
+        self,
+        msg: Mapping[str, object],
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> AsyncGenerator[dict[str, JsonValue], None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
                 # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
@@ -166,7 +171,7 @@ class _ResponsesWebsocket:
                 if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
-                event = json.loads(raw_msg.data)
+                event = _WS_EVENT.validate_json(raw_msg.data)
                 yield event
                 if event["type"] in [
                     "response.completed",
@@ -411,7 +416,7 @@ class LLM(llm.LLM):
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: response_create_params.ToolChoice
-            if isinstance(tool_choice, dict):
+            if not isinstance(tool_choice, str):
                 oai_tool_choice = {
                     "type": "function",
                     "name": tool_choice["function"]["name"],
@@ -576,19 +581,15 @@ class LLMStream(llm.LLMStream):
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
+    def _parse_ws_event(self, event: dict[str, JsonValue]) -> ResponseStreamEvent | None:
         # Strip prompt_cache_retention from any response object before validation:
         # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
         # vs "in-memory"). We don't use this field so dropping it is safe.
-        if (
-            isinstance(event.get("response"), dict)
-            and "prompt_cache_retention" in event["response"]
-        ):
+        response = event.get("response")
+        if isinstance(response, dict) and "prompt_cache_retention" in response:
             event = {
                 **event,
-                "response": {
-                    k: v for k, v in event["response"].items() if k != "prompt_cache_retention"
-                },
+                "response": {k: v for k, v in response.items() if k != "prompt_cache_retention"},
             }
 
         event_type = event.get("type", "")
@@ -599,7 +600,8 @@ class LLMStream(llm.LLMStream):
             # the real API message ("... 1 validation error ... sequence_number
             # Field required ..."). Default the field so the genuine error
             # surfaces as a clean APIStatusError via _handle_error instead.
-            merged = {"sequence_number": -1, **event.get("error", {}), **event}
+            error = event.get("error")
+            merged = {"sequence_number": -1, **(error if isinstance(error, dict) else {}), **event}
             return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)

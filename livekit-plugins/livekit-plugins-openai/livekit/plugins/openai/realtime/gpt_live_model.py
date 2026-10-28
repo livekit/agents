@@ -682,7 +682,7 @@ class GPTVoiceSession(
 
         send_task = asyncio.create_task(_send_task(), name="_send_task")
         tasks = [asyncio.create_task(_recv_task(), name="_recv_task"), send_task]
-        wait_reconnect_task: asyncio.Task | None = None
+        wait_reconnect_task: asyncio.Task[None] | None = None
         if self._opts.max_session_duration is not None:
             wait_reconnect_task = asyncio.create_task(
                 asyncio.sleep(self._opts.max_session_duration), name="_timeout_task"

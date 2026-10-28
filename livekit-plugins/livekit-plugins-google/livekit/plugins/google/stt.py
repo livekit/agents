@@ -159,7 +159,7 @@ class STT(stt.STT):
         adaptation: NotGivenOr[
             cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
         ] = NOT_GIVEN,
-        credentials_info: NotGivenOr[dict] = NOT_GIVEN,
+        credentials_info: NotGivenOr[dict[str, object]] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -318,7 +318,7 @@ class STT(stt.STT):
         return "Google Cloud Platform"
 
     async def _create_client(
-        self, timeout: float | None
+        self, conn_options: APIConnectOptions
     ) -> SpeechAsyncClientV2 | SpeechAsyncClientV1:
         # Add support for passing a specific location that matches recognizer
         # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
@@ -1042,7 +1042,7 @@ class SpeechStream(stt.SpeechStream):
                         # call (and the input_generator that yielded into it) stays
                         # pinned across reconnects and leaks ~0.4 MB per cycle.
                         with contextlib.suppress(Exception):
-                            cast(StreamStreamCall, stream).cancel()
+                            cast(StreamStreamCall[object, object], stream).cancel()
                         if not process_stream_task.done() and not wait_reconnect_task.done():
                             # try to gracefully stop the process_stream_task
                             try:

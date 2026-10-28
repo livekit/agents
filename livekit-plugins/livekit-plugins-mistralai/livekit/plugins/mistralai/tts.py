@@ -21,6 +21,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
+from mistralai.client.models import SpeechStreamAudioDelta
 
 from ._http import request_timeout_ms
 from .models import TTSModels, TTSVoices
@@ -185,7 +186,7 @@ class ChunkedStream(tts.ChunkedStream):
                     stream=True,
                 )
             async for ev in stream:
-                if ev.event == "speech.audio.delta":
+                if isinstance(ev.data, SpeechStreamAudioDelta):
                     data = base64.b64decode(ev.data.audio_data)
                     if self._opts.response_format == "pcm":
                         data = _f32le_to_s16le(data)

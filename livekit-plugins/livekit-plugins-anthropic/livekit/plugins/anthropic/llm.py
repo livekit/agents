@@ -118,7 +118,7 @@ class LLM(llm.LLM):
             strict_tool_schema=_strict_tool_schema,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
-        if not anthropic_api_key:
+        if not anthropic_api_key and client is None:
             raise ValueError(
                 "Anthropic API key is required, either as argument or set"
                 " ANTHROPIC_API_KEY environment variable"
@@ -211,12 +211,12 @@ class LLM(llm.LLM):
             tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
-                if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+                if not isinstance(tool_choice, str):
                     anthropic_tool_choice = {
                         "type": "tool",
                         "name": tool_choice["function"]["name"],
                     }
-                elif isinstance(tool_choice, str):
+                else:
                     if tool_choice == "required":
                         anthropic_tool_choice = {"type": "any"}
                     elif tool_choice == "none":

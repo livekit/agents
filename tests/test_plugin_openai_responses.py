@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +17,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     llm as agents_llm,
+    utils,
 )
 from livekit.plugins.openai.responses.llm import (
     _WS_HEARTBEAT,
@@ -72,10 +72,13 @@ def _use_connections(transport: _ResponsesWebsocket, *conns: _RecordingWS) -> No
     """Wire a connect callback that hands out ``conns`` in order (last one repeats)."""
     remaining = list(conns)
 
-    async def _connect(_timeout: float) -> _RecordingWS:
+    async def _connect(_options: APIConnectOptions) -> _RecordingWS:
         return remaining.pop(0) if len(remaining) > 1 else remaining[0]
 
-    transport._pool._connect_cb = _connect  # type: ignore[assignment]
+    transport._pool = utils.ConnectionPool(  # type: ignore[assignment]
+        connect_cb=_connect,
+        close_cb=transport._close_ws,
+    )
 
 
 async def _capture_sent_payload(msg: dict) -> dict:
@@ -128,7 +131,8 @@ async def test_incomplete_response_is_a_terminal_websocket_event() -> None:
 
     assert events == [frame]
     assert rec.receive_calls == 1
-    assert rec in transport._pool._available
+    assert await transport._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS) is rec
+    transport._pool.put(rec)
     await transport.aclose()
 
 
@@ -166,14 +170,14 @@ async def test_stale_reused_ws_is_discarded_and_request_succeeds() -> None:
     fresh = _RecordingWS(reply)
 
     transport = _make_transport()
-    _use_connections(transport, fresh)
 
     # two pooled connections dropped while idle: not expired, send fails, and
     # ws.closed is still False (so a `not ws.closed` validation would not help).
     stale = [_RecordingWS(reply, dead=True), _RecordingWS(reply, dead=True)]
-    for ws in stale:
-        transport._pool._connections[ws] = time.time()  # type: ignore[index]
-        transport._pool._available.add(ws)  # type: ignore[arg-type]
+    _use_connections(transport, *stale, fresh)
+    acquired = [await transport._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS) for _ in stale]
+    for ws in acquired:
+        transport._pool.put(ws)
 
     async for _ in transport.generate_response({"type": "response.create"}):
         pass
@@ -209,13 +213,15 @@ async def test_send_cancellation_discards_socket() -> None:
     ws.send_str = _cancel  # type: ignore[method-assign]
 
     transport = _make_transport()
-    _use_connections(transport, ws)
+    fresh = _RecordingWS({"type": "response.completed", "response": {"output": []}})
+    _use_connections(transport, ws, fresh)
 
     with pytest.raises(asyncio.CancelledError):
         await transport._acquire_and_send("{}")
 
-    assert ws not in transport._pool._connections
-    assert ws not in transport._pool._available
+    assert await transport._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS) is fresh
+    assert ws.closed
+    transport._pool.put(fresh)
     await transport.aclose()
 
 
@@ -399,7 +405,9 @@ class _ReplayResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(
+        self, payload: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ):  # noqa: ANN201
         self.attempts += 1
 
         async def _replay():  # noqa: ANN202
@@ -446,7 +454,8 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         request_counter = transport
     else:
         client = MagicMock()
-        client._base_url = httpx.URL("https://api.openai.com/v1")
+        client.base_url = httpx.URL("https://api.openai.com/v1")
+        client.with_options.return_value = client
         parsed_events = [
             ResponseCreatedEvent.model_validate(raw_events[0]),
             ResponseIncompleteEvent.model_validate(raw_events[1]),
@@ -498,7 +507,9 @@ class _StallingResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(
+        self, payload: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ):  # noqa: ANN201
         self.attempts += 1
         frames = self._frames
 

@@ -84,7 +84,7 @@ class TTS(tts.TTS):
         volume_gain_db: float = 0.0,
         location: str = "global",
         audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,  # type: ignore
-        credentials_info: NotGivenOr[dict] = NOT_GIVEN,
+        credentials_info: NotGivenOr[dict[str, object]] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,

@@ -224,13 +224,15 @@ class STT(stt.STT):
                         language=LanguageCode(resp.language)
                         if resp.language
                         else self._opts.language or LanguageCode(""),
-                        start_time=resp.segments[0].start if resp.segments else 0,
-                        end_time=resp.segments[-1].end if resp.segments else 0,
+                        start_time=(resp.segments[0].start or 0.0) if resp.segments else 0.0,
+                        end_time=(resp.segments[-1].end or 0.0) if resp.segments else 0.0,
                         words=[
                             TimedString(
                                 text=segment.text,
-                                start_time=segment.start,
-                                end_time=segment.end,
+                                start_time=segment.start
+                                if segment.start is not None
+                                else NOT_GIVEN,
+                                end_time=segment.end if segment.end is not None else NOT_GIVEN,
                             )
                             for segment in resp.segments
                         ]
@@ -376,8 +378,16 @@ class SpeechStream(stt.RecognizeStream):
                     [
                         TimedString(
                             text=seg.text,
-                            start_time=seg.start + self.start_time_offset,
-                            end_time=seg.end + self.start_time_offset,
+                            start_time=(
+                                seg.start + self.start_time_offset
+                                if seg.start is not None
+                                else NOT_GIVEN
+                            ),
+                            end_time=(
+                                seg.end + self.start_time_offset
+                                if seg.end is not None
+                                else NOT_GIVEN
+                            ),
                         )
                         for seg in event.segments
                     ]

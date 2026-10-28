@@ -132,7 +132,7 @@ class TTS(tts.TTS):
             ),
         )
 
-        self._prewarm_task: asyncio.Task | None = None
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def model(self) -> str:

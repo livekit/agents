@@ -272,7 +272,7 @@ class RecognizeStream(stt.RecognizeStream):
         )
 
         config = types.LiveConnectConfig(
-            response_modalities=["TEXT"],
+            response_modalities=[types.Modality.TEXT],
             input_audio_transcription=input_audio_transcription,
         )
 

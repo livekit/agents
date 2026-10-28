@@ -105,23 +105,20 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         resolved_max_session_duration = (
             max_session_duration if is_given(max_session_duration) else None
         )
-        init_kwargs: dict = {
-            "base_url": resolved_base_url,
-            "model": resolved_model,
-            "voice": resolved_voice,
-            "api_key": api_key,
-            "modalities": ["audio", "text"],
-            "input_audio_transcription": resolved_transcription,
-            "turn_detection": resolved_turn_detection,
-            "http_session": http_session,
-            "max_session_duration": resolved_max_session_duration,
-            "conn_options": conn_options,
-        }
-        if is_given(reasoning):
-            init_kwargs["reasoning"] = reasoning
-        if is_given(speed):
-            init_kwargs["speed"] = speed
-        super().__init__(**init_kwargs)
+        super().__init__(
+            base_url=resolved_base_url,
+            model=resolved_model,
+            voice=resolved_voice,
+            api_key=api_key,
+            modalities=["audio", "text"],
+            input_audio_transcription=resolved_transcription,
+            turn_detection=resolved_turn_detection,
+            http_session=http_session,
+            max_session_duration=resolved_max_session_duration,
+            conn_options=conn_options,
+            reasoning=reasoning,
+            speed=speed,
+        )
         self._capabilities.per_response_tool_choice = False
         # client turn-taking is not stable during testing, mark it as unsupported for now
         self._capabilities.can_disable_turn_detection = False

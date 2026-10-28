@@ -20,7 +20,9 @@ from typing import Generic, Never, Protocol, TypeVar, cast, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.pregel import Pregel
+
+# The SDK ships annotated namespace modules without a recognized typing marker.
+from langgraph.pregel import Pregel  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.types import StreamMode
 from langgraph.typing import ContextT, InputT, OutputT, StateT
 

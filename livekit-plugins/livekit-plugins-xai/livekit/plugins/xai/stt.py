@@ -23,6 +23,7 @@ import weakref
 from dataclasses import dataclass
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -62,6 +63,32 @@ class STTOptions:
     smart_turn: NotGivenOr[float] = NOT_GIVEN
     smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN
     keyterm: NotGivenOr[list[str]] = NOT_GIVEN
+
+
+class _Word(BaseModel):
+    model_config = ConfigDict(strict=True)
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    speaker: int | str | None = None
+
+
+class _Transcript(BaseModel):
+    model_config = ConfigDict(strict=True)
+    type: str = ""
+    text: str = ""
+    language: str = ""
+    is_final: bool = False
+    speech_final: bool = False
+    words: list[_Word] = Field(default_factory=list[_Word])
+    message: str = "unknown error"
+
+
+def _decode_transcript(data: object) -> _Transcript:
+    try:
+        return _Transcript.model_validate(data)
+    except ValidationError as error:
+        raise APIConnectionError("invalid xAI transcript", retryable=False) from error
 
 
 class STT(stt.STT):
@@ -478,18 +505,19 @@ class SpeechStream(stt.RecognizeStream):
             )
         )
 
-    def _process_stream_event(self, data: dict) -> None:
-        msg_type = data.get("type", "")
+    def _process_stream_event(self, raw_data: object) -> None:
+        data = _decode_transcript(raw_data)
+        msg_type = data.type
 
         if msg_type == "transcript.created":
             self._server_ready.set()
 
         elif msg_type == "transcript.partial":
-            text = data.get("text", "")
-            is_final = data.get("is_final", False)
-            speech_final = data.get("speech_final", False)
-            words = data.get("words", [])
-            language = data.get("language", "")
+            text = data.text
+            is_final = data.is_final
+            speech_final = data.speech_final
+            words = data.words
+            language = data.language
 
             if not text:
                 return
@@ -547,9 +575,9 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
         elif msg_type == "transcript.done":
-            text = data.get("text", "")
-            words = data.get("words", [])
-            language = data.get("language", "")
+            text = data.text
+            words = data.words
+            language = data.language
             if text:
                 self.send(
                     stt.SpeechEvent(
@@ -570,42 +598,37 @@ class SpeechStream(stt.RecognizeStream):
                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif msg_type == "error":
-            logger.error("xAI STT error: %s", data.get("message", "unknown error"))
+            logger.error("xAI STT error: %s", data.message)
 
         else:
             logger.warning("received unexpected message from xAI: %s", msg_type)
 
 
 def _words_to_speech_data(
-    words: list[dict], text: str, *, language: str, enable_diarization: bool
+    words: list[_Word], text: str, *, language: str, enable_diarization: bool
 ) -> stt.SpeechData:
     speaker_id = (
-        f"S{words[0]['speaker']}"
-        if enable_diarization and words and "speaker" in words[0]
+        f"S{words[0].speaker}"
+        if enable_diarization and words and words[0].speaker is not None
         else None
     )
     return stt.SpeechData(
         language=LanguageCode(language),
         text=text,
-        start_time=words[0].get("start", 0.0) if words else 0.0,
-        end_time=words[-1].get("end", 0.0) if words else 0.0,
+        start_time=words[0].start if words else 0.0,
+        end_time=words[-1].end if words else 0.0,
         speaker_id=speaker_id,
-        words=[
-            TimedString(
-                w.get("text", ""), start_time=w.get("start", 0.0), end_time=w.get("end", 0.0)
-            )
-            for w in words
-        ]
-        or None,
+        words=[TimedString(w.text, start_time=w.start, end_time=w.end) for w in words] or None,
     )
 
 
 def _prerecorded_transcription_to_speech_event(
-    data: dict, *, enable_diarization: bool
+    raw_data: object, *, enable_diarization: bool
 ) -> stt.SpeechEvent:
-    text = data.get("text", "")
-    words = data.get("words", [])
-    language = data.get("language", "")
+    data = _decode_transcript(raw_data)
+    text = data.text
+    words = data.words
+    language = data.language
     return stt.SpeechEvent(
         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[

@@ -292,7 +292,7 @@ class AIPlatformLLM(llm.LLM):
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
-            if isinstance(tool_choice, dict):
+            if not isinstance(tool_choice, str):
                 oai_tool_choice = {
                     "type": "function",
                     "function": {"name": tool_choice["function"]["name"]},

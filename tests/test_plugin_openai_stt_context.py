@@ -53,6 +53,7 @@ class _FakeSession:
     def __init__(self) -> None:
         self.ws = _FakeWebSocket()
         self.connects = 0
+        self.trace_configs: list[aiohttp.TraceConfig] = []
 
     async def ws_connect(self, url: str, **_kwargs: object) -> _FakeWebSocket:
         self.connects += 1

@@ -55,6 +55,7 @@ from openai.types.audio import Transcription, TranscriptionVerbose
 from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
 )
+from openai.types.realtime import NoiseReductionType
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_formats import AudioPCM
 from openai.types.realtime.realtime_transcription_session_audio import (
@@ -141,7 +142,7 @@ class _STTOptions:
     turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetection
     keywords: list[str] = field(default_factory=list)
     prompt: NotGivenOr[str] = NOT_GIVEN
-    noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
+    noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
 
 
@@ -196,7 +197,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
-        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -344,7 +345,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
-        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
@@ -462,7 +463,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
-        noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """

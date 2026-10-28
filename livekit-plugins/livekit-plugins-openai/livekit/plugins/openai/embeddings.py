@@ -44,7 +44,7 @@ async def create_embeddings(
     ) as resp:
         json = await resp.json()
         data = json["data"]
-        list_data = []
+        list_data: list[EmbeddingData] = []
         for d in data:
             bytes = base64.b64decode(d["embedding"])
             num_floats = len(bytes) // 4

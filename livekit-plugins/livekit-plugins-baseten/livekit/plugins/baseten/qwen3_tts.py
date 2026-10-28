@@ -38,6 +38,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     APIConnectionError,
@@ -600,8 +601,6 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
-        except (APIConnectionError, APIStatusError, APITimeoutError):
-            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -671,7 +670,9 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             output_emitter.push_timed_transcript(timed)
 
 
-async def _control(model_endpoint: str, api_key: str | None, message: dict) -> dict:
+async def _control(
+    model_endpoint: str, api_key: str | None, message: dict[str, object]
+) -> dict[str, JsonValue]:
     api_key = api_key or os.environ.get("BASETEN_API_KEY")
     if not api_key:
         raise ValueError("Pass `api_key` or set BASETEN_API_KEY.")
@@ -693,8 +694,7 @@ async def _control(model_endpoint: str, api_key: str | None, message: dict) -> d
                 # on ERROR — json.loads would raise a bare TypeError and hide
                 # what actually went wrong.
                 raise RuntimeError(f"unexpected reply to {message.get('type')!r}: {msg.type.name}")
-            response: dict[str, Any] = json.loads(msg.data)
-            return response
+            return TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
 
 
 async def register_voice(
@@ -705,7 +705,7 @@ async def register_voice(
     ref_text: str | None = None,
     api_key: str | None = None,
     consent: str = "user_consent",
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """Clone a voice from 10-20s of clean speech. Omitting ref_text is less faithful.
 
     The clone lives on one replica's local disk and dies with the container.
@@ -725,11 +725,15 @@ async def register_voice(
     response = await _control(model_endpoint, api_key, message)
     if response.get("type") == "error" or not response.get("success"):
         raise RuntimeError(f"voice.add failed: {response.get('message') or response}")
-    voice: dict[str, Any] = response.get("voice", response)
+    voice = response.get("voice", response)
+    if not isinstance(voice, dict):
+        raise APIConnectionError(
+            "Qwen3 voice.add returned an invalid voice record", retryable=False
+        )
     return voice
 
 
-async def list_voices(*, model_endpoint: str, api_key: str | None = None) -> dict[str, Any]:
+async def list_voices(*, model_endpoint: str, api_key: str | None = None) -> dict[str, JsonValue]:
     """`voices` is built-ins (empty on Base); `uploaded_voices` is per-replica."""
     response = await _control(model_endpoint, api_key, {"type": "voice.list"})
     if response.get("type") == "error":

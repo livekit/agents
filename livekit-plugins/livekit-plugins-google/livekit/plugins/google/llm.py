@@ -412,7 +412,11 @@ class LLM(llm.LLM):
                     )
                 if _level is None and _is_gemini_3_model(self._opts.model):
                     # only default the level where the accepted levels are known
-                    _level = "minimal" if _is_gemini_3_flash_model(self._opts.model) else "low"
+                    _level = (
+                        types.ThinkingLevel.MINIMAL
+                        if _is_gemini_3_flash_model(self._opts.model)
+                        else types.ThinkingLevel.LOW
+                    )
                 # the level passes through as given, checked against the model in __init__
                 extra["thinking_config"] = types.ThinkingConfig(
                     thinking_level=_level, include_thoughts=_include_thoughts
