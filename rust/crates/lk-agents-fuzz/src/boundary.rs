@@ -178,6 +178,29 @@ pub const WORKER: Boundary = Boundary {
     ],
 };
 
+/// The TextSession campaign (`tests/text_session_survey.rs`, `text_session` module).
+pub const TEXT_SESSION: Boundary = Boundary {
+    cores: &["TextSession routing core (lk_agents_core::text_session::TextSession over \
+         lk_agents_core::agent_run::AgentRun and the shared approval gate), reconstructed from \
+         its returned state every turn and stepped per delivered model, host, delivery or \
+         client event and due wake"],
+    fakes: &[
+        "text_session::World: a model that answers in text, delegates through the agent tool \
+         (once or twice per reply, with refused arguments), answers as a child with a reference \
+         or a question, repeats, changes or drops an approved call, fails or is cancelled; a \
+         recursive desk down to the depth bound",
+        "the host: argument binding, read-backs, output validation and checkpoints after their \
+         own delays; the endpoint delivering each settled invocation's dialogue before \
+         releasing it; a client cancelling turns midway",
+    ],
+    transitional: &["none: TextSession and AgentRun are core machines the simulation steps itself"],
+    outside: &[
+        "the runtime's TextSession runner, its stream and state codec, and the Python \
+         text_session module (K-30 conformance, the generated state codec's tests)",
+        "the application's context loads and saves around each turn (context.md; I-27)",
+    ],
+};
+
 impl Boundary {
     /// Prints the boundary with what the campaign actually delivered, and fails on an empty
     /// inventory: a campaign that cannot say what it covered proves nothing.

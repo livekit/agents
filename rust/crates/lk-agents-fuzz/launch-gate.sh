@@ -28,9 +28,11 @@ storage_seeds=${STORAGE_SEEDS:-4096}
 inference_seeds=${INFERENCE_SEEDS:-4096}
 worker_seeds=${WORKER_SEEDS:-4096}
 a2a_seeds=${A2A_SEEDS:-2048}
+text_session_seeds=${TEXT_SESSION_SEEDS:-4096}
 for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
     "VOICE_SOAK_SEEDS=$soak_seeds" "STORAGE_SEEDS=$storage_seeds" \
-    "INFERENCE_SEEDS=$inference_seeds" "WORKER_SEEDS=$worker_seeds" "A2A_SEEDS=$a2a_seeds"; do
+    "INFERENCE_SEEDS=$inference_seeds" "WORKER_SEEDS=$worker_seeds" "A2A_SEEDS=$a2a_seeds" \
+    "TEXT_SESSION_SEEDS=$text_session_seeds"; do
     [[ ${pair#*=} =~ ^[1-9][0-9]*$ ]] || fail "$pair: a campaign needs a positive number of seeds"
 done
 
@@ -145,11 +147,13 @@ campaign "soak, $soak_seeds calls" soak nothing_grows_with_the_conversation \
     VOICE_SOAK_SEEDS="$soak_seeds"
 campaign "storage survey, $storage_seeds seeds" storage_survey survey \
     STORAGE_SEEDS="$storage_seeds"
-campaign "inference survey (LLM request, avatar session), $inference_seeds seeds" \
+campaign "inference survey (LLM request, avatar session, VAD stream), $inference_seeds seeds" \
     inference_survey survey INFERENCE_SEEDS="$inference_seeds"
-campaign "worker survey (process pool), $worker_seeds seeds" worker_survey survey \
+campaign "worker survey (process pool, registration), $worker_seeds seeds" worker_survey survey \
     WORKER_SEEDS="$worker_seeds"
-campaign "A2A survey (exclusive door turns), $a2a_seeds seeds" a2a_survey survey \
+campaign "A2A survey (every inbox policy), $a2a_seeds seeds" a2a_survey survey \
     A2A_SEEDS="$a2a_seeds"
+campaign "TextSession survey, $text_session_seeds seeds" text_session_survey survey \
+    TEXT_SESSION_SEEDS="$text_session_seeds"
 
 printf '\nlaunch gate passed\n'

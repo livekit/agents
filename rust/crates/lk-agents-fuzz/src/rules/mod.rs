@@ -23,8 +23,11 @@ mod registry {
             let named = |id: &&str| *id == known.contract;
             let simulated = crate::inference::llm::RULES.iter().map(|r| &r.0).any(named)
                 || crate::inference::avatar::RULES.iter().map(|r| &r.0).any(named)
+                || crate::inference::vad::RULES.iter().map(|r| &r.0).any(named)
                 || crate::worker::RULES.iter().map(|r| &r.0).any(named)
-                || crate::a2a::rules::RULES.iter().map(|r| &r.0).any(named);
+                || crate::worker::registration::RULES.iter().map(|r| &r.0).any(named)
+                || crate::a2a::rules::RULES.iter().map(|r| &r.0).any(named)
+                || crate::text_session::RULES.iter().map(|r| &r.0).any(named);
             assert!(
                 known.contract == "session_settles"
                     || simulated
