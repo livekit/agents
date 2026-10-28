@@ -53,6 +53,7 @@ def _make_recognition(
     ar._vad = vad
     ar._turn_detection_mode = mode
     ar._user_turn_committed = False
+    ar._stt_speech_ended = False
     ar._vad_base_turn_detection = False
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
