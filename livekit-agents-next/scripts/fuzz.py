@@ -25,7 +25,7 @@ What every seed checks:
     python livekit-agents-next/scripts/fuzz.py --seeds 500 --first 1000
     python livekit-agents-next/scripts/fuzz.py 17           # one seed, with its call printed
 
-It needs the venv ``parity.py`` builds (``livekit-agents-next`` and pytest). Exit status 1 names
+It needs livekit-agents-next and pytest in the current interpreter. Exit status 1 names
 each failing seed and what failed.
 """
 

@@ -1,56 +1,49 @@
-"""End-to-end parity on LiveKit Cloud: one agent file served by the reference (``livekit-agents/``)
-and by the copy over the Rust core (``livekit-agents-next/``), the same scripted callers on both.
+"""End-to-end calls on LiveKit Cloud: one agent file served by livekit-agents-next, scripted
+callers driving it.
 
-Each stack runs this file as a worker (``e2e.py agent``) from its own venv, both registered on the
-same project. Each scenario makes one room per stack at the same moment, dispatches that stack's
-agent with the scenario in the metadata, and drives a ``livekit.rtc`` caller through it: speech
-from WAVs (synthesized once and cached), chat on ``lk.chat``, host commands over RPC, DTMF,
-leaving, rejoining, and a small avatar worker that publishes video from the audio it receives.
+This file runs as a worker (``e2e.py agent``) on the current interpreter, registered on the
+project. Each scenario makes a room, dispatches the agent with the scenario in the metadata, and
+drives a ``livekit.rtc`` caller through it: speech from WAVs (synthesized once and cached), chat on
+``lk.chat``, host commands over RPC, DTMF, leaving, rejoining, and a small avatar worker that
+publishes video from the audio it receives.
 
 Recorded per run: every ``session.on(...)`` event with its payload, ``session.history``, the
 item metrics (latency per stage), what the caller saw (``lk.transcription`` streams, the agent
 state attribute, the agent's audio, the avatar's audio and video) and the worker's error lines.
-Ids and timestamps are normalised away, then the two stacks are compared field by field. A
-difference is INTENDED when the table below lists it (with the reason), otherwise it is unknown:
-the scenario is run again and a difference that repeats fails the suite, as does a check failing
-on next alone. Checks that hold on each stack alone (what the caller saw is what the history
-says, no error events, the scenario did what it is for) are reported per stack.
+Each run is judged on its own: the scenario did what it is for (its checks), what the caller saw
+is what the history says, no error events, no timeouts. There is no comparison with any other
+implementation (owner decision 22). A failing scenario is run again; both attempts are kept and
+reported, and a scenario fails when either attempt fails.
 
-    python livekit-agents-next/scripts/e2e.py                    # build if needed, everything
+    python livekit-agents-next/scripts/e2e.py                    # everything
     python livekit-agents-next/scripts/e2e.py turns barge_in     # some scenarios
-    python livekit-agents-next/scripts/e2e.py --no-build --jobs 6
+    python livekit-agents-next/scripts/e2e.py --jobs 6
     python livekit-agents-next/scripts/e2e.py --list
     python livekit-agents-next/scripts/e2e.py --env-file ~/livekit/.env --keep runs/
     python livekit-agents-next/scripts/e2e.py --report runs/     # judge kept runs again
 
 Needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET (a project with LiveKit Inference),
-from the environment or ``--env-file``. The venvs are parity.py's (``$LK_PARITY_VENVS``); the
-reference's worker runs on the Rust core of its time (``REF_CORE``, built once). Every scenario
-runs at once up to ``--jobs`` (two rooms each): about three minutes for all of them. Exits 0
-when every difference is intended, 1 otherwise.
+from the environment or ``--env-file``, and livekit-agents-next with
+livekit-plugins-noise-cancellation installed in the current interpreter. Exits 0 when every
+scenario passed, 1 otherwise. Replaced by the tests/e2e pytest suite (K-18).
 """
 
 import argparse
 import asyncio
 import contextlib
 import dataclasses
-import difflib
 import enum
-import fnmatch
 import hashlib
 import json
 import math
 import os
 import re
-import shutil
-import statistics
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 import wave
-import zipfile
 from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -58,7 +51,7 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-STACKS = ("ref", "next")
+STACK = "next"
 SAMPLE_RATE = 24000
 LOUD = 400.0  # int16 RMS of an audible frame
 STT, LLM, TTS, REALTIME = (
@@ -286,7 +279,7 @@ async def entry(ctx: Any) -> None:
             if name == "close":
                 snapshot("close")
 
-        # 2.0 removed metrics_collected from the session (INTENDED lists the difference)
+        # 2.0 removed metrics_collected from the session
         with contextlib.suppress(ValueError):
             session.on(name, on_event)
 
@@ -378,7 +371,7 @@ def run_agent(name: str) -> None:
 
 
 # ===================================================================================== caller
-# Runs in the reference venv: the person, the avatar, and the scenario scripts.
+# Runs in the driving process: the person, the avatar, and the scenario scripts.
 
 
 async def speech_frames(cache: Path) -> dict[str, list[Any]]:
@@ -661,7 +654,7 @@ class Call:
 
     async def start_avatar(self) -> None:
         """An avatar worker in the room: the agent's audio back out, with a video frame per 40 ms
-        whose brightness is that audio's loudness, through the reference's AvatarRunner."""
+        whose brightness is that audio's loudness, through AvatarRunner."""
         from livekit import rtc
         from livekit.agents.voice.avatar import (
             AudioSegmentEnd,
@@ -784,10 +777,8 @@ def _who(identity: str) -> str:
 class Scenario:
     drive: Callable[[Call], Awaitable[None]]
     agent: dict[str, Any] = dataclasses.field(default_factory=dict)
-    # what the scenario is for, checked on each stack alone: name -> predicate over its view
+    # what the scenario is for: name -> predicate over the run's view
     expect: dict[str, Callable[[dict[str, Any]], bool]] = dataclasses.field(default_factory=dict)
-    # a 2.0 feature the reference does not have runs on next alone, judged by its checks
-    stacks: tuple[str, ...] = STACKS
 
 
 async def sc_turns(c: Call) -> None:
@@ -953,7 +944,6 @@ SCENARIOS: dict[str, Scenario] = {
     "voice_task": Scenario(
         sc_voice_task,
         agent={"voice_task": True},
-        stacks=("next",),
         expect={
             "the task returned the address to the tool": lambda v: any(
                 i.startswith("function_call_output change_receipt_email")
@@ -1036,98 +1026,7 @@ SCENARIOS: dict[str, Scenario] = {
 }
 
 
-# ============================================================================ normalise, diff
-
-
-def _without_event(name: str) -> Callable[[dict[str, Any], dict[str, Any]], None]:
-    def normalise(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-        for v in (ref, nxt):
-            v["events_seen"] = [e for e in v["events_seen"] if e != name]
-            v["event_types"] = [e for e in v["event_types"] if not e.startswith(name + ":")]
-            v["event_schemas"].pop(name, None)
-
-    return normalise
-
-
-def _without_fields(event: str, *fields: str) -> Callable[[dict[str, Any], dict[str, Any]], None]:
-    def normalise(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-        for v in (ref, nxt):
-            keys = v["event_schemas"].get(event)
-            if keys is not None:
-                v["event_schemas"][event] = [
-                    k for k in keys if not any(k == f or k.startswith(f + ".") for f in fields)
-                ]
-
-    return normalise
-
-
-def _without_params(*names: str) -> Callable[[dict[str, Any], dict[str, Any]], None]:
-    def normalise(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-        for v in (ref, nxt):
-            if v["start_params"]:
-                v["start_params"] = [p for p in v["start_params"] if p not in names]
-
-    return normalise
-
-
-def _settled_attribute(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-    for v in (ref, nxt):
-        s = v["caller"]["agent_states"]
-        v["caller"]["agent_states"] = [
-            x
-            for i, x in enumerate(s)
-            if not (
-                0 < i < len(s) - 1
-                and (s[i - 1], x, s[i + 1]) == ("speaking", "listening", "thinking")
-            )
-        ]
-
-
-def _job_end_reason(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-    if (ref["close"], nxt["close"]) == ("user_initiated", "job_shutdown"):
-        ref["close"] = "job_shutdown"
-
-
-# Differences listed rather than fixed, as (key, scenario glob, why, a normaliser applied to both
-# views). A field the normalisers alone make agree counts as agreeing; the report prints them all.
-INTENDED: list[tuple[str, str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = [
-    (
-        "metrics_collected",
-        "*",
-        "deprecated in the reference (it warns when subscribed: session_usage_updated and "
-        "ChatMessage.metrics replace it); 2.0 deletes deprecated surface",
-        _without_event("metrics_collected"),
-    ),
-    (
-        "chat_item_hash",
-        "*",
-        "ChatMessage.hash is deprecated in the reference (Field(deprecated=...)), deleted in 2.0",
-        _without_fields("conversation_item_added", "item.hash"),
-    ),
-    (
-        "room_io_options",
-        "*",
-        "start(room_input_options=, room_output_options=) are the reference's deprecated forms "
-        "of room_options=, deleted in 2.0",
-        _without_params("room_input_options", "room_output_options"),
-    ),
-    (
-        "job_end_close_reason",
-        "*",
-        "the room deleted under a session: the reference's job closes its primary session with "
-        "aclose() (user_initiated) before the JOB_SHUTDOWN callback it registers for this can "
-        "run; the core reports job_shutdown (owner to confirm)",
-        _job_end_reason,
-    ),
-    (
-        "settled_state_attribute",
-        "*",
-        "a reply ending as a scheduled tool reply starts moves the core listening -> thinking in "
-        "one step, and lk.agent.state publishes the settled thinking; the reference's states are "
-        "10 ms apart and the attribute shows both (owner to confirm)",
-        _settled_attribute,
-    ),
-]
+# ================================================================================ judge
 
 
 def _norm(text: str) -> str:
@@ -1307,38 +1206,6 @@ def _of_mic(x: dict[str, Any], mics: set[str]) -> bool:
     return x["attrs"].get("lk.transcribed_track_id") in mics
 
 
-# the fields compared between the stacks; the rest are per-stack checks and the report
-COMPARED = (
-    "started",
-    "history",
-    "agent_states",
-    "user_states",
-    "speeches",
-    "tools_executed",
-    "tool_updates",
-    "false_interruptions",
-    "errors",
-    "close",
-    "events_seen",
-    "event_types",
-    "event_schemas",
-    "item_metrics",
-    "item_times",
-    "start_params",
-    "dtmf",
-    "final_transcripts",
-    "caller.agent_states",
-    "caller.agent_said",
-    "caller.user_said",
-    "caller.transcript_attrs",
-    "caller.tracks",
-    "caller.heard_agent",
-    "caller.room_gone",
-    "caller.timeouts",
-    "caller.rpc_errors",
-)
-
-
 def _get(v: dict[str, Any], path: str) -> Any:
     for part in path.split("."):
         v = v.get(part) if isinstance(v, dict) else None  # type: ignore[assignment]
@@ -1372,56 +1239,6 @@ def consistency(v: dict[str, Any]) -> list[str]:
     if v["trace"] is not None and v["trace"]["violations"]:
         problems.append(f"trace shape violations: {v['trace']['violations']}")
     return problems
-
-
-def _same(a: Any, b: Any) -> bool:
-    """Equal, but for the words the speech-to-text heard differently in the same audio."""
-    if a == b:
-        return True
-    if not (isinstance(a, list) and isinstance(b, list) and len(a) == len(b)):
-        return False
-    for x, y in zip(a, b, strict=True):
-        if x == y:
-            continue
-        if not (isinstance(x, str) and isinstance(y, str)):
-            return False
-        head_x, _, words_x = x.rpartition(": ")
-        head_y, _, words_y = y.rpartition(": ")
-        if head_x != head_y or difflib.SequenceMatcher(None, words_x, words_y).ratio() < 0.8:
-            return False
-    return True
-
-
-def diff(ref: dict[str, Any], nxt: dict[str, Any], scenario: str) -> tuple[list, list]:
-    """The compared fields that differ, and the intended differences that explain others."""
-    before = {p: (_get(ref, p), _get(nxt, p)) for p in COMPARED}
-    ref, nxt = json.loads(json.dumps(ref)), json.loads(json.dumps(nxt))
-    explained: dict[str, list[str]] = {}
-    for key, glob, _, normalise in INTENDED:
-        if not fnmatch.fnmatch(scenario, glob):
-            continue
-        was = {p: json.dumps((_get(ref, p), _get(nxt, p))) for p in COMPARED}
-        normalise(ref, nxt)
-        for p in COMPARED:
-            if was[p] != json.dumps((_get(ref, p), _get(nxt, p))) and not _same(
-                *json.loads(was[p])
-            ):
-                explained.setdefault(p, []).append(key)
-    unknown, intended = [], []
-    for p in COMPARED:
-        a, b = _get(ref, p), _get(nxt, p)
-        if not _same(a, b):
-            unknown.append({"field": p, "ref": a, "next": b})
-        elif p in explained:
-            intended.append(
-                {
-                    "field": p,
-                    "ref": before[p][0],
-                    "next": before[p][1],
-                    "key": ",".join(explained[p]),
-                }
-            )
-    return unknown, intended
 
 
 # ======================================================================= latency per stage
@@ -1464,55 +1281,12 @@ def load_env(path: str | None) -> None:
             os.environ[key.strip()] = value.strip().strip("'\"")  # the last one wins, as sourced
 
 
-# The last core the reference's worker runs on: c6cba6de0 replaced `_core.Worker` with
-# `_core.ServerRuntime` under the copy and left the reference's worker.py calling the old one.
-REF_CORE = "63d314a41"
-
-
-def ref_overlay(venvs: Path) -> None:
-    """The reference package beside the core of its time, put first on the reference worker's
-    path: the reference as checked in, its own Rust core built once from REF_CORE."""
-    so = venvs / f"ref-core-{REF_CORE}.so"
-    if not so.exists():
-        print(f"building the reference's core at {REF_CORE} (once)", flush=True)
-        src = Path(tempfile.mkdtemp(prefix="lk-ref-core-"))
-        try:
-            tar = src / "src.tar"
-            subprocess.run(
-                ["git", "archive", "-o", str(tar), REF_CORE, "rust", "livekit-agents"],
-                cwd=str(REPO),
-                check=True,
-            )
-            subprocess.run(["tar", "-xf", str(tar), "-C", str(src)], check=True)
-            subprocess.run(
-                ["maturin", "build", "--release", "-q", "--out", str(src / "wheel")],
-                cwd=str(src / "livekit-agents"),
-                env={**os.environ, "CARGO_TARGET_DIR": str(REPO / "rust" / "target")},
-                check=True,
-            )
-            with zipfile.ZipFile(next((src / "wheel").glob("*.whl"))) as wheel:
-                name = next(n for n in wheel.namelist() if n.endswith(".so"))
-                so.write_bytes(wheel.read(name))
-        finally:
-            shutil.rmtree(src, ignore_errors=True)
-    package = venvs / "ref-overlay" / "livekit" / "agents"
-    shutil.rmtree(package, ignore_errors=True)
-    shutil.copytree(
-        REPO / "livekit-agents" / "livekit" / "agents",
-        package,
-        ignore=shutil.ignore_patterns("__pycache__", "_core.abi3.so"),
-    )
-    shutil.copyfile(so, package / "_core.abi3.so")
-
-
 class Worker:
-    def __init__(self, stack: str, name: str, venvs: Path, log: Path) -> None:
+    def __init__(self, stack: str, name: str, log: Path) -> None:
         self.stack, self.name, self.log = stack, name, log
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-        if stack == "ref":
-            env["PYTHONPATH"] = str(venvs / "ref-overlay")
         self.proc = subprocess.Popen(
-            [str(venvs / stack / "bin" / "python"), __file__, "agent", "--name", name],
+            [sys.executable, __file__, "agent", "--name", name],
             stdout=open(log, "w"),  # noqa: SIM115
             stderr=subprocess.STDOUT,
             cwd=str(REPO),
@@ -1572,9 +1346,8 @@ async def drive(args: argparse.Namespace) -> int:
 
     runs = Path(args.keep or tempfile.mkdtemp(prefix="lk-e2e-"))
     runs.mkdir(parents=True, exist_ok=True)
-    speech = await speech_frames(Path(args.venvs) / "e2e-speech")
-    tag = uuid.uuid4().hex[:6]
-    workers = {s: Worker(s, f"e2e-{s}-{tag}", Path(args.venvs), runs / f"{s}.log") for s in STACKS}
+    speech = await speech_frames(Path(tempfile.gettempdir()) / "lk-e2e-speech")
+    worker = Worker(STACK, f"e2e-{STACK}-{uuid.uuid4().hex[:6]}", runs / f"{STACK}.log")
     lkapi = api.LiveKitAPI()
     sem = asyncio.Semaphore(args.jobs)
     results: dict[str, dict[str, Any]] = {}
@@ -1582,59 +1355,32 @@ async def drive(args: argparse.Namespace) -> int:
     async def scenario(name: str, attempt: int) -> None:
         async with sem:
             print(f"  {name} (attempt {attempt}) ...", flush=True)
-            stacks = SCENARIOS[name].stacks
-            both = await asyncio.gather(
-                *(run_one(name, s, workers[s].name, lkapi, speech, runs) for s in stacks)
-            )
-            results[name] = dict(zip(stacks, both, strict=True))
+            run = await run_one(name, STACK, worker.name, lkapi, speech, runs)
+            results[name] = {STACK: run}
 
     try:
-        await asyncio.gather(*(w.registered() for w in workers.values()))
-        print(f"workers registered; runs in {runs}", flush=True)
+        await worker.registered()
+        print(f"worker registered; runs in {runs}", flush=True)
         await asyncio.gather(*(scenario(n, 1) for n in args.scenarios))
-        again = [] if args.no_confirm else [n for n in args.scenarios if _differs(n, results[n])]
+        again = [] if args.no_confirm else [n for n in args.scenarios if _problems(n, results[n])]
         if again:
-            print(f"confirming {again}", flush=True)
+            print(f"running again {again}", flush=True)
             for n in again:
                 results[n + "#1"] = results[n]
             await asyncio.gather(*(scenario(n, 2) for n in again))
     finally:
         await lkapi.aclose()
-        for w in workers.values():
-            w.stop()
+        worker.stop()
 
     (runs / "results.json").write_text(json.dumps(results, indent=1, default=repr))
     return report(args.scenarios, results, runs)
 
 
-def _differs(name: str, run: dict[str, Any]) -> bool:
-    j = _judge(name, run)
-    return bool(j["unknown"] or _regressions(j))
-
-
-def _regressions(j: dict[str, Any]) -> list[str]:
-    """A check failing on next alone, or a consistency problem next alone has."""
-    ref_failed = j["expect_failed"].get("ref", [])
-    ref_consistency = j["consistency"].get("ref", [])
-    out = [f"next did not: {k}" for k in j["expect_failed"]["next"] if k not in ref_failed]
-    out += [f"next: {p}" for p in j["consistency"]["next"] if p not in ref_consistency]
-    return out
-
-
-def _judge(name: str, run: dict[str, Any]) -> dict[str, Any]:
-    views = {s: view(run[s]) for s in STACKS if s in run}
-    unknown, intended = diff(views["ref"], views["next"], name) if len(views) == 2 else ([], [])
-    checks = {
-        s: [k for k, f in SCENARIOS[name].expect.items() if not _safe(f, views[s])] for s in views
-    }
-    return {
-        "views": views,
-        "unknown": unknown,
-        "intended": intended,
-        "flaky": [],
-        "expect_failed": checks,
-        "consistency": {s: consistency(views[s]) for s in views},
-    }
+def _problems(name: str, run: dict[str, Any]) -> list[str]:
+    """What the run's checks and its consistency say is wrong with it."""
+    v = view(run[STACK])
+    failed = [f"did not: {k}" for k, f in SCENARIOS[name].expect.items() if not _safe(f, v)]
+    return failed + consistency(v)
 
 
 def _safe(f: Callable[[dict[str, Any]], bool], v: dict[str, Any]) -> bool:
@@ -1644,93 +1390,41 @@ def _safe(f: Callable[[dict[str, Any]], bool], v: dict[str, Any]) -> bool:
         return False
 
 
-def _short(v: Any, limit: int = 300) -> str:
-    s = json.dumps(v, default=repr)
-    return s if len(s) < limit else s[:limit] + "..."
-
-
-def delta(a: Any, b: Any, at: str = "") -> list[str]:
-    """Where two values differ, as short lines: per key for dicts, per element for lists."""
-    if isinstance(a, dict) and isinstance(b, dict):
-        return [
-            line
-            for k in sorted(set(a) | set(b))
-            if a.get(k) != b.get(k)
-            for line in delta(a.get(k), b.get(k), f"{at}{k}: ")
-        ]
-    if isinstance(a, list) and isinstance(b, list) and all(isinstance(x, str) for x in a + b):
-        only_a = [x for x in a if x not in b]
-        only_b = [x for x in b if x not in a]
-        if only_a or only_b:
-            return [f"{at}ref only {_short(only_a, 200)}; next only {_short(only_b, 200)}"]
-    return [f"{at}ref {_short(a)}\n        next {_short(b)}"]
-
-
 def report(names: list[str], results: dict[str, Any], runs: Path) -> int:
-    """Judge saved runs and print the report: 0 when every difference is intended."""
+    """Judge saved runs and print the report: 0 when every scenario passed every attempt."""
+    if not names:
+        print("no scenarios to judge", file=sys.stderr)
+        return 1
     failed = []
     print("\n" + "=" * 100)
     for n in names:
-        j = _judge(n, results[n])
-        unknown, regressions = j["unknown"], _regressions(j)
-        if n + "#1" in results:  # what the first attempt alone showed did not repeat
-            first = _judge(n, results[n + "#1"])
-            repeated = {d["field"] for d in first["unknown"]}
-            j["flaky"] = [d for d in unknown if d["field"] not in repeated]
-            j["flaky"] += [
-                d for d in first["unknown"] if d["field"] not in {u["field"] for u in unknown}
-            ]
-            unknown = [d for d in unknown if d["field"] in repeated]
-            regressions = [r for r in regressions if r in _regressions(first)]
-        bad = bool(unknown or regressions)
-        status = "DIFFERS" if bad else "same"
-        if j["intended"] and not bad:
-            status = (
-                f"same but for intended ({', '.join(sorted({d['key'] for d in j['intended']}))})"
-            )
-        print(f"{n}: {status}")
-        if any(v["caller"]["av_lag"] is not None for v in j["views"].values()):
-            lags = {s: v["caller"]["av_lag"] for s, v in j["views"].items()}
-            print(f"    video behind audio (s): {lags}")
-        for d in unknown:
-            for line in delta(d["ref"], d["next"]):
-                print(f"    {d['field']}: {line}")
-        for r in regressions:
-            print(f"    {r}")
-        for d in j["flaky"]:
-            print(
-                f"    (did not repeat) {d['field']}: " + "; ".join(delta(d["ref"], d["next"]))[:300]
-            )
-        for s in j["views"]:
-            if j["expect_failed"][s] and s == "ref":
-                print(f"    ref did not: {j['expect_failed'][s]}")
-            for p in j["consistency"][s]:
-                if s == "ref" or p not in j["consistency"].get("ref", []):
-                    print(f"    ({s}) {p}")
+        attempts = [results[k] for k in (n + "#1", n) if k in results]
+        problems = [_problems(n, run) for run in attempts]
+        bad = any(problems)
+        print(f"{n}: {'FAILED' if bad else 'passed'}")
+        for i, found in enumerate(problems, 1):
+            for p in found:
+                print(f"    (attempt {i}) {p}")
+        lag = view(results[n][STACK])["caller"]["av_lag"]
+        if lag is not None:
+            print(f"    video behind audio (s): {lag}")
         if bad:
             failed.append(n)
 
     print("\nlatency per stage (s), every reply of every scenario")
-    lat = {s: latencies({n: results[n][s] for n in names if s in results[n]}) for s in STACKS}
-    print(f"{'stage':<20}{'ref p50':>10}{'next p50':>10}{'ref p90':>10}{'next p90':>10}{'n':>8}")
-    for stage in lat["ref"]:
-        a, b = lat["ref"][stage], lat["next"][stage]
-        if a and b:
-            row = f"{stage:<20}{statistics.median(a):>10.3f}{statistics.median(b):>10.3f}"
-            row += f"{_p90(a):>10.3f}{_p90(b):>10.3f}{len(a):>4}/{len(b):<4}"
+    lat = latencies({n: results[n][STACK] for n in names})
+    print(f"{'stage':<20}{'p50':>10}{'p90':>10}{'n':>6}")
+    for stage, values in lat.items():
+        if values:
+            print(f"{stage:<20}{_p50(values):>10.3f}{_p90(values):>10.3f}{len(values):>6}")
         else:
-            row = f"{stage:<20}{'-':>10}{'-':>10}{'-':>10}{'-':>10}{len(a):>4}/{len(b):<4}"
-        print(row)
+            print(f"{stage:<20}{'-':>10}{'-':>10}{0:>6}")
 
-    for s in STACKS:
-        errs = log_errors(runs / f"{s}.log")
-        print(f"\n{s} worker: {len(errs)} error lines ({runs / (s + '.log')})")
-        for line in _dedupe(errs)[:25]:
-            print(f"    {line}")
-    print("\nintended differences:")
-    for key, glob, why, _ in INTENDED:
-        print(f"  {key} [{glob}]: {why}")
-    print(f"\n{len(names) - len(failed)}/{len(names)} scenarios agree; runs kept in {runs}")
+    errs = log_errors(runs / f"{STACK}.log")
+    print(f"\nworker: {len(errs)} error lines ({runs / (STACK + '.log')})")
+    for line in _dedupe(errs)[:25]:
+        print(f"    {line}")
+    print(f"\n{len(names) - len(failed)}/{len(names)} scenarios passed; runs kept in {runs}")
     return 1 if failed else 0
 
 
@@ -1749,6 +1443,11 @@ def log_errors(log: Path) -> list[str]:
             tail = f" | {exc[-1]}" if exc else ""
             out.append(f"{rec['level']} {rec.get('message')}{tail}"[:300])
     return out
+
+
+def _p50(values: list[float]) -> float:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
 
 
 def _p90(values: list[float]) -> float:
@@ -1776,14 +1475,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument("scenarios", nargs="*")
     p.add_argument("--list", action="store_true")
-    p.add_argument("--no-build", action="store_true", help="use the venvs as they are")
     p.add_argument("--jobs", type=int, default=4, help="scenarios at once (two rooms each)")
     p.add_argument("--env-file", help="KEY=value lines to load (LiveKit credentials)")
     p.add_argument("--keep", help="write the runs here instead of a temp dir")
-    p.add_argument("--no-confirm", action="store_true", help="do not rerun a differing scenario")
+    p.add_argument("--no-confirm", action="store_true", help="do not rerun a failing scenario")
     p.add_argument("--report", metavar="RUNS", help="judge the runs kept in RUNS again")
-    p.add_argument("--drive", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--venvs", help=argparse.SUPPRESS)
     args = p.parse_args()
     if args.list:
         print("\n".join(SCENARIOS))
@@ -1796,28 +1492,12 @@ def main() -> None:
     if unknown := [n for n in args.scenarios if n not in SCENARIOS]:
         p.error(f"unknown scenarios: {unknown}")
     load_env(args.env_file)
-    if args.drive:
-        sys.exit(asyncio.run(drive(args)))
     missing = [
         k for k in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET") if not os.environ.get(k)
     ]
     if missing:
         sys.exit(f"needs {', '.join(missing)} (or --env-file)")
-    sys.path.insert(0, str(HERE))
-    import parity
-
-    for stack in STACKS:
-        parity.build(stack, rebuild=not args.no_build)
-    for stack in STACKS:  # the agent's noise cancellation filter, the same build on both
-        subprocess.run(
-            ["uv", "pip", "install", "-q", "--no-deps", "livekit-plugins-noise-cancellation"],
-            check=True,
-            env={**os.environ, "VIRTUAL_ENV": str(parity.venvs_dir() / stack)},
-        )
-    ref_overlay(parity.venvs_dir())
-    ref = str(parity.python_of("ref"))
-    argv = [ref, __file__, "--drive", "--venvs", str(parity.venvs_dir()), *sys.argv[1:]]
-    os.execve(ref, argv, os.environ.copy())
+    sys.exit(asyncio.run(drive(args)))
 
 
 if __name__ == "__main__":
