@@ -692,7 +692,8 @@ fn handwritten_scalar_unions_import_the_records_in_their_declaring_module() {
             #[host(call)] fn send(&self, message: Input);
         }
         "#,
-    ).expect("resolves");
+    )
+    .expect("resolves");
     let out = crate::class_stub::emit(&decls).expect("emits");
     let stub = &out[0].text;
     assert!(stub.contains("from .client import Message"), "{stub}");

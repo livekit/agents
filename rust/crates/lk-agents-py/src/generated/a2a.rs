@@ -66,6 +66,18 @@ pub fn _core_auth_grant_allows(grant: ::lk_agents_abi::a2a::auth::AuthGrant, ope
     Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
+type EndpointCardImpl = <crate::Selected as super::Implementations>::EndpointCard;
+
+/// Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation.
+#[pyfunction]
+#[pyo3(signature = (descriptor))]
+pub fn _core_a2a_agent_card(descriptor: ::lk_agents_abi::a2a::card::EndpointDescriptor) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_agent_card(descriptor).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
 type ReplyImpl = <crate::Selected as super::Implementations>::Reply;
 
@@ -252,18 +264,6 @@ type RemoteConfigurationImpl = <crate::Selected as super::Implementations>::Remo
 pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
     ::lk_agents_abi::python::check_pid()?;
     let out = <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, token).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
-}
-
-// Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
-type EndpointCardImpl = <crate::Selected as super::Implementations>::EndpointCard;
-
-/// Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation.
-#[pyfunction]
-#[pyo3(signature = (descriptor))]
-pub fn _core_a2a_agent_card(descriptor: ::lk_agents_abi::a2a::card::EndpointDescriptor) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
-    let out = <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_agent_card(descriptor).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 

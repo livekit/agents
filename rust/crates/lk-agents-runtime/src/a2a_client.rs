@@ -663,8 +663,12 @@ async fn exchange(
                 for event in events.drain(..) {
                     if let Some(update) = state.decode(event.data.as_bytes(), &id)? {
                         exchange.delivered();
-                        exchange.wait_for_consumer(deliver(inner, update, ack, tx, remote, terminal, known))
-                            .await.map_err(ClientError::Transport)??;
+                        exchange
+                            .wait_for_consumer(deliver(
+                                inner, update, ack, tx, remote, terminal, known,
+                            ))
+                            .await
+                            .map_err(ClientError::Transport)??;
                     }
                     if state.settled() {
                         return state.finish();
@@ -684,8 +688,12 @@ async fn exchange(
                         state.decode(&body, &id)?
                     };
                     if let Some(update) = update {
-                        exchange.wait_for_consumer(deliver(inner, update, ack, tx, remote, terminal, known))
-                            .await.map_err(ClientError::Transport)??;
+                        exchange
+                            .wait_for_consumer(deliver(
+                                inner, update, ack, tx, remote, terminal, known,
+                            ))
+                            .await
+                            .map_err(ClientError::Transport)??;
                     }
                 }
                 return state.finish();

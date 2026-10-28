@@ -1,7 +1,9 @@
 //! The `.pyi` of the declared classes, one per ABI subject (`_generated/_core_<subject>.pyi`),
 //! star-imported by `_core.pyi`. Written from the same IR as the adapters.
 
-use crate::decl::{Class, Declarations, Form, HostForm, Literal, Method, MethodKind, RecordDecl, Ty};
+use crate::decl::{
+    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, RecordDecl, Ty,
+};
 use crate::python::Out;
 
 pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
@@ -70,10 +72,17 @@ impl Imports {
     /// A handwritten scalar union can refer to the generated records beside its declaration.
     fn annotation(&mut self, text: &str, rust: &str) {
         let Some((module, _)) = rust.rsplit_once("::") else { return };
-        let records: Vec<_> = self.1.iter().filter(|record| {
-            record.rust.rsplit_once("::").is_some_and(|(scope, _)| scope == module)
-                && text.split(|c: char| !c.is_alphanumeric() && c != '_').any(|name| name == record.name)
-        }).map(|record| (record.module.clone(), record.name.clone())).collect();
+        let records: Vec<_> = self
+            .1
+            .iter()
+            .filter(|record| {
+                record.rust.rsplit_once("::").is_some_and(|(scope, _)| scope == module)
+                    && text
+                        .split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .any(|name| name == record.name)
+            })
+            .map(|record| (record.module.clone(), record.name.clone()))
+            .collect();
         for (module, name) in records {
             self.add(&format!(".{module}"), &name);
         }
@@ -240,7 +249,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             HostForm::Annotation(text) => {
                 imports.annotation(text, &r.rust);
                 text.clone()
-            },
+            }
         },
         Ty::This => c.name.clone(),
         Ty::Proxy { host, generic, .. } => {

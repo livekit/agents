@@ -3,7 +3,7 @@
 //! reusable remote-tool definition.
 
 mod messages;
-pub use messages::{message_to_wire, message_from_wire, part_from_wire, metadata_to_wire};
+pub use messages::{message_from_wire, message_to_wire, metadata_to_wire, part_from_wire};
 mod tool;
 pub use tool::tool_definition;
 

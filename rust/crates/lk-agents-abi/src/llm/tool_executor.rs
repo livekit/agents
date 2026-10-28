@@ -142,10 +142,7 @@ pub enum ToolOutcome {
     /// The host cancelled the body.
     Cancelled,
     /// `ctx.update(message)`: `message` rendered, `raw` as written; the tool runs on.
-    Update {
-        message: String,
-        raw: String,
-    },
+    Update { message: String, raw: String },
     /// `Completed(value)`: the value as text (`completed` for `None`).
     Completed {
         text: String,

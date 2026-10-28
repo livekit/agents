@@ -31,15 +31,15 @@ use lk_agents_abi::{
 use serde_json::{Map, Value};
 
 use crate::agent::{self, AgentError, first_string_parameter};
-use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
-use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_outcome;
-use model_step::{ModelStep, Purpose};
-pub use result::{CallId, RenderId, RequestId};
 use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
 };
+use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
+use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
+use model_step::{ModelStep, Purpose};
+pub use result::{CallId, RenderId, RequestId};
 use tool_calls::{FinalCandidate, Recorded, ToolCalls};
 
 /// The feedback a rejected text output gives the model.
@@ -394,7 +394,9 @@ impl AgentRun {
             Event::ToolSettled { call, outcome } => {
                 let cancelled = if let Phase::Acting(a) = &mut self.phase {
                     a.calls.body_settled(call, outcome, &mut fx)
-                } else { false };
+                } else {
+                    false
+                };
                 if cancelled {
                     self.abort(RunError::Cancelled, now, &mut fx);
                 } else {
@@ -450,7 +452,8 @@ impl AgentRun {
         self.history.push(ChatItem::Message(self.input.message.clone()));
         // The answer is that tool's: it takes it as its first string parameter, no model turn.
         let handed = self.input.answer_tool.clone().and_then(|name| {
-            let parameter = first_string_parameter(&agent::tool(&self.agent, &name)?.spec)?.to_owned();
+            let parameter =
+                first_string_parameter(&agent::tool(&self.agent, &name)?.spec)?.to_owned();
             Some((name, parameter))
         });
         match handed {
@@ -493,7 +496,8 @@ impl AgentRun {
         let Some(llm) = self.input.llm.as_ref().map(|l| l.id) else {
             return self.finish(Err(RunError::NoModel), fx);
         };
-        let instructions = agent::instructions_with(&self.agent, dynamic.as_deref().unwrap_or_default());
+        let instructions =
+            agent::instructions_with(&self.agent, dynamic.as_deref().unwrap_or_default());
         let mut tools: Vec<ToolSpec> = Vec::new();
         let mut phrase = None;
         match &purpose {

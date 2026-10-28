@@ -9,11 +9,11 @@ pub mod run;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
-use crate::{FunctionCall, ToolSpec};
 use crate::errors::HostError;
+use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
+use crate::{FunctionCall, ToolSpec};
 
 /// What one host callback runs within, captured when the owning operation was created (a
 /// `run()` call entry), never from whichever task dispatches it later.
@@ -86,10 +86,7 @@ pub enum ReadBackAnswer {
     #[host(field = "question")]
     Question(String),
     /// A detail is missing before there is anything to approve.
-    InputRequired {
-        question: String,
-        verbatim: bool,
-    },
+    InputRequired { question: String, verbatim: bool },
 }
 
 /// An output candidate for the host to validate.

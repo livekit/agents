@@ -1,8 +1,8 @@
 //! The generated `AgentHostProxy` against a live interpreter: what the host object receives,
 //! the context each call runs in, refusals versus failures, and notifications.
 
-use lk_agents_abi::agent::{Invocation, OutputCandidate, ValidatedOutput};
 use _core::generated::agent::AgentHostProxy;
+use lk_agents_abi::agent::{Invocation, OutputCandidate, ValidatedOutput};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -198,24 +198,39 @@ fn records_cross_as_their_models_with_declared_presence() {
         );
         globals.set_item("MODELS", models).unwrap();
         py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
-        let eval = |code: &str| py.eval(&std::ffi::CString::new(code).unwrap(), Some(&globals), None).unwrap();
+        let eval = |code: &str| {
+            py.eval(&std::ffi::CString::new(code).unwrap(), Some(&globals), None).unwrap()
+        };
 
         let accepted = eval("models.ValidatedOutputAccepted(text=None, value=None)");
         assert!(matches!(
             accepted.extract::<ValidatedOutput>().unwrap(),
             ValidatedOutput::Accepted { text: None, value: None }
         ));
-        let dict = eval("{'kind': 'retry', 'reason': 'no'}").extract::<ValidatedOutput>().unwrap_err();
+        let dict =
+            eval("{'kind': 'retry', 'reason': 'no'}").extract::<ValidatedOutput>().unwrap_err();
         assert!(dict.is_instance_of::<pyo3::exceptions::PyTypeError>(py), "{dict}");
-        assert!(dict.to_string().contains("ValidatedOutputAccepted | ValidatedOutputRetry"), "{dict}");
+        assert!(
+            dict.to_string().contains("ValidatedOutputAccepted | ValidatedOutputRetry"),
+            "{dict}"
+        );
 
         let null = eval("models.ReadBackAnswerInputRequired(question=None, verbatim=False)")
             .extract::<ReadBackAnswer>()
             .unwrap_err();
         assert!(null.to_string().contains("ReadBackAnswerInputRequired.question"), "{null}");
 
-        assert_eq!(eval("models.Retries()").extract::<Retries>().unwrap(), Retries { tool: 1, output: 1 });
-        assert_eq!(eval("models.Retries(output=0)").extract::<Retries>().unwrap(), Retries { tool: 1, output: 0 });
-        assert!(eval("models.Retries(tool=None)").extract::<Retries>().is_err(), "None is not omission");
+        assert_eq!(
+            eval("models.Retries()").extract::<Retries>().unwrap(),
+            Retries { tool: 1, output: 1 }
+        );
+        assert_eq!(
+            eval("models.Retries(output=0)").extract::<Retries>().unwrap(),
+            Retries { tool: 1, output: 0 }
+        );
+        assert!(
+            eval("models.Retries(tool=None)").extract::<Retries>().is_err(),
+            "None is not omission"
+        );
     });
 }

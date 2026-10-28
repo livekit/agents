@@ -203,12 +203,16 @@ impl AgentHost for FakeHost {
                 assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
             }
         }
-        Ok((ToolOutcome::Value {
-            text: "9:00 is free".into(),
-            reply_required: true,
-            verbatim: false,
-            more: None,
-        }.into(), [("application_receipt".into(), json!("confirmed-appointment"))].into_iter().collect()))
+        Ok((
+            ToolOutcome::Value {
+                text: "9:00 is free".into(),
+                reply_required: true,
+                verbatim: false,
+                more: None,
+            }
+            .into(),
+            [("application_receipt".into(), json!("confirmed-appointment"))].into_iter().collect(),
+        ))
     }
 
     async fn validate_output(
@@ -371,9 +375,15 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
     );
     assert!(updates.iter().any(|u| matches!(u, RunUpdate::Stream(StreamEvent::ToolResult { output, .. }) if output == "9:00 is free")));
 
-    let recorded_call = settled.result.new_messages.iter().find_map(|item| match item {
-        lk_agents_abi::ChatItem::FunctionCall(call) => Some(call), _ => None,
-    }).expect("the original tool call is recorded");
+    let recorded_call = settled
+        .result
+        .new_messages
+        .iter()
+        .find_map(|item| match item {
+            lk_agents_abi::ChatItem::FunctionCall(call) => Some(call),
+            _ => None,
+        })
+        .expect("the original tool call is recorded");
     assert_eq!(recorded_call.extra["application_receipt"], "confirmed-appointment");
 
     let seen = s.host.seen.lock().unwrap().clone();

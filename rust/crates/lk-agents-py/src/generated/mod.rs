@@ -23,11 +23,11 @@ pub mod worker;
 pub trait Implementations: 'static {
     type Credentials: ::lk_agents_abi::a2a::auth::Credentials;
     type AuthPermissions: ::lk_agents_abi::a2a::auth::AuthPermissions;
+    type EndpointCard: ::lk_agents_abi::a2a::card::EndpointCard;
     type Reply: ::lk_agents_abi::a2a::client::Reply;
     type AgentClient: ::lk_agents_abi::a2a::client::AgentClient<Reply = Self::Reply>;
     type RemoteInteraction: ::lk_agents_abi::a2a::remote::RemoteInteraction;
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
-    type EndpointCard: ::lk_agents_abi::a2a::card::EndpointCard;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
@@ -51,11 +51,11 @@ pub trait Implementations: 'static {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::_core_Credentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
     m.add_class::<a2a::Reply>()?;
     m.add_class::<a2a::AgentClient>()?;
     m.add_class::<a2a::_core_RemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
-    m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
     m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;

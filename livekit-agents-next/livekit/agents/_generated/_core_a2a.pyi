@@ -48,6 +48,9 @@ def _core_auth_grant_allows(
     scope: str | None,
 ) -> bool: ...
 
+def _core_a2a_agent_card(descriptor: EndpointDescriptor) -> str:
+    """Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation."""
+
 class Reply:
     @property
     def task_id(self) -> str: ...
@@ -111,6 +114,3 @@ class _core_RemoteInteraction:
 
 def _core_remote_token(endpoint: str, token: str | None = None) -> str | None:
     """Resolve an endpoint credential from explicit input or the configured project's origin."""
-
-def _core_a2a_agent_card(descriptor: EndpointDescriptor) -> str:
-    """Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation."""

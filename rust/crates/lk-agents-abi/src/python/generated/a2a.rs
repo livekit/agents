@@ -159,6 +159,44 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::auth::AuthPrincipal {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
+static ENDPOINT_DESCRIPTOR: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::a2a::card::EndpointDescriptor {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(ENDPOINT_DESCRIPTOR.import(py, "livekit.agents._generated.a2a_card", "EndpointDescriptor")?)? {
+            return Err(super::not_a(obj, "EndpointDescriptor"));
+        }
+        Ok(Self {
+            name: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "name", |v| v.extract::<::std::string::String>())?,
+            description: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "description", |v| v.extract::<::std::string::String>())?,
+            version: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "version", |v| v.extract::<::std::string::String>())?,
+            url: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "url", |v| v.extract::<::std::string::String>())?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::card::EndpointDescriptor {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { name, description, version, url } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item("description", ::pyo3::IntoPyObjectExt::into_bound_py_any(description, py)?)?;
+        kwargs.set_item("version", ::pyo3::IntoPyObjectExt::into_bound_py_any(version, py)?)?;
+        kwargs.set_item("url", ::pyo3::IntoPyObjectExt::into_bound_py_any(url, py)?)?;
+        ENDPOINT_DESCRIPTOR.import(py, "livekit.agents._generated.a2a_card", "EndpointDescriptor")?.call((), Some(&kwargs))
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
 static MESSAGE_METADATA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
@@ -463,44 +501,6 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::remote::RemoteEvent {
                 REMOTE_EVENT_FOLLOW.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventFollow")?.call((), Some(&kwargs))
             },
         }
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
-static ENDPOINT_DESCRIPTOR: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-    ::pyo3::sync::PyOnceLock::new();
-
-impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::a2a::card::EndpointDescriptor {
-    type Error = PyErr;
-
-    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let obj = &*obj;
-        let py = obj.py();
-        if !obj.is_instance(ENDPOINT_DESCRIPTOR.import(py, "livekit.agents._generated.a2a_card", "EndpointDescriptor")?)? {
-            return Err(super::not_a(obj, "EndpointDescriptor"));
-        }
-        Ok(Self {
-            name: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "name", |v| v.extract::<::std::string::String>())?,
-            description: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "description", |v| v.extract::<::std::string::String>())?,
-            version: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "version", |v| v.extract::<::std::string::String>())?,
-            url: ::lk_agents_abi::python::attr_with(obj, "EndpointDescriptor", "url", |v| v.extract::<::std::string::String>())?,
-        })
-    }
-}
-
-impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::card::EndpointDescriptor {
-    type Target = PyAny;
-    type Output = Bound<'py, PyAny>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Self { name, description, version, url } = self;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
-        kwargs.set_item("description", ::pyo3::IntoPyObjectExt::into_bound_py_any(description, py)?)?;
-        kwargs.set_item("version", ::pyo3::IntoPyObjectExt::into_bound_py_any(version, py)?)?;
-        kwargs.set_item("url", ::pyo3::IntoPyObjectExt::into_bound_py_any(url, py)?)?;
-        ENDPOINT_DESCRIPTOR.import(py, "livekit.agents._generated.a2a_card", "EndpointDescriptor")?.call((), Some(&kwargs))
     }
 }
 
