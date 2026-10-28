@@ -314,6 +314,8 @@ pub enum Ty {
     Bool,
     Int(Int),
     Float,
+    /// `std::time::Duration`: seconds, as a float on the host.
+    Duration,
     Str,
     /// `serde_json::Value`: any JSON value.
     Json,
@@ -426,6 +428,7 @@ impl Ty {
             Ty::Bool => "bool".into(),
             Ty::Int(i) => i.rust().into(),
             Ty::Float => "f64".into(),
+            Ty::Duration => "::std::time::Duration".into(),
             Ty::Str => "::std::string::String".into(),
             Ty::Json => "::serde_json::Value".into(),
             Ty::JsonObject => {

@@ -493,7 +493,7 @@ impl lk_agents_abi::EotDetector for EotStream {
         self.cancel_inference(timed_out);
     }
 
-    fn flush(&self, _reason: &'static str) {
+    fn flush(&self, _reason: &str) {
         EotStream::flush(self);
     }
 

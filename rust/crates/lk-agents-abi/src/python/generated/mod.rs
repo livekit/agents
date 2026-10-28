@@ -15,6 +15,7 @@ mod stt;
 mod telemetry;
 mod text_session;
 mod tts;
+mod turn;
 mod vad;
 mod worker;
 

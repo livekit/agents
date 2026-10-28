@@ -146,6 +146,8 @@ impl AgentRunUpdates {
 #[derive(Clone)]
 pub struct AgentHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
+    /// The `notify` calls, delivered in order.
+    notifier: ::lk_agents_runtime::host::python::Notifier,
 }
 
 impl AgentHostProxy {
@@ -163,7 +165,7 @@ impl AgentHostProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?) })
     }
 }
 
@@ -331,21 +333,9 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
             ::lk_agents_abi::python::log::warn!("AgentHost.cancel failed: {}", ::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.cancel: the call captured no host context"));
             return;
         };
-        let runtime = match ::lk_agents_runtime::process::handle() {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                ::lk_agents_abi::python::log::warn!("AgentHost.cancel failed: {e}");
-                return;
-            }
-        };
-        runtime.spawn(async move {
-            let context = &context;
-            if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
-                Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await {
-                ::lk_agents_abi::python::log::warn!("AgentHost.cancel failed: {e}");
-            }
+        self.notifier.notify(context, "AgentHost.cancel", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+            Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
 }

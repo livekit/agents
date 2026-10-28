@@ -388,6 +388,13 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
                 len = items.len(),
             )
         }
+        Ty::Duration => format!(
+            "::lk_agents_abi::python::number_from_py::<f64>(&{v}, {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
+        ),
+        Ty::Optional(inner) if **inner == Ty::Duration => format!(
+            "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
+            from_object(v, inner, path, at)?
+        ),
         other if native(other) => format!("{v}.extract::<{}>()", other.rust()),
         other => return Err(format!("{at}: `{}` has no input conversion", other.rust())),
     })

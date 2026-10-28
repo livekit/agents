@@ -18,6 +18,8 @@ pub struct VadProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: ::lk_agents_runtime::host::python::Notifier,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::VadCapabilities,
     id: ::lk_agents_abi::ProviderId,
@@ -50,7 +52,7 @@ impl VadProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(VadProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, label, capabilities, id })
+        Ok(VadProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?), label, capabilities, id })
     }
 }
 
@@ -75,21 +77,9 @@ impl ::lk_agents_abi::Vad for VadProxy {
     fn prewarm(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
-        let runtime = match ::lk_agents_runtime::process::handle() {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                ::lk_agents_abi::python::log::warn!("Vad._core_prewarm failed: {e}");
-                return;
-            }
-        };
-        runtime.spawn(async move {
-            let context = &context;
-            if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await {
-                ::lk_agents_abi::python::log::warn!("Vad._core_prewarm failed: {e}");
-            }
+        self.notifier.notify(context, "Vad._core_prewarm", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+            Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
 

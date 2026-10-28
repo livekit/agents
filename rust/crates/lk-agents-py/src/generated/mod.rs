@@ -18,6 +18,7 @@ pub mod stt;
 pub mod telemetry;
 pub mod text_session;
 pub mod tts;
+pub mod turn;
 pub mod vad;
 pub mod worker;
 

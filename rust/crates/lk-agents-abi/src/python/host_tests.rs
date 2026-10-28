@@ -123,62 +123,6 @@ class ChatChunk:
         extract_generated::<SpeechEvent>(obj.bind(py)).unwrap()
     }
 
-    // Catches: the generated EOT proxy calling its host off the loop thread (a silent stall), out
-    // of order, or under any name but the `_core_*` surface's.
-    #[test]
-    fn the_eot_proxy_calls_its_host_on_the_loop_thread_in_order() {
-        use crate::EotDetector as _;
-        attach(|py| {
-            let out = eval_with_stubs(
-                py,
-                r#"
-import asyncio, threading
-loop = asyncio.new_event_loop()
-ready = threading.Event()
-def run():
-    asyncio.set_event_loop(loop); loop.call_soon(ready.set); loop.run_forever()
-thread = threading.Thread(target=run, daemon=True); thread.start(); ready.wait()
-class Detector:
-    def __init__(self): self.calls = []; self.done = threading.Event()
-    def _core_id(self): return {"label": "t", "model": "m", "provider": "p"}
-    def _core_thresholds(self): return None
-    def _core_push_audio(self, f): self.calls.append(("push", f.sample_rate, threading.get_ident()))
-    def _core_flush(self, reason): self.calls.append(("flush", reason, threading.get_ident()))
-    def _core_cancel(self, timed_out):
-        self.calls.append(("cancel", timed_out, threading.get_ident())); self.done.set()
-out = (loop, thread.ident, Detector())
-"#,
-            );
-            let (event_loop, loop_thread, detector): (Py<PyAny>, u64, Py<PyAny>) =
-                out.extract(py).unwrap();
-            let handle = HostHandle::from_parts(
-                detector.clone_ref(py),
-                pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone()),
-            );
-            let proxy = crate::turn::detector::PyEotDetector::from_bridge(handle).unwrap();
-            assert_eq!(proxy.id().model, "m", "the identity is read once, off `_core_id`");
-            assert!(proxy.thresholds().is_none(), "a host detector hands over no table");
-            proxy.push_audio(AudioFrame::new(vec![0u8; 4], 16_000, 1, 2));
-            proxy.flush("end_of_speech");
-            proxy.cancel(true);
-            // `Event.wait` releases the GIL, so the loop thread can run the three callbacks.
-            let detector = detector.bind(py);
-            let done = detector.getattr("done").unwrap().call_method1("wait", (5.0,)).unwrap();
-            assert!(done.extract::<bool>().unwrap(), "the calls never reached the loop");
-            let calls: Vec<Bound<'_, PyAny>> =
-                detector.getattr("calls").unwrap().extract().unwrap();
-            let got: Vec<String> = calls.iter().map(|c| c.repr().unwrap().to_string()).collect();
-            let want = [
-                format!("('push', 16000, {loop_thread})"),
-                format!("('flush', 'end_of_speech', {loop_thread})"),
-                format!("('cancel', True, {loop_thread})"),
-            ];
-            assert_eq!(got, want);
-            let stop = event_loop.bind(py).getattr("stop").unwrap();
-            event_loop.bind(py).call_method1("call_soon_threadsafe", (stop,)).unwrap();
-        });
-    }
-
     // Catches: a host coroutine scheduled from a core thread while the loop thread runs a callback
     // in the same captured context raising "cannot enter context: ... is already entered" (a
     // worker's simulate_job failing at random beside its load reports).

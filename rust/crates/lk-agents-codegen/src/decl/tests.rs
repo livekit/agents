@@ -153,7 +153,7 @@ fn a_handle_is_handed_out_as_the_shells_class_and_never_taken_in() {
 }
 
 // Catches: a type accepted for what its last segment spells. `Value` here is the crate's own
-// undeclared type, not `serde_json::Value`, and `Duration` has no declared unit.
+// undeclared type, not `serde_json::Value`, and an instant has no declared host form.
 #[test]
 fn a_type_is_what_it_resolves_to_never_its_name() {
     let krate = Crate::from_files(
@@ -171,8 +171,8 @@ fn a_type_is_what_it_resolves_to_never_its_name() {
             && err.contains("not a declared host type"),
         "{err}"
     );
-    let err = refuse("#[host(call)] fn f(&self, d: std::time::Duration);");
-    assert!(err.contains("std::time::Duration") && err.contains("no declared conversion"), "{err}");
+    let err = refuse("#[host(call)] fn f(&self, d: std::time::Instant);");
+    assert!(err.contains("std::time::Instant") && err.contains("no declared conversion"), "{err}");
 }
 
 // Catches: a record crossing in a direction it never declared, a proxy handed back to the host,
@@ -344,7 +344,7 @@ fn refuse_proxy(body: &str) -> String {
 }
 
 // Catches: a proxy call made outside the context its invocation captured, a host refusal read as
-// a failure (or the reverse), a notification awaited or its failure dropped silently, an argument
+// a failure (or the reverse), a notification awaited, reordered (a task per call) or its failure dropped silently, an argument
 // converted by anything but its declared kind, or a class parameter of a declared proxy taken
 // through the in-place `HostProxy`.
 #[test]
@@ -391,9 +391,8 @@ fn declared_proxies_call_the_host_in_their_context() {
         "return Ok(Err(<::lk_agents_abi::errors::Refused as ::std::convert::From<String>>::from(e.value(py).to_string())));",
         "<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e)",
         "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
-        "runtime.spawn(async move {",
+        "self.notifier.notify(context, \"Callbacks.abort\", move |py| {",
         "Ok((host.bind(py).getattr(\"abort\")?",
-        "::lk_agents_abi::python::log::warn!(\"Callbacks.abort failed: {e}\");",
         "let host = super::llm::CallbacksProxy::from_host(&host)?;",
         "native::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)",
     ] {
@@ -723,7 +722,8 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
 
 // Catches: a live room read answered from a stale snapshot (or awaited off its caller), a host
 // failure of a synchronous call turned into a default, a writer close that cannot consume its
-// proxy, a host object the core must own (`Box<dyn ..>`) refused, or a borrowed participant read
+// proxy, a host object the core must own (`Box<dyn ..>`) refused, a failed close that returns
+// nothing dropped silently, or a borrowed participant read
 // on every call instead of once when the room is taken.
 #[test]
 fn proxy_calls_consumes_and_lends_by_declaration() {
@@ -733,6 +733,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         #[host(await)] async fn close(self: Box<Self>) -> Result<(), HostError>;
         #[host(read_once)] fn conn(&self) -> &Conn;
         #[host(await)] async fn open_writer(&self) -> Result<Box<dyn Callbacks>, HostError>;
+        #[host(await)] async fn release(&self);
         "#,
     ))
     .expect("resolves");
@@ -745,6 +746,14 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         "{llm}"
     );
     assert!(llm.contains("async fn close(self: ::std::boxed::Box<Self>)"), "{llm}");
+    // An awaited close returning nothing still reports its failure.
+    assert!(
+        llm.contains("async fn release(&self) {")
+            && llm.contains(
+                "::lk_agents_abi::python::log::warn!(\"Callbacks.release failed: {e}\");"
+            ),
+        "{llm}"
+    );
     // A host object handed over to be owned (a writer the core later closes by value).
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")

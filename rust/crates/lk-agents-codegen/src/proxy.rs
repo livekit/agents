@@ -28,6 +28,12 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         );
         inits.push("context: ::lk_agents_runtime::host::python::capture_context(obj.py())?".into());
     }
+    if p.methods.iter().any(|m| m.kind == ProxyCall::Notify) {
+        fields.push(
+            "    /// The `notify` calls, delivered in order.\n    notifier: ::lk_agents_runtime::host::python::Notifier,\n".into(),
+        );
+        inits.push("notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?)".into());
+    }
     for m in p.methods.iter().filter(|m| m.kind == ProxyCall::ReadOnce) {
         let at = format!("{}::{}", tr, m.rust_name);
         fields.push(format!("    {}: {},\n", m.rust_name, m.ret.ok.rust()));
@@ -181,7 +187,13 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let head = format!("        let host = ::std::sync::Arc::clone(&self.host);\n{moved}{context}");
     match m.kind {
         ProxyCall::Notify => Ok(format!(
-            "    {sig} {{\n{head}        let runtime = match ::lk_agents_runtime::process::handle() {{\n            Ok(runtime) => runtime,\n            Err(e) => {{\n                ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n                return;\n            }}\n        }};\n        runtime.spawn(async move {{\n            let context = &context;\n            if let Err(e) = {call}.await {{\n                ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n            }}\n        }});\n    }}\n",
+            "    {sig} {{\n{head}        self.notifier.notify(context, \"{label}\", move |py| {{\n            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n            Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n        }});\n    }}\n",
+            args.len(),
+            args.join(", "),
+            m.name
+        )),
+        ProxyCall::Await if m.ret.err.is_none() => Ok(format!(
+            "    async {sig} {{\n{head}        let context = &context;\n        if let Err(e) = {call}.await {{\n            ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n        }}\n    }}\n",
         )),
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;
@@ -258,6 +270,13 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Handle { .. }
         | Ty::Instance { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));
+        }
+        // Seconds, as the host's timeouts and delays are.
+        Ty::Duration => {
+            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}.as_secs_f64(), py)?")
+        }
+        Ty::Optional(t) if **t == Ty::Duration => {
+            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}.map(|d| d.as_secs_f64()), py)?")
         }
         Ty::Optional(t) | Ty::List(t)
             if matches!(**t, Ty::Json | Ty::JsonObject | Ty::Error(_)) =>

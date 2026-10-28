@@ -24,6 +24,10 @@ impl Resolver<'_> {
         let mut methods = Vec::new();
         for inner in &tr.items {
             match inner {
+                // A provided method without a key is native only: the proxy keeps its default.
+                syn::TraitItem::Fn(f)
+                    if f.default.is_some()
+                        && voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?.is_empty() => {}
                 syn::TraitItem::Fn(f) => methods.push(self.proxy_method(f, &trait_path)?),
                 other => {
                     return Err(format!(
@@ -127,6 +131,10 @@ impl Resolver<'_> {
         let mut lends = false;
         let ret = match kind {
             ProxyCall::Notify => ProxyRet { ok: Ty::Unit, refusal: None, err: None },
+            // An awaited call returning nothing (a close): its failure is logged, as a notify's is.
+            ProxyCall::Await if matches!(f.sig.output, syn::ReturnType::Default) => {
+                ProxyRet { ok: Ty::Unit, refusal: None, err: None }
+            }
             ProxyCall::Await | ProxyCall::Call => self.proxy_ret(&f.sig.output, &at)?,
             ProxyCall::ReadOnce => {
                 let syn::ReturnType::Type(_, t) = &f.sig.output else {

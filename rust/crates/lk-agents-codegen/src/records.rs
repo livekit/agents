@@ -238,6 +238,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             format!("::lk_agents_abi::python::number_from_py::<{}>({v}, {path:?})", i.rust())
         }
         Ty::Float => format!("::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?})"),
+        Ty::Duration => format!(
+            "::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
+        ),
         Ty::Str => format!("{v}.extract::<::std::string::String>()"),
         Ty::Json => format!("::lk_agents_abi::python::value_from_py({v}, {path:?})"),
         Ty::JsonObject => format!(
@@ -298,6 +301,9 @@ fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         ),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?")
+        }
+        Ty::Duration => {
+            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}.as_secs_f64(), py)?")
         }
         other => return Err(format!("`{}` is not a record field", other.rust())),
     })
@@ -460,7 +466,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
     match ty {
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
-        Ty::Float => "float".into(),
+        Ty::Float | Ty::Duration => "float".into(),
         Ty::Str => "str".into(),
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),

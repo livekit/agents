@@ -37,41 +37,48 @@ pub trait DetectorLeg: Send + Sync {
     async fn next(&self) -> LegEvent<Self::Verdict>;
 }
 
-/// A host `turn_detection` object is this trait through its `#[host(proxy)]` (`PyEotDetector`), over
-/// `_core_view.TurnDetector`, which speaks the detector's `stream()` behind the `_core_*` surface.
-#[crate::host(proxy)]
+/// A host `turn_detection` object is this trait through `_core_view.TurnDetector`, which speaks
+/// the detector's `stream()` behind the `_core_*` surface.
+#[crate::host(proxy(host = "livekit.agents._core_view.TurnDetector"))]
 #[async_trait::async_trait]
 pub trait EotDetector: Send + Sync + 'static {
     /// The detector's `model`/`provider`, as `EOUMetrics.metadata` names them.
+    #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label("turn_detector")
     }
 
     /// One frame of the user's audio. Fire-and-forget, gated as the STT leg is.
+    #[host(notify, name = "_core_push_audio")]
     fn push_audio(&self, frame: crate::AudioFrame);
 
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
     /// timeout and a superseding speech differently.
+    #[host(notify, name = "_core_cancel")]
     fn cancel(&self, timed_out: bool);
 
     /// `flush(reason)`: a segment boundary, not a close.
-    fn flush(&self, reason: &'static str);
+    #[host(notify, name = "_core_flush")]
+    fn flush(&self, reason: &str);
     /// Ask for a prediction (`stream.predict()`).
     ///
     /// The countdown already bounds `timeout` itself, so ignoring it cannot hang a turn. An `Err`
     /// is not a turn failure: the countdown proceeds as if no detector were configured.
+    #[host(await, name = "_core_predict")]
     async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError>;
 
     /// What a prediction is judged against (`unlikely_threshold(language)`,
     /// `backchannel_threshold(language)`, `supports_language(language)`), as it is now: the user's
     /// overrides over the model's defaults, the gateway's once its session is created. `None`: the
-    /// detector keeps no table, and the mini model's stock one judges it.
+    /// detector keeps no table, and the mini model's stock one judges it. Native detectors only:
+    /// a host detector answers per language itself, so its proxy keeps this default.
     fn thresholds(&self) -> Option<crate::tokenize::language::ThresholdOptions> {
         None
     }
 
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
+    #[host(await, name = "_core_aclose")]
     async fn aclose(&self) {}
 }
 

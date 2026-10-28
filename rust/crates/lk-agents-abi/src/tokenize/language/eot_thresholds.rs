@@ -104,19 +104,6 @@ pub struct ThresholdOptions {
     bc_default: Option<f64>,
 }
 
-/// A host detector (`_core_view.TurnDetector`) answers its thresholds per language, so it has no
-/// table to hand over: its `_core_thresholds()` is `None`, and anything else is refused.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ThresholdOptions {
-    type Error = pyo3::PyErr;
-
-    fn extract(_obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "a turn detector's threshold table crosses only from the core's own detector",
-        ))
-    }
-}
-
 impl ThresholdOptions {
     pub fn new(
         model: TurnDetectorModel,

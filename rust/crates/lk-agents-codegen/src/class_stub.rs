@@ -215,7 +215,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Unit => "None".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
-        Ty::Float => "float".into(),
+        Ty::Float | Ty::Duration => "float".into(),
         Ty::Str => "str".into(),
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),

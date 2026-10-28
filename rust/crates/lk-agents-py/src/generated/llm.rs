@@ -446,6 +446,8 @@ pub struct LlmProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: ::lk_agents_runtime::host::python::Notifier,
     label: ::std::string::String,
     model: ::std::string::String,
     id: ::lk_agents_abi::ProviderId,
@@ -480,7 +482,7 @@ impl LlmProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, label, model, id, conn: None })
+        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?), label, model, id, conn: None })
     }
 }
 
@@ -505,21 +507,9 @@ impl ::lk_agents_abi::Llm for LlmProxy {
     fn prewarm(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
-        let runtime = match ::lk_agents_runtime::process::handle() {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                ::lk_agents_abi::python::log::warn!("Llm._core_prewarm failed: {e}");
-                return;
-            }
-        };
-        runtime.spawn(async move {
-            let context = &context;
-            if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await {
-                ::lk_agents_abi::python::log::warn!("Llm._core_prewarm failed: {e}");
-            }
+        self.notifier.notify(context, "Llm._core_prewarm", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+            Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
 
@@ -532,21 +522,9 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let error_arg = error;
         let recoverable_arg = recoverable;
         let context = ::std::clone::Clone::clone(&self.context);
-        let runtime = match ::lk_agents_runtime::process::handle() {
-            Ok(runtime) => runtime,
-            Err(e) => {
-                ::lk_agents_abi::python::log::warn!("Llm._core_failed failed: {e}");
-                return;
-            }
-        };
-        runtime.spawn(async move {
-            let context = &context;
-            if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))(error_arg).into_value(py).into_bound(py).into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
-                Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await {
-                ::lk_agents_abi::python::log::warn!("Llm._core_failed failed: {e}");
-            }
+        self.notifier.notify(context, "Llm._core_failed", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))(error_arg).into_value(py).into_bound(py).into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
+            Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
 

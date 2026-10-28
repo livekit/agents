@@ -43,7 +43,7 @@ impl EotDetector for FakeEot {
 
     fn cancel(&self, _timed_out: bool) {}
 
-    fn flush(&self, _reason: &'static str) {}
+    fn flush(&self, _reason: &str) {}
 
     fn thresholds(&self) -> Option<ThresholdOptions> {
         Some(ThresholdOptions::new(
