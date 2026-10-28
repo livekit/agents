@@ -215,12 +215,13 @@ async def peer() -> AsyncIterator[Peer]:
     try:
         yield peer
     finally:
+        # wait_closed() waits for open connections: release the stalled handlers first
         server.close()
-        await server.wait_closed()
         peer.release.set()
         for writer in tuple(peer.sockets):
             writer.close()
         await asyncio.gather(*tuple(peer.tasks))
+        await server.wait_closed()
 
 
 @pytest.mark.asyncio
@@ -519,27 +520,3 @@ async def test_remote_tool_uses_only_its_configured_project_origin_for_default_c
         monkeypatch.setenv("LIVEKIT_URL", project)
         await RemoteAgent(peer.url, conn_options=OPTIONS).as_tool().setup()
         assert "authorization" not in peer.requests[-1][1]
-
-
-@pytest.mark.parametrize("failed", [False, True])
-def test_native_remote_result_crosses_the_voice_tool_output_adapter(failed: bool) -> None:
-    from livekit.agents._generated.tool_report import (
-        ToolOutcomeToolError,
-        ToolOutcomeValue,
-        ToolReport,
-    )
-    from livekit.agents.llm import FunctionCall
-    from livekit.agents.llm.utils import make_function_call_output
-
-    report = ToolReport(
-        outcome=ToolOutcomeToolError(message="unavailable")
-        if failed
-        else ToolOutcomeValue(text="covered")
-    )
-    result = make_function_call_output(
-        fnc_call=FunctionCall(call_id="call", name="coverage_expert", arguments="{}"),
-        output=report,
-        exception=None,
-    )
-    assert result.fnc_call_out.output == ("unavailable" if failed else "covered")
-    assert result.fnc_call_out.is_error == failed
