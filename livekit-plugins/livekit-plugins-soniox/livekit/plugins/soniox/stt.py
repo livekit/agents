@@ -48,6 +48,7 @@ BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 
 # WebSocket messages and tokens.
 KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
+FINALIZE_MESSAGE = '{"type": "finalize"}'
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
@@ -428,11 +429,20 @@ class SpeechStream(stt.SpeechStream):
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
             return
 
+        audio_since_finalize = False
         async for data in self._input_ch:
             if isinstance(data, rtc.AudioFrame):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
+                audio_since_finalize = True
+            elif isinstance(data, self._FlushSentinel) and audio_since_finalize:
+                # Ask Soniox for the final transcript of the audio so far, instead of waiting
+                # for its own endpoint detection (it replies with a `<fin>` token). Only once
+                # per stretch of audio: end_input() flushes again, and Soniox advises against
+                # frequent finalize requests.
+                self.audio_queue.put_nowait(FINALIZE_MESSAGE)
+                audio_since_finalize = False
 
     async def _send_audio_task(self) -> None:
         """Take queued audio data and transmit it over the WebSocket."""
