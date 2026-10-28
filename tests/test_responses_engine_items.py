@@ -268,13 +268,21 @@ async def test_tool_call_between_messages_is_kept() -> None:
     assert reply.calls == ["fc1"]
 
 
-async def test_tool_call_after_second_message_is_dropped() -> None:
+async def test_tool_call_after_second_message_is_kept(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
     reply = await _reply_over_ws(
         _stream(_message("m1", "Checking."), _message("m2", "Again."), _function_call("fc1"))
     )
 
     assert reply.text == "Checking."
-    assert reply.calls == []
+    assert reply.calls == ["fc1"]
+    records = [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+    assert records[0].__dict__["dropped_item_ids"] == ["m2"]
 
 
 async def test_textless_second_message_keeps_later_tool_call(
