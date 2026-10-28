@@ -204,6 +204,7 @@ markers = [
     "tts(name): text-to-speech test, optionally for provider `name` (--tts [name])",
     "evals: behavioral evals run against the LiveKit inference gateway (--evals)",
     "docs: tests for the docs-build tooling under .github/ (select with --docs)",
+    "e2e: real process and transport journeys, requires live services (select with --e2e)",
 ]
 
 

@@ -48,6 +48,7 @@ it.
 | `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
 | `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
+| `pytest.mark.e2e` | `--e2e` | real process and transport journeys; selected runs require live services |
 
 ```bash
 uv run pytest --unit --audio_eot        # the CI unit gate (no cloud accounts)
