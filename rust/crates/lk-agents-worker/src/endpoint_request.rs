@@ -106,7 +106,7 @@ pub(super) fn scope_base(
     // `urllib.parse.unquote` of the latin-1 text: percent-escapes decode as UTF-8.
     let latin1: String = raw_path.iter().map(|b| *b as char).collect();
     Scope {
-        kind,
+        kind: kind.into(),
         method: String::new(),
         scheme: String::new(),
         path: unquote(&latin1),

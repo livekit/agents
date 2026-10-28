@@ -15,8 +15,9 @@ here; a thread grant reaches a public route as its bearer, for the handler to ve
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from typing import Any
+import traceback
+from collections.abc import Awaitable, Callable, Iterable
+from typing import Any, Protocol
 
 from starlette.applications import Starlette
 from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
@@ -30,6 +31,7 @@ from ._core import (
     HSR_REFUSED as HSR_REFUSED,
     HSR_TIMEOUT as HSR_TIMEOUT,
 )
+from ._generated import worker_endpoint as asgi
 from ._generated.worker_endpoint import (
     EndpointOptions as EndpointOptions,
     EndpointRequest as EndpointRequest,
@@ -189,9 +191,122 @@ def _request_from_args(args: dict[str, Any]) -> EndpointRequest:
 
 
 async def serve_endpoint(
-    stream: Any, request: EndpointRequest, app: ASGIApp, registry: AgentHttp | None = None
+    stream: ExchangeStream,
+    request: EndpointRequest,
+    app: ASGIApp,
+    registry: AgentHttp | None = None,
 ) -> None:
     """Serve one exchange stream (an ``EndpointStream`` after its preamble, or any object with
     its five methods) with ``app``; ``registry`` keeps its WebSocket for draining."""
     server = registry._server if registry is not None else _core.EndpointServer()
-    await server.serve(stream, app, request)
+    await server.serve(stream, AsgiApplication(app), request)
+
+
+class ExchangeStream(Protocol):
+    """One exchange after its preamble: ``_core.EndpointStream``, or a test's node."""
+
+    def read(self, max_bytes: int) -> Awaitable[bytes]: ...
+    def write(self, data: bytes) -> Awaitable[None]: ...
+    def finish(self) -> None: ...
+    def reset(self, code: int) -> None: ...
+    def stop(self, code: int) -> None: ...
+
+
+class AsgiApplication:
+    """An ASGI application as the core calls it: the declared scope and messages shaped as
+    ASGI dicts, and the application's failure answered with its traceback."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def _core_call(
+        self,
+        scope: asgi.AsgiScope,
+        request: EndpointRequest,
+        receive: _core._core_AsgiReceive,
+        send: _core._core_AsgiSend,
+    ) -> asgi.AsgiFailure | None:
+        async def asgi_receive() -> dict[str, Any]:
+            return _received(await receive())
+
+        async def asgi_send(message: Any) -> None:
+            await send(_sent(message))
+
+        try:
+            await self._app(_scope(scope, request), asgi_receive, asgi_send)
+        except Exception as e:
+            return asgi.AsgiFailure(
+                summary=f"{type(e).__qualname__}: {e}",
+                traceback="".join(traceback.format_tb(e.__traceback__)),
+            )
+        return None
+
+
+def _scope(scope: asgi.AsgiScope, request: EndpointRequest) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "type": scope.kind,
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "scheme": scope.scheme,
+        "path": scope.path,
+        "raw_path": scope.raw_path,
+        "query_string": scope.query_string,
+        "root_path": "",
+        "headers": list(scope.headers),
+        "client": scope.client,
+        "server": None,
+        "state": {"lk_request": request},
+    }
+    if scope.kind == "http":
+        d["method"] = scope.method
+    else:
+        d["subprotocols"] = list(scope.subprotocols)
+    return d
+
+
+def _received(message: asgi.AsgiReceived) -> dict[str, Any]:
+    match message:
+        case asgi.AsgiReceivedRequest(body=body, more_body=more_body):
+            return {"type": "http.request", "body": body, "more_body": more_body}
+        case asgi.AsgiReceivedDisconnect():
+            return {"type": "http.disconnect"}
+        case asgi.AsgiReceivedWsConnect():
+            return {"type": "websocket.connect"}
+        case asgi.AsgiReceivedWsText(text=text):
+            return {"type": "websocket.receive", "text": text}
+        case asgi.AsgiReceivedWsBytes(data=data):
+            return {"type": "websocket.receive", "bytes": data}
+        case asgi.AsgiReceivedWsDisconnect(code=code):
+            return {"type": "websocket.disconnect", "code": code}
+    raise TypeError(f"unknown ASGI message {message!r}")
+
+
+def _sent(m: Any) -> asgi.AsgiSent:
+    """ASGI headers and bodies may be any bytes-like object."""
+
+    def headers() -> list[tuple[bytes, bytes]]:
+        return [(bytes(k), bytes(v)) for k, v in m.get("headers") or ()]
+
+    def body() -> bytes:
+        return bytes(m.get("body") or b"")
+
+    kind: str = m["type"]
+    if kind == "http.response.start":
+        return asgi.AsgiSentResponseStart(status=m["status"], headers=headers())
+    if kind == "http.response.body":
+        return asgi.AsgiSentResponseBody(body=body(), more_body=bool(m.get("more_body")))
+    if kind == "http.response.trailers":
+        return asgi.AsgiSentResponseTrailers()
+    if kind == "websocket.accept":
+        return asgi.AsgiSentWsAccept(subprotocol=m.get("subprotocol"), headers=headers())
+    if kind == "websocket.send":
+        if (data := m.get("bytes")) is not None:
+            return asgi.AsgiSentWsBytes(data=bytes(data))
+        return asgi.AsgiSentWsText(text=m.get("text") or "")
+    if kind == "websocket.close":
+        return asgi.AsgiSentWsClose(code=m.get("code") or 1000, reason=m.get("reason") or "")
+    if kind == "websocket.http.response.start":
+        return asgi.AsgiSentWsHttpResponseStart(status=m["status"], headers=headers())
+    if kind == "websocket.http.response.body":
+        return asgi.AsgiSentWsHttpResponseBody(body=body(), more_body=bool(m.get("more_body")))
+    return asgi.AsgiSentUnknown(kind=kind)

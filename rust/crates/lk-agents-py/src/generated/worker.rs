@@ -29,44 +29,75 @@ fn _extract_endpoint_stream_stop_code(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
     ::lk_agents_abi::python::number_from_py::<i32>(&obj, "code")
 }
 
-/// An exchange after its preamble, with independent reads and writes.
 #[pyclass(frozen, name = "EndpointStream", module = "livekit.agents._core")]
 pub struct EndpointStream(pub(crate) ::std::sync::Arc<EndpointStreamImpl>);
 
 #[pymethods]
 impl EndpointStream {
     #[pyo3(signature = (max_bytes = 65536))]
-    fn read(&self, #[pyo3(from_py_with = _extract_endpoint_stream_read_max_bytes)] max_bytes: usize) -> PyResult<::lk_agents_abi::HostRef> {
+    fn read<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_endpoint_stream_read_max_bytes)] max_bytes: usize) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::read(&self.0, max_bytes).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::read(&this, max_bytes)
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
     }
 
     #[pyo3(signature = (data))]
-    fn write(&self, #[pyo3(from_py_with = _extract_endpoint_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<::lk_agents_abi::HostRef> {
+    fn write<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_endpoint_stream_write_data)] data: ::std::vec::Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::write(&self.0, data).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::write(&this, data)
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
     }
 
+    /// Idempotent; a stream already reset raises.
     fn finish(&self) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
-        <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::finish(&self.0).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::finish(&self.0).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     #[pyo3(signature = (code))]
     fn reset(&self, #[pyo3(from_py_with = _extract_endpoint_stream_reset_code)] code: i32) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
-        <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::reset(&self.0, code).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::reset(&self.0, code).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     #[pyo3(signature = (code))]
     fn stop(&self, #[pyo3(from_py_with = _extract_endpoint_stream_stop_code)] code: i32) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
-        <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::stop(&self.0, code).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::stop(&self.0, code).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::ExchangeStream`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(),
+        read: |obj| {
+            let this = obj.cast::<EndpointStream>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// A `::lk_agents_abi::worker::endpoint_host::ExchangeStream` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(),
+        write: |py, native| {
+            let native = native.downcast::<EndpointStreamImpl>().ok()?;
+            Some(::pyo3::Py::new(py, EndpointStream(native)).map(::pyo3::Py::into_any))
+        },
     }
 }
 
@@ -90,51 +121,116 @@ impl EndpointServer {
         Ok(EndpointServer(::std::sync::Arc::new(out)))
     }
 
+    /// Serve `stream` with `app` to completion; `request` is its preamble.
     #[pyo3(signature = (stream, app, request))]
-    fn serve(&self, stream: ::lk_agents_abi::HostRef, app: ::lk_agents_abi::HostRef, request: ::lk_agents_abi::HostRef) -> PyResult<::lk_agents_abi::HostRef> {
+    fn serve<'py>(&self, py: Python<'py>, stream: Bound<'_, PyAny>, app: Bound<'_, PyAny>, request: ::lk_agents_abi::worker::endpoint::EndpointRequest) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <EndpointServerImpl as ::lk_agents_abi::worker::endpoint_host::EndpointServer>::serve(&self.0, stream, app, request).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        let stream = crate::generated::worker::ExchangeStreamProxy::from_host(&stream)?;
+        let app = crate::generated::worker::AsgiApplicationProxy::from_host(&app)?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <EndpointServerImpl as ::lk_agents_abi::worker::endpoint_host::EndpointServer>::serve(&this, stream, app, request)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
     }
 
+    /// A close frame to every open WebSocket, so clients reconnect to another worker.
     #[pyo3(signature = (code = 1001, reason = "worker draining".to_owned()))]
-    fn close_websockets(&self, #[pyo3(from_py_with = _extract_endpoint_server_close_websockets_code)] code: u16, reason: ::std::string::String) -> PyResult<::lk_agents_abi::HostRef> {
+    fn close_websockets<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_endpoint_server_close_websockets_code)] code: u16, reason: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <EndpointServerImpl as ::lk_agents_abi::worker::endpoint_host::EndpointServer>::close_websockets(&self.0, code, reason).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <EndpointServerImpl as ::lk_agents_abi::worker::endpoint_host::EndpointServer>::close_websockets(&this, code, reason)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
 type _core_AsgiReceiveImpl = <crate::Selected as super::Implementations>::AsgiReceive;
 
-/// The native ASGI receive callback, bound to one endpoint exchange.
 #[pyclass(frozen, name = "_core_AsgiReceive", module = "livekit.agents._core")]
 pub struct _core_AsgiReceive(pub(crate) ::std::sync::Arc<_core_AsgiReceiveImpl>);
 
 #[pymethods]
 impl _core_AsgiReceive {
-    fn __call__(&self) -> PyResult<::lk_agents_abi::HostRef> {
+    fn __call__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_AsgiReceiveImpl as ::lk_agents_abi::worker::endpoint_host::AsgiReceive>::__call__(&self.0).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <_core_AsgiReceiveImpl as ::lk_agents_abi::worker::endpoint_host::AsgiReceive>::__call__(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::worker_endpoint::asgi_received_to_py(py, out)?, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::AsgiReceiver`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(),
+        read: |obj| {
+            let this = obj.cast::<_core_AsgiReceive>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// A `::lk_agents_abi::worker::endpoint_host::AsgiReceiver` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(),
+        write: |py, native| {
+            let native = native.downcast::<_core_AsgiReceiveImpl>().ok()?;
+            Some(::pyo3::Py::new(py, _core_AsgiReceive(native)).map(::pyo3::Py::into_any))
+        },
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
 type _core_AsgiSendImpl = <crate::Selected as super::Implementations>::AsgiSend;
 
-/// The native ASGI send callback, bound to one endpoint exchange.
 #[pyclass(frozen, name = "_core_AsgiSend", module = "livekit.agents._core")]
 pub struct _core_AsgiSend(pub(crate) ::std::sync::Arc<_core_AsgiSendImpl>);
 
 #[pymethods]
 impl _core_AsgiSend {
     #[pyo3(signature = (message))]
-    fn __call__(&self, message: ::lk_agents_abi::HostRef) -> PyResult<::lk_agents_abi::HostRef> {
+    fn __call__<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_AsgiSendImpl as ::lk_agents_abi::worker::endpoint_host::AsgiSend>::__call__(&self.0, message).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        let message = crate::generated::records::worker_endpoint::asgi_sent_from_py(&message)?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <_core_AsgiSendImpl as ::lk_agents_abi::worker::endpoint_host::AsgiSend>::__call__(&this, message)
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::AsgiSender`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(),
+        read: |obj| {
+            let this = obj.cast::<_core_AsgiSend>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// A `::lk_agents_abi::worker::endpoint_host::AsgiSender` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(),
+        write: |py, native| {
+            let native = native.downcast::<_core_AsgiSendImpl>().ok()?;
+            Some(::pyo3::Py::new(py, _core_AsgiSend(native)).map(::pyo3::Py::into_any))
+        },
     }
 }
 
@@ -469,6 +565,17 @@ impl ProcSupervisor {
             let this = obj.cast::<ProcSupervisor>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::SupervisedProcess> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// A `::lk_agents_abi::worker::ipc_host::SupervisedProcess` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::SupervisedProcess>(),
+        write: |py, native| {
+            let native = native.downcast::<ProcSupervisorImpl>().ok()?;
+            Some(::pyo3::Py::new(py, ProcSupervisor(native)).map(::pyo3::Py::into_any))
         },
     }
 }
@@ -826,6 +933,17 @@ impl JobRun {
     }
 }
 
+// A `::lk_agents_abi::worker::ipc_host::JobExecution` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(),
+        write: |py, native| {
+            let native = native.downcast::<JobRunImpl>().ok()?;
+            Some(::pyo3::Py::new(py, JobRun(native)).map(::pyo3::Py::into_any))
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerConfigImpl = <crate::Selected as super::Implementations>::ServerConfig;
 
@@ -925,6 +1043,17 @@ impl ServerConfig {
     }
 }
 
+// A `::lk_agents_abi::worker::server_host::ServerConfiguration` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration>(),
+        write: |py, native| {
+            let native = native.downcast::<ServerConfigImpl>().ok()?;
+            Some(::pyo3::Py::new(py, ServerConfig(native)).map(::pyo3::Py::into_any))
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerRuntimeImpl = <crate::Selected as super::Implementations>::ServerRuntime;
 
@@ -1003,6 +1132,172 @@ impl ServerRuntime {
         ::lk_agents_abi::python::check_pid()?;
         let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::simulate_job(&self.0, room, fake_job, agent_identity, room_info, token).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+
+/// [`::lk_agents_abi::worker::endpoint_host::ExchangeStream`] over a host `livekit.agents.http.ExchangeStream`.
+#[derive(Clone)]
+pub struct ExchangeStreamProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: crate::host::Notifier,
+}
+
+impl ExchangeStreamProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(ExchangeStreamProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(|obj| ExchangeStreamProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+#[::async_trait::async_trait]
+impl ::lk_agents_abi::worker::endpoint_host::ExchangeStream for ExchangeStreamProxy {
+    async fn read(&self, max_bytes: usize) -> ::std::result::Result<::std::vec::Vec<u8>, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let max_bytes_arg = max_bytes;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ExchangeStream.read", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(max_bytes_arg, py)?];
+                Ok((host.bind(py).getattr("read")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ if o.is_instance_of::<::pyo3::types::PyBytes>() || o.is_instance_of::<::pyo3::types::PyByteArray>() || o.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&o, "ExchangeStream.read") } else { o.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "ExchangeStream.read") }).collect::<PyResult<Vec<_>>>()) } }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn write(&self, data: ::std::vec::Vec<u8>) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let data_arg = data;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ExchangeStream.write", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(data_arg, py)?];
+                Ok((host.bind(py).getattr("write")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn finish(&self) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        ::lk_agents_runtime::host::notify(&self.notifier, "ExchangeStream.finish", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("finish")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+    }
+
+    fn reset(&self, code: i32) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let code_arg = code;
+        ::lk_agents_runtime::host::notify(&self.notifier, "ExchangeStream.reset", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(code_arg, py)?];
+                Ok((host.bind(py).getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+    }
+
+    fn stop(&self, code: i32) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let code_arg = code;
+        ::lk_agents_runtime::host::notify(&self.notifier, "ExchangeStream.stop", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(code_arg, py)?];
+                Ok((host.bind(py).getattr("stop")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+
+/// [`::lk_agents_abi::worker::endpoint_host::AsgiApplication`] over a host `livekit.agents.http.AsgiApplication`.
+#[derive(Clone)]
+pub struct AsgiApplicationProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+}
+
+impl AsgiApplicationProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(AsgiApplicationProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>(|obj| AsgiApplicationProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+#[::async_trait::async_trait]
+impl ::lk_agents_abi::worker::endpoint_host::AsgiApplication for AsgiApplicationProxy {
+    async fn call(&self, scope: ::lk_agents_abi::worker::endpoint_host::AsgiScope, request: ::lk_agents_abi::worker::endpoint::EndpointRequest, receive: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>, send: ::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>) -> ::std::result::Result<::std::option::Option<::lk_agents_abi::worker::endpoint_host::AsgiFailure>, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let scope_arg = scope;
+        let request_arg = request;
+        let receive_arg = receive;
+        let send_arg = send;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AsgiApplication._core_call", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [crate::generated::records::worker_endpoint::asgi_scope_to_py(py, scope_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(request_arg, py)?, { let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = receive_arg; ::lk_agents_abi::python::native_to_host::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(py, native)? }, { let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = send_arg; ::lk_agents_abi::python::native_to_host::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(py, native)? }];
+                Ok((host.bind(py).getattr("_core_call")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::worker_endpoint::asgi_failure_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
     }
 }
 

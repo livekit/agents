@@ -2732,6 +2732,139 @@ pub mod worker_endpoint {
             kwargs.set_item("public", ::pyo3::IntoPyObjectExt::into_bound_py_any(public, py)?)?;
             crate::host::construct(ENDPOINT_OPTIONS.import(py, "livekit.agents._generated.worker_endpoint", "EndpointOptions")?.as_any(), (), Some(&kwargs))
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+    static ASGI_SCOPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn asgi_scope_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::endpoint_host::AsgiScope) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::worker::endpoint_host::AsgiScope { kind, method, scheme, path, raw_path, query_string, headers, client, subprotocols } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("kind", ::pyo3::IntoPyObjectExt::into_bound_py_any(kind, py)?)?;
+            kwargs.set_item("method", ::pyo3::IntoPyObjectExt::into_bound_py_any(method, py)?)?;
+            kwargs.set_item("scheme", ::pyo3::IntoPyObjectExt::into_bound_py_any(scheme, py)?)?;
+            kwargs.set_item("path", ::pyo3::IntoPyObjectExt::into_bound_py_any(path, py)?)?;
+            kwargs.set_item("raw_path", ::pyo3::types::PyBytes::new(py, &raw_path).into_any())?;
+            kwargs.set_item("query_string", ::pyo3::types::PyBytes::new(py, &query_string).into_any())?;
+            kwargs.set_item("headers", ::pyo3::types::PyList::new(py, headers.into_iter().map(|x| PyResult::Ok({ let (x0, x1,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::types::PyBytes::new(py, &x0).into_any(), ::pyo3::types::PyBytes::new(py, &x1).into_any()])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("client", match client { None => py.None().into_bound(py), Some(x) => { let (x0, x1,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?])?.into_any() } })?;
+            kwargs.set_item("subprotocols", ::pyo3::types::PyList::new(py, subprotocols.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(ASGI_SCOPE.import(py, "livekit.agents._generated.worker_endpoint", "AsgiScope")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+    static ASGI_RECEIVED_REQUEST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_RECEIVED_DISCONNECT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_RECEIVED_WS_CONNECT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_RECEIVED_WS_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_RECEIVED_WS_BYTES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_RECEIVED_WS_DISCONNECT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn asgi_received_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::endpoint_host::AsgiReceived) -> PyResult<Bound<'py, PyAny>> {
+            match value {
+                ::lk_agents_abi::worker::endpoint_host::AsgiReceived::Request { body, more_body } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("body", ::pyo3::types::PyBytes::new(py, &body).into_any())?;
+                    kwargs.set_item("more_body", ::pyo3::IntoPyObjectExt::into_bound_py_any(more_body, py)?)?;
+                    crate::host::construct(ASGI_RECEIVED_REQUEST.import(py, "livekit.agents._generated.worker_endpoint", "AsgiReceivedRequest")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::endpoint_host::AsgiReceived::Disconnect => crate::host::construct(ASGI_RECEIVED_DISCONNECT.import(py, "livekit.agents._generated.worker_endpoint", "AsgiReceivedDisconnect")?.as_any(), (), None),
+                ::lk_agents_abi::worker::endpoint_host::AsgiReceived::WsConnect => crate::host::construct(ASGI_RECEIVED_WS_CONNECT.import(py, "livekit.agents._generated.worker_endpoint", "AsgiReceivedWsConnect")?.as_any(), (), None),
+                ::lk_agents_abi::worker::endpoint_host::AsgiReceived::WsText(text) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                    crate::host::construct(ASGI_RECEIVED_WS_TEXT.import(py, "livekit.agents._generated.worker_endpoint", "AsgiReceivedWsText")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::endpoint_host::AsgiReceived::WsBytes(data) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("data", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
+                    crate::host::construct(ASGI_RECEIVED_WS_BYTES.import(py, "livekit.agents._generated.worker_endpoint", "AsgiReceivedWsBytes")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::worker::endpoint_host::AsgiReceived::WsDisconnect { code } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("code", ::pyo3::IntoPyObjectExt::into_bound_py_any(code, py)?)?;
+                    crate::host::construct(ASGI_RECEIVED_WS_DISCONNECT.import(py, "livekit.agents._generated.worker_endpoint", "AsgiReceivedWsDisconnect")?.as_any(), (), Some(&kwargs))
+                },
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+    static ASGI_SENT_RESPONSE_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_RESPONSE_BODY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_RESPONSE_TRAILERS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_WS_ACCEPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_WS_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_WS_BYTES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_WS_CLOSE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_WS_HTTP_RESPONSE_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_WS_HTTP_RESPONSE_BODY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static ASGI_SENT_UNKNOWN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn asgi_sent_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::endpoint_host::AsgiSent> {
+        let py = obj.py();
+            if obj.is_instance(ASGI_SENT_RESPONSE_START.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentResponseStart")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::ResponseStart { status: ::lk_agents_abi::python::attr_with(obj, "AsgiSentResponseStart", "status", |v| ::lk_agents_abi::python::number_from_py::<u16>(v, "AsgiSentResponseStart.status"))?, headers: ::lk_agents_abi::python::attr_with(obj, "AsgiSentResponseStart", "headers", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AsgiSentResponseStart.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok((({ if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_0, "AsgiSentResponseStart.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) } })?, ({ if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_1, "AsgiSentResponseStart.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) } })?,)) })() }).collect::<PyResult<Vec<_>>>())? });
+            }
+            if obj.is_instance(ASGI_SENT_RESPONSE_BODY.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentResponseBody")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::ResponseBody { body: ::lk_agents_abi::python::attr_with(obj, "AsgiSentResponseBody", "body", |v| { if v.is_instance_of::<::pyo3::types::PyBytes>() || v.is_instance_of::<::pyo3::types::PyByteArray>() || v.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&v, "AsgiSentResponseBody.body") } else { v.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentResponseBody.body") }).collect::<PyResult<Vec<_>>>()) } })?, more_body: ::lk_agents_abi::python::attr_with(obj, "AsgiSentResponseBody", "more_body", |v| v.extract::<bool>())? });
+            }
+            if obj.is_instance(ASGI_SENT_RESPONSE_TRAILERS.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentResponseTrailers")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::ResponseTrailers);
+            }
+            if obj.is_instance(ASGI_SENT_WS_ACCEPT.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentWsAccept")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::WsAccept { subprotocol: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsAccept", "subprotocol", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, headers: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsAccept", "headers", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AsgiSentWsAccept.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok((({ if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_0, "AsgiSentWsAccept.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentWsAccept.headers") }).collect::<PyResult<Vec<_>>>()) } })?, ({ if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_1, "AsgiSentWsAccept.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentWsAccept.headers") }).collect::<PyResult<Vec<_>>>()) } })?,)) })() }).collect::<PyResult<Vec<_>>>())? });
+            }
+            if obj.is_instance(ASGI_SENT_WS_TEXT.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentWsText")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::WsText(::lk_agents_abi::python::attr_with(obj, "AsgiSentWsText", "text", |v| v.extract::<::std::string::String>())?));
+            }
+            if obj.is_instance(ASGI_SENT_WS_BYTES.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentWsBytes")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::WsBytes(::lk_agents_abi::python::attr_with(obj, "AsgiSentWsBytes", "data", |v| { if v.is_instance_of::<::pyo3::types::PyBytes>() || v.is_instance_of::<::pyo3::types::PyByteArray>() || v.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&v, "AsgiSentWsBytes.data") } else { v.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentWsBytes.data") }).collect::<PyResult<Vec<_>>>()) } })?));
+            }
+            if obj.is_instance(ASGI_SENT_WS_CLOSE.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentWsClose")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::WsClose { code: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsClose", "code", |v| ::lk_agents_abi::python::number_from_py::<u16>(v, "AsgiSentWsClose.code"))?, reason: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsClose", "reason", |v| v.extract::<::std::string::String>())? });
+            }
+            if obj.is_instance(ASGI_SENT_WS_HTTP_RESPONSE_START.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentWsHttpResponseStart")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::WsHttpResponseStart { status: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsHttpResponseStart", "status", |v| ::lk_agents_abi::python::number_from_py::<u16>(v, "AsgiSentWsHttpResponseStart.status"))?, headers: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsHttpResponseStart", "headers", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AsgiSentWsHttpResponseStart.headers"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok((({ if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_0, "AsgiSentWsHttpResponseStart.headers") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentWsHttpResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) } })?, ({ if item_1.is_instance_of::<::pyo3::types::PyBytes>() || item_1.is_instance_of::<::pyo3::types::PyByteArray>() || item_1.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_1, "AsgiSentWsHttpResponseStart.headers") } else { item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentWsHttpResponseStart.headers") }).collect::<PyResult<Vec<_>>>()) } })?,)) })() }).collect::<PyResult<Vec<_>>>())? });
+            }
+            if obj.is_instance(ASGI_SENT_WS_HTTP_RESPONSE_BODY.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentWsHttpResponseBody")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::WsHttpResponseBody { body: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsHttpResponseBody", "body", |v| { if v.is_instance_of::<::pyo3::types::PyBytes>() || v.is_instance_of::<::pyo3::types::PyByteArray>() || v.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&v, "AsgiSentWsHttpResponseBody.body") } else { v.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "AsgiSentWsHttpResponseBody.body") }).collect::<PyResult<Vec<_>>>()) } })?, more_body: ::lk_agents_abi::python::attr_with(obj, "AsgiSentWsHttpResponseBody", "more_body", |v| v.extract::<bool>())? });
+            }
+            if obj.is_instance(ASGI_SENT_UNKNOWN.import(py, "livekit.agents._generated.worker_endpoint", "AsgiSentUnknown")?)? {
+                return Ok(::lk_agents_abi::worker::endpoint_host::AsgiSent::Unknown(::lk_agents_abi::python::attr_with(obj, "AsgiSentUnknown", "kind", |v| v.extract::<::std::string::String>())?));
+            }
+            Err(super::not_a(obj, "AsgiSentResponseStart | AsgiSentResponseBody | AsgiSentResponseTrailers | AsgiSentWsAccept | AsgiSentWsText | AsgiSentWsBytes | AsgiSentWsClose | AsgiSentWsHttpResponseStart | AsgiSentWsHttpResponseBody | AsgiSentUnknown"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+    static ASGI_FAILURE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn asgi_failure_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::worker::endpoint_host::AsgiFailure> {
+        let py = obj.py();
+            if !obj.is_instance(ASGI_FAILURE.import(py, "livekit.agents._generated.worker_endpoint", "AsgiFailure")?)? {
+                return Err(super::not_a(obj, "AsgiFailure"));
+            }
+            Ok(::lk_agents_abi::worker::endpoint_host::AsgiFailure {
+                summary: ::lk_agents_abi::python::attr_with(obj, "AsgiFailure", "summary", |v| v.extract::<::std::string::String>())?,
+                traceback: ::lk_agents_abi::python::attr_with(obj, "AsgiFailure", "traceback", |v| v.extract::<::std::string::String>())?,
+            })
+    }
 }
 
 pub mod worker_ipc {

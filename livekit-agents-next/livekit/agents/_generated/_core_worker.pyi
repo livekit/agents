@@ -9,38 +9,41 @@ from asyncio import Future
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from livekit.agents.cli import _DevServer
+from livekit.agents.http import AsgiApplication, ExchangeStream
 from livekit.agents.ipc import JobExecutor, ProcPool
 from livekit.agents.ipc.child import _JobProc
 
 from .._core import StartJobFields
 from .worker_cli import CliArgs
+from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
 from .worker_options import ServerOptions
 
 class EndpointStream:
-    """An exchange after its preamble, with independent reads and writes."""
-    def read(self, max_bytes: int = 65536) -> Future[bytes]: ...
-    def write(self, data: bytes | bytearray | memoryview | list[int]) -> Future[None]: ...
-    def finish(self) -> None: ...
+    async def read(self, max_bytes: int = 65536) -> bytes: ...
+    async def write(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
+    def finish(self) -> None:
+        """Idempotent; a stream already reset raises."""
     def reset(self, code: int) -> None: ...
     def stop(self, code: int) -> None: ...
 
 class EndpointServer:
     """The host's ASGI application bridge and its active WebSockets."""
     def __init__(self) -> None: ...
-    def serve(self, stream: object, app: object, request: object) -> Future[None]: ...
-    def close_websockets(
+    async def serve(
         self,
-        code: int = 1001,
-        reason: str = "worker draining",
-    ) -> Future[None]: ...
+        stream: ExchangeStream,
+        app: AsgiApplication,
+        request: EndpointRequest,
+    ) -> None:
+        """Serve `stream` with `app` to completion; `request` is its preamble."""
+    async def close_websockets(self, code: int = 1001, reason: str = "worker draining") -> None:
+        """A close frame to every open WebSocket, so clients reconnect to another worker."""
 
 class _core_AsgiReceive:
-    """The native ASGI receive callback, bound to one endpoint exchange."""
-    def __call__(self) -> Future[object]: ...
+    async def __call__(self) -> AsgiReceived: ...
 
 class _core_AsgiSend:
-    """The native ASGI send callback, bound to one endpoint exchange."""
-    def __call__(self, message: object) -> Future[None]: ...
+    async def __call__(self, message: AsgiSent) -> None: ...
 
 def job_timeline(
     received_at: float,

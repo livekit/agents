@@ -19,16 +19,12 @@ pub(super) mod callback;
 pub mod cli;
 mod server;
 
-use crate::worker::transport::{
-    AgentEndpointKind, EndpointReader, EndpointWriter, HttpStreamResetCode,
-};
+use crate::worker::endpoint_host::NativeStream;
+use crate::worker::transport::{AgentEndpointKind, HttpStreamResetCode};
 use crate::worker::{
     EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, HostError, JobDecision, JobId, TransportConfig,
     WorkerCommand, WorkerHost, protocol,
 };
-
-pub mod endpoint;
-use endpoint::{Half, PyEndpointStream};
 
 // --------------------------------------------------------------------- the host
 
@@ -109,10 +105,8 @@ impl WorkerHost for PyWorkerHost {
         let EndpointRequest { preamble, stream } = request;
         let request_id = preamble.request_id.clone();
         let (writer, reader) = stream.split();
-        let control = writer.control();
-        let reader: Half<EndpointReader> = Arc::new(tokio::sync::Mutex::new(Some(reader)));
-        let writer: Half<EndpointWriter> = Arc::new(tokio::sync::Mutex::new(Some(writer)));
-        let halves = (reader.clone(), writer.clone());
+        let stream = Arc::new(NativeStream::new(reader, writer));
+        let native = stream.clone();
         let kind = match AgentEndpointKind::try_from(preamble.kind) {
             Ok(AgentEndpointKind::AekText) => "text",
             _ => "http",
@@ -122,14 +116,7 @@ impl WorkerHost for PyWorkerHost {
         let outcome = self
             .open("endpoint", move |py| {
                 let d = PyDict::new(py);
-                d.set_item(
-                    "stream",
-                    crate::generated::worker::EndpointStream(Arc::new(PyEndpointStream {
-                        reader,
-                        writer,
-                        control,
-                    })),
-                )?;
+                d.set_item("stream", crate::generated::worker::EndpointStream(native))?;
                 d.set_item("kind", kind)?;
                 d.set_item("request_id", &preamble.request_id)?;
                 d.set_item("authorized", preamble.authorized)?;
@@ -155,13 +142,7 @@ impl WorkerHost for PyWorkerHost {
                     "endpoint request failed in the host request_id={request_id} error={error}"
                 ),
             );
-            let (reader, writer) = halves;
-            if let Some(w) = writer.lock().await.as_mut() {
-                w.reset(code);
-            }
-            if let Some(r) = reader.lock().await.as_mut() {
-                r.stop(code);
-            }
+            stream.fail(code).await;
         }
     }
 }

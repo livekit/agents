@@ -1,6 +1,6 @@
 //! An endpoint exchange served with an ASGI application: one stream after its preamble is either
 //! one HTTP/1.1 exchange or, after a `101`, a WebSocket. The codecs and the outcome reporting are
-//! here; the application is behind [`AsgiApp`] (`python.rs` calls the Python one).
+//! here; the application is behind [`AsgiApp`] (`endpoint_host` calls the host's).
 //!
 //! Every outcome is reported the way the data plane expects: a reset code before any response
 //! byte, `x-lk-completion`/`x-lk-error` trailers after (chunked responses only), FIN on success.
@@ -35,7 +35,7 @@ const READ_SIZE: usize = 64 * 1024;
 // Graceful close shares the bounded IPC flush budget; frame scheduling is a separate contract.
 const CLOSE_FLUSH_TIMEOUT: Duration = crate::ipc::FLUSH_TIMEOUT;
 
-pub type Headers = Vec<(Vec<u8>, Vec<u8>)>;
+pub use lk_agents_abi::worker::endpoint_host::Headers;
 
 /// One exchange stream: what the worker hands over after the preamble.
 #[async_trait]
@@ -53,67 +53,11 @@ pub trait StreamIo: Send + Sync {
 
 pub use lk_agents_abi::worker::endpoint::EndpointRequest as RequestInfo;
 
-/// The ASGI scope, without `state` (the host adds `request.state.lk_request`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Scope {
-    /// `"http"` or `"websocket"`.
-    pub kind: &'static str,
-    /// HTTP only.
-    pub method: String,
-    pub scheme: String,
-    pub path: String,
-    pub raw_path: Vec<u8>,
-    pub query_string: Vec<u8>,
-    pub headers: Headers,
-    pub client: Option<(String, u16)>,
-    /// WebSocket only.
-    pub subprotocols: Vec<String>,
-}
-
-/// What `receive()` returns.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Received {
-    Request { body: Vec<u8>, more_body: bool },
-    Disconnect,
-    WsConnect,
-    WsText(String),
-    WsBytes(Vec<u8>),
-    WsDisconnect { code: u16 },
-}
-
-/// What `send()` takes.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Sent {
-    ResponseStart {
-        status: u16,
-        headers: Headers,
-    },
-    ResponseBody {
-        body: Vec<u8>,
-        more_body: bool,
-    },
-    ResponseTrailers,
-    WsAccept {
-        subprotocol: Option<String>,
-        headers: Headers,
-    },
-    WsText(String),
-    WsBytes(Vec<u8>),
-    WsClose {
-        code: u16,
-        reason: String,
-    },
-    WsHttpResponseStart {
-        status: u16,
-        headers: Headers,
-    },
-    WsHttpResponseBody {
-        body: Vec<u8>,
-        more_body: bool,
-    },
-    /// Any other `type`: a `RuntimeError` for the application.
-    Unknown(String),
-}
+/// The ASGI scope (without `state`, which the host adds) and the messages of `receive()` and
+/// `send()`: declared records, so the host shapes them as ASGI dicts itself.
+pub use lk_agents_abi::worker::endpoint_host::{
+    AsgiReceived as Received, AsgiScope as Scope, AsgiSent as Sent,
+};
 
 /// The application raised: `"{Type}: {message}"` and its traceback.
 #[derive(Debug, Clone)]
