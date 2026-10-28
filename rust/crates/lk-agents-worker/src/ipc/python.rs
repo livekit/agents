@@ -108,6 +108,8 @@ impl PyProcSupervisor {
         killable: bool,
     ) -> PyResult<Self> {
         check_pid()?;
+        // Thread runners and direct supervisors need diagnostics before any OS launch.
+        crate::diagnostics::initialize().map_err(PyRuntimeError::new_err)?;
         let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
         let opts = SupervisorOptions {
             pid,
@@ -195,7 +197,6 @@ impl PyProcSupervisor {
         }
         let resource = ProcessResource::new(pid, sentinel, StartMethod::parse(method)?, owned)?;
         self.launch.send_replace(ProcessLaunch::Started(resource));
-        let _ = crate::diagnostics::initialize();
         Ok(())
     }
 

@@ -787,10 +787,8 @@ async def job_call(call: Call) -> None:
     from livekit.agents import _core, get_job_context
     from livekit.agents.ipc.child import _JobProc
     from livekit.agents.job import (
-        JobAcceptArguments,
         JobContext,
         JobExecutorType,
-        RunningJobInfo,
     )
     from livekit.protocol import agent as agent_proto, models
 
@@ -867,22 +865,30 @@ async def job_call(call: Call) -> None:
         killable=False,
     )
     initialized = asyncio.ensure_future(sup.initialize(asyncio_debug=False, http_proxy=None))
-    await asyncio.sleep(0)
-    client = _core.IpcClient(cch, runner.initialize)
+    client = await asyncio.to_thread(_core.IpcClient, cch, runner.initialize)
     await initialized
     runner._client = client
     # the core's IPC client starts the job from its own task, whose context the steps it later
     # runs (the entrypoint, the callbacks) do not share
     serving = contextvars.Context().run(asyncio.ensure_future, client.serve(runner))
-    request = RunningJobInfo(
-        accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
-        job=agent_proto.Job(id="AJ_fuzz", room=models.Room(name="console", sid="RM_fuzz")),
-        url="",
-        token="",
-        worker_id="fuzz",
-        fake_job=True,
+    await sup.start_job(
+        _core.StartJobFields(
+            job=agent_proto.Job(
+                id="AJ_fuzz", room=models.Room(name="console", sid="RM_fuzz")
+            ).SerializeToString(),
+            name="",
+            identity="agent",
+            metadata="",
+            url="",
+            token="",
+            worker_id="fuzz",
+            fake_job=True,
+            received_at=0,
+            accepted_at=0,
+            assigned_at=0,
+            launched_at=0,
+        )
     )
-    await sup.start_job(request._to_wire())
     await asyncio.wait_for(serving, 60)
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 60)
