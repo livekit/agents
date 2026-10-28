@@ -33,6 +33,8 @@ from ._generated._core_telemetry import (
     _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
 )
 from ._generated._core_storage import *  # noqa: F401, F403
+from ._generated._core_storage import _core_ContextActivation as _core_ContextActivation
+from ._generated.storage_context import ContextScope, ContextScopeWrite
 from ._generated._core_worker import *  # noqa: F401, F403
 from ._generated.storage_class import EventRow, InboxRow, StreamInfo, ItemRow, LaneRow, TaskPage, TaskRecord
 from ._generated.storage_options import Policy, TurnOptions
@@ -388,7 +390,15 @@ class Run:
     def history(self) -> list[ItemRow]: ...
     @property
     def state(self) -> Any: ...
-    def commit(self, history: list[ItemRow], state: Any = None) -> Awaitable[int]:
+    @property
+    def context_scopes(self) -> list[ContextScope]: ...
+    def commit(
+        self,
+        history: list[ItemRow],
+        state: Any = None,
+        *,
+        scope_writes: list[ContextScopeWrite] | None = None,
+    ) -> Awaitable[int]:
         """Writes what changed since the load (``None`` state keeps the stored one), then
         releases; the version after."""
 

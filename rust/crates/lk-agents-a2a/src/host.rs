@@ -34,6 +34,8 @@ impl From<TurnContext> for host::TurnContext {
             batch: ctx.batch.into_iter().map(Into::into).collect(),
             history: ctx.history.into_iter().map(Into::into).collect(),
             state: ctx.state,
+            context_scope_id: ctx.context_scope_id,
+            context_scopes: ctx.context_scopes,
             read_only: ctx.read_only,
             task_id: ctx.task_id,
             tasks: ctx.tasks.into_iter().map(Into::into).collect(),
@@ -59,6 +61,7 @@ impl TryFrom<host::HandlerOutput> for HandlerOutput {
             output: output.output,
             new_items,
             state: output.state,
+            scope_writes: output.scope_writes,
             usage: output.usage,
             input_required: output.input_required,
             pending_call: output.pending_call.map(|p| PendingCall {
@@ -100,6 +103,7 @@ impl From<HandlerOutput> for host::HandlerOutput {
                 .map(|item| serde_json::to_value(item).expect("chat item"))
                 .collect(),
             state: output.state,
+            scope_writes: output.scope_writes,
             usage: output.usage,
             input_required: output.input_required,
             pending_call: output.pending_call.map(|p| host::PendingCall {

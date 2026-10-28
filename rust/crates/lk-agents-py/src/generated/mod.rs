@@ -31,7 +31,8 @@ pub trait Implementations: 'static {
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
-    type Storage: ::lk_agents_abi::storage::Storage;
+    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation>;
+    type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
@@ -61,6 +62,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::mcp_check_result, m)?)?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
+    m.add_class::<storage::_core_ContextActivation>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;
     m.add_class::<telemetry::_core_SessionReportUpload>()?;

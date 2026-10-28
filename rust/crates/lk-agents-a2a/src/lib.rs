@@ -190,6 +190,8 @@ pub struct TurnContext {
     pub history: Vec<ItemRow>,
     /// The state as loaded; `None` for a fresh lane.
     pub state: Option<Value>,
+    pub context_scope_id: String,
+    pub context_scopes: Vec<lk_agents_abi::storage::context::ContextScope>,
     /// Context field writes require the lane's exclusive lease.
     #[serde(default)]
     pub read_only: bool,
@@ -241,6 +243,8 @@ pub struct HandlerOutput {
     /// The state after the handler; written at commit when it differs from what was loaded.
     #[serde(default)]
     pub state: Option<Value>,
+    #[serde(default)]
+    pub scope_writes: Vec<lk_agents_abi::storage::context::ContextScopeWrite>,
     #[serde(default)]
     pub usage: RunUsage,
     /// A conversation tool's `InputRequired(question)`.

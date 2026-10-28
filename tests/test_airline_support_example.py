@@ -179,7 +179,7 @@ async def test_a_missing_booking_reference_is_asked_and_the_reply_continues(
     async def reply(reference: str) -> sa.TriageResult | InputRequired:
         nonlocal ctx
         restored = sa.SupportContext()
-        restored_store = ContextStore(ctx.store._pending_state)
+        restored_store = ContextStore(scopes=[write.scope for write in ctx.store._scope_writes])
         await restored_store.load_context(restored)
         ctx = SimpleNamespace(context=restored, store=restored_store)
         return await sa.continue_request(ctx, booking_ref=reference)

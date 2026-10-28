@@ -674,6 +674,8 @@ impl Turn {
             batch: batch.to_vec(),
             history: run.history.clone(),
             state: run.state.clone(),
+            context_scope_id: format!("root:{}", call.lane.name()),
+            context_scopes: run.context_scopes.clone(),
             read_only: run.lease().is_none(),
             task_id: answer_task.clone(),
             tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
@@ -687,6 +689,7 @@ impl Turn {
         if out.state.is_some() {
             run.state = out.state.clone();
         }
+        run.scope_writes = out.scope_writes.clone();
         run.usage.add(&out.usage);
         let answer_canceled = (stop.is_some() || out.interrupted)
             && call

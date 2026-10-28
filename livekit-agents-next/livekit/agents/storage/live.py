@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Coroutine
 from typing import TypeVar
 
 from .. import utils
-from .._core import Run, Thread
+from .._core import Run, Thread, _core_ContextActivation
 from .._generated.storage_class import ItemRow
 from ..llm import ChatContext
 from ..log import logger
@@ -70,7 +70,10 @@ class LiveLane:
         if not self._history.items:
             self._history.items = history_of(await self._thread.history(self._agent_name)).items
 
-        self._store._rebase(row.state if row is not None else None)
+        activation = await self._storage.threads._core_context_store(
+            self._thread_id, self._agent_name
+        )
+        self._store = ContextStore(scope_id=f"root:{self._agent_name}", activation=activation)
 
     @property
     def store(self) -> ContextStore:
@@ -143,7 +146,10 @@ class LiveLane:
             return None
 
         try:
-            self._store._rebase(run.state)
+            # Saves during the turn join its commit; between turns the bound direct store
+            # makes explicit application saves durable before returning.
+            self._store._activation.close()
+            self._store._activation = _core_ContextActivation(run.context_scopes, run.state, False)
         except Exception:
             await run.abandon("failed", "context-conflict")
             raise
@@ -194,10 +200,13 @@ class LiveLane:
             ItemRow(id=item.id, message_id=message_ids.get(item.id), payload=item_to_payload(item))
             for item in self._history.items
         ]
-        state = self._store._pending_state
         try:
-            self._version = await run.commit(history, state)
-            self._store._acknowledge(state)
+            self._version = await run.commit(history, scope_writes=self._store._scope_writes)
+            self._store._acknowledge()
+            self._store._activation.close()
+            self._store._activation = await self._storage.threads._core_context_store(
+                self._thread_id, self._agent_name
+            )
         except StorageError as e:
             logger.warning(
                 "the voice turn's commit was not written",

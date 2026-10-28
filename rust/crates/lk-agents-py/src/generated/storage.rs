@@ -139,6 +139,18 @@ impl Storage {
         })
     }
 
+    /// A runtime-supplied field store whose explicit saves commit outside a managed turn.
+    #[pyo3(signature = (thread_id, lane))]
+    fn _core_context_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_context_store(&this, thread_id, lane)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::storage::_core_ContextActivation(::std::sync::Arc::new(out)), py))
+        })
+    }
+
     /// The storage's response streams, shared by its threads.
     fn streams<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
@@ -159,5 +171,68 @@ impl Storage {
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+type _core_ContextActivationImpl = <crate::Selected as super::Implementations>::ContextActivation;
+
+/// Activation state and revision/schema decisions. Application type validation stays in the host.
+#[pyclass(frozen, name = "_core_ContextActivation", module = "livekit.agents._core")]
+pub struct _core_ContextActivation(::std::sync::Arc<_core_ContextActivationImpl>);
+
+#[pymethods]
+impl _core_ContextActivation {
+    #[new]
+    #[pyo3(signature = (scopes, routing_state, read_only))]
+    fn new(scopes: ::std::vec::Vec<::lk_agents_abi::storage::context::ContextScope>, routing_state: Option<Bound<'_, PyAny>>, read_only: bool) -> PyResult<_core_ContextActivation> {
+        ::lk_agents_abi::python::check_pid()?;
+        let routing_state = routing_state.map(|v| ::lk_agents_abi::python::value_from_py(&v, "routing_state")).transpose()?;
+        let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::new(scopes, routing_state, read_only).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(_core_ContextActivation(::std::sync::Arc::new(out)))
+    }
+
+    /// Check manifests before restoring values or accepting defaults for absent fields.
+    #[pyo3(signature = (scope_id, identity, fields))]
+    fn load<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, fields: ::std::vec::Vec<::lk_agents_abi::storage::context::ContextField>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::load(&this, scope_id, identity, fields)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// Stage the validated fields; a stale activation cannot overwrite a newer revision.
+    #[pyo3(signature = (scope_id, identity, revision, fields))]
+    fn save<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, revision: i64, fields: ::std::vec::Vec<::lk_agents_abi::storage::context::ContextField>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::save(&this, scope_id, identity, revision, fields)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[getter]
+    fn writes(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::storage::context::ContextScopeWrite>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::writes(&self.0);
+        Ok(out)
+    }
+
+    fn acknowledge(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::acknowledge(&self.0);
+        Ok(())
+    }
+
+    /// End the activation, refusing subsequent loads or saves.
+    fn close(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::close(&self.0);
+        Ok(())
     }
 }

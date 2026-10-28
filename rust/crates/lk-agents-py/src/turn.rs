@@ -208,6 +208,7 @@ impl PyThread {
                 closed: run.closed,
                 history: run.history.clone(),
                 state: run.state.clone(),
+                context_scopes: run.context_scopes.clone(),
                 run: Arc::new(tokio::sync::Mutex::new(run)),
             })
         })
@@ -229,6 +230,7 @@ pub struct PyRun {
     closed: bool,
     history: Vec<ItemRow>,
     state: Option<serde_json::Value>,
+    context_scopes: Vec<host::context::ContextScope>,
 }
 
 #[pymethods]
@@ -257,14 +259,20 @@ impl PyRun {
         value_to_py(py, self.state.as_ref().unwrap_or(&serde_json::Value::Null))
     }
 
+    #[getter]
+    fn context_scopes(&self) -> Vec<host::context::ContextScope> {
+        self.context_scopes.clone()
+    }
+
     /// Writes what changed since the load: `history` (`ItemRow`s, the whole of it) and `state`
     /// (`None` keeps the stored one), then releases. The version after. Awaitable.
-    #[pyo3(signature = (history, state=None))]
+    #[pyo3(signature = (history, state=None, *, scope_writes=None))]
     fn commit<'py>(
         &self,
         py: Python<'py>,
         history: &Bound<'py, PyAny>,
         state: Option<&Bound<'py, PyAny>>,
+        scope_writes: Option<Vec<host::context::ContextScopeWrite>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let history: Vec<ItemRow> = history
@@ -276,6 +284,7 @@ impl PyRun {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut run = run.lock().await;
             run.history = history;
+            run.scope_writes = scope_writes.unwrap_or_default();
             if state.is_some() {
                 run.state = state;
             }

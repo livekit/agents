@@ -108,6 +108,184 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::ThreadTask {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+static CONTEXT_FIELD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::context::ContextField {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(CONTEXT_FIELD.import(py, "livekit.agents._generated.storage_context", "ContextField")?)? {
+            return Err(super::not_a(obj, "ContextField"));
+        }
+        Ok(Self {
+            name: ::lk_agents_abi::python::attr_with(obj, "ContextField", "name", |v| v.extract::<::std::string::String>())?,
+            schema: ::lk_agents_abi::python::attr_with(obj, "ContextField", "schema", |v| ::lk_agents_abi::python::value_from_py(v, "ContextField.schema"))?,
+            value: ::lk_agents_abi::python::attr_with(obj, "ContextField", "value", |v| ::lk_agents_abi::python::value_from_py(v, "ContextField.value"))?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::context::ContextField {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { name, schema, value } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item("schema", ::lk_agents_abi::python::value_to_py(py, &schema)?)?;
+        kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
+        CONTEXT_FIELD.import(py, "livekit.agents._generated.storage_context", "ContextField")?.call((), Some(&kwargs))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+static CONTEXT_MANIFEST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::context::ContextManifest {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(CONTEXT_MANIFEST.import(py, "livekit.agents._generated.storage_context", "ContextManifest")?)? {
+            return Err(super::not_a(obj, "ContextManifest"));
+        }
+        Ok(Self {
+            identity: ::lk_agents_abi::python::attr_with(obj, "ContextManifest", "identity", |v| v.extract::<::std::string::String>())?,
+            fields: ::lk_agents_abi::python::attr_with(obj, "ContextManifest", "fields", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>())?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::context::ContextManifest {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { identity, fields } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
+        kwargs.set_item("fields", ::pyo3::types::PyList::new(py, fields.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+        CONTEXT_MANIFEST.import(py, "livekit.agents._generated.storage_context", "ContextManifest")?.call((), Some(&kwargs))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+static CONTEXT_SCOPE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::context::ContextScope {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(CONTEXT_SCOPE.import(py, "livekit.agents._generated.storage_context", "ContextScope")?)? {
+            return Err(super::not_a(obj, "ContextScope"));
+        }
+        Ok(Self {
+            scope_id: ::lk_agents_abi::python::attr_with(obj, "ContextScope", "scope_id", |v| v.extract::<::std::string::String>())?,
+            revision: ::lk_agents_abi::python::attr_with(obj, "ContextScope", "revision", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "ContextScope.revision"))?,
+            fields: ::lk_agents_abi::python::attr_with(obj, "ContextScope", "fields", |v| match ::lk_agents_abi::python::value_from_py(v, "ContextScope.fields")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("ContextScope.fields: expected a dict")) })?,
+            contracts: ::lk_agents_abi::python::attr_with(obj, "ContextScope", "contracts", |v| match ::lk_agents_abi::python::value_from_py(v, "ContextScope.contracts")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("ContextScope.contracts: expected a dict")) })?,
+            manifests: ::lk_agents_abi::python::attr_with(obj, "ContextScope", "manifests", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::storage::context::ContextManifest>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::context::ContextScope {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { scope_id, revision, fields, contracts, manifests } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("scope_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(scope_id, py)?)?;
+        kwargs.set_item("revision", ::pyo3::IntoPyObjectExt::into_bound_py_any(revision, py)?)?;
+        kwargs.set_item("fields", ::lk_agents_abi::python::extra_to_py(py, &fields)?.into_any())?;
+        kwargs.set_item("contracts", ::lk_agents_abi::python::extra_to_py(py, &contracts)?.into_any())?;
+        kwargs.set_item("manifests", ::pyo3::types::PyList::new(py, manifests.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+        CONTEXT_SCOPE.import(py, "livekit.agents._generated.storage_context", "ContextScope")?.call((), Some(&kwargs))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+static CONTEXT_SCOPE_WRITE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::context::ContextScopeWrite {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(CONTEXT_SCOPE_WRITE.import(py, "livekit.agents._generated.storage_context", "ContextScopeWrite")?)? {
+            return Err(super::not_a(obj, "ContextScopeWrite"));
+        }
+        Ok(Self {
+            expected_revision: ::lk_agents_abi::python::attr_with(obj, "ContextScopeWrite", "expected_revision", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "ContextScopeWrite.expected_revision"))?,
+            scope: ::lk_agents_abi::python::attr_with(obj, "ContextScopeWrite", "scope", |v| v.extract::<::lk_agents_abi::storage::context::ContextScope>().map_err(::std::convert::Into::<PyErr>::into))?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::context::ContextScopeWrite {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { expected_revision, scope } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("expected_revision", ::pyo3::IntoPyObjectExt::into_bound_py_any(expected_revision, py)?)?;
+        kwargs.set_item("scope", ::pyo3::IntoPyObjectExt::into_bound_py_any(scope, py)?)?;
+        CONTEXT_SCOPE_WRITE.import(py, "livekit.agents._generated.storage_context", "ContextScopeWrite")?.call((), Some(&kwargs))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+static CONTEXT_VALUES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::context::ContextValues {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(CONTEXT_VALUES.import(py, "livekit.agents._generated.storage_context", "ContextValues")?)? {
+            return Err(super::not_a(obj, "ContextValues"));
+        }
+        Ok(Self {
+            revision: ::lk_agents_abi::python::attr_with(obj, "ContextValues", "revision", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "ContextValues.revision"))?,
+            fields: ::lk_agents_abi::python::attr_with(obj, "ContextValues", "fields", |v| match ::lk_agents_abi::python::value_from_py(v, "ContextValues.fields")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("ContextValues.fields: expected a dict")) })?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::context::ContextValues {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { revision, fields } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("revision", ::pyo3::IntoPyObjectExt::into_bound_py_any(revision, py)?)?;
+        kwargs.set_item("fields", ::lk_agents_abi::python::extra_to_py(py, &fields)?.into_any())?;
+        CONTEXT_VALUES.import(py, "livekit.agents._generated.storage_context", "ContextValues")?.call((), Some(&kwargs))
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
 
 impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::TaskState {

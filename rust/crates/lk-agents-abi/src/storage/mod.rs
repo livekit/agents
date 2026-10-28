@@ -1,6 +1,7 @@
 //! Thread storage as the host sees it: the `Storage` class `AgentDBStorage` and `SQLiteStorage`
 //! configure, the thread records it answers with, and the error every operation fails with.
 
+pub mod context;
 mod rows;
 
 use serde_json::{Map, Value};
@@ -125,6 +126,8 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// The response streams a task's subscribers read.
     #[host(handle(class = "Streams"))]
     type Streams: Send + Sync + 'static;
+    #[host(class(name = "_core_ContextActivation"))]
+    type ContextActivation: Send + Sync + 'static;
 
     /// `directory`: threads in that local directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url` (the project's
@@ -201,6 +204,14 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// The existing thread's handle, its writes under `holder`. Takes no lease.
     #[host(await)]
     async fn open(&self, thread_id: String, holder: String) -> Result<Self::Thread, StorageError>;
+
+    /// A runtime-supplied field store whose explicit saves commit outside a managed turn.
+    #[host(await)]
+    async fn _core_context_store(
+        &self,
+        thread_id: String,
+        lane: String,
+    ) -> Result<Self::ContextActivation, StorageError>;
 
     /// The storage's response streams, shared by its threads.
     #[host(await)]

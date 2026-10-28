@@ -21,12 +21,12 @@ extern crate lk_agents_worker as _;
 
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
+/// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over `lk-agents-voice`'s `NodeFactory`.
+pub mod nodes;
 /// `init(role)` and the registration table.
 pub mod runtime;
 /// `Streams` and `StreamReader`, and the record helpers of `turn.rs`.
 pub mod storage;
-/// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over `lk-agents-voice`'s `NodeFactory`.
-pub mod nodes;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
 
@@ -41,6 +41,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type Credentials = lk_agents_runtime::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::a2a_auth::Credentials;

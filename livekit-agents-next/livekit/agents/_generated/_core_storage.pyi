@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from .._core import Streams, Thread
 from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
+from .storage_context import ContextField, ContextScope, ContextScopeWrite, ContextValues
 
 class Storage:
     """Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
@@ -79,7 +80,33 @@ class Storage:
         """The thread's A2A tasks, of one `status` when given."""
     async def open(self, thread_id: str, holder: str) -> Thread:
         """The existing thread's handle, its writes under `holder`. Takes no lease."""
+    async def _core_context_store(self, thread_id: str, lane: str) -> _core_ContextActivation:
+        """A runtime-supplied field store whose explicit saves commit outside a managed turn."""
     async def streams(self) -> Streams:
         """The storage's response streams, shared by its threads."""
     async def aclose(self) -> None:
         """Releases backend resources once open handles settled; repeat-safe."""
+
+class _core_ContextActivation:
+    """Activation state and revision/schema decisions. Application type validation stays in the host."""
+    def __init__(
+        self,
+        scopes: list[ContextScope],
+        routing_state: object | None,
+        read_only: bool,
+    ) -> None: ...
+    async def load(self, scope_id: str, identity: str, fields: list[ContextField]) -> ContextValues:
+        """Check manifests before restoring values or accepting defaults for absent fields."""
+    async def save(
+        self,
+        scope_id: str,
+        identity: str,
+        revision: int,
+        fields: list[ContextField],
+    ) -> ContextValues:
+        """Stage the validated fields; a stale activation cannot overwrite a newer revision."""
+    @property
+    def writes(self) -> list[ContextScopeWrite]: ...
+    def acknowledge(self) -> None: ...
+    def close(self) -> None:
+        """End the activation, refusing subsequent loads or saves."""

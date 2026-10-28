@@ -4,6 +4,7 @@
 use serde_json::{Map, Value};
 
 use crate::errors::ProviderError;
+use crate::storage::context::{ContextScope, ContextScopeWrite};
 use crate::storage::{ItemRow, RunUsage, TaskRecord};
 use crate::{StreamSink, StreamSource};
 
@@ -29,6 +30,8 @@ pub struct TurnContext {
     pub batch: Vec<Message>,
     pub history: Vec<ItemRow>,
     pub state: Option<Value>,
+    pub context_scope_id: String,
+    pub context_scopes: Vec<ContextScope>,
     pub read_only: bool,
     pub task_id: String,
     pub tasks: Vec<TaskRecord>,
@@ -58,6 +61,7 @@ pub struct HandlerOutput {
     pub output: Option<Value>,
     pub new_items: Vec<Value>,
     pub state: Option<Value>,
+    pub scope_writes: Vec<ContextScopeWrite>,
     pub usage: RunUsage,
     pub input_required: Option<String>,
     pub pending_call: Option<PendingCall>,

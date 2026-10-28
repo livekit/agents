@@ -208,6 +208,9 @@ Payloads are JSON and queryable in place. Schema changes require compatibility
 validation and explicit migrations where needed; adding a key is not sufficient
 to guarantee compatibility. State is JSON-shaped and under 64 KiB: a field that cannot be written as JSON raises
 `NotSerializable` naming it, a larger state raises `TooLarge`.
+The byte budget counts the complete keyed map of saved fields in the lane's
+referenced scopes and saved routing state, once per scope. Schema manifests
+and revisions are metadata, separate from application values.
 
 ## Lanes
 
@@ -437,7 +440,8 @@ implicitly touch a thread.
 
 The schema is livekit/protocol `livekit/agent/thread_schema_v1.sql`, which
 `livekit-protocol` carries as `agent::THREAD_SCHEMA_V1`; the framework runs it
-on a database's first write. JSONB columns hold JSON. The file
+on a database's first write. The framework adds its private `context_scopes`
+table for persisted application fields. JSONB columns hold JSON. The file
 tags each column with who reads it: the platform (the threads service's
 GetThreadItems and GetThreadTasks), the A2A methods, or the framework.
 `seq` is a position within a lane; `pos` on `items` and `tasks` is the
@@ -452,6 +456,7 @@ insertion order, never reused, the platform's page cursor; `id` on
 | `lanes`          | lane                         | `lane`, `version`, `state`, `lease_holder`, `lease_token`, `lease_until`, `waiter`, `drained_id` (the last inbox `id` a run consumed) |
 | `events`         | journal entry                | `id`, `ts_ms`, `lane`, `run_id`, `type`, `payload` |
 | `inbox`          | message received during a run | `id`, `lane`, `task_id`, `message_id`, `message`, `received_at` |
+| `context_scopes` | persisted application scope | `scope_id`, `lane` (the committing owner), `revision`, `fields`, `contracts`, `manifests` |
 
 An item's `payload` keeps what the model needs to see the conversation
 again: messages and their text, function calls with their `extra`, function

@@ -11,6 +11,7 @@
 //! The decisions (statements, fences, transitions, renewal timing) are `lk_agents_storage`'s.
 
 pub mod agentdb;
+pub mod context;
 pub mod engine;
 pub mod host;
 pub mod lease;

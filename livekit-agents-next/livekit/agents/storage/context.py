@@ -70,7 +70,12 @@ class A2ASessionContext:
         self.message = cast(ChatMessage, payload_to_item(turn.message))
         self.messages: list[Message] = list(turn.batch)
         self.message_history: ChatContext = history_of(turn.history)
-        self.store = ContextStore(turn.state, read_only=turn.read_only)
+        self.store = ContextStore(
+            turn.state,
+            read_only=turn.read_only,
+            scopes=turn.context_scopes,
+            scope_id=turn.context_scope_id,
+        )
         self.thread = thread
         self.task_id = turn.task_id
         self.tasks: list[TaskRecord] = list(turn.tasks)
@@ -237,7 +242,8 @@ class TurnHost:
         return HandlerOutput(
             output=output.question if isinstance(output, InputRequired) else output,
             new_items=[item_to_payload(item) for r in results for item in r.new_messages()],
-            state=ctx.store._pending_state,
+            state=None,
+            scope_writes=ctx.store._scope_writes,
             usage=_usage(results),
             input_required=question,
             pending_call=pending,

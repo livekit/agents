@@ -515,7 +515,8 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     from livekit.agents.storage.context_store import ContextStore
 
     restored = AppContext(settings=deps)
-    await ContextStore(row.state).load_context(restored)
+    activation = await storage.threads._core_context_store(sid, agent.name)
+    await ContextStore(scope_id=f"root:{agent.name}", activation=activation).load_context(restored)
     assert restored.patient == Patient(looked_up=1)
 
 

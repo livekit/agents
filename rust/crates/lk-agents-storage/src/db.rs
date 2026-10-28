@@ -3,6 +3,7 @@
 //! a connection and hands the [`BatchResult`] back to its [`Decode`]; nothing here performs I/O,
 //! reads a clock or mints an id: lease tokens, timestamps and run ids are supplied.
 
+use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -121,6 +122,11 @@ pub struct Commit {
     pub tasks: Vec<TaskWrite>,
     /// `None` keeps the stored snapshot.
     pub state: Option<Value>,
+    /// The unchanged routing snapshot still counts toward the aggregate state budget.
+    pub loaded_state: Option<Value>,
+    /// The lane's loaded scopes; staged replacements are substituted before size accounting.
+    pub context_scopes: Vec<ContextScope>,
+    pub scope_writes: Vec<ContextScopeWrite>,
     pub drained_id: Option<i64>,
     pub run_ended: EventWrite,
     /// A task row to read back after the writes, in the same batch: the answer's record.
@@ -183,6 +189,7 @@ pub fn bootstrap() -> Vec<Statement> {
     let mut out: Vec<Statement> =
         crate::sql::schema_statements(THREAD_SCHEMA).map(Statement::raw).collect();
     out.push(InsertSchemaVersion { version: THREAD_SCHEMA_VERSION }.bind());
+    out.push(Statement::raw(crate::context::db::SCHEMA));
     out
 }
 
@@ -236,6 +243,7 @@ pub struct Acquired {
     pub items: Vec<ItemRow>,
     /// The newest task rows, newest first.
     pub tasks: Vec<TaskRow>,
+    pub context_scopes: Vec<ContextScope>,
     /// Whether `submit` inserted its row; `Some(false)` is a `task_id` or `messageId` that
     /// already had one.
     pub submitted: Option<bool>,
@@ -262,6 +270,7 @@ pub struct AcquireDecode {
     items: usize,
     lane: usize,
     tasks: usize,
+    context_scopes: usize,
 }
 
 /// Takes the lease and loads the lane, one atomic batch, `schema` prepended for a fresh
@@ -269,6 +278,7 @@ pub struct AcquireDecode {
 pub fn acquire(req: &Acquire<'_>, schema: Vec<Statement>) -> Plan<AcquireDecode> {
     let (lane, token) = (req.lane, req.token);
     let mut b = Batch(schema);
+    b.0.push(Statement::raw(crate::context::db::SCHEMA));
     let submitted = req.submit.map(|task| b.add(submitted_task(lane, task)));
     b.add(InsertLane { lane });
     let take = b.add(TakeLease {
@@ -292,6 +302,8 @@ pub fn acquire(req: &Acquire<'_>, schema: Vec<Statement>) -> Plan<AcquireDecode>
     let items = b.add(SelectItems { lane });
     let lane_row = b.add(SelectLane { lane });
     let tasks = b.add(SelectTasks { lane, limit: req.tasks_limit });
+    b.0.push(crate::context::db::select(lane));
+    let context_scopes = b.0.len() - 1;
     let fence = Fence {
         lane: lane.to_owned(),
         holder: req.holder.to_owned(),
@@ -307,6 +319,7 @@ pub fn acquire(req: &Acquire<'_>, schema: Vec<Statement>) -> Plan<AcquireDecode>
         items,
         lane: lane_row,
         tasks,
+        context_scopes,
     })
 }
 
@@ -336,6 +349,7 @@ impl Decode for AcquireDecode {
             lane: LaneRow::from_row(lane_row)?,
             items: rows(out, self.items, ItemRow::from_row)?,
             tasks: rows(out, self.tasks, TaskRow::from_row)?,
+            context_scopes: crate::context::db::from_rows(out.at(self.context_scopes)?.rows())?,
             submitted,
             picked_up,
         })))
@@ -544,18 +558,27 @@ pub fn commit(
     fenced: Option<Fenced<'_>>,
     schema: Vec<Statement>,
 ) -> Result<Plan<CommitDecode>, StorageError> {
-    if let Some(state) = &c.state {
-        let size = serde_json::to_vec(state)
-            .map_err(|e| StorageError::NotSerializable("state".into(), e.to_string()))?
-            .len();
-        if size > STATE_LIMIT {
-            return Err(StorageError::TooLarge { what: "state".into(), limit: STATE_LIMIT });
-        }
+    let mut scopes: std::collections::BTreeMap<_, _> =
+        c.context_scopes.iter().map(|scope| (&scope.scope_id, scope)).collect();
+    for write in &c.scope_writes {
+        scopes.insert(&write.scope.scope_id, &write.scope);
+    }
+    crate::context::check_state_size(
+        c.state.as_ref().or(c.loaded_state.as_ref()),
+        scopes.into_values(),
+    )?;
+    if fenced.is_none() && !c.scope_writes.is_empty() {
+        return Err(StorageError::Invalid(
+            "context writes require an exclusive managed turn".into(),
+        ));
     }
     let mut b = Batch(schema);
     match &fenced {
         Some(Fenced { fence, .. }) => {
             let (version, token) = (fence.version, fence.token.as_str());
+            for write in &c.scope_writes {
+                b.0.push(crate::context::db::write(lane, write, Some(fence))?);
+            }
             for item in &c.items {
                 b.add(InsertItem {
                     lane,

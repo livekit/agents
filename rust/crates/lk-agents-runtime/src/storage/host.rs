@@ -32,15 +32,22 @@ enum Config {
 }
 
 enum Backend {
-    Local(SqliteStorage),
-    Cloud(AgentDbStorage),
+    Local(Arc<SqliteStorage>),
+    Cloud(Arc<AgentDbStorage>),
 }
 
 impl Backend {
     fn storage(&self) -> &dyn Storage {
         match self {
-            Backend::Local(s) => s,
-            Backend::Cloud(s) => s,
+            Backend::Local(s) => s.as_ref(),
+            Backend::Cloud(s) => s.as_ref(),
+        }
+    }
+
+    fn shared_storage(&self) -> Arc<dyn Storage> {
+        match self {
+            Backend::Local(s) => s.clone(),
+            Backend::Cloud(s) => s.clone(),
         }
     }
 }
@@ -65,9 +72,9 @@ impl HostStorage {
                     Config::Local { directory, lease } => {
                         let storage = SqliteStorage::open(directory, *lease).await?;
                         log::info!("local thread storage in {}", storage.directory().display());
-                        Backend::Local(storage)
+                        Backend::Local(Arc::new(storage))
                     }
-                    Config::Cloud(storage) => Backend::Cloud(storage.clone()),
+                    Config::Cloud(storage) => Backend::Cloud(Arc::new(storage.clone())),
                 })
             })
             .await
@@ -75,6 +82,10 @@ impl HostStorage {
 
     async fn storage(&self) -> Result<&dyn Storage, StorageError> {
         Ok(self.backend().await?.storage())
+    }
+
+    pub(crate) async fn shared_storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
+        Ok(self.backend().await?.shared_storage())
     }
 }
 
@@ -210,6 +221,7 @@ async fn local_tasks(
 impl HostStorageClass for HostStorage {
     type Thread = Thread;
     type Streams = Arc<QueuedStreams>;
+    type ContextActivation = super::context::ContextActivation;
 
     fn new(
         directory: Option<String>,
@@ -380,6 +392,19 @@ impl HostStorageClass for HostStorage {
 
     async fn open(&self, thread_id: String, holder: String) -> Result<Thread, StorageError> {
         self.storage().await?.open(&thread_id, &holder).await
+    }
+
+    async fn _core_context_store(
+        &self,
+        thread_id: String,
+        lane: String,
+    ) -> Result<Self::ContextActivation, StorageError> {
+        super::context::ContextActivation::bound(
+            self.backend().await?.shared_storage(),
+            thread_id,
+            lane,
+        )
+        .await
     }
 
     async fn streams(&self) -> Result<Arc<QueuedStreams>, StorageError> {

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .storage_class import ItemRow, RunUsage, TaskRecord
+    from .storage_context import ContextScope, ContextScopeWrite
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -33,6 +34,8 @@ class TurnContext:
     batch: list[Message]
     history: list[ItemRow]
     state: object | None
+    context_scope_id: str
+    context_scopes: list[ContextScope]
     read_only: bool
     task_id: str
     tasks: list[TaskRecord]
@@ -58,6 +61,7 @@ class HandlerOutput:
     output: object | None
     new_items: list[object]
     state: object | None
+    scope_writes: list[ContextScopeWrite]
     usage: RunUsage
     input_required: str | None
     pending_call: PendingCall | None

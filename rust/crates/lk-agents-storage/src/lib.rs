@@ -14,6 +14,7 @@
 //! * [`streams`]: the answer streams' records.
 //! * `sqlite` (feature): the statements executed on a SQLite connection the caller owns.
 
+pub mod context;
 pub mod db;
 pub mod host;
 pub mod lease;

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use livekit_protocol::agent::chat_context::ChatItem;
+use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use lk_agents_storage::db::{
     self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced,
     ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery, TaskWrite,
@@ -422,6 +423,20 @@ impl Thread {
         &self.holder
     }
 
+    /// A direct field store's committed scope snapshot. Initialization remains runtime-owned.
+    pub async fn context_scopes(&self, lane: &str) -> Result<Vec<ContextScope>, StorageError> {
+        self.db.ensure_schema().await?;
+        let result = self
+            .db
+            .conn
+            .batch(vec![
+                Statement::raw(lk_agents_storage::context::db::SCHEMA),
+                lk_agents_storage::context::db::select(lane),
+            ])
+            .await?;
+        lk_agents_storage::context::db::from_rows(result.at(1)?.rows())
+    }
+
     pub fn lane(&self, agent: &str) -> Lane {
         Lane { holder: self.holder.clone(), db: self.db.lane(agent) }
     }
@@ -545,30 +560,32 @@ impl Lane {
     }
 
     async fn open_with_holder(&self, opts: RunOptions, holder: &str) -> Result<Run, StorageError> {
-        let (lease, closed, state, items, tasks, submitted, picked_up) = match opts.exclusive {
-            true => {
-                let acquired = self.acquire(&opts, holder).await?;
-                let lease = Lease::new(self.db.db.clone(), acquired.fence.clone());
-                if !acquired.already_committed {
-                    lease.keep_alive();
+        let (lease, closed, state, items, tasks, submitted, picked_up, context_scopes) =
+            match opts.exclusive {
+                true => {
+                    let acquired = self.acquire(&opts, holder).await?;
+                    let lease = Lease::new(self.db.db.clone(), acquired.fence.clone());
+                    if !acquired.already_committed {
+                        lease.keep_alive();
+                    }
+                    let a = *acquired;
+                    let tasks = Tasks::loaded(self.db.clone(), a.tasks);
+                    (
+                        Some(lease),
+                        a.already_committed,
+                        a.lane.state,
+                        a.items,
+                        tasks,
+                        a.submitted,
+                        a.picked_up,
+                        a.context_scopes,
+                    )
                 }
-                let a = *acquired;
-                let tasks = Tasks::loaded(self.db.clone(), a.tasks);
-                (
-                    Some(lease),
-                    a.already_committed,
-                    a.lane.state,
-                    a.items,
-                    tasks,
-                    a.submitted,
-                    a.picked_up,
-                )
-            }
-            false => {
-                let items = self.db.history().await?;
-                (None, false, None, items, Tasks::new(self.db.clone()), None, false)
-            }
-        };
+                false => {
+                    let items = self.db.history().await?;
+                    (None, false, None, items, Tasks::new(self.db.clone()), None, false, Vec::new())
+                }
+            };
         Ok(Run {
             db: self.db.clone(),
             lease,
@@ -581,6 +598,8 @@ impl Lane {
             history: items,
             loaded_state: state.clone(),
             state,
+            context_scopes,
+            scope_writes: Vec::new(),
             events: EventLog::default(),
             tasks,
             submitted,
@@ -717,6 +736,8 @@ pub struct Run {
     /// The state snapshot as loaded, `None` for a fresh lane; the caller can replace it
     /// explicitly, and the commit writes it when it differs from what was loaded.
     pub state: Option<Value>,
+    pub context_scopes: Vec<ContextScope>,
+    pub scope_writes: Vec<ContextScopeWrite>,
     loaded_state: Option<Value>,
     pub events: EventLog,
     pub tasks: Tasks,
@@ -748,7 +769,7 @@ impl Run {
 
     /// The run's writes, as the core composes them.
     pub fn writes(&self, opts: CommitOptions) -> Result<Commit, StorageError> {
-        run::run_commit(RunWrites {
+        let mut commit = run::run_commit(RunWrites {
             run_id: &self.run_id,
             task_id: &self.task_id,
             channel: self.channel.as_deref(),
@@ -765,7 +786,10 @@ impl Run {
             now_ms: now_ms(),
             drained_id: opts.drained_id,
             answer_task: opts.answer_task,
-        })
+        })?;
+        commit.context_scopes = self.context_scopes.clone();
+        commit.scope_writes = self.scope_writes.clone();
+        Ok(commit)
     }
 
     fn finish(&mut self) -> Result<(), StorageError> {

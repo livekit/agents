@@ -1,19 +1,19 @@
-"""Explicit persistence of marked application-context fields in a managed turn."""
+"""Host type validation and hydration for the runtime's persisted context scopes."""
 
 from __future__ import annotations
 
-import copy
-from collections.abc import Callable, Mapping
-from dataclasses import MISSING, field, fields, is_dataclass
-from typing import Any, TypeVar, get_type_hints, overload
+from collections.abc import Callable, Sequence
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass
+from typing import Any, TypeVar, cast, get_type_hints, overload
 
 from pydantic import JsonValue, TypeAdapter
 
-from .protocol import NotSerializable, VersionConflict, dump_state
+from .._core import _core_ContextActivation
+from .._generated.storage_context import ContextField, ContextScope, ContextScopeWrite
+from .protocol import NotSerializable
 
 T = TypeVar("T")
 _FIELD_MARKER = "livekit.persisted"
-_STORAGE_KEY = "context_fields"
 
 
 @overload
@@ -29,131 +29,133 @@ def persisted(*, default: Any = MISSING, default_factory: Any = MISSING) -> Any:
     return field(default=default, default_factory=default_factory, metadata={_FIELD_MARKER: True})
 
 
+@dataclass
+class _LoadedContext:
+    context: object
+    revision: int
+    names: set[str]
+
+
+@dataclass
+class _HydratedScope:
+    loaded: dict[int, _LoadedContext] = field(default_factory=dict)
+    values: dict[str, object] = field(default_factory=dict)
+    revision: int | None = None
+
+
 class ContextStore:
-    """A turn-scoped view of persisted context fields.
+    """A runtime-supplied store; application values remain host objects after validation."""
 
-    Saves stage a validated snapshot for the host's fenced transaction. Loading
-    and saving are explicit; the host owns the connection and commit lifecycle.
-    """
-
-    def __init__(self, state: JsonValue = None, *, read_only: bool = False) -> None:
-        self._state = copy.deepcopy(state)
-        self._committed_state = copy.deepcopy(state)
-        self._read_only = read_only
+    def __init__(
+        self,
+        state: JsonValue = None,
+        *,
+        read_only: bool = False,
+        scopes: Sequence[ContextScope] = (),
+        scope_id: str = "root",
+        activation: _core_ContextActivation | None = None,
+    ) -> None:
+        self._activation = activation or _core_ContextActivation(list(scopes), state, read_only)
+        self._scope_id = scope_id
+        self._hydration: dict[str, _HydratedScope] = {scope_id: _HydratedScope()}
+        self._objects = self._hydration[scope_id]
+        self._owns_activation = True
         self._closed = False
-        self._pending_state: JsonValue = None
-        self._revisions: dict[str, int] = {}
-        self._loaded: dict[int, tuple[object, dict[str, int]]] = {}
+
+    def _for_scope(self, scope_id: str) -> ContextStore:
+        """Select the scope recorded by the runtime without allocating a replacement identity."""
+        self._ensure_open()
+        view = ContextStore(scope_id=scope_id, activation=self._activation)
+        view._hydration = self._hydration
+        view._objects = self._hydration.setdefault(scope_id, _HydratedScope())
+        view._owns_activation = False
+        return view
 
     async def load_context(self, context: T) -> T:
-        """Restore marked fields, preserving runtime-only objects and declared defaults."""
+        """Check saved contracts, then restore marked fields without touching runtime services."""
         self._ensure_open()
-        declared = _declared_fields(context)
-        stored = self._stored_fields()
-        restored: dict[str, Any] = {}
-        for name, annotation in declared.items():
-            value = stored[name] if name in stored else getattr(context, name)
-            restored[name] = TypeAdapter(annotation).validate_python(value)
-        # Validate every field before changing the caller's object.
-        for name, value in restored.items():
-            setattr(context, name, value)
-        self._loaded[id(context)] = (
-            context,
-            {name: self._revisions.get(name, 0) for name in declared},
-        )
+        adapters = _field_adapters(context)
+        declarations = [
+            ContextField(name=name, schema=adapter.json_schema(), value=None)
+            for name, adapter in adapters.items()
+        ]
+        values = await self._activation.load(self._scope_id, _identity(context), declarations)
+        restored: dict[str, object] = {}
+        for name, adapter in adapters.items():
+            if values.revision == self._objects.revision and name in self._objects.values:
+                restored[name] = self._objects.values[name]
+            else:
+                value = values.fields[name] if name in values.fields else getattr(context, name)
+                restored[name] = adapter.validate_python(value)
+        # A failed validator must not leave a partially hydrated application object.
+        self._objects.loaded[id(context)] = _LoadedContext(context, values.revision, set(adapters))
+        self._publish(restored, values.revision, restored=True)
         return context
 
     async def save_context(self, context: object) -> None:
-        """Stage all marked fields for the managed commit, rejecting stale local snapshots."""
+        """Validate all marked fields, then stage or durably commit through the runtime owner."""
         self._ensure_open()
-        if self._read_only:
-            raise ValueError("context writes require an exclusive managed turn")
-        declared = _declared_fields(context)
-        loaded = self._loaded.get(id(context))
-        if loaded is None or loaded[0] is not context:
+        loaded = self._objects.loaded.get(id(context))
+        if loaded is None or loaded.context is not context:
             raise ValueError("load_context must be called before save_context")
-        revisions = loaded[1]
-        for name in declared:
-            if revisions.get(name) != self._revisions.get(name, 0):
-                raise VersionConflict(f"persisted field `{name}` changed since it was loaded")
-        updated: dict[str, JsonValue] = dict(self._stored_fields())
-        for name, annotation in declared.items():
+        declarations: list[ContextField] = []
+        validated: dict[str, object] = {}
+        for name, adapter in _field_adapters(context).items():
             try:
-                adapter = TypeAdapter(annotation)
                 value = adapter.validate_python(getattr(context, name))
-                updated[name] = adapter.dump_python(value, mode="json")
+                encoded = adapter.dump_python(value, mode="json")
+                declarations.append(
+                    ContextField(name=name, schema=adapter.json_schema(), value=encoded)
+                )
+                validated[name] = value
             except Exception as exc:
                 raise NotSerializable(f"persisted field `{name}`: {exc}") from exc
-        state: dict[str, JsonValue] = dict(self._state) if isinstance(self._state, dict) else {}
-        state[_STORAGE_KEY] = updated
-        # Apply the same JSON validation and size limit as other stored state.
-        encoded = dump_state(state, dict[str, JsonValue])
-        self._state = copy.deepcopy(encoded)
-        self._pending_state = copy.deepcopy(encoded)
-        for name in declared:
-            self._revisions[name] = self._revisions.get(name, 0) + 1
-            revisions[name] = self._revisions[name]
+        values = await self._activation.save(
+            self._scope_id, _identity(context), loaded.revision, declarations
+        )
+        self._publish(validated, values.revision)
 
-    def _stored_fields(self) -> Mapping[str, JsonValue]:
-        return _field_values(self._state)
+    def _publish(self, values: dict[str, object], revision: int, *, restored: bool = False) -> None:
+        if revision != self._objects.revision:
+            self._objects.values.clear()
+        self._objects.values.update(values)
+        self._objects.revision = revision
+        for loaded in self._objects.loaded.values():
+            if not restored or loaded.names <= values.keys():
+                loaded.revision = revision
+            for name in loaded.names & values.keys():
+                setattr(loaded.context, name, values[name])
 
-    def _rebase(self, state: JsonValue) -> None:
-        """Refresh a host snapshot without discarding explicitly staged writes."""
-        self._ensure_open()
-        incoming = copy.deepcopy(state)
-        incoming_fields = _field_values(incoming)
-        if incoming == self._committed_state:
-            return
-        if self._pending_state is not None:
-            raise VersionConflict("persisted context changed while explicit saves were pending")
-        previous_fields = self._stored_fields()
-        changed = {
-            name
-            for name in previous_fields.keys() | incoming_fields.keys()
-            if (name in previous_fields) != (name in incoming_fields)
-            or previous_fields.get(name) != incoming_fields.get(name)
-        }
-        self._state = incoming
-        self._committed_state = copy.deepcopy(incoming)
-        for name in changed:
-            self._revisions[name] = self._revisions.get(name, 0) + 1
+    @property
+    def _scope_writes(self) -> list[ContextScopeWrite]:
+        return self._activation.writes
 
-    def _acknowledge(self, state: JsonValue) -> None:
-        """Record the snapshot the host committed, preserving any newer explicit save."""
-        self._ensure_open()
-        if state is None:
-            return
-        self._committed_state = copy.deepcopy(state)
-        if self._pending_state == state:
-            self._pending_state = None
+    def _acknowledge(self) -> None:
+        self._activation.acknowledge()
 
     def close(self) -> None:
-        """End this activation's access to the store."""
         self._closed = True
-        self._loaded.clear()
+        if self._owns_activation:
+            self._activation.close()
+            for scope in self._hydration.values():
+                scope.loaded.clear()
+                scope.values.clear()
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("the context store's activation has ended")
 
 
-def _field_values(state: JsonValue) -> Mapping[str, JsonValue]:
-    if state is None:
-        return {}
-    if not isinstance(state, dict):
-        raise ValueError("persisted context state must be an object")
-    stored = state.get(_STORAGE_KEY, {})
-    if not isinstance(stored, dict):
-        raise ValueError("invalid persisted context field record")
-    return stored
+def _identity(context: object) -> str:
+    return f"{type(context).__module__}.{type(context).__qualname__}"
 
 
-def _declared_fields(context: object) -> dict[str, Any]:
+def _field_adapters(context: object) -> dict[str, TypeAdapter[object]]:
     if not is_dataclass(context) or isinstance(context, type):
         raise TypeError("context persistence requires a dataclass instance")
     hints = get_type_hints(type(context), include_extras=True)
     return {
-        item.name: hints[item.name]
+        item.name: cast(TypeAdapter[object], TypeAdapter(hints[item.name]))
         for item in fields(context)
         if item.metadata.get(_FIELD_MARKER, False)
     }
@@ -167,3 +169,4 @@ async def load_context(context: T, *, store: ContextStore) -> T:
 async def save_context(context: object, *, store: ContextStore) -> None:
     """Save marked fields using an explicitly supplied store."""
     await store.save_context(context)
+
