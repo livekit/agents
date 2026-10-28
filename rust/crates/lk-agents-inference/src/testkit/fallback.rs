@@ -129,7 +129,6 @@ impl StreamSink<String> for DiscardText {
     fn end_input(&self) {}
 }
 
-#[async_trait]
 impl Stt for PolicyProvider {
     fn label(&self) -> String {
         "policy-stt".into()
@@ -140,21 +139,25 @@ impl Stt for PolicyProvider {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(Self { conn: *conn, ..self.clone() }))
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _buffer: AudioBuffer<'_>,
         _language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        self.record();
-        Ok(SpeechEvent::new(SpeechEventType::FinalTranscript))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move {
+            self.record();
+            Ok(SpeechEvent::new(SpeechEventType::FinalTranscript))
+        })
     }
-    async fn stream(
+    fn stream(
         &self,
         _language: Option<&LanguageCode>,
         _offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        self.record();
-        Ok(Some((Box::new(DiscardAudio), Box::new(EmptySpeech))))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            self.record();
+            Ok(Some((Box::new(DiscardAudio) as SttSink, Box::new(EmptySpeech) as SttSource)))
+        })
     }
 }
 

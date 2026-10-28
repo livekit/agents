@@ -52,7 +52,6 @@ struct Recognition {
     ended: Arc<Notify>,
 }
 
-#[async_trait::async_trait]
 impl Stt for FakeStt {
     fn label(&self) -> String {
         "fake::stt".into()
@@ -67,34 +66,41 @@ impl Stt for FakeStt {
         }
     }
 
-    async fn recognize(
+    fn recognize(
         &self,
         _: AudioBuffer<'_>,
         _: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        unreachable!("streaming fixture")
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { unreachable!("streaming fixture") })
     }
 
-    async fn stream(
+    fn stream(
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        if !self.connect.is_zero() {
-            tokio::time::sleep(self.connect).await;
-        }
-        let (sender, events) = mpsc::unbounded_channel();
-        let ended = Arc::new(Notify::new());
-        let opened = self.registry.now();
-        let slot = self.registry.register(
-            Kind::Stt,
-            self.detail.clone(),
-            Control::Stt(sender, opened, None),
-        );
-        Ok(Some((
-            Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
-            Box::new(Recognition { slot, registry: self.registry.clone(), events, ended }),
-        )))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            if !self.connect.is_zero() {
+                tokio::time::sleep(self.connect).await;
+            }
+            let (sender, events) = mpsc::unbounded_channel();
+            let ended = Arc::new(Notify::new());
+            let opened = self.registry.now();
+            let slot = self.registry.register(
+                Kind::Stt,
+                self.detail.clone(),
+                Control::Stt(sender, opened, None),
+            );
+            Ok(Some((
+                Box::new(Forward {
+                    slot,
+                    registry: self.registry.clone(),
+                    ended: Some(ended.clone()),
+                }) as SttSink,
+                Box::new(Recognition { slot, registry: self.registry.clone(), events, ended })
+                    as SttSource,
+            )))
+        })
     }
 }
 

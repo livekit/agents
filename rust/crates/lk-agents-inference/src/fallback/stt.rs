@@ -485,7 +485,6 @@ impl<E: Env> lk_agents_abi::stt::fallback::FallbackStt for FallbackStt<E> {
     }
 }
 
-#[async_trait]
 impl<E: Env> Stt for FallbackStt<E> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
@@ -524,94 +523,105 @@ impl<E: Env> Stt for FallbackStt<E> {
         self.capabilities
     }
 
-    async fn recognize(
+    fn recognize(
         &self,
         buffer: lk_agents_abi::AudioBuffer<'_>,
         language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        let req = SttReq::Batch { frames: Arc::from(buffer.to_vec()), language: language.cloned() };
-        let mut unused = ();
-        let out = self
-            .chain
-            .run(
-                &req,
-                &self.caller_conn,
-                RecoverySlot::OneShot,
-                &mut unused,
-                |_i, _b, session, _s| {
-                    Box::pin(async move {
-                        match session {
-                            SttSession::Batch(ev) => Attempt::Served(ev),
-                            SttSession::Stream(_) => unreachable!("a Batch request opens Batch"),
-                        }
-                    }) as BoxFuture<'_, Attempt<SpeechEvent>>
-                },
-            )
-            .await?;
-        match out {
-            ChainOutcome::Served(ev) => Ok(ev),
-        }
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        let buffer = buffer.to_vec();
+        let language = language.cloned();
+        Box::pin(async move {
+            let req = SttReq::Batch { frames: Arc::from(buffer), language: language.clone() };
+            let mut unused = ();
+            let out = self
+                .chain
+                .run(
+                    &req,
+                    &self.caller_conn,
+                    RecoverySlot::OneShot,
+                    &mut unused,
+                    |_i, _b, session, _s| {
+                        Box::pin(async move {
+                            match session {
+                                SttSession::Batch(ev) => Attempt::Served(ev),
+                                SttSession::Stream(_) => {
+                                    unreachable!("a Batch request opens Batch")
+                                }
+                            }
+                        }) as BoxFuture<'_, Attempt<SpeechEvent>>
+                    },
+                )
+                .await?;
+            match out {
+                ChainOutcome::Served(ev) => Ok(ev),
+            }
+        })
     }
 
     /// Each leg's `start_time_offset` is `start_time_offset` plus the time since this call.
-    async fn stream(
+    fn stream(
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        let tee = InputTee::new();
-        let opened = self.chain.clock().now();
-        let offset =
-            start_time_offset.map(|start_time_offset| LegOffset { start_time_offset, opened });
-        let (tx, rx) = mpsc::channel::<Result<SpeechEvent, ProviderError>>(32);
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        let language = language.cloned();
+        Box::pin(async move {
+            let tee = InputTee::new();
+            let opened = self.chain.clock().now();
+            let offset =
+                start_time_offset.map(|start_time_offset| LegOffset { start_time_offset, opened });
+            let (tx, rx) = mpsc::channel::<Result<SpeechEvent, ProviderError>>(32);
 
-        let chain = Arc::clone(&self.chain);
-        let drain_chain = Arc::clone(&self.chain);
-        let req = SttReq::Stream { language: language.cloned(), tee: Arc::clone(&tee), offset };
-        let call = ChainCall {
-            conn_options: self.caller_conn,
-            accepted_at: opened,
-            slot: RecoverySlot::Streaming,
-        };
-        let tee_for_task = Arc::clone(&tee);
+            let chain = Arc::clone(&self.chain);
+            let drain_chain = Arc::clone(&self.chain);
+            let req = SttReq::Stream { language: language.clone(), tee: Arc::clone(&tee), offset };
+            let call = ChainCall {
+                conn_options: self.caller_conn,
+                accepted_at: opened,
+                slot: RecoverySlot::Streaming,
+            };
+            let tee_for_task = Arc::clone(&tee);
 
-        let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-        let handle = self.spawner.spawn_unboxed(async move {
-            let mut tx = tx;
-            let result = chain
-                .run_cancellable(
-                    &req,
-                    call,
-                    &mut tx,
-                    stop_rx,
-                    move |index, _b, session, tx, mut stop| {
-                        let chain = Arc::clone(&drain_chain);
-                        let tee = Arc::clone(&tee_for_task);
-                        Box::pin(async move {
-                            let SttSession::Stream(mut source) = session else {
-                                unreachable!("a Stream request opens Stream")
-                            };
-                            let outcome =
-                                forward(&chain, index, source.as_mut(), &mut stop, tx, |_| true)
+            let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
+            let handle = self.spawner.spawn_unboxed(async move {
+                let mut tx = tx;
+                let result = chain
+                    .run_cancellable(
+                        &req,
+                        call,
+                        &mut tx,
+                        stop_rx,
+                        move |index, _b, session, tx, mut stop| {
+                            let chain = Arc::clone(&drain_chain);
+                            let tee = Arc::clone(&tee_for_task);
+                            Box::pin(async move {
+                                let SttSession::Stream(mut source) = session else {
+                                    unreachable!("a Stream request opens Stream")
+                                };
+                                let outcome =
+                                    forward(&chain, index, source.as_mut(), &mut stop, tx, |_| {
+                                        true
+                                    })
                                     .await;
-                            // The dead stream leaves the tee before the next entry installs its own.
-                            tee.clear_main();
-                            source.close(chain.teardown_deadline()).await;
-                            outcome
-                        }) as BoxFuture<'_, Attempt<()>>
-                    },
-                )
-                .await;
-            if let Err(e) = result {
-                let _ = tx.send(Err(e)).await;
-            }
-            let _ = done_tx.send(());
-        });
+                                // The dead stream leaves the tee before the next entry installs its own.
+                                tee.clear_main();
+                                source.close(chain.teardown_deadline()).await;
+                                outcome
+                            }) as BoxFuture<'_, Attempt<()>>
+                        },
+                    )
+                    .await;
+                if let Err(e) = result {
+                    let _ = tx.send(Err(e)).await;
+                }
+                let _ = done_tx.send(());
+            });
 
-        Ok(Some((
-            Box::new(TeeSink(tee)) as SttSink,
-            Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as SttSource,
-        )))
+            Ok(Some((
+                Box::new(TeeSink(tee)) as SttSink,
+                Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as SttSource,
+            )))
+        })
     }
 }
 

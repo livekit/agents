@@ -21,9 +21,9 @@ use lk_agents_abi::{
 use tokio::sync::mpsc;
 
 use crate::fallback::llm::FallbackLlm;
-use lk_agents_net::env::Standalone;
 use crate::fallback::policy::ChainPolicy;
 use crate::fallback::stt::{FallbackStt, SttChainError};
+use lk_agents_net::env::Standalone;
 
 use crate::testkit::fallback::{NO_DEADLINE, boom, parts, until, within};
 
@@ -352,7 +352,6 @@ struct FakeStt {
     calls: Arc<Mutex<Vec<(String, ApiConnectOptions)>>>,
 }
 
-#[async_trait]
 impl Stt for FakeStt {
     fn label(&self) -> String {
         self.label.clone()
@@ -369,23 +368,25 @@ impl Stt for FakeStt {
     fn capabilities(&self) -> SttCapabilities {
         SttCapabilities { streaming: true, ..Default::default() }
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _buffer: AudioBuffer<'_>,
         _language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        self.calls.lock().expect("calls").push((self.label.clone(), self.conn));
-        if self.fails {
-            return Err(boom("stt down"));
-        }
-        Ok(SpeechEvent::new(SpeechEventType::FinalTranscript))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls").push((self.label.clone(), self.conn));
+            if self.fails {
+                return Err(boom("stt down"));
+            }
+            Ok(SpeechEvent::new(SpeechEventType::FinalTranscript))
+        })
     }
-    async fn stream(
+    fn stream(
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        Ok(None)
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move { Ok(None) })
     }
 }
 
@@ -543,7 +544,6 @@ impl DuplexStt {
     }
 }
 
-#[async_trait]
 impl Stt for DuplexStt {
     fn label(&self) -> String {
         self.label.clone()
@@ -551,31 +551,33 @@ impl Stt for DuplexStt {
     fn capabilities(&self) -> SttCapabilities {
         SttCapabilities { streaming: self.streaming, interim_results: true, ..Default::default() }
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _buffer: AudioBuffer<'_>,
         _language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        Err(boom("this fake only has a streaming path"))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { Err(boom("this fake only has a streaming path")) })
     }
     #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-    async fn stream(
+    fn stream(
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        let left = self.refusals.load(Ordering::SeqCst);
-        if left > 0 {
-            self.refusals.store(left - 1, Ordering::SeqCst);
-            return Err(boom(&format!("{} has no socket", self.label)));
-        }
-        let sess = Arc::new(SttSess::default());
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.made.lock().expect("made").push((Arc::clone(&sess), Some(tx)));
-        Ok(Some((
-            Box::new(SttSessSink(Arc::clone(&sess))) as SttSink,
-            Box::new(SttSessSource { sess, rx }) as SttSource,
-        )))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            let left = self.refusals.load(Ordering::SeqCst);
+            if left > 0 {
+                self.refusals.store(left - 1, Ordering::SeqCst);
+                return Err(boom(&format!("{} has no socket", self.label)));
+            }
+            let sess = Arc::new(SttSess::default());
+            let (tx, rx) = mpsc::unbounded_channel();
+            self.made.lock().expect("made").push((Arc::clone(&sess), Some(tx)));
+            Ok(Some((
+                Box::new(SttSessSink(Arc::clone(&sess))) as SttSink,
+                Box::new(SttSessSource { sess, rx }) as SttSource,
+            )))
+        })
     }
 }
 

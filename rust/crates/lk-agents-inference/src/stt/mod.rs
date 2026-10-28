@@ -10,13 +10,13 @@ pub mod stream_adapter;
 pub mod wire;
 
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
-use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
+use async_trait::async_trait;
+use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
     to_ws_url, within,
 };
-use async_trait::async_trait;
 
 use base64::Engine as _;
 use lifecycle::{SttEffect, SttEvent, SttProtocol};
@@ -486,7 +486,6 @@ impl<E: Env> lk_agents_abi::stt::inference::InferenceStt for NativeStt<E> {
     }
 }
 
-#[async_trait]
 impl<E: Env> Stt for NativeStt<E> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
@@ -524,25 +523,38 @@ impl<E: Env> Stt for NativeStt<E> {
     }
 
     /// "LiveKit Inference STT does not support batch recognition, use stream() instead".
-    async fn recognize(
+    fn recognize(
         &self,
         _buffer: AudioBuffer<'_>,
         _language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        Err(ProviderError::Local(ApiError::new(
-            "LiveKit Inference STT does not support batch recognition, use stream() instead",
-        )))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move {
+            Err(ProviderError::Local(ApiError::new(
+                "LiveKit Inference STT does not support batch recognition, use stream() instead",
+            )))
+        })
     }
 
     /// Always `Some`: gateway STT declares `streaming=True`.
-    async fn stream(
+    fn stream(
         &self,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> Result<Option<(crate::abi::SttSink, crate::abi::SttSource)>, ProviderError> {
-        let offset = start_time_offset.unwrap_or(0.0);
-        self.stream_native(language.map(|l| l.as_str()), offset).map(|(sink, source)| {
-            Some((Box::new(sink) as crate::abi::SttSink, Box::new(source) as crate::abi::SttSource))
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<(crate::abi::SttSink, crate::abi::SttSource)>, ProviderError>,
+    > {
+        let language = language.cloned();
+        Box::pin(async move {
+            let offset = start_time_offset.unwrap_or(0.0);
+            self.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(
+                |(sink, source)| {
+                    Some((
+                        Box::new(sink) as crate::abi::SttSink,
+                        Box::new(source) as crate::abi::SttSource,
+                    ))
+                },
+            )
         })
     }
 }

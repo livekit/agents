@@ -58,7 +58,6 @@ impl StreamSource<SpeechEvent> for Attempt {
     }
 }
 
-#[async_trait]
 impl Stt for Flaky {
     fn label(&self) -> String {
         "flaky".into()
@@ -69,28 +68,30 @@ impl Stt for Flaky {
     fn failed(&self, _: ProviderError, recoverable: bool) {
         self.reports.lock().unwrap().push(recoverable);
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        Err(ApiError::new("down").into())
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { Err(ApiError::new("down").into()) })
     }
-    async fn stream(
+    fn stream(
         &self,
         _: Option<&LanguageCode>,
         offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        let mut opened = self.opened.lock().unwrap();
-        opened.push(offset.unwrap_or_default());
-        self.heard.lock().unwrap().push(0);
-        let attempt = match (opened.len(), self.cancels) {
-            (1, true) => Attempt::Cancelled,
-            (1, false) => Attempt::Fail,
-            _ => Attempt::Final,
-        };
-        let sink = Count(Arc::clone(&self.heard), opened.len() - 1);
-        Ok(Some((Box::new(sink), Box::new(attempt))))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            let mut opened = self.opened.lock().unwrap();
+            opened.push(offset.unwrap_or_default());
+            self.heard.lock().unwrap().push(0);
+            let attempt = match (opened.len(), self.cancels) {
+                (1, true) => Attempt::Cancelled,
+                (1, false) => Attempt::Fail,
+                _ => Attempt::Final,
+            };
+            let sink = Count(Arc::clone(&self.heard), opened.len() - 1);
+            Ok(Some((Box::new(sink) as SttSink, Box::new(attempt) as SttSource)))
+        })
     }
 }
 
@@ -181,7 +182,6 @@ impl StreamSink<AudioFrame> for Deaf {
     fn end_input(&self) {}
 }
 
-#[async_trait]
 impl Stt for Dropping {
     fn label(&self) -> String {
         "dropping".into()
@@ -189,19 +189,24 @@ impl Stt for Dropping {
     fn capabilities(&self) -> SttCapabilities {
         SttCapabilities { streaming: true, ..SttCapabilities::default() }
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        std::future::pending().await
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { std::future::pending().await })
     }
-    async fn stream(
+    fn stream(
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        Ok(Some((Box::new(Deaf), Box::new(Silent(self.uptime, Arc::clone(&self.clock))))))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            Ok(Some((
+                Box::new(Deaf) as SttSink,
+                Box::new(Silent(self.uptime, Arc::clone(&self.clock))) as SttSource,
+            )))
+        })
     }
 }
 
@@ -303,7 +308,6 @@ impl StreamSource<SpeechEvent> for StalledSource {
 }
 
 struct StalledHost(Arc<StalledInput>);
-#[async_trait]
 impl Stt for StalledHost {
     fn label(&self) -> String {
         "stalled host".into()
@@ -311,19 +315,24 @@ impl Stt for StalledHost {
     fn capabilities(&self) -> SttCapabilities {
         SttCapabilities { streaming: true, ..Default::default() }
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        unreachable!()
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { unreachable!() })
     }
-    async fn stream(
+    fn stream(
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        Ok(Some((Box::new(RefusingSink(self.0.clone())), Box::new(StalledSource(self.0.clone())))))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            Ok(Some((
+                Box::new(RefusingSink(self.0.clone())) as SttSink,
+                Box::new(StalledSource(self.0.clone())) as SttSource,
+            )))
+        })
     }
 }
 
@@ -360,7 +369,6 @@ struct ReplayRefuses {
     state: Arc<StalledInput>,
 }
 
-#[async_trait]
 impl Stt for ReplayRefuses {
     fn label(&self) -> String {
         "refuses replay".into()
@@ -368,26 +376,28 @@ impl Stt for ReplayRefuses {
     fn capabilities(&self) -> SttCapabilities {
         SttCapabilities { streaming: true, ..Default::default() }
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        unreachable!()
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { unreachable!() })
     }
-    async fn stream(
+    fn stream(
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        let source: SttSource =
-            if self.opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                Box::new(Attempt::Fail)
-            } else {
-                self.state.accepted.store(256, std::sync::atomic::Ordering::SeqCst);
-                Box::new(StalledSource(self.state.clone()))
-            };
-        Ok(Some((Box::new(RefusingSink(self.state.clone())), source)))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        Box::pin(async move {
+            let source: SttSource =
+                if self.opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Box::new(Attempt::Fail)
+                } else {
+                    self.state.accepted.store(256, std::sync::atomic::Ordering::SeqCst);
+                    Box::new(StalledSource(self.state.clone()))
+                };
+            Ok(Some((Box::new(RefusingSink(self.state.clone())) as SttSink, source)))
+        })
     }
 }
 

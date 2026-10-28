@@ -2,13 +2,12 @@
 //! always callable; `SttCapabilities::offline_recognize` says whether it works.
 
 use crate::SpeechEvent;
-use crate::tokenize::language::LanguageCode;
-use async_trait::async_trait;
 use crate::errors::ProviderError;
+use crate::tokenize::language::LanguageCode;
 use lk_agents_host_derive::Host;
 
-use crate::{AudioFrame, ApiConnectOptions};
 use crate::utils::stream::{StreamSink, StreamSource};
+use crate::{ApiConnectOptions, AudioFrame};
 
 /// `Literal["word", "chunk", False]`. `None` is the boolean `False` on the host, never a string.
 #[crate::host(wire_strs(
@@ -30,7 +29,10 @@ impl<'py> pyo3::IntoPyObject<'py> for AlignedTranscript {
     type Output = pyo3::Bound<'py, pyo3::PyAny>;
     type Error = std::convert::Infallible;
 
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> Result<pyo3::Bound<'py, pyo3::PyAny>, std::convert::Infallible> {
+    fn into_pyobject(
+        self,
+        py: pyo3::Python<'py>,
+    ) -> Result<pyo3::Bound<'py, pyo3::PyAny>, std::convert::Infallible> {
         Ok(match self {
             AlignedTranscript::None => pyo3::types::PyBool::new(py, false).to_owned().into_any(),
             other => pyo3::types::PyString::new(py, other.as_str()).into_any(),
@@ -107,7 +109,6 @@ pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
     events = "metrics_collected, error",
     error(name = "STTError", kind = "stt_error")
 ))]
-#[async_trait]
 pub trait Stt: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
@@ -177,11 +178,11 @@ pub trait Stt: Send + Sync {
     // Always present. `language: None` is `NOT_GIVEN`, the provider's default.
     #[python(hook = "recognize", impl = "_recognize_impl", retry = "recognize")]
     #[host(await, name = "_core_recognize")]
-    async fn recognize(
+    fn recognize(
         &self,
         #[python(ty = "AudioBuffer", import = "..utils:AudioBuffer")] buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError>;
+    ) -> crate::BoxFuture<'_, Result<SpeechEvent, ProviderError>>;
 
     /// Open a stream recognizing live audio. Providers with the `streaming` capability override
     /// it; any other is wrapped in a `StreamAdapter`.
@@ -207,9 +208,9 @@ pub trait Stt: Send + Sync {
         )
     )]
     #[host(await, name = "_core_stream")]
-    async fn stream(
+    fn stream(
         &self,
         language: Option<&LanguageCode>,
         #[python(attr)] start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError>;
+    ) -> crate::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>>;
 }

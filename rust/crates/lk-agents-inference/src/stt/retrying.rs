@@ -139,7 +139,6 @@ async fn wait_for_retry(
     }
 }
 
-#[async_trait]
 impl Stt for RetryingStt {
     fn label(&self) -> String {
         self.inner.label()
@@ -175,63 +174,71 @@ impl Stt for RetryingStt {
     }
 
     /// Retried within `total_timeout`, which spans every attempt and wait.
-    async fn recognize(
+    fn recognize(
         &self,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        let mut attempts = attempts(&self.options, self.clock.now(), &*self.inner)?;
-        let deadline = attempts.wake_at(None);
-        match before(
-            &*self.clock,
-            deadline,
-            self.recognize_attempts(buffer, language, &mut attempts),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(total_expired(&mut attempts, self.clock.now(), &*self.inner)),
-        }
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        let buffer = buffer.to_vec();
+        let language = language.cloned();
+        Box::pin(async move {
+            let mut attempts = attempts(&self.options, self.clock.now(), &*self.inner)?;
+            let deadline = attempts.wake_at(None);
+            match before(
+                &*self.clock,
+                deadline,
+                self.recognize_attempts(&buffer, language.as_ref(), &mut attempts),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(total_expired(&mut attempts, self.clock.now(), &*self.inner)),
+            }
+        })
     }
 
-    async fn stream(
+    fn stream(
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        let accepted = self.clock.now();
-        let mut attempts = attempts(&self.options, accepted, &*self.inner)?;
-        let deadline = attempts.wake_at(None);
-        wake_attempts(&mut attempts, self.clock.now(), &*self.inner)?;
-        let offset = start_time_offset.unwrap_or(0.0);
-        let input = Arc::new(Input::default());
-        let opened =
-            before(&*self.clock, deadline, self.inner.stream(language, Some(offset))).await;
-        let (current, failed) = match opened {
-            Err(_) => return Err(total_expired(&mut attempts, self.clock.now(), &*self.inner)),
-            Ok(Ok(None)) => return Ok(None),
-            Ok(Ok(Some((sink, source)))) => {
-                input.install(sink);
-                (Some(source), None)
-            }
-            Ok(Err(error)) => (None, Some(error)),
-        };
-        let source = RetrySource {
-            stt: Arc::clone(&self.inner),
-            options: self.options.clone(),
-            clock: Arc::clone(&self.clock),
-            label: self.inner.label(),
-            language: language.cloned(),
-            input: Arc::clone(&input),
-            current,
-            failed,
-            attempts,
-            began: accepted,
-            offset,
-            deadline,
-            hook: None,
-        };
-        Ok(Some((Box::new(InputSink(input)) as SttSink, Box::new(source) as SttSource)))
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        let language = language.cloned();
+        Box::pin(async move {
+            let accepted = self.clock.now();
+            let mut attempts = attempts(&self.options, accepted, &*self.inner)?;
+            let deadline = attempts.wake_at(None);
+            wake_attempts(&mut attempts, self.clock.now(), &*self.inner)?;
+            let offset = start_time_offset.unwrap_or(0.0);
+            let input = Arc::new(Input::default());
+            let opened =
+                before(&*self.clock, deadline, self.inner.stream(language.as_ref(), Some(offset)))
+                    .await;
+            let (current, failed) = match opened {
+                Err(_) => return Err(total_expired(&mut attempts, self.clock.now(), &*self.inner)),
+                Ok(Ok(None)) => return Ok(None),
+                Ok(Ok(Some((sink, source)))) => {
+                    input.install(sink);
+                    (Some(source), None)
+                }
+                Ok(Err(error)) => (None, Some(error)),
+            };
+            let source = RetrySource {
+                stt: Arc::clone(&self.inner),
+                options: self.options.clone(),
+                clock: Arc::clone(&self.clock),
+                label: self.inner.label(),
+                language: language.clone(),
+                input: Arc::clone(&input),
+                current,
+                failed,
+                attempts,
+                began: accepted,
+                offset,
+                deadline,
+                hook: None,
+            };
+            Ok(Some((Box::new(InputSink(input)) as SttSink, Box::new(source) as SttSource)))
+        })
     }
 }
 

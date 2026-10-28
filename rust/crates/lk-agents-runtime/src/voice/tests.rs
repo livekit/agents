@@ -214,7 +214,6 @@ impl lk_agents_abi::StreamSource<lk_agents_abi::SpeechEvent> for StartupSource {
     }
 }
 
-#[async_trait::async_trait]
 impl lk_agents_abi::Stt for StartupStt {
     fn label(&self) -> String {
         "startup-stt".into()
@@ -222,22 +221,33 @@ impl lk_agents_abi::Stt for StartupStt {
     fn capabilities(&self) -> lk_agents_abi::SttCapabilities {
         lk_agents_abi::SttCapabilities { streaming: true, ..Default::default() }
     }
-    async fn recognize(
+    fn recognize(
         &self,
         _: &[lk_agents_abi::AudioFrame],
         _: Option<&lk_agents_abi::LanguageCode>,
-    ) -> Result<lk_agents_abi::SpeechEvent, lk_agents_abi::errors::ProviderError> {
-        unreachable!("startup uses streaming recognition")
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::SpeechEvent, lk_agents_abi::errors::ProviderError>,
+    > {
+        Box::pin(async move { unreachable!("startup uses streaming recognition") })
     }
-    async fn stream(
+    fn stream(
         &self,
         _: Option<&lk_agents_abi::LanguageCode>,
         _: Option<f64>,
-    ) -> Result<
-        Option<(lk_agents_abi::SttSink, lk_agents_abi::SttSource)>,
-        lk_agents_abi::errors::ProviderError,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            Option<(lk_agents_abi::SttSink, lk_agents_abi::SttSource)>,
+            lk_agents_abi::errors::ProviderError,
+        >,
     > {
-        Ok(Some((Box::new(StartupSink), Box::new(StartupSource(self.0.clone(), self.1.clone())))))
+        Box::pin(async move {
+            Ok(Some((
+                Box::new(StartupSink) as lk_agents_abi::SttSink,
+                Box::new(StartupSource(self.0.clone(), self.1.clone())) as lk_agents_abi::SttSource,
+            )))
+        })
     }
 }
 

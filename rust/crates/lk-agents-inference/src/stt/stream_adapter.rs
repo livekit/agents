@@ -88,7 +88,6 @@ impl<E: Env> lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdap
     }
 }
 
-#[async_trait]
 impl<E: Env> Stt for StreamAdapter<E> {
     fn label(&self) -> String {
         format!("StreamAdapter[{}]", self.stt.label())
@@ -133,31 +132,36 @@ impl<E: Env> Stt for StreamAdapter<E> {
         Some(Arc::new(self.configured(Some(*conn))))
     }
 
-    async fn recognize(
+    fn recognize(
         &self,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        self.stt.recognize(buffer, language).await
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        let buffer = buffer.to_vec();
+        let language = language.cloned();
+        Box::pin(async move { self.stt.recognize(&buffer, language.as_ref()).await })
     }
 
-    async fn stream(
+    fn stream(
         &self,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        let opened = self.vad.stream().await.map(|(sink, vad)| {
-            let source = AdapterSource {
-                vad,
-                stt: Arc::clone(&self.stt),
-                language: language.cloned(),
-                utterance: None,
-                speech_end: None,
-                clock: Arc::clone(&self.clock),
-            };
-            (sink as SttSink, Box::new(source) as SttSource)
-        });
-        opened.map(Some)
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+        let language = language.cloned();
+        Box::pin(async move {
+            let opened = self.vad.stream().await.map(|(sink, vad)| {
+                let source = AdapterSource {
+                    vad,
+                    stt: Arc::clone(&self.stt),
+                    language: language.clone(),
+                    utterance: None,
+                    speech_end: None,
+                    clock: Arc::clone(&self.clock),
+                };
+                (sink as SttSink, Box::new(source) as SttSource)
+            });
+            opened.map(Some)
+        })
     }
 }
 
@@ -280,7 +284,6 @@ mod tests {
     /// Recognizes each utterance as the next of its texts.
     struct BatchStt(Mutex<VecDeque<&'static str>>);
 
-    #[async_trait]
     impl Stt for BatchStt {
         fn label(&self) -> String {
             "batch".into()
@@ -288,22 +291,25 @@ mod tests {
         fn capabilities(&self) -> SttCapabilities {
             SttCapabilities { keyterms: true, ..SttCapabilities::default() }
         }
-        async fn recognize(
+        fn recognize(
             &self,
             _: &[AudioFrame],
             _: Option<&LanguageCode>,
-        ) -> Result<SpeechEvent, ProviderError> {
-            let text = self.0.lock().unwrap().pop_front().unwrap_or_default();
-            let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
-            ev.alternatives.push(lk_agents_abi::SpeechData::new("en", text));
-            Ok(ev)
+        ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+            Box::pin(async move {
+                let text = self.0.lock().unwrap().pop_front().unwrap_or_default();
+                let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
+                ev.alternatives.push(lk_agents_abi::SpeechData::new("en", text));
+                Ok(ev)
+            })
         }
-        async fn stream(
+        fn stream(
             &self,
             _: Option<&LanguageCode>,
             _: Option<f64>,
-        ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-            Ok(None)
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>>
+        {
+            Box::pin(async move { Ok(None) })
         }
     }
 

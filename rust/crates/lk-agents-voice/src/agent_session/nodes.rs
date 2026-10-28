@@ -262,30 +262,19 @@ impl Stt for Node<dyn Stt> {
     }
 
     /// `stt_node` is a stream; a batch recognition is the provider's.
-    fn recognize<'a, 'b, 'c, 'call>(
-        &'a self,
-        buffer: &'b [AudioFrame],
-        language: Option<&'c LanguageCode>,
-    ) -> lk_agents_abi::BoxFuture<'call, Result<SpeechEvent, ProviderError>>
-    where
-        'a: 'call,
-        'b: 'call,
-        'c: 'call,
-        Self: 'call,
-    {
-        Box::pin(async move { self.below.recognize(buffer, language).await })
+    fn recognize(
+        &self,
+        buffer: &[AudioFrame],
+        language: Option<&LanguageCode>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        self.below.recognize(buffer, language)
     }
 
-    fn stream<'a, 'b, 'call>(
-        &'a self,
-        _language: Option<&'b LanguageCode>,
+    fn stream(
+        &self,
+        _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'call, Result<Option<(SttSink, SttSource)>, ProviderError>>
-    where
-        'a: 'call,
-        'b: 'call,
-        Self: 'call,
-    {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
         Box::pin(async move { duplex(self.host.stt_node().await).map(Some) })
     }
 }
