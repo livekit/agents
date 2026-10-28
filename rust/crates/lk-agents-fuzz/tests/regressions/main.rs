@@ -62,6 +62,7 @@ mod realtime_waiter_journalled;
 mod refused_attach_replaces_nothing;
 mod refused_speech_announced;
 mod reply_behind_tool_step;
+mod reply_during_playout;
 mod replaced_inputs;
 mod replaced_output_detached;
 mod replaced_output_mid_step;

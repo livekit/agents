@@ -623,16 +623,12 @@ impl Driver {
             },
         };
 
-        // A reply created while a speech plays or is being cut is requested once that speech's
-        // item is on the record.
-        let after = self
-            .current_handle()
-            .filter(|h| {
-                !h.done()
-                    && (h.interrupted()
-                        || self.session.states.agent_state() == AgentState::Speaking)
-            })
-            .map(|h| h.id());
+        // A reply created while a speech is being cut is requested once that speech's item is on
+        // the record (the cut settles within the interruption watchdog). One created while a
+        // speech plays is requested now, on the record as it stands, as the reference's reply
+        // task copies the context at creation: the playing speech's item may be seconds away.
+        let after =
+            self.current_handle().filter(|h| !h.done() && h.interrupted()).map(|h| h.id());
         let replan = match (after, &spec.source) {
             (Some(after), ReplySource::Llm) => {
                 Some(crate::generation::Replan { after, spec: plan })
@@ -877,6 +873,11 @@ impl Driver {
                 Some(step) => self.activity.tools_committed.contains_key(&(plan.after, step)),
                 None => {
                     self.activity.finished.contains(&plan.after)
+                        || self
+                            .activity
+                            .speech_scheduler
+                            .handle(plan.after)
+                            .is_none_or(|handle| handle.done())
                         || self
                             .activity
                             .tools_committed
