@@ -13,7 +13,7 @@ use lk_agents_abi::voice::room_io::{
 use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomIoEvent, RoomVideoInput};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RoomEvent, RtcRoom};
 use lk_agents_abi::{AbortHandle, Clock, Closed, Monotone, Spawner, TaskSet, Ts};
-use lk_agents_voice::room_io::_output::transcription::SegmentIds;
+use super::transcription::SegmentIds;
 use lk_agents_voice::room_io::coordinator::RoomCoordinator;
 use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
 use std::sync::{Arc, Mutex, Weak};
@@ -49,7 +49,7 @@ impl RoomIo {
         spawner: Arc<dyn Spawner>,
         config: RoomIoConfig,
     ) -> Arc<Self> {
-        let ids = Arc::new(SegmentIds::counting());
+        let ids = Arc::new(SegmentIds::default());
         let pre_connect = config
             .audio_input
             .as_ref()

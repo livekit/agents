@@ -29,3 +29,5 @@ pub mod websocket;
 pub mod webtransport;
 
 pub mod connection_pool;
+
+pub mod strings;

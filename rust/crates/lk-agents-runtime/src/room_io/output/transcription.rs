@@ -14,7 +14,7 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, Clock, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner,
     SpawnerExt, TOPIC_TRANSCRIPTION, TimedString, Ts,
 };
-pub use lk_agents_voice::room_io::_output::transcription::SegmentIds;
+pub use super::segment_ids::SegmentIds;
 use lk_agents_voice::room_io::transcription::{
     ParticipantTracks, Subject, Writer, WriterEffect, Writing, retained_bytes, stream_attributes,
 };

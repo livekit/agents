@@ -10,7 +10,7 @@ use lk_agents_abi::voice::room_io::RoomIoConfig;
 use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomVideoInput};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, capabilities::RtcRoom};
 use lk_agents_abi::{Clock, Spawner};
-use lk_agents_voice::room_io::_output::transcription::SegmentIds;
+use self::output::transcription::SegmentIds;
 use std::sync::Arc;
 
 pub use owner::RoomIo;

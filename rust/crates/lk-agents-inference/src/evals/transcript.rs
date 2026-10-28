@@ -1,6 +1,6 @@
 //! A conversation as the one-line-per-item transcript every judge prompt embeds.
 
-use lk_agents_abi::utils::strings::py_repr;
+use lk_agents_core::text::py_repr;
 use lk_agents_abi::{ChatItem, ChatMessage, CopyOptions, Role};
 
 /// The items in list order, one line each.

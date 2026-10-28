@@ -127,7 +127,6 @@ from ._generated._core_classes import (
     api_connect_options_check as api_connect_options_check,
     api_retry_interval as api_retry_interval,
     base_language as base_language,
-    camel_to_snake_case as camel_to_snake_case,
     card_expired as card_expired,
     chat_chunk_has_response as chat_chunk_has_response,
     chat_ctx_copy_plan as chat_ctx_copy_plan,
@@ -149,7 +148,6 @@ from ._generated._core_classes import (
     hyphenate_word as hyphenate_word,
     instructions_message_id as instructions_message_id,
     interruption_timeout as interruption_timeout,
-    is_cloud as is_cloud,
     language_iso as language_iso,
     language_name as language_name,
     language_region as language_region,
@@ -158,7 +156,6 @@ from ._generated._core_classes import (
     normalize_email_address as normalize_email_address,
     normalize_language as normalize_language,
     normalize_phone_number as normalize_phone_number,
-    observability_url as observability_url,
     otel_turn_records as otel_turn_records,
     otel_usage_records as otel_usage_records,
     plan_session_start as plan_session_start,
@@ -347,6 +344,9 @@ from ._generated._core_utils import (
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
+    camel_to_snake_case as camel_to_snake_case,
+    is_cloud as is_cloud,
+    observability_url as observability_url,
 )
 from ._generated._core_vad import (
     InferenceVad as InferenceVad,

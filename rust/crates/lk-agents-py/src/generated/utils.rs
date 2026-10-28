@@ -258,3 +258,31 @@ impl MovingAverage {
         Ok(out)
     }
 }
+
+// Declared in rust/crates/lk-agents-abi/src/utils/strings.rs.
+type TextFunctionsImpl = <crate::Selected as super::Implementations>::TextFunctions;
+
+#[pyfunction]
+#[pyo3(signature = (name))]
+pub fn camel_to_snake_case(name: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <TextFunctionsImpl as ::lk_agents_abi::utils::strings::TextFunctions>::camel_to_snake_case(&name);
+    Ok(out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/utils/strings.rs.
+type TransportFunctionsImpl = <crate::Selected as super::Implementations>::TransportFunctions;
+
+#[pyfunction]
+#[pyo3(signature = (url))]
+pub fn is_cloud(url: ::std::string::String) -> PyResult<bool> {
+    let out = <TransportFunctionsImpl as ::lk_agents_abi::utils::strings::TransportFunctions>::is_cloud_url(&url);
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (livekit_url, env_override))]
+pub fn observability_url(livekit_url: ::std::string::String, env_override: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <TransportFunctionsImpl as ::lk_agents_abi::utils::strings::TransportFunctions>::observability_url(&livekit_url, env_override);
+    Ok(out)
+}

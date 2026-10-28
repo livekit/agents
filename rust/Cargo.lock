@@ -1378,8 +1378,6 @@ dependencies = [
  "pbjson-types",
  "pyo3",
  "pyo3-async-runtimes",
- "rand 0.9.5",
- "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

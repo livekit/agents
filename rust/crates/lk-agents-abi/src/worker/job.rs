@@ -5,18 +5,7 @@ use lk_agents_host_derive::Host;
 use std::future::Future;
 use std::time::Duration;
 
-use crate::{Clock, is_cloud_url, timeout};
-
-/// `_observability_url(livekit_url)` (`job.py:58`). The env override wins unvalidated; otherwise
-/// only LiveKit Cloud URLs get one, at `https://` + the ws url's hostname.
-#[crate::host(export)]
-pub fn observability_url(livekit_url: &str, env_override: Option<&str>) -> Option<String> {
-    if let Some(u) = env_override.filter(|u| !u.is_empty()) {
-        return Some(u.to_string());
-    }
-    let host = crate::utils::strings::host_of(livekit_url)?;
-    is_cloud_url(livekit_url).then(|| format!("https://{host}"))
-}
+use crate::{Clock, timeout};
 
 // ---------------------------------------------------------------------------------------------
 // the shutdown callbacks
@@ -198,29 +187,6 @@ mod tests {
     use crate::SimClock;
 
     type Cb = Pin<Box<dyn Future<Output = Result<(), String>>>>;
-
-    #[test]
-    fn the_observability_url_is_cloud_only_unless_overridden() {
-        assert_eq!(
-            observability_url("wss://project.livekit.cloud", None).as_deref(),
-            Some("https://project.livekit.cloud")
-        );
-        // Port and path are dropped; the host is lowercased.
-        assert_eq!(
-            observability_url("wss://Project.LiveKit.Cloud:443/rtc", None).as_deref(),
-            Some("https://project.livekit.cloud")
-        );
-        assert_eq!(observability_url("ws://localhost:7880", None), None);
-        assert_eq!(observability_url("wss://sfu.example.com", None), None);
-        assert_eq!(
-            observability_url("ws://localhost:7880", Some("http://collector:4318")).as_deref(),
-            Some("http://collector:4318")
-        );
-        assert_eq!(
-            observability_url("wss://project.livekit.cloud", Some("")).as_deref(),
-            Some("https://project.livekit.cloud")
-        );
-    }
 
     // Catches: one raising callback aborting the rest.
     #[tokio::test(start_paused = true)]

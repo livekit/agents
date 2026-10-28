@@ -49,7 +49,7 @@ pub fn category_is_machine(category: &str) -> Result<bool, String> {
 
 /// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
 pub fn auto_select_models(livekit_url: &str, api_key: &str, api_secret: &str) -> bool {
-    lk_agents_abi::is_cloud_url(livekit_url) && !api_key.is_empty() && !api_secret.is_empty()
+    lk_agents_net::strings::is_cloud_url(livekit_url) && !api_key.is_empty() && !api_secret.is_empty()
 }
 
 #[cfg(test)]

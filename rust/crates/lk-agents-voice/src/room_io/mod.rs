@@ -1,4 +1,3 @@
-pub mod _output;
 pub mod coordinator;
 pub mod detached;
 pub mod input_state;

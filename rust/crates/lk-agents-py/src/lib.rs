@@ -47,6 +47,8 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
+    type TransportFunctions = lk_agents_runtime::net::strings::TransportAlgorithms;
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::codecs::MediaTokenization;
     type AudioDecoder = lk_agents_runtime::codecs::StreamDecoder;

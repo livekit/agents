@@ -150,7 +150,7 @@ impl port::Reply for Reply {
 }
 
 pub fn message_to_wire(input: MessageInput) -> Result<a2a::Message, AgentClientError> {
-    lk_agents_core::a2a::client::message_to_wire(input, lk_agents_abi::utils::strings::shortuuid("msg_"))
+    lk_agents_core::a2a::client::message_to_wire(input, crate::strings::shortuuid("msg_"))
 }
 
 pub use lk_agents_core::a2a::client::message_from_wire;

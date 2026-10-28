@@ -5,7 +5,7 @@ use super::super::{PlaybackInfo, TrackPublishOptions, frame_duration};
 use super::super::{Result, RtcError};
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::{Clock, Monotone, Ts};
-use lk_agents_voice::room_io::_output::PlayoutLedger;
+use lk_agents_voice::room_io::playout::PlayoutLedger;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;

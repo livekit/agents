@@ -61,7 +61,7 @@ pub use telemetry::report::{
     TagEntry, Tagger, UploadGate, session_records, usage_attributes,
 };
 pub use worker::job::{
-    CallbackOutcome, SHUTDOWN_CALLBACK_TIMEOUT, observability_url, run_shutdown_callbacks,
+    CallbackOutcome, SHUTDOWN_CALLBACK_TIMEOUT, run_shutdown_callbacks,
 };
 
 #[cfg(feature = "python")]
@@ -149,7 +149,6 @@ pub use utils::filters::FilterError;
 pub use utils::frame::FrameId;
 pub use utils::lock;
 pub use utils::maybe::Maybe;
-pub use utils::strings::{camel_to_snake_case, is_cloud_url};
 pub use utils::timer::{TimerId, TimerSet};
 
 pub use utils::bounded_lossy::{AUDIO_QUEUE_FRAMES, BoundedLossy, LossyTx, Pushed};

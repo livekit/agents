@@ -96,6 +96,8 @@ pub trait Implementations: 'static {
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
+    type TextFunctions: ::lk_agents_abi::utils::strings::TextFunctions;
+    type TransportFunctions: ::lk_agents_abi::utils::strings::TransportFunctions;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
@@ -268,6 +270,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;
     m.add_class::<utils::MovingAverage>()?;
+    m.add_function(wrap_pyfunction!(utils::camel_to_snake_case, m)?)?;
+    m.add_function(wrap_pyfunction!(utils::is_cloud, m)?)?;
+    m.add_function(wrap_pyfunction!(utils::observability_url, m)?)?;
     m.add_class::<vad::InferenceVad>()?;
     m.add_class::<vad::InferenceVadStream>()?;
     m.add_class::<voice::DataStreamAudioOutput>()?;

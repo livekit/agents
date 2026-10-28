@@ -174,7 +174,7 @@ impl<E: Env> AgentClient<E> {
     ) -> Result<Reply, ClientError> {
         self.send(
             Message {
-                message_id: lk_agents_abi::utils::strings::shortuuid("msg_"),
+                message_id: crate::strings::shortuuid("msg_"),
                 role: a2a::Role::User,
                 parts: vec![a2a::Part::text(text)],
                 context_id: None,

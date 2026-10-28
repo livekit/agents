@@ -1,16 +1,13 @@
 //! Transcript segment identities shared by the session and runtime output.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Transcript segment ids: `utils.shortuuid("SG_")`, unique across sessions in one room (a
 /// frontend keys its transcript rows on them), or counted for a test that compares them.
 #[derive(Debug, Default)]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct SegmentIds(Option<AtomicU64>);
 
 impl SegmentIds {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn counting() -> Self {
         SegmentIds(Some(AtomicU64::new(0)))
     }
@@ -18,7 +15,7 @@ impl SegmentIds {
     pub fn next_segment_id(&self) -> String {
         match &self.0 {
             Some(n) => format!("SG_{}", n.fetch_add(1, Ordering::Relaxed)),
-            None => lk_agents_abi::utils::strings::shortuuid("SG_"),
+            None => lk_agents_net::strings::shortuuid("SG_"),
         }
     }
 }

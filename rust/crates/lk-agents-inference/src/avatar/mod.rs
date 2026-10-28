@@ -25,7 +25,7 @@ pub fn parse_model(model: &str) -> Result<(String, Option<String>), AvatarError>
         provider.trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c));
     let id = id.trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c));
     if provider.is_empty() {
-        return Err(AvatarError::InvalidModel(lk_agents_abi::utils::strings::py_repr(model)));
+        return Err(AvatarError::InvalidModel(lk_agents_core::text::py_repr(model)));
     }
     Ok((provider.to_owned(), (!id.is_empty()).then(|| id.to_owned())))
 }

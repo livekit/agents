@@ -1,6 +1,6 @@
 //! `utils.misc.shortuuid` and `inference/_utils.create_inference_request_id`.
 
-pub use lk_agents_abi::utils::strings::shortuuid;
+pub use lk_agents_net::strings::shortuuid;
 
 /// Which kind of logical request an id is minted for (`Literal["tts", "eot"]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

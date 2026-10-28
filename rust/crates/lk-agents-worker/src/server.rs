@@ -408,20 +408,20 @@ pub fn simulated_job(
     };
     let identity = match agent_identity {
         Some(identity) => identity,
-        None if fake_job => lk_agents_abi::utils::strings::shortuuid("fake-agent-"),
+        None if fake_job => lk_agents_net::strings::shortuuid("fake-agent-"),
         None => return Err("agent_identity is None but fake_job is False".into()),
     };
     let room_info = match room_info {
         Some(info) => info,
         None if fake_job => proto::Room {
-            sid: lk_agents_abi::utils::strings::shortuuid("SRM_"),
+            sid: lk_agents_net::strings::shortuuid("SRM_"),
             name: room.to_owned(),
             ..Default::default()
         },
         None => return Err("room_info is None but fake_job is False".into()),
     };
     let job = proto::Job {
-        id: lk_agents_abi::utils::strings::shortuuid(if fake_job { "mock-job-" } else { "job-" }),
+        id: lk_agents_net::strings::shortuuid(if fake_job { "mock-job-" } else { "job-" }),
         room: Some(room_info),
         r#type: proto::JobType::JtRoom as i32,
         ..Default::default()

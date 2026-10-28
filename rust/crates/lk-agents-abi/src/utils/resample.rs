@@ -1,5 +1,4 @@
-//! The resampler seam and a pure-Rust fallback. Production uses libsoxr (what the models were
-//! trained on); `lk_agents_media::new_resampler` is the one place that chooses.
+//! Resampler contracts. Implementations and fallback selection live in `lk-agents-media`.
 
 /// The discriminants are the protobuf ordinals passed to libsoxr as the recipe.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]

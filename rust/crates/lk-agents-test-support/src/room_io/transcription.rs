@@ -10,13 +10,21 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, BoxFuture, Clock, Monotone, Spawner, SpawnerExt,
     TOPIC_TRANSCRIPTION, TimedString,
 };
-use lk_agents_voice::room_io::_output::transcription::SegmentIds;
 use lk_agents_voice::room_io::transcription::{
     ParticipantTracks, Subject, Writer, WriterEffect, Writing, retained_bytes, stream_attributes,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+
+/// Deterministic transcript identities supplied by the fake room owner.
+#[derive(Default)]
+pub struct SegmentIds(std::sync::atomic::AtomicU64);
+impl SegmentIds {
+    pub fn next_segment_id(&self) -> String {
+        format!("SG_{}", self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 
 struct Batch {
     effects: Vec<WriterEffect>,
