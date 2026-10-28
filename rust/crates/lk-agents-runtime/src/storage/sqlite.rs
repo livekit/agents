@@ -1,7 +1,8 @@
-//! [`SqliteStorage`]: threads in a local directory. `registry.sqlite` holds thread metadata and
-//! `threads/<AT_id>.sqlite` each thread's database, every lane in it. Separate processes sharing
-//! the directory coordinate through the engine's database leases and fences. Each open file is
-//! executed by its own connection thread ([`FileConnection`]), so no query blocks the executor.
+//! [`SqliteStorage`]: threads in a local directory. `registry.sqlite` holds thread metadata,
+//! `threads/<AT_id>.sqlite` each thread's database, every lane in it, and `streams.sqlite` the
+//! response streams. Separate processes sharing the directory coordinate through the engine's
+//! database leases and fences. Each open file is executed by its own connection thread
+//! ([`FileConnection`]), so no query blocks the executor.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use lk_agents_storage::sqlite::{batch, query, sqlite_error};
 use tokio::sync::{mpsc, oneshot};
 
 use super::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
+use super::streams::{LocalStreams, ResponseStreams};
 use super::{SqliteConnection, Storage, shortuuid};
 
 /// How long a statement waits for another process's write lock before failing retryably.
@@ -164,6 +166,7 @@ const THREAD_COLUMNS: &str =
 pub struct SqliteStorage {
     directory: PathBuf,
     registry: FileConnection,
+    streams: Arc<LocalStreams>,
     lease: LeaseTiming,
 }
 
@@ -182,7 +185,8 @@ impl SqliteStorage {
             .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?;
         let registry = FileConnection::open(directory.join("registry.sqlite"), true).await?;
         registry.batch(vec![Statement::raw(REGISTRY_SCHEMA)]).await?;
-        Ok(Self { directory, registry, lease })
+        let streams = Arc::new(LocalStreams::open(directory.join("streams.sqlite")).await?);
+        Ok(Self { directory, registry, streams, lease })
     }
 
     pub fn directory(&self) -> &Path {
@@ -387,8 +391,13 @@ impl Storage for SqliteStorage {
         Ok(Thread::new(db, holder))
     }
 
+    fn response_streams(&self) -> Arc<dyn ResponseStreams> {
+        self.streams.clone()
+    }
+
     async fn close(&self) {
         self.registry.close().await;
+        self.streams.shutdown().await;
     }
 }
 

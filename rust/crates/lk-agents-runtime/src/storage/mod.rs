@@ -5,6 +5,7 @@
 //! * [`SqliteConnection`]: one thread database's reads and atomic batches, whichever backend.
 //! * [`engine`]: the shared [`Thread`], [`Lane`] and [`Run`] handles over a connection.
 //! * [`lease`]: a held lease, its renewal task and its loss.
+//! * [`streams`]: the response streams a task's subscribers read, on either backend.
 //!
 //! The decisions (statements, fences, transitions, renewal timing) are `lk_agents_storage`'s.
 
@@ -12,6 +13,9 @@ pub mod agentdb;
 pub mod engine;
 pub mod lease;
 pub mod sqlite;
+pub mod streams;
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
@@ -22,6 +26,7 @@ use lk_agents_storage::sql::{BatchResult, Row, Statement};
 
 pub use engine::{CommitOptions, Lane, LaneDb, Run, RunOptions, Tasks, Thread, ThreadDb};
 pub use lease::Lease;
+pub use streams::{LocalStreams, ResponseStreams, StreamRead};
 
 /// One thread database's execution: typed reads and atomic ordered batches. Statements and
 /// results are backend-neutral; an `Err` from `batch` never claims a rollback it did not see.
@@ -51,6 +56,8 @@ pub trait Storage: Send + Sync {
     /// The shared engine's handle on an existing thread, its writes under `holder`. Opening
     /// takes no lease.
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError>;
+    /// Where a task's response frames are kept for its subscribers.
+    fn response_streams(&self) -> Arc<dyn ResponseStreams>;
     /// Releases backend resources; repeat-safe.
     async fn close(&self);
 }

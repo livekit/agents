@@ -240,6 +240,10 @@ impl Storage for AgentDbStorage {
         self.open_database(thread_id, &record.database_id, holder).await
     }
 
+    fn response_streams(&self) -> Arc<dyn super::ResponseStreams> {
+        Arc::new(self.streams.clone())
+    }
+
     async fn close(&self) {
         self.pool.clear();
     }
