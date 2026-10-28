@@ -619,6 +619,41 @@ async def test_plugin_ws_receive_uses_conn_timeout() -> None:
     assert transport.receive_timeouts == [0.05]
 
 
+async def test_plugin_ws_receive_uses_stream_idle_timeout() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key", stream_idle_timeout=2.0)
+    transport = _UsageResponsesWS(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+    llm_model._ws = transport  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=0.05)
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await llm_model.aclose()
+
+    assert transport.receive_timeouts == [2.0]
+
+
+def test_plugin_rejects_zero_stream_idle_timeout() -> None:
+    with pytest.raises(ValueError, match="stream_idle_timeout"):
+        ResponsesLLM(model="gpt-4.1", api_key="test-key", stream_idle_timeout=0)
+
+
 async def _usage_from_frames(frames: list[dict]) -> agents_llm.CompletionUsage:
     llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
     llm_model._ws = _UsageResponsesWS(frames)  # type: ignore[assignment]

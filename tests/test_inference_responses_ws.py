@@ -253,6 +253,30 @@ async def test_ws_per_call_inference_class_warns(caplog: pytest.LogCaptureFixtur
     await llm_model.aclose()
 
 
+async def test_ws_receive_uses_stream_idle_timeout() -> None:
+    llm_model = _make_llm(stream_idle_timeout=30.0)
+    ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
+    timeouts: list[float | None] = []
+    scripted_receive = ws.receive
+
+    async def _receive(timeout: float | None = None) -> _FakeWsMsg:
+        timeouts.append(timeout)
+        return await scripted_receive(timeout)
+
+    ws.receive = _receive  # type: ignore[method-assign]
+    _use_connection(llm_model, ws)
+
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=1.5)
+    )
+    async for _ in stream:
+        pass
+    await stream.aclose()
+
+    assert timeouts and set(timeouts) == {30.0}
+    await llm_model.aclose()
+
+
 async def test_ws_dial_uses_request_connect_timeout() -> None:
     llm_model = _make_llm()
     ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
