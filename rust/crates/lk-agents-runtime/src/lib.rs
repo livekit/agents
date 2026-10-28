@@ -15,10 +15,10 @@ pub mod cores {
     pub use lk_agents_core::telemetry::metrics::MetricSeries;
     pub use lk_agents_core::telemetry::policy::DestinationPolicy;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
-    pub use lk_agents_inference::creds::Credentials as InferenceCredentials;
     pub use lk_agents_inference::fallback::TokenLog as TtsTokenLog;
     pub use lk_agents_inference::llm::parse::{ChoiceParser, CompletionWire};
     pub use lk_agents_inference::provider::ProviderAttempts;
+    pub use lk_agents_net::credentials::Credentials as InferenceCredentials;
     pub use lk_agents_voice::tokenize::{
         BasicSentenceTokenizer, BasicWordTokenizer, SpeechTokenizer,
     };
@@ -60,7 +60,6 @@ pub use lk_agents_worker::cli_signals as worker_cli;
 pub mod text_session;
 
 pub use lk_agents_worker as worker;
-
 
 /// Synchronous media algorithms used by the generated host adapters.
 pub use lk_agents_media as media;

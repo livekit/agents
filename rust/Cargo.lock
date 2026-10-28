@@ -1488,7 +1488,6 @@ dependencies = [
  "pyo3",
  "rand 0.9.5",
  "reqwest 0.13.4",
- "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

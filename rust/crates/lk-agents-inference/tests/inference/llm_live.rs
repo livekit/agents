@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use lk_agents_abi::{ChatContext, RealClock, Role};
 use lk_agents_inference::llm::LlmOptions;
+use lk_agents_inference::llm::gateway::GatewayLlm;
 use lk_agents_inference::llm::lifecycle::RequestPolicy;
 use lk_agents_net::http::GatewayHttp;
-use lk_agents_inference::llm::gateway::GatewayLlm;
 
 fn llm(model: &str) -> Option<GatewayLlm> {
-    let api_key = lk_agents_inference::creds::resolve_api_key(None).ok()?;
-    let api_secret = lk_agents_inference::creds::resolve_api_secret(None).ok()?;
+    let api_key = lk_agents_net::credentials::resolve_api_key(None).ok()?;
+    let api_secret = lk_agents_net::credentials::resolve_api_secret(None).ok()?;
     let opts = LlmOptions {
         model: model.to_owned(),
         provider: None,

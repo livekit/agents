@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::errors::ApiError;
-use tokio_tungstenite::tungstenite::Message;
+use lk_agents_net::websocket::Message;
 
 use crate::eot::cloud::{WebSocketConnector, WebSocketSink, WebSocketStream};
 use lk_agents_net::transport::TransportError;

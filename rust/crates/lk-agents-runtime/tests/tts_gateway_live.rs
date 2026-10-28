@@ -6,8 +6,8 @@ fn credentials() -> Option<(String, String, String)> {
     // The *inference* key pair, which is distinct from the room key pair. `resolve_credential`
     // reproduces the reference's fallback (§creds), and the point of using it here rather than
     // reading the vars directly is that the fallback itself gets exercised against a real key.
-    let key = lk_agents_inference::creds::resolve_api_key(None).ok()?;
-    let secret = lk_agents_inference::creds::resolve_api_secret(None).ok()?;
+    let key = lk_agents_net::credentials::resolve_api_key(None).ok()?;
+    let secret = lk_agents_net::credentials::resolve_api_secret(None).ok()?;
     let url = lk_agents_inference::default_inference_url_from_env();
     Some((key, secret, url))
 }

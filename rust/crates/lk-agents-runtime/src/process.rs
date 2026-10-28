@@ -95,8 +95,7 @@ pub fn host_clock() -> Arc<dyn Clock> {
     Arc::new(lk_agents_abi::RealClock::new())
 }
 
-/// This process as the async crates' `Env` (`lk_agents_net::env`, `lk_agents_inference::env`):
-/// what a class the host constructs runs on (decision 88).
+/// The process services selected by host-constructed clients through the shared environment.
 #[derive(Clone)]
 pub struct Process;
 

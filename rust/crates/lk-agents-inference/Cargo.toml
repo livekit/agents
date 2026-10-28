@@ -62,11 +62,6 @@ base64 = { workspace = true }
 # socket from Python. A gate whose off-state silently disables the implementation is the same
 # mistake as leaving the work in the host: the build was green and the feature was absent.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
-# TLS crypto provider: `ring`, shared with the net transport. reqwest's plain
-# `rustls` feature would add `aws-lc-rs` (a 207 s cmake build, measured 2026-09-06) as a second
-# provider; `rustls-no-provider` plus this explicit `rustls` line keeps one.
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
 url = "2"
@@ -85,6 +80,7 @@ pbjson-types.workspace = true
 pyo3 = { workspace = true, optional = true }
 
 [dev-dependencies]
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 livekit-token.workspace = true
 # The integration tests' fakes (`testkit`).
 lk-agents-inference = { path = ".", features = ["testkit"] }

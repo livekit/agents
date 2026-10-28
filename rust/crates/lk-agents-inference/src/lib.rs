@@ -9,7 +9,6 @@ pub mod env;
 // Conversation judges: model calls run concurrently on one conversation (decision 79).
 pub mod evals;
 
-pub mod creds;
 pub mod extra;
 pub mod headers;
 pub mod ids;

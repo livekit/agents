@@ -768,7 +768,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
 
     // An unusable URL is the caller's mistake, which no retry fixes.
     {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+        use lk_agents_net::websocket::tungstenite::client::IntoClientRequest as _;
         if let Err(e) = url.as_str().into_client_request() {
             return Err(StreamError {
                 request: None,

@@ -17,6 +17,7 @@
 pub mod a2a_auth;
 pub mod a2a_client;
 pub mod attempts;
+pub mod credentials;
 pub mod env;
 pub mod http;
 pub mod session_report;

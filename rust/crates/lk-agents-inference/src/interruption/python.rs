@@ -24,11 +24,11 @@ use super::{
     InterruptionDetectionError, InterruptionOptions, InterruptionStream, OverlapEnd, OverlapStart,
     OverlappingSpeechEvent, StreamEvent,
 };
-use crate::creds::resolve_credential;
 use crate::headers::default_inference_url_from_env;
 use crate::python::{header_provider, register_class, register_fn};
-use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_abi::python::{CancellingHandle, HostBridge as _};
+use lk_agents_net::credentials::resolve_credential;
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 
 /// `inference/interruption.py`'s WebSocket, over `lk_agents_inference::interruption`.
 ///
