@@ -494,7 +494,32 @@ async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
+/// I-24: items page by insertion position with an optional lane filter; the cursor is opaque,
+/// bound to its filter, and pages neither skip nor repeat.
+async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    for (lane, n) in [("lane-a", 0), ("lane-b", 1), ("lane-a", 2)] {
+        let mut run = s.lane(lane).open(RunOptions::new(format!("r{n}"), "")).await.unwrap();
+        run.history.push(message(&format!("i{n}"), ChatRole::User, "hi"));
+        run.commit(CommitOptions::default()).await.unwrap();
+    }
+    let ids = |p: &lk_agents_storage::db::ItemPage| -> Vec<String> {
+        p.items.iter().map(|(lane, i)| format!("{lane}/{}", i.id)).collect()
+    };
+    let first = s.list_items(None, None, 2).await.unwrap();
+    assert_eq!(ids(&first), vec!["lane-a/i0", "lane-b/i1"]);
+    let rest = s.list_items(None, first.next.as_deref(), 2).await.unwrap();
+    assert_eq!((ids(&rest), rest.next), (vec!["lane-a/i2".to_owned()], None));
+    let a = s.list_items(Some("lane-a"), None, 10).await.unwrap();
+    assert_eq!(ids(&a), vec!["lane-a/i0", "lane-a/i2"]);
+    let crossed = s.list_items(Some("lane-a"), first.next.as_deref(), 2).await;
+    assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a cursor of another filter");
+    fx.cleanup(&[&s]).await;
+}
+
 contract!(
+    items_page_by_position_with_a_filter_bound_cursor,
     a_run_loads_its_whole_history_in_its_acquire,
     a_concurrent_run_refuses_to_edit_or_delete_loaded_history,
     an_item_id_of_another_lane_fails_the_commit_without_mutation,

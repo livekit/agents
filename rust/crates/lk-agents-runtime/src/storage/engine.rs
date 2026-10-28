@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_storage::db::{
-    self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced, Plan,
-    Read, Receive, Resolution, TaskPage, TaskQuery, TaskWrite,
+    self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced,
+    ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery, TaskWrite,
 };
 use lk_agents_storage::lease::{LanePoll, lease_secs};
 use lk_agents_storage::run::{
@@ -202,6 +202,20 @@ impl ThreadDb {
 
     pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {
         self.read(db::lanes()).await
+    }
+
+    /// One page of the thread's committed items in insertion order, of `lane` when given,
+    /// after the opaque `cursor` of the previous page. No lease needed.
+    pub async fn list_items(
+        &self,
+        lane: Option<&str>,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> Result<ItemPage, StorageError> {
+        if !self.refresh_schema().await? {
+            return Ok(ItemPage { items: Vec::new(), next: None });
+        }
+        self.execute(db::list_items(lane, cursor, limit)?).await
     }
 }
 
@@ -424,6 +438,17 @@ impl Thread {
     /// One page of every lane's tasks, last updated first (A2A `tasks/list`).
     pub async fn list_tasks(&self, q: &TaskQuery) -> Result<TaskPage, StorageError> {
         self.db.list_tasks(q).await
+    }
+
+    /// One page of the committed items in insertion order, of `lane` when given, after the
+    /// previous page's opaque `cursor`. Reads need no lease.
+    pub async fn list_items(
+        &self,
+        lane: Option<&str>,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> Result<ItemPage, StorageError> {
+        self.db.list_items(lane, cursor, limit).await
     }
 
     pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {

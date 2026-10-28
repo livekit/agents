@@ -720,6 +720,16 @@ SELECT id, message_id, json(payload) FROM items WHERE lane = :lane ORDER BY seq
 }
 
 statement! {
+    /// One page of the thread's items in insertion order (`pos`), after `after`, of one lane
+    /// when given: each row its position and lane, then the item.
+    SelectItemsAfter<'a> { lane: Option<&'a str>, after: i64, limit: i64 } => r#"
+SELECT pos, lane, id, message_id, json(payload) FROM items
+WHERE (:lane IS NULL OR lane = :lane) AND pos > :after
+ORDER BY pos LIMIT :limit
+"#
+}
+
+statement! {
     /// The lane's journal after the event `after_id`.
     SelectLaneEvents<'a> { lane: &'a str, after_id: i64 } => r#"
 SELECT id, ts_ms, lane, run_id, type, json(payload) FROM events

@@ -786,6 +786,70 @@ impl Decode for ListTasksDecode {
     }
 }
 
+/// One page of the thread's items: in insertion order with their lane, and
+/// the cursor of the next page when there is one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemPage {
+    pub items: Vec<(String, ItemRow)>,
+    pub next: Option<String>,
+}
+
+/// The largest item page.
+const MAX_ITEM_PAGE: i64 = 500;
+
+/// A page cursor: opaque to callers, bound to the lane filter it was made under.
+fn item_cursor(lane: Option<&str>, pos: i64) -> String {
+    format!("{}:{pos}", lane.unwrap_or("*"))
+}
+
+pub struct ItemPageDecode {
+    lane: Option<String>,
+    limit: i64,
+}
+
+/// One page of the thread's items after `cursor`, of `lane` when given. A cursor made under
+/// another filter is refused.
+pub fn list_items(
+    lane: Option<&str>,
+    cursor: Option<&str>,
+    limit: i64,
+) -> Result<Plan<ItemPageDecode>, StorageError> {
+    let after = match cursor {
+        None => 0,
+        Some(c) => c
+            .rsplit_once(':')
+            .filter(|(scope, _)| *scope == lane.unwrap_or("*"))
+            .and_then(|(_, pos)| pos.parse().ok())
+            .ok_or_else(|| StorageError::Invalid(format!("item cursor {c:?} for this listing")))?,
+    };
+    let limit = limit.clamp(1, MAX_ITEM_PAGE);
+    let mut b = Batch::default();
+    b.add(SelectItemsAfter { lane, after, limit: limit + 1 });
+    Ok(b.plan(ItemPageDecode { lane: lane.map(str::to_owned), limit }))
+}
+
+impl Decode for ItemPageDecode {
+    type Output = ItemPage;
+
+    fn decode(self, out: &BatchResult) -> Result<ItemPage, StorageError> {
+        let mut items = Vec::new();
+        let mut last = 0;
+        for row in out.at(0)?.rows() {
+            let pos = row.first().and_then(SqlValue::as_i64);
+            let lane = row.get(1).and_then(SqlValue::as_str);
+            let (Some(pos), Some(lane)) = (pos, lane) else {
+                return Err(StorageError::Decode("an item page row".into()));
+            };
+            if items.len() as i64 == self.limit {
+                return Ok(ItemPage { items, next: Some(item_cursor(self.lane.as_deref(), last)) });
+            }
+            items.push((lane.to_owned(), ItemRow::from_row(&row[2..].to_vec())?));
+            last = pos;
+        }
+        Ok(ItemPage { items, next: None })
+    }
+}
+
 /// The journal, every lane, after the event `after_id`.
 pub fn events(after_id: i64, limit: i64) -> Read<EventRow> {
     Read::new(SelectEvents { after_id, limit }, EventRow::from_row)
