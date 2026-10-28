@@ -4,7 +4,7 @@ went with the release, so the step reported spoken afterwards committed its item
 naming no voice (say_item_after_close_edge, survey seed 114526)
 
 diff --git a/rust/crates/lk-agents-voice/src/agent_activity/mod.rs b/rust/crates/lk-agents-voice/src/agent_activity/mod.rs
-index 485a1be..ea90476 100644
+index 3daadb9..c063059 100644
 --- a/rust/crates/lk-agents-voice/src/agent_activity/mod.rs
 +++ b/rust/crates/lk-agents-voice/src/agent_activity/mod.rs
 @@ -17,7 +17,7 @@ pub mod voice_task;
@@ -28,7 +28,7 @@ index 485a1be..ea90476 100644
      pub(crate) finished: BTreeSet<SpeechId>,
      /// Per tool step: whether the activity that made the speech drains, so the step's reply
      /// offers no tools.
-@@ -155,13 +156,18 @@ impl AgentActivity {
+@@ -159,13 +160,18 @@ impl AgentActivity {
      }
  
      /// The speech is the running agent's: its late items are attributed to it.
@@ -51,10 +51,10 @@ index 485a1be..ea90476 100644
  
      pub(crate) fn set_tools_in_flight(&mut self, speech: SpeechId, running: bool) {
 diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-index c07c3d7..f8a9270 100644
+index 9e26933..a2e6af0 100644
 --- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
 +++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-@@ -638,7 +638,7 @@ impl Driver {
+@@ -649,7 +649,7 @@ impl Driver {
  
          let (id, handle) = self.new_speech(spec.host_handle.as_ref(), spec.allow_interruptions);
  
@@ -63,14 +63,15 @@ index c07c3d7..f8a9270 100644
  
          let message_id = self.session.ids.mint("item");
          let ctx = ReplyContext {
-@@ -880,7 +880,9 @@ impl Driver {
+@@ -950,7 +950,10 @@ impl Driver {
          out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
          // The step's edge is spent: the next step's first frame is a new one.
          self.activity.spoke.remove(&speech);
 -        let kind = self.activity.speech_scheduler.kind(speech);
 +        // Read off the record kept past the release: a `say` cut by the close's edge reports its
 +        // step after the edge released it, and is still a `say`'s item.
-+        let kind = self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
++        let kind =
++            self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
          let mut item = item.map(|msg| {
              let source = match kind {
                  Some(SpeechKind::Say) => Source::Say { speech },
