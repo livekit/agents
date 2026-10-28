@@ -1,9 +1,9 @@
 import asyncio
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import rimelabs_sdk as sdk
 
 from livekit import rtc
 from livekit.agents import AgentSession, APIConnectOptions, APIStatusError, llm, stt, vad
@@ -12,6 +12,11 @@ from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.plugins import rime
 
 pytestmark = pytest.mark.unit
+
+if sys.version_info >= (3, 11):
+    import rimelabs_sdk as sdk
+else:
+    pytest.skip("Rime STT requires Python 3.11+", allow_module_level=True)
 
 
 class DetectorStream:

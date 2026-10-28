@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Sequence
 from typing import Literal
 
@@ -66,6 +67,9 @@ class STT(stt.STT):
                 build exposing TranscriptionOutputContract.
             api_key: Rime API key. Defaults to the ``RIME_API_KEY`` environment variable.
         """
+        if sys.version_info < (3, 11):
+            raise ImportError("Rime STT requires Python 3.11+ and livekit-plugins-rime[stt]")
+
         # Keep the SDK optional for TTS-only installations.
         try:
             import rimelabs_sdk

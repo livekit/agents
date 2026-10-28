@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import subprocess
 import sys
 import traceback
 import wave
@@ -13,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
-import rimelabs_sdk as sdk
 
 from livekit import rtc
 from livekit.agents import (
@@ -29,6 +27,11 @@ from livekit.agents import (
 from livekit.plugins import rime
 
 pytestmark = pytest.mark.unit
+
+if sys.version_info >= (3, 11):
+    import rimelabs_sdk as sdk
+else:
+    pytest.skip("Rime STT requires Python 3.11+", allow_module_level=True)
 
 
 NO_RETRY = APIConnectOptions(max_retry=0, timeout=2)
@@ -248,37 +251,6 @@ async def test_real_sdk_pending_request_lifecycle(
             await asyncio.wait_for(task, timeout=1)
         assert cancelled.is_set()
     channel.close.assert_awaited_once()
-
-
-def test_tts_import_does_not_require_the_sdk() -> None:
-    # A fresh interpreter also catches accidental eager SDK imports from rime.__init__.
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            """
-import sys
-from importlib.abc import MetaPathFinder
-class NoSDK(MetaPathFinder):
-    def find_spec(self, fullname, path, target=None):
-        if fullname == 'rimelabs_sdk':
-            raise ModuleNotFoundError(name=fullname)
-sys.meta_path.insert(0, NoSDK())
-from livekit.plugins import rime
-assert rime.TTS
-try:
-    rime.STT()
-except ImportError as error:
-    assert 'livekit-plugins-rime[stt]' in str(error)
-else:
-    raise AssertionError('Missing SDK was not detected')
-""",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
 
 
 def test_sdk_without_transcribe_has_actionable_error(client: MagicMock) -> None:

@@ -6,8 +6,8 @@ See [https://docs.livekit.io/agents/integrations/tts/rime/](https://docs.livekit
 
 ## Installation
 
-Requires Python 3.11 or newer for both TTS and STT. Applications using Python 3.10
-must upgrade Python or keep a compatible older plugin release.
+TTS supports Python 3.10 or newer. STT requires Python 3.11 or newer and the
+optional `stt` extra.
 
 ```bash
 pip install livekit-plugins-rime
@@ -19,7 +19,7 @@ You'll need an API key from Rime. It can be set as an environment variable: `RIM
 
 ## Speech recognition
 
-STT uses the Rime Python SDK. Install the `stt` extra:
+STT uses the Rime Python SDK and requires Python 3.11 or newer. Install the `stt` extra:
 
 ```bash
 pip install 'livekit-plugins-rime[stt]'
@@ -27,6 +27,8 @@ pip install 'livekit-plugins-rime[stt]'
 
 The extra installs `rimelabs-sdk>=0.1.0a18`, which provides unary transcription,
 revised-hypothesis streaming, and append-fragment streaming.
+On Python 3.10, the SDK dependency is skipped even when the extra is requested;
+upgrade Python to use STT. TTS does not require the SDK.
 
 ```python
 from livekit.agents import AgentSession
