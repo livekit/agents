@@ -457,6 +457,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
         if all_failed:
             logger.error("all TTSs are unavailable, retrying..")
 
+        # a retry (SynthesizeStream._main_task) replays the whole input into a fresh
+        # _input_ch, which _forward_input_task below records again: start empty, or the
+        # text an earlier attempt read is sent to the TTS a second time
+        self._pushed_tokens = []
+
         new_input_ch: aio.Chan[str | SynthesizeStream._FlushSentinel] | None = None
         output_emitter.initialize(
             request_id=utils.shortuuid(),
