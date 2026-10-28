@@ -9,6 +9,11 @@
 //! (the owner says since when), each restarted by transport progress; total runs from acceptance
 //! and never restarts. A failure is retried only while its error allows it, attempts remain and
 //! the owner has not marked the request unsafe to replay.
+//!
+//! A request the server may have received and that no answer resolved (timed out, stopped or cut
+//! after it was sent) may still take effect. When no caller takes its outcome, its owner retires
+//! it: the request keeps asking under its identity until an attempt answers or the retirement
+//! deadline passes, which is reported.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -84,6 +89,8 @@ pub enum AttemptStep {
     Retry { attempt: u32, error: ApiError },
     /// The request failed: no attempt follows.
     GiveUp(ApiError),
+    /// A retiring request's outcome was still unknown at its deadline; no attempt follows.
+    Unresolved,
     /// The attempt missed its cleanup deadline; the runtime still owns it (decision 14).
     CleanupIncomplete(u32),
 }
@@ -111,6 +118,11 @@ pub struct Attempts {
     phase: Phase,
     /// The outcome would repeat something visible: no further attempt.
     replay_unsafe: bool,
+    /// A sent attempt ended without an answer: the request may have taken effect.
+    unresolved: bool,
+    /// No caller takes the outcome: retrying until an answer or the total deadline.
+    retiring: bool,
+    next_attempt: u32,
     /// Launched attempts not yet closed, with their cleanup deadline once asked to stop or done.
     open: BTreeMap<u32, Option<Ts>>,
 }
@@ -123,6 +135,9 @@ impl Attempts {
             total_deadline: policy.total_timeout.map(|t| now.saturating_add(t)),
             phase: Phase::Settled,
             replay_unsafe: false,
+            unresolved: false,
+            retiring: false,
+            next_attempt: 0,
             open: BTreeMap::new(),
         };
         attempts.launch(0, now, steps);
@@ -145,6 +160,12 @@ impl Attempts {
     /// Decided, and no attempt is left to clean up.
     pub fn is_settled(&self) -> bool {
         self.is_decided() && self.open.is_empty()
+    }
+
+    /// The request may have taken effect on the server: an attempt is sent and unanswered, or
+    /// one ended so. Retiring it learns the outcome.
+    pub fn may_have_taken_effect(&self) -> bool {
+        self.unresolved || self.sent()
     }
 
     /// Visible output reached the consumer: a replay would repeat it.
@@ -185,6 +206,7 @@ impl Attempts {
         if self.current() != Some(attempt) {
             return false;
         }
+        self.unresolved = false;
         self.close_attempt(attempt, now);
         self.phase = Phase::Settled;
         true
@@ -193,8 +215,17 @@ impl Attempts {
     /// `attempt` failed; only the current attempt's failure decides anything.
     pub fn failed(&mut self, attempt: u32, failure: AttemptFailure, now: Ts, steps: &mut Vec<AttemptStep>) {
         if self.current() == Some(attempt) {
+            // A final rejection answers the operation (a replay gets it too); a retryable one
+            // leaves an earlier attempt's effect unknown; a cut or unreadable answer is none.
+            let rejected = matches!(failure, AttemptFailure::Rejected { .. });
+            let error = failure.into_error();
+            if !rejected {
+                self.unresolved |= self.sent();
+            } else if !error.retryable {
+                self.unresolved = false;
+            }
             self.close_attempt(attempt, now);
-            self.fail(attempt, failure.into_error(), now, steps);
+            self.fail(attempt, error, now, steps);
         }
     }
 
@@ -203,6 +234,7 @@ impl Attempts {
     pub fn closed(&mut self, attempt: u32, now: Ts, steps: &mut Vec<AttemptStep>) {
         self.open.remove(&attempt);
         if self.current() == Some(attempt) {
+            self.unresolved |= self.sent();
             let failure = AttemptFailure::Connection("the response ended unexpectedly".into());
             self.fail(attempt, failure.into_error(), now, steps);
         }
@@ -210,23 +242,30 @@ impl Attempts {
 
     /// The consumer gave up: the running attempt is stopped and no outcome follows.
     pub fn cancel(&mut self, now: Ts, steps: &mut Vec<AttemptStep>) {
+        self.unresolved |= self.sent();
         if let Some(attempt) = self.current() {
             self.stop(attempt, now, steps);
         }
         self.phase = Phase::Settled;
     }
 
-    /// No further attempt and no total limit, but the running attempt is left to answer within
-    /// the cleanup deadline: an answer may hold a resource that must be released.
-    pub fn drain(&mut self, now: Ts) {
-        match self.phase {
-            Phase::Waiting { .. } => self.phase = Phase::Settled,
-            Phase::Attempting { attempt, .. } => {
-                self.policy.max_retry = attempt;
-                self.total_deadline = None;
-                self.close_attempt(attempt, now);
-            }
-            Phase::Settled => {}
+    /// No caller takes the outcome any more. A request that may have taken effect keeps asking
+    /// under its identity, retrying every retryable failure, until an attempt answers or
+    /// `deadline` ([`AttemptStep::Unresolved`]); any other request stops now.
+    pub fn retire(&mut self, now: Ts, deadline: Ts, steps: &mut Vec<AttemptStep>) {
+        if self.retiring {
+            return;
+        }
+        if !self.may_have_taken_effect() {
+            self.cancel(now, steps);
+            return;
+        }
+        self.retiring = true;
+        self.replay_unsafe = false;
+        self.policy.max_retry = u32::MAX;
+        self.total_deadline = Some(deadline);
+        if self.is_decided() {
+            self.phase = Phase::Waiting { attempt: self.next_attempt, at: now.saturating_add(self.policy.retry_interval) };
         }
     }
 
@@ -236,10 +275,6 @@ impl Attempts {
         for attempt in expired {
             // Reported once; the runtime keeps owning the attempt.
             self.open.remove(&attempt);
-            if self.current() == Some(attempt) {
-                steps.push(AttemptStep::Stop(attempt));
-                self.phase = Phase::Settled;
-            }
             steps.push(AttemptStep::CleanupIncomplete(attempt));
         }
         if self.is_decided() {
@@ -247,7 +282,11 @@ impl Attempts {
         }
         if self.total_deadline.is_some_and(|d| d <= now) {
             self.cancel(now, steps);
-            steps.push(AttemptStep::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false)));
+            steps.push(if self.retiring {
+                AttemptStep::Unresolved
+            } else {
+                AttemptStep::GiveUp(ApiError::timed_out(TimeoutPhase::Total).with_retryable(false))
+            });
             return;
         }
         match self.phase {
@@ -256,6 +295,7 @@ impl Attempts {
                 if let Some((at, phase)) = self.stage_deadline(stage, expecting)
                     && at <= now
                 {
+                    self.unresolved |= self.sent();
                     self.stop(attempt, now, steps);
                     self.fail(attempt, ApiError::timed_out(phase), now, steps);
                 }
@@ -266,6 +306,7 @@ impl Attempts {
 
     fn launch(&mut self, attempt: u32, now: Ts, steps: &mut Vec<AttemptStep>) {
         self.open.insert(attempt, None);
+        self.next_attempt = attempt + 1;
         self.phase = Phase::Attempting { attempt, stage: Stage::Connecting { since: now } };
         steps.push(AttemptStep::Launch(attempt));
     }
@@ -283,6 +324,11 @@ impl Attempts {
             self.close_attempt(attempt, now);
             steps.push(AttemptStep::Stop(attempt));
         }
+    }
+
+    /// The current attempt's request may have reached the server.
+    fn sent(&self) -> bool {
+        matches!(self.phase, Phase::Attempting { stage: Stage::Writing { .. } | Stage::Reading { .. }, .. })
     }
 
     fn advance(&mut self, attempt: u32, next: impl FnOnce(Stage) -> Option<Stage>) {

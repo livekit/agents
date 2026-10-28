@@ -228,16 +228,37 @@ async fn a_session_created_after_its_start_was_cancelled_is_terminated() {
     assert_eq!(avatar.close(Headers::new()).await, Closed::Clean);
 }
 
-// Catches (decision 14): close waiting forever on a creation that never answers, or reporting
-// a clean close while that attempt may still create a billable session.
+// Catches (regression, DST avatar_sessions_are_never_leaked): a create the gateway received,
+// cut by its read timeout after close, abandoned while the gateway still makes the session.
+#[tokio::test]
+async fn close_during_a_received_create_asks_again_under_its_key_and_terminates() {
+    let (url, received) = peer(vec![Reply::Silent, ok(CREATED), ok("")]).await;
+    let avatar = Arc::new(avatar(url, 200));
+    let creating = tokio::spawn({
+        let avatar = avatar.clone();
+        async move { avatar.create(room(), Headers::new()).await }
+    });
+    requests(&received, 1).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(avatar.close(Headers::new()).await, Closed::Clean);
+    assert!(matches!(creating.await.unwrap(), Err(AvatarError::Closed)));
+    let seen = requests(&received, 3).await;
+    assert_eq!(header(&seen[0].0, "idempotency-key"), header(&seen[1].0, "idempotency-key"));
+    assert!(seen[1].0.starts_with("POST /v1/avatar/sessions "), "{}", seen[1].0);
+    assert!(seen[2].0.starts_with("POST /v1/avatar/sessions/terminate "), "{}", seen[2].0);
+}
+
+// Catches (decision 14): close waiting forever on a received creation that never answers, or
+// reporting a clean close while it may still create a billable session.
 #[tokio::test(start_paused = true)]
 async fn close_reports_incomplete_cleanup_when_a_creation_never_answers() {
-    let (url, _received) = peer(vec![Reply::Silent]).await;
+    let (url, received) = peer(vec![Reply::Silent]).await;
     let avatar = Arc::new(avatar(url, 60_000));
     let creating = tokio::spawn({
         let avatar = avatar.clone();
         async move { avatar.create(room(), Headers::new()).await }
     });
+    requests(&received, 1).await;
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(avatar.close(Headers::new()).await, Closed::TimedOut);
     assert!(matches!(creating.await.unwrap(), Err(AvatarError::Closed)));

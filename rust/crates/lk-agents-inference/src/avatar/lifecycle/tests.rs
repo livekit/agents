@@ -50,6 +50,12 @@ fn closed(request: u64, attempt: u32) -> Ev {
     Ev::AttemptClosed { request: AvatarRequestId(request), attempt }
 }
 
+fn written(avatar: &mut AvatarSessionLifecycle, request: u64, attempt: u32, ms: u64) {
+    let (request, at_ms) = (AvatarRequestId(request), at(ms));
+    avatar.handle(Ev::Connected { request, attempt }, at_ms);
+    avatar.handle(Ev::RequestWritten { request, attempt }, at_ms);
+}
+
 fn reset() -> AttemptFailure {
     AttemptFailure::Connection("reset".into())
 }
@@ -111,7 +117,8 @@ fn retries_keep_the_operation_and_any_attempts_answer_settles_it() {
 #[test]
 fn a_late_success_after_the_caller_left_is_retired() {
     let mut avatar = creating();
-    assert_eq!(avatar.handle(Ev::Cancel, at(5)), vec![], "the running attempt is left to answer");
+    written(&mut avatar, 1, 0, 2);
+    assert_eq!(avatar.handle(Ev::Cancel, at(5)), vec![], "the sent attempt is left to answer");
     let s = session("late");
     let effects = avatar.handle(created(1, 0, &s), at(900));
     assert_eq!(
@@ -153,6 +160,7 @@ fn a_refused_delivery_keeps_cleanup_with_the_sender() {
 #[test]
 fn close_during_creation_settles_the_caller_and_retires_the_result() {
     let mut avatar = creating();
+    written(&mut avatar, 1, 0, 0);
     assert_eq!(avatar.handle(Ev::Close, at(1)), vec![Fx::CreateFinished(Err(CreateFailure::Closed))]);
     assert!(!avatar.is_settled(), "the running attempt still owes its answer");
     let s = session("a");
@@ -161,21 +169,20 @@ fn close_during_creation_settles_the_caller_and_retires_the_result() {
     assert_eq!(avatar.handle(Ev::Create, at(3)), vec![Fx::CreateRefused]);
 }
 
-// Catches: an attempt that never answers reported as clean termination or waited on forever
-// (decision 14: one typed observation, the runtime keeps the attempt).
+// Catches: an unsent create kept running after its caller left, or a stopped attempt that never
+// releases reported as clean or waited on forever (decision 14: one typed observation, the
+// runtime keeps the attempt).
 #[test]
 fn a_missed_cleanup_deadline_is_reported_once() {
     let mut avatar = creating();
-    avatar.handle(Ev::Cancel, at(0));
+    assert_eq!(
+        avatar.handle(Ev::Cancel, at(0)),
+        vec![Fx::AvatarRequestCancel { request: AvatarRequestId(1), attempt: 0 }],
+        "the gateway cannot have received it: nothing to retire"
+    );
     let due = at(0).saturating_add(ATTEMPT_CLEANUP_TIMEOUT);
     assert_eq!(avatar.wake_at(), Some(due));
-    assert_eq!(
-        avatar.handle(Ev::Wake, due),
-        vec![
-            Fx::AvatarRequestCancel { request: AvatarRequestId(1), attempt: 0 },
-            Fx::CleanupIncomplete { request: AvatarRequestId(1), attempt: 0 },
-        ]
-    );
+    assert_eq!(avatar.handle(Ev::Wake, due), vec![Fx::CleanupIncomplete { request: AvatarRequestId(1), attempt: 0 }]);
     assert!(avatar.is_settled());
     assert_eq!(avatar.wake_at(), None);
     // A session the stopped attempt reports anyway is still terminated.
@@ -214,4 +221,63 @@ fn a_session_without_terminate_identity_is_released_with_a_report() {
         avatar.handle(Ev::DeliveryRefused, at(2)),
         vec![Fx::Retiring { session: s.clone(), reason: Retirement::Refused }, Fx::Unterminable(s)]
     );
+}
+
+// Catches: a create the gateway received abandoned when its read timeout fires after close: the
+// gateway still makes the session and nobody ends it (DST avatar_sessions_are_never_leaked, seed 0).
+#[test]
+fn a_received_create_cut_by_its_timeout_after_close_is_asked_again_and_retired() {
+    let read = RequestPolicy { read_timeout: Some(Duration::from_secs(2)), max_retry: 0, ..policy() };
+    let mut avatar = AvatarSessionLifecycle::new(AVATAR, read);
+    avatar.handle(Ev::Create, at(0));
+    written(&mut avatar, 1, 0, 10);
+    assert_eq!(avatar.handle(Ev::Close, at(20)), vec![Fx::CreateFinished(Err(CreateFailure::Closed))]);
+    let effects = avatar.handle(Ev::Wake, avatar.wake_at().unwrap());
+    assert!(
+        matches!(effects.as_slice(), [Fx::AvatarRequestCancel { attempt: 0, .. }, Fx::AttemptFailed { attempt: 0, .. }]),
+        "the timed-out attempt is stopped and the operation retried: {effects:?}"
+    );
+    assert_eq!(avatar.handle(Ev::Wake, avatar.wake_at().unwrap()), vec![create(1, 1)], "same operation identity");
+    let s = session("a");
+    let effects = avatar.handle(created(1, 1, &s), at(3_000));
+    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]);
+}
+
+// Catches: a create whose last attempt lost its answer after the gateway received it failing its
+// caller and forgetting the operation, so the session the gateway made bills on.
+#[test]
+fn a_create_failed_after_it_was_received_is_retired_once_its_caller_has_the_error() {
+    let mut avatar = AvatarSessionLifecycle::new(AVATAR, RequestPolicy { max_retry: 0, ..policy() });
+    avatar.handle(Ev::Create, at(0));
+    written(&mut avatar, 1, 0, 10);
+    let effects = avatar.handle(Ev::Failed { request: AvatarRequestId(1), attempt: 0, failure: reset() }, at(500));
+    assert!(matches!(effects.as_slice(), [Fx::CreateFinished(Err(CreateFailure::Api(_)))]), "{effects:?}");
+    assert_eq!(avatar.handle(Ev::Wake, avatar.wake_at().unwrap()), vec![create(1, 1)], "asked again under its identity");
+    let s = session("a");
+    let effects = avatar.handle(created(1, 1, &s), at(2_000));
+    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]);
+}
+
+// Catches: a retirement that cannot learn the operation's outcome waited on forever, or ended
+// silently (decision 14: one typed report; a later answer is still terminated).
+#[test]
+fn a_retirement_unanswered_by_its_deadline_is_reported_once() {
+    let mut avatar = creating();
+    written(&mut avatar, 1, 0, 10);
+    avatar.handle(Ev::Close, at(20));
+    let deadline = at(20).saturating_add(RETIREMENT_TIMEOUT);
+    let mut effects = Vec::new();
+    while let Some(due) = avatar.wake_at().filter(|due| *due <= deadline) {
+        for effect in avatar.handle(Ev::Wake, due) {
+            if let Fx::AvatarRequestCancel { request, attempt } = effect {
+                avatar.handle(Ev::AttemptClosed { request, attempt }, due);
+            }
+            effects.push(effect);
+        }
+    }
+    let reports: Vec<_> = effects.iter().filter(|e| matches!(e, Fx::RetirementIncomplete { .. })).collect();
+    assert_eq!(reports, vec![&Fx::RetirementIncomplete { request: AvatarRequestId(1) }]);
+    let s = session("very-late");
+    let effects = avatar.handle(created(1, 0, &s), deadline.saturating_add(Duration::from_secs(1)));
+    assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]);
 }

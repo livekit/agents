@@ -416,6 +416,11 @@ impl Driver {
                     log::error!(target: LOG, provider, request = request.0, attempt;
                         "avatar gateway request did not settle by its cleanup deadline; a provider session it created may bill until its idle timeout");
                 }
+                AvatarSessionEffect::RetirementIncomplete { request } => {
+                    self.cleanup_incomplete = true;
+                    log::error!(target: LOG, provider, request = request.0;
+                        "the gateway never answered an avatar create no caller took; a provider session it made may bill until its idle timeout");
+                }
             }
         }
     }

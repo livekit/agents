@@ -150,6 +150,8 @@ impl LlmRequest {
                 AttemptStep::Retry { attempt, error } => LlmRequestEffect::AttemptFailed { attempt, error },
                 AttemptStep::GiveUp(error) => LlmRequestEffect::Finished(Err(error)),
                 AttemptStep::CleanupIncomplete(attempt) => LlmRequestEffect::CleanupIncomplete { request_id, attempt },
+                // A generation is never retired: its consumer's cancel ends it.
+                AttemptStep::Unresolved => continue,
             });
         }
     }
