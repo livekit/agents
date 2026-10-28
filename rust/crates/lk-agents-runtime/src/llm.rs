@@ -83,16 +83,20 @@ impl GatewayLlm {
     }
 
     /// Opens a completion; the first attempt starts at once, its response is read on demand.
+    /// `identification` is the caller's job identity, read where it called; else this view's.
     pub fn chat(
         &self,
         chat_ctx: &ChatContext,
         tools: &[ToolSpec],
         args: ChatArgs,
         policy: RequestPolicy,
+        identification: Option<&Headers>,
     ) -> Result<LlmChunks, ApiError> {
         let opts = self.options();
+        // The host serialized every image onto its item already.
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
-        let request = build_request(&opts, self.identity.as_ref(), &images, chat_ctx, tools, args)?;
+        let identification = identification.or(self.identity.as_ref());
+        let request = build_request(&opts, identification, &images, chat_ctx, tools, args)?;
         let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
         let now = self.clock.now();
         let (core, effects) = LlmRequest::start(id, self.resource, policy, models::think_tags(&opts.model), now);
@@ -166,7 +170,7 @@ impl Llm for GatewayLlm {
             response_format: None,
             inference_class: req.inference_class.clone(),
         };
-        Ok(Box::new(self.chat(&req.chat_ctx, &req.tools, args, policy)?))
+        Ok(Box::new(self.chat(&req.chat_ctx, &req.tools, args, policy, None)?))
     }
 }
 

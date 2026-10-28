@@ -141,7 +141,7 @@ fn llm(peer: &Peer) -> GatewayLlm {
 }
 
 fn open(llm: &GatewayLlm, policy: RequestPolicy) -> LlmChunks {
-    llm.chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy).unwrap()
+    llm.chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy, None).unwrap()
 }
 
 async fn text(chunks: &mut LlmChunks) -> Result<String, lk_agents_abi::errors::ApiError> {

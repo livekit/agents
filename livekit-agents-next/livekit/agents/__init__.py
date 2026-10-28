@@ -28,6 +28,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    StreamStateError,
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
@@ -259,6 +260,7 @@ __all__ = [
     "APIError",
     "APIStatusError",
     "APITimeoutError",
+    "StreamStateError",
     "create_api_error_from_http",
     "APIConnectOptions",
     "NotGiven",

@@ -6,9 +6,11 @@
 //! - [`sse`]: event-stream framing over response bytes.
 //! - [`http`]: the gateway's HTTPS exchange, reporting transport observations.
 //! - [`llm`]: the gateway LLM, executing the LLM request core's effects.
+//! - [`source`]: a native source as one host consumer pulls and closes it.
 
 pub mod http;
 pub mod llm;
 pub mod process;
+pub mod source;
 pub mod sse;
 pub mod task;

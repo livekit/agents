@@ -171,6 +171,10 @@ class APITimeoutError(APIConnectionError):
         self.phase = phase
 
 
+class StreamStateError(RuntimeError):
+    """Raised when a stream is pulled while another pull of it is still in flight."""
+
+
 class CLIError(Exception):
     pass
 

@@ -89,6 +89,7 @@ pub enum LlmRequestEffect {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant, reason = "one per request: boxing the assembly buys nothing")]
 enum Phase {
     /// Backing off before `attempt`.
     Waiting { attempt: u32, at: Ts },

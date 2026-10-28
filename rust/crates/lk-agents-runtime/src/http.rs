@@ -47,6 +47,12 @@ pub struct GatewayHttp {
 }
 
 impl GatewayHttp {
+    /// The process's client, built on first use.
+    pub fn shared() -> Result<Arc<GatewayHttp>, String> {
+        static SHARED: std::sync::OnceLock<Result<Arc<GatewayHttp>, String>> = std::sync::OnceLock::new();
+        SHARED.get_or_init(|| GatewayHttp::new().map(Arc::new)).clone()
+    }
+
     pub fn new() -> Result<Self, String> {
         lk_agents_inference::transport::install_tls_provider();
         let client = reqwest::Client::builder()
