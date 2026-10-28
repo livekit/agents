@@ -473,14 +473,14 @@ class ProviderMessage(BaseModel, Generic[DataT]):
     model_config = ConfigDict(strict=True, extra="allow")
 
     request_id: str | None = None
-    session_id: object | None = None
+    session_id: str | None = None
     data: DataT | None = None
     metadata: RequestMetadata | None = None
     error: object | None = None
     code: object | None = None
 
 
-def message_request_id(message: ProviderMessage[RequestMetadata]) -> object:
+def message_request_id(message: ProviderMessage[RequestMetadata]) -> str | None:
     if message.request_id is not None:
         return message.request_id
     if message.data is not None and message.data.request_id is not None:
@@ -589,6 +589,29 @@ TTS_MESSAGE: TypeAdapter[TTSMessage] = TypeAdapter(
         Discriminator(_message_kind),
     ]
 )
+
+
+class RealtimeMessage(ProviderMessage[RequestMetadata]):
+    """Common realtime STT identity and payload fields.
+
+    Transcript/timing fields remain opaque until their existing tolerant checks;
+    server identity and the configuration object have a fixed wire schema.
+    """
+
+    event: str | None = None
+    config: dict[str, object] | None = None
+    applied: object = None
+    utterance_idx: object = None
+    text: object = None
+    language: str | None = None
+    language_confidence: object = None
+    confidence: object = None
+    audio_duration_s: object = None
+    start_s: object = None
+    end_s: object = None
+    is_fatal: object = False
+    message: object = None
+    status_code: object = -1
 
 
 class TTSBatchResponse(BaseModel):

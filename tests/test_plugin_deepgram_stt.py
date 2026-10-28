@@ -293,20 +293,6 @@ async def test_flush_finalizes_after_the_buffered_audio():
         await stream.aclose()
 
 
-class _RecordingSession:
-    """Stands in for the aiohttp session so the connect kwargs are assertable."""
-
-    def __init__(self) -> None:
-        self.trace_configs: list[object] = []  # aiohttp request tracing
-        self.closed = False
-        self.kwargs: dict = {}
-        self._ws = _LiveWS()
-
-    async def ws_connect(self, url: str, **kwargs):
-        self.kwargs = kwargs
-        return self._ws
-
-
 class _DeadSocket:
     """A socket that has silently gone away: writes fail, the read side never notices.
 
@@ -359,17 +345,36 @@ def _v1_stream(*, http_session=None, connect=None):
 
 
 async def test_v1_socket_is_opened_with_a_heartbeat():
-    # aiohttp defaults heartbeat and receive_timeout to None, so without this the
-    # read side of a half-open socket parks forever and the reconnect loop in _run,
-    # which only runs when something raises, never gets a turn. stt_v2 already does
-    # this; v1 is the Nova-3 path and was the only Deepgram stream left unbounded.
-    session = _RecordingSession()
-    stream = _v1_stream(http_session=session)
-    try:
-        await _wait_until(lambda: "heartbeat" in session.kwargs)
-        assert session.kwargs["heartbeat"] == 30.0
-    finally:
-        await stream.aclose()
+    """A real local handshake retains heartbeat-based detection of half-open sockets."""
+    from unittest.mock import patch
+
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.plugins.deepgram import STT
+
+    connected = asyncio.Event()
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        connected.set()
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/listen", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        with patch.object(session, "ws_connect", wraps=session.ws_connect) as connect:
+            provider = STT(
+                api_key="test-key", base_url=str(server.make_url("/listen")), http_session=session
+            )
+            async with provider.stream():
+                await asyncio.wait_for(connected.wait(), 1)
+                assert connect.call_args.kwargs["heartbeat"] == 30.0
+            await provider.aclose()
 
 
 async def test_keepalive_write_drop_reconnects_instead_of_stalling():

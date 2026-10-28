@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents import APIConnectOptions
 
 pytestmark = pytest.mark.plugin("deepgram")
 
@@ -255,66 +255,65 @@ async def test_stream_run_rejects_non_linear16_encoding():
 # --- speed (v1 / Aura-2) -------------------------------------------------------------
 
 
-class _RecordingSession:
-    json_serialize = staticmethod(json.dumps)
+async def _request_urls(**options) -> list[str]:
+    """Observe streaming and batch request URLs at a real local HTTP boundary."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
 
-    """Records the URLs the v1 TTS connects and posts to, without touching the network."""
+    from livekit.plugins.deepgram import TTS
 
-    def __init__(self) -> None:
-        self.trace_configs: list[object] = []  # aiohttp request tracing
-        self.urls: list[str] = []
+    urls: list[str] = []
 
-    async def ws_connect(self, url: str, **kwargs):  # noqa: ANN201
-        self.urls.append(url)
-        return SimpleNamespace(_response=SimpleNamespace(headers={}))
+    async def speak(request: web.Request) -> web.StreamResponse:
+        urls.append(str(request.rel_url))
+        if request.method == "GET":
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            async for message in ws:
+                if (
+                    message.type == aiohttp.WSMsgType.TEXT
+                    and json.loads(message.data)["type"] == "Flush"
+                ):
+                    await ws.send_bytes(bytes(4800))
+                    await ws.send_json({"type": "Flushed"})
+            return ws
+        assert await request.json() == {"text": "hello"}
+        return web.Response(body=bytes(4800), content_type="audio/pcm")
 
-    def request(self, method: str, url: str, **kwargs):
-        return self.post(url, **kwargs)
-
-    def post(self, url: str, **kwargs):  # noqa: ANN201
-        self.urls.append(url)
-        raise RuntimeError("stop before sending")
-
-
-async def _request_urls(tts) -> list[str]:  # noqa: ANN001
-    """The WebSocket URL (streaming) and the HTTP URL (synthesize) this TTS would use."""
-    from livekit.agents import APIConnectionError
-    from livekit.plugins.deepgram.tts import ChunkedStream
-
-    await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
-
-    stream = SimpleNamespace(
-        _tts=tts,
-        _opts=tts._opts,
-        _get_session=tts._ensure_session,
-        _input_text="hello",
-        _conn_options=DEFAULT_API_CONNECT_OPTIONS,
-    )
-    with pytest.raises(APIConnectionError):
-        await ChunkedStream._run.__get__(stream)(_FakeEmitter())
-
-    return tts._session.urls
+    app = web.Application()
+    app.router.add_route("*", "/speak", speak)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        provider = TTS(
+            api_key="test-key",
+            base_url=str(server.make_url("/speak")),
+            http_session=session,
+            **options,
+        )
+        try:
+            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                stream.push_text("hello")
+                stream.end_input()
+                async with asyncio.timeout(2):
+                    assert [chunk async for chunk in stream]
+            async with provider.synthesize(
+                "hello", conn_options=APIConnectOptions(max_retry=0)
+            ) as stream:
+                async with asyncio.timeout(2):
+                    assert [chunk async for chunk in stream]
+        finally:
+            await provider.aclose()
+    return urls
 
 
 async def test_speed_is_sent_on_websocket_and_http():
-    from livekit.plugins.deepgram import TTS
-
-    tts = TTS(api_key="test-key", speed=1.2, http_session=_RecordingSession())  # type: ignore[arg-type]
-
-    ws_url, http_url = await _request_urls(tts)
-
+    ws_url, http_url = await _request_urls(speed=1.2)
     assert parse_qs(urlparse(ws_url).query)["speed"] == ["1.2"]
     assert parse_qs(urlparse(http_url).query)["speed"] == ["1.2"]
 
 
 async def test_speed_is_left_out_unless_set():
-    # Aura-1 models and Aura-2 voices outside English/Spanish reject any `speed`, even 1.0,
-    # so the default must not send it.
-    from livekit.plugins.deepgram import TTS
-
-    tts = TTS(api_key="test-key", model="aura-asteria-en", http_session=_RecordingSession())  # type: ignore[arg-type]
-
-    for url in await _request_urls(tts):
+    # Aura-1 and some Aura-2 languages reject even speed=1.0.
+    for url in await _request_urls(model="aura-asteria-en"):
         assert "speed" not in parse_qs(urlparse(url).query)
 
 

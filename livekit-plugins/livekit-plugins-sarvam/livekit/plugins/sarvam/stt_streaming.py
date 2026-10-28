@@ -21,7 +21,7 @@ import platform
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -46,6 +46,7 @@ from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector, looks_like_error_text
 from .log import logger
+from .models import RealtimeMessage, message_request_id
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
@@ -140,7 +141,6 @@ SUPPORTED_LANGUAGES = {
 
 
 _APPLIED_KEYS = TypeAdapter(list[str])
-_CONFIG = TypeAdapter(dict[str, object])
 
 
 @dataclass
@@ -521,10 +521,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._pending_endpointing: RealtimeEndpointing | str | None = None
         self._endpointing_update_acknowledged = False
         self._endpointing_update_sent = False
-        self._pending_config_update: dict[str, Any] | None = None
+        self._pending_config_update: dict[str, object] | None = None
         self._manual_speech_started = False
         self._flush_observed = False
-        self._pending_final_data: dict[str, Any] | None = None
+        self._pending_final_data: RealtimeMessage | None = None
         self._utterance_start_audio_pos = 0.0
         self._utterance_speech_end_audio_pos: float | None = None
         self._utterance_speech_end_wall: float | None = None
@@ -587,34 +587,48 @@ class RealtimeSpeechStream(stt.SpeechStream):
             ValueError: If an option falls outside the values the endpoint accepts.
         """
         previous_opts = self._opts
-        requested: dict[str, Any] = {}
-        if is_given(language):
-            requested["language"] = language
-        if is_given(stream_type):
-            requested["stream_type"] = stream_type
-        if is_given(mode):
-            requested["mode"] = mode
-        if is_given(endpointing):
-            requested["endpointing"] = endpointing
-        if is_given(sample_rate):
-            requested["sample_rate"] = sample_rate
-        if is_given(prompt):
-            requested["prompt"] = prompt
-        if is_given(return_timestamps):
-            requested["return_timestamps"] = return_timestamps
-        if is_given(vad_sot_threshold):
-            requested["vad_sot_threshold"] = vad_sot_threshold
-        if is_given(vad_min_speech_ms):
-            requested["vad_min_speech_ms"] = vad_min_speech_ms
-        if is_given(vad_min_silence_ms):
-            requested["vad_min_silence_ms"] = vad_min_silence_ms
-        if is_given(vad_prefix_padding_ms):
-            requested["vad_prefix_padding_ms"] = vad_prefix_padding_ms
-
-        if not requested:
+        if not any(
+            is_given(value)
+            for value in (
+                language,
+                stream_type,
+                mode,
+                endpointing,
+                sample_rate,
+                prompt,
+                return_timestamps,
+                vad_sot_threshold,
+                vad_min_speech_ms,
+                vad_min_silence_ms,
+                vad_prefix_padding_ms,
+            )
+        ):
             return
 
-        opts = replace(previous_opts, **requested)
+        opts = replace(
+            previous_opts,
+            language=language if is_given(language) else previous_opts.language,
+            stream_type=stream_type if is_given(stream_type) else previous_opts.stream_type,
+            mode=mode if is_given(mode) else previous_opts.mode,
+            endpointing=endpointing if is_given(endpointing) else previous_opts.endpointing,
+            sample_rate=sample_rate if is_given(sample_rate) else previous_opts.sample_rate,
+            prompt=prompt if is_given(prompt) else previous_opts.prompt,
+            return_timestamps=return_timestamps
+            if is_given(return_timestamps)
+            else previous_opts.return_timestamps,
+            vad_sot_threshold=vad_sot_threshold
+            if is_given(vad_sot_threshold)
+            else previous_opts.vad_sot_threshold,
+            vad_min_speech_ms=vad_min_speech_ms
+            if is_given(vad_min_speech_ms)
+            else previous_opts.vad_min_speech_ms,
+            vad_min_silence_ms=vad_min_silence_ms
+            if is_given(vad_min_silence_ms)
+            else previous_opts.vad_min_silence_ms,
+            vad_prefix_padding_ms=vad_prefix_padding_ms
+            if is_given(vad_prefix_padding_ms)
+            else previous_opts.vad_prefix_padding_ms,
+        )
         connection_only_options: list[str] = []
         if opts.sample_rate != previous_opts.sample_rate:
             connection_only_options.append("sample_rate")
@@ -658,8 +672,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
     def _config_update_payload(
         previous: RealtimeSTTOptions,
         current: RealtimeSTTOptions,
-    ) -> dict[str, Any] | None:
-        payload: dict[str, Any] = {"event": "config.update"}
+    ) -> dict[str, object] | None:
+        payload: dict[str, object] = {"event": "config.update"}
         values = (
             ("language_code", previous.language, current.language),
             ("stream_type", previous.stream_type, current.stream_type),
@@ -686,7 +700,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         return payload if len(payload) > 1 else None
 
     @staticmethod
-    def _ack_lists_endpointing(data: dict[str, Any]) -> bool | None:
+    def _ack_lists_endpointing(data: RealtimeMessage) -> bool | None:
         """Whether a ``config.updated`` acknowledges an endpointing change.
 
         The server echoes each applied key as ``"<key>=<value>"``, optionally
@@ -694,7 +708,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         Returns ``None`` when ``applied`` is missing or not a list of strings, so
         the caller can fall back instead of stalling on an unexpected shape.
         """
-        applied = data.get("applied")
+        applied = data.applied
         if not isinstance(applied, list):
             return None
         try:
@@ -703,7 +717,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             return None
         return any(entry.split("=", 1)[0].strip() == "endpointing" for entry in applied_keys)
 
-    def _handle_config_updated(self, data: dict[str, Any]) -> None:
+    def _handle_config_updated(self, data: RealtimeMessage) -> None:
         if self._pending_endpointing is None:
             return
         if not self._endpointing_update_sent:
@@ -731,7 +745,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._utterance_in_progress = False
         self._apply_pending_endpointing()
 
-    def _build_log_context(self) -> dict[str, Any]:
+    def _build_log_context(self) -> dict[str, object]:
         return {
             "request_id": self._request_id,
             "session_id": self._session_id,
@@ -742,33 +756,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
             "utterance_idx": self._utterance_idx,
         }
 
-    @staticmethod
-    def _extract_request_id(data: dict[str, object]) -> str | None:
-        request_id = data.get("request_id")
-        if isinstance(request_id, str) and request_id:
-            return request_id
-        for key in ("data", "metadata"):
-            match data.get(key):
-                case {"request_id": str(nested_id)} if nested_id:
-                    return nested_id
-                case _:
-                    pass
-        return None
-
-    @staticmethod
-    def _extract_session_id(data: dict[str, object]) -> str | None:
-        session_id = data.get("session_id")
-        return session_id if isinstance(session_id, str) and session_id else None
-
-    def _capture_server_ids(self, data: dict[str, Any]) -> None:
-        session_id = self._extract_session_id(data)
-        if session_id is not None:
-            self._session_id = session_id
-
-        if not self._request_id:
-            request_id = self._extract_request_id(data)
-            if request_id is not None:
-                self._request_id = request_id
+    def _capture_server_ids(self, data: RealtimeMessage) -> None:
+        if data.session_id:
+            self._session_id = data.session_id
+        if not self._request_id and (request_id := message_request_id(data)):
+            self._request_id = request_id
 
     async def aclose(self) -> None:
         """Close the connection, reporting any audio duration not yet billed.
@@ -856,7 +848,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
     async def _safe_send_str(
         self,
         ws: aiohttp.ClientWebSocketResponse,
-        payload: dict[str, Any],
+        payload: dict[str, object],
     ) -> bool:
         """Send a JSON control message, tolerating a peer that already closed.
 
@@ -997,8 +989,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
             msg = await ws.receive()
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
-                    await self._handle_message(json.loads(msg.data))
-                except json.JSONDecodeError as e:
+                    await self._handle_message(RealtimeMessage.model_validate_json(msg.data))
+                except ValidationError as e:
+                    if any(error["type"] != "json_invalid" for error in e.errors()):
+                        raise APIConnectionError(
+                            "Sarvam realtime STT sent an invalid event", retryable=False
+                        ) from e
                     if looks_like_error_text(msg.data):
                         self._logger.error(
                             "Sarvam realtime STT non-JSON error message",
@@ -1076,21 +1072,18 @@ class RealtimeSpeechStream(stt.SpeechStream):
             retryable=retryable,
         )
 
-    async def _handle_message(self, data: dict[str, Any]) -> None:
-        event = data.get("event")
+    async def _handle_message(self, data: RealtimeMessage) -> None:
+        event = data.event
         self._capture_server_ids(data)
         if event == "session.begin":
-            config = data.get("config")
-            self._resolved_config = (
-                _CONFIG.validate_python(config) if isinstance(config, dict) else None
-            )
+            self._resolved_config = data.config
         self._log_stt_event(event, data)
         if event == "session.begin":
             return
         elif event == "vad.speech_start":
             self._reset_utterance_state()
             self._utterance_in_progress = True
-            utterance_idx = data.get("utterance_idx")
+            utterance_idx = data.utterance_idx
             self._utterance_idx = utterance_idx if isinstance(utterance_idx, int) else None
             self.send(
                 stt.SpeechEvent(
@@ -1126,23 +1119,27 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 extra={**self._build_log_context(), "event": event, "data": data},
             )
 
-    def _log_stt_event(self, event: object, data: dict[str, Any]) -> None:
+    def _log_stt_event(self, event: object, data: RealtimeMessage) -> None:
         if event == "pong":
             return
 
-        extra: dict[str, Any] = {
+        extra: dict[str, object] = {
             **self._build_log_context(),
             "event": event,
-            "utterance_idx": data.get("utterance_idx"),
+            "utterance_idx": data.utterance_idx,
         }
         if event in {"transcript.partial", "transcript.final"}:
             # Recognized speech is personal data, so only its length is safe for the
             # INFO record; the text itself stays in the opt-in DEBUG raw payload.
-            text = data.get("text")
+            text = data.text
             if isinstance(text, str):
                 extra["text_length"] = len(text)
-            extra["language"] = data.get("language") or self._opts.language
-            extra["confidence"] = data.get("language_confidence", data.get("confidence"))
+            extra["language"] = data.language or self._opts.language
+            extra["confidence"] = (
+                data.language_confidence
+                if "language_confidence" in data.model_fields_set
+                else data.confidence
+            )
         elif event == "vad.speech_start":
             extra["audio_position"] = self._audio_position
         elif event == "vad.speech_end":
@@ -1150,31 +1147,31 @@ class RealtimeSpeechStream(stt.SpeechStream):
         elif event == "session.begin":
             pass
         elif event == "session.end":
-            extra["audio_duration_s"] = data.get("audio_duration_s")
+            extra["audio_duration_s"] = data.audio_duration_s
         elif event == "config.updated":
-            extra["applied"] = data.get("applied")
+            extra["applied"] = data.applied
         elif event == "error":
-            extra["error_code"] = data.get("code")
-            extra["error_message"] = data.get("message")
-            extra["status_code"] = data.get("status_code")
+            extra["error_code"] = data.code
+            extra["error_message"] = data.message
+            extra["status_code"] = data.status_code
         else:
             return
 
         if event == "transcript.partial":
             self._logger.debug(
                 "Sarvam realtime STT transcript.partial",
-                extra={**extra, "raw_data": data},
+                extra={**extra, "raw_data": data.model_dump(exclude_unset=True)},
             )
             return
 
         self._logger.info(f"Sarvam realtime STT {event}", extra=extra)
         self._logger.debug(
             "Sarvam realtime STT raw event",
-            extra={**extra, "raw_data": data},
+            extra={**extra, "raw_data": data.model_dump(exclude_unset=True)},
         )
 
-    def _is_valid_transcript(self, data: dict[str, Any]) -> bool:
-        text = data.get("text")
+    def _is_valid_transcript(self, data: RealtimeMessage) -> bool:
+        text = data.text
         # Whitespace carries no content, and emitting it would commit a user turn
         # with no words.
         return isinstance(text, str) and bool(text.strip())
@@ -1252,26 +1249,26 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
 
-    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict[str, Any]) -> bool:
-        text = data.get("text")
+    def _send_transcript_event(
+        self, event_type: stt.SpeechEventType, data: RealtimeMessage
+    ) -> bool:
+        text = data.text
         if not isinstance(text, str) or not text.strip():
             return False
 
-        language = data.get("language") or self._opts.language
+        language = data.language or self._opts.language
         # Recognition confidence only: `language_confidence` is a language-identification
         # score and stays in metadata. The endpoint sends no per-segment confidence
         # today, and an absent value falls back to 1.0 (as `_extract_confidence` in
         # stt.py does) so it isn't averaged downstream as "no confidence".
         # bool is a subclass of int, so exclude it explicitly.
-        confidence = data.get("confidence")
+        confidence = data.confidence
         if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
             confidence = 1.0
 
-        metadata: dict[str, Any] = {
-            key: data[key]
-            for key in ("utterance_idx", "language_confidence")
-            if key in data and data[key] is not None
-        }
+        metadata: dict[str, object] = data.model_dump(
+            include={"utterance_idx", "language_confidence"}, exclude_none=True, exclude_unset=True
+        )
         if (
             event_type == stt.SpeechEventType.FINAL_TRANSCRIPT
             and self._utterance_speech_end_wall is not None
@@ -1280,8 +1277,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         end_time = 0.0
         start_time = 0.0
         if event_type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-            start_s = data.get("start_s")
-            end_s = data.get("end_s")
+            start_s = data.start_s
+            end_s = data.end_s
             if isinstance(start_s, (int, float)) and not isinstance(start_s, bool):
                 start_time = max(float(start_s), 0.0)
             if isinstance(end_s, (int, float)) and not isinstance(end_s, bool):
@@ -1316,10 +1313,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         return True
 
-    def _handle_session_end(self, data: dict[str, Any]) -> None:
+    def _handle_session_end(self, data: RealtimeMessage) -> None:
         self._capture_server_ids(data)
         self._flush_terminal_utterance()
-        audio_duration = data.get("audio_duration_s")
+        audio_duration = data.audio_duration_s
         if (
             isinstance(audio_duration, (int, float))
             and not isinstance(audio_duration, bool)
@@ -1337,22 +1334,23 @@ class RealtimeSpeechStream(stt.SpeechStream):
             self._emit_local_usage_fallback()
         self._session_ended = True
 
-    def _handle_error_event(self, data: dict[str, Any]) -> None:
-        if not data.get("is_fatal", False):
+    def _handle_error_event(self, data: RealtimeMessage) -> None:
+        if not data.is_fatal:
             self._logger.warning(
                 "Non-fatal Sarvam realtime STT error",
                 extra={
                     **self._build_log_context(),
-                    "error_code": data.get("code"),
-                    "error_message": data.get("message"),
-                    "status_code": data.get("status_code"),
-                    "raw_message": data,
+                    "error_code": data.code,
+                    "error_message": data.message,
+                    "status_code": data.status_code,
+                    "raw_message": data.model_dump(exclude_unset=True),
                 },
             )
             return
 
-        code = data.get("code", "unknown")
-        status_code = data.get("status_code", -1)
+        code = data.code if "code" in data.model_fields_set else "unknown"
+        error_message = data.message if "message" in data.model_fields_set else code
+        status_code = data.status_code
         if not isinstance(status_code, int):
             status_code = -1
         self._logger.error(
@@ -1360,16 +1358,16 @@ class RealtimeSpeechStream(stt.SpeechStream):
             extra={
                 **self._build_log_context(),
                 "error_code": code,
-                "error_message": data.get("message", code),
+                "error_message": error_message,
                 "status_code": status_code,
-                "raw_message": data,
+                "raw_message": data.model_dump(exclude_unset=True),
             },
         )
         raise APIStatusError(
-            message=f"Sarvam realtime STT error: {data.get('message', code)}",
+            message=f"Sarvam realtime STT error: {error_message}",
             status_code=status_code,
             request_id=self._request_id or None,
-            body=data,
+            body=data.model_dump(exclude_unset=True),
             retryable=code == "model_unavailable",
         )
 

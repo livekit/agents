@@ -12,6 +12,7 @@ import pytest
 from livekit.agents import APIStatusError
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt_streaming, tts
+from livekit.plugins.sarvam.models import RealtimeMessage
 
 pytestmark = pytest.mark.plugin("sarvam")
 
@@ -308,11 +309,13 @@ async def test_session_begin_records_resolved_config() -> None:
     }
 
     await stream._handle_message(
-        {
-            "event": "session.begin",
-            "request_id": "req_123",
-            "config": resolved_config,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.begin",
+                "request_id": "req_123",
+                "config": resolved_config,
+            }
+        )
     )
     resolved_config["sample_rate"] = 16000
 
@@ -495,7 +498,9 @@ async def test_active_stream_defers_endpointing_until_config_acknowledgement() -
     assert await _flush_pending_config_update(stream) == [
         {"event": "config.update", "endpointing": "manual"}
     ]
-    stream._handle_config_updated({"applied": ["endpointing=manual"]})
+    stream._handle_config_updated(
+        RealtimeMessage.model_validate({"applied": ["endpointing=manual"]})
+    )
     assert stream._active_endpointing == "vad"
 
     stream._utterance_in_progress = False
@@ -522,7 +527,9 @@ async def test_endpointing_ignores_ack_for_an_update_not_yet_sent() -> None:
         "endpointing": "manual",
     }
 
-    await stream._handle_message({"event": "config.updated", "applied": ["prompt=LiveKit"]})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "config.updated", "applied": ["prompt=LiveKit"]})
+    )
 
     assert stream._active_endpointing == "vad"
     assert stream._pending_endpointing == "manual"
@@ -530,7 +537,11 @@ async def test_endpointing_ignores_ack_for_an_update_not_yet_sent() -> None:
 
     # Once it is actually sent and acknowledged, the switch promotes.
     await _flush_pending_config_update(stream)
-    await stream._handle_message({"event": "config.updated", "applied": ["endpointing=manual"]})
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {"event": "config.updated", "applied": ["endpointing=manual"]}
+        )
+    )
     assert stream._active_endpointing == "manual"
 
 
@@ -541,14 +552,18 @@ async def test_endpointing_ignores_ack_that_does_not_list_endpointing() -> None:
     stream.update_options(endpointing="manual")
     await _flush_pending_config_update(stream)
 
-    await stream._handle_message({"event": "config.updated", "applied": ["mode=translate"]})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "config.updated", "applied": ["mode=translate"]})
+    )
 
     assert stream._active_endpointing == "vad"
     assert stream._pending_endpointing == "manual"
 
     # A multi-key ack that does include endpointing is accepted.
     await stream._handle_message(
-        {"event": "config.updated", "applied": ["mode=translate", "endpointing=manual"]}
+        RealtimeMessage.model_validate(
+            {"event": "config.updated", "applied": ["mode=translate", "endpointing=manual"]}
+        )
     )
     assert stream._active_endpointing == "manual"
 
@@ -570,7 +585,7 @@ async def test_endpointing_falls_back_when_applied_list_is_unusable(
     payload: dict[str, object] = {"event": "config.updated"}
     if applied is not None:
         payload["applied"] = applied
-    await stream._handle_message(payload)
+    await stream._handle_message(RealtimeMessage.model_validate(payload))
 
     assert stream._active_endpointing == "manual"
 
@@ -583,10 +598,12 @@ async def test_deferred_endpointing_ack_is_accepted() -> None:
     await _flush_pending_config_update(stream)
 
     await stream._handle_message(
-        {
-            "event": "config.updated",
-            "applied": ["endpointing=manual (pending: applies next boundary)"],
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "config.updated",
+                "applied": ["endpointing=manual (pending: applies next boundary)"],
+            }
+        )
     )
 
     assert stream._active_endpointing == "manual"
@@ -613,16 +630,24 @@ async def test_speech_end_promotes_pending_endpointing_without_a_valid_final(
     """
     stream = _make_stream()
     stream.update_options(endpointing="manual")
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
     await _flush_pending_config_update(stream)
-    await stream._handle_message({"event": "config.updated", "applied": ["endpointing=manual"]})
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {"event": "config.updated", "applied": ["endpointing=manual"]}
+        )
+    )
 
     assert stream._utterance_in_progress is True
     assert stream._active_endpointing == "vad"
 
     if final_payload is not None:
-        await stream._handle_message(final_payload)
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+        await stream._handle_message(RealtimeMessage.model_validate(final_payload))
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
 
     assert stream._utterance_in_progress is False
     assert stream._active_endpointing == "manual"
@@ -637,7 +662,11 @@ async def test_blank_final_transcript_is_not_emitted(endpointing: str, text: str
     stream = _make_stream(endpointing=endpointing)
     stream._audio_position = 1.0
 
-    await stream._handle_message({"event": "transcript.final", "utterance_idx": 0, "text": text})
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {"event": "transcript.final", "utterance_idx": 0, "text": text}
+        )
+    )
 
     finals = [
         event
@@ -652,14 +681,24 @@ async def test_blank_final_transcript_is_not_emitted(endpointing: str, text: str
 async def test_repeated_speech_end_still_completes_the_utterance() -> None:
     stream = _make_stream()
     stream.update_options(endpointing="manual")
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
     await _flush_pending_config_update(stream)
-    await stream._handle_message({"event": "config.updated", "applied": ["endpointing=manual"]})
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {"event": "config.updated", "applied": ["endpointing=manual"]}
+        )
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
     # A duplicate speech end takes the already-emitted branch; it must not reopen or
     # strand the utterance.
     stream._utterance_in_progress = True
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
 
     assert stream._utterance_in_progress is False
     eos_events = [
@@ -676,29 +715,37 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
     stream._audio_position = 1.25
 
     await stream._handle_message(
-        {
-            "event": "session.begin",
-            "session_id": "sess_123",
-            "request_id": "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68",
-        }
-    )
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
-    await stream._handle_message(
-        {
-            "event": "transcript.partial",
-            "utterance_idx": 0,
-            "text": "नमस्ते",
-            "confidence": 0.91,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.begin",
+                "session_id": "sess_123",
+                "request_id": "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68",
+            }
+        )
     )
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते आप कैसे हैं",
-            "language": "hi-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.partial",
+                "utterance_idx": 0,
+                "text": "नमस्ते",
+                "confidence": 0.91,
+            }
+        )
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते आप कैसे हैं",
+                "language": "hi-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     assert [event.type for event in stream._event_ch.events] == [
@@ -707,7 +754,9 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
     ]
 
     stream._audio_position = 1.75
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
 
     event_types = [event.type for event in stream._event_ch.events]
     assert event_types == [
@@ -757,14 +806,16 @@ async def test_transcript_confidence_uses_recognition_score_with_absent_fallback
     stream = _make_stream(endpointing="manual")
 
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते",
-            "language": "hi-IN",
-            "language_confidence": 0.2,
-            **payload_confidence,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते",
+                "language": "hi-IN",
+                "language_confidence": 0.2,
+                **payload_confidence,
+            }
+        )
     )
 
     final_event = stream._event_ch.events[0]
@@ -777,10 +828,12 @@ async def test_streaming_session_begin_captures_server_request_id() -> None:
     stream = _make_stream()
 
     await stream._handle_message(
-        {
-            "event": "session.begin",
-            "request_id": "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68",
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.begin",
+                "request_id": "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68",
+            }
+        )
     )
 
     assert stream._session_id == ""
@@ -792,10 +845,12 @@ async def test_streaming_request_id_stores_raw_value_without_format_assumptions(
     stream = _make_stream()
 
     await stream._handle_message(
-        {
-            "event": "session.begin",
-            "request_id": "srv_custom-id_v9",
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.begin",
+                "request_id": "srv_custom-id_v9",
+            }
+        )
     )
 
     assert stream._session_id == ""
@@ -806,7 +861,7 @@ async def test_streaming_request_id_stores_raw_value_without_format_assumptions(
 async def test_streaming_session_begin_without_request_id_leaves_request_id_empty() -> None:
     stream = _make_stream()
 
-    await stream._handle_message({"event": "session.begin"})
+    await stream._handle_message(RealtimeMessage.model_validate({"event": "session.begin"}))
 
     assert stream._session_id == ""
     assert stream._request_id == ""
@@ -816,8 +871,12 @@ async def test_streaming_session_begin_without_request_id_leaves_request_id_empt
 async def test_streaming_emits_end_of_speech_before_final_transcript() -> None:
     stream = _make_stream()
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
 
     assert [event.type for event in stream._event_ch.events] == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
@@ -825,13 +884,15 @@ async def test_streaming_emits_end_of_speech_before_final_transcript() -> None:
     ]
 
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते आप कैसे हैं",
-            "language": "hi-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते आप कैसे हैं",
+                "language": "hi-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     assert [event.type for event in stream._event_ch.events] == [
@@ -846,17 +907,23 @@ async def test_streaming_final_after_speech_end_includes_audio_end_time() -> Non
     stream = _make_stream()
     stream._audio_position = 1.25
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
-    stream._audio_position = 1.75
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते आप कैसे हैं",
-            "language": "hi-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
+    stream._audio_position = 1.75
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते आप कैसे हैं",
+                "language": "hi-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     eos_event = stream._event_ch.events[1]
@@ -872,19 +939,23 @@ async def test_streaming_final_transcript_waits_for_speech_end_for_end_time() ->
     stream._audio_position = 1.25
 
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते आप कैसे हैं",
-            "language": "hi-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते आप कैसे हैं",
+                "language": "hi-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     assert stream._event_ch.events == []
 
     stream._audio_position = 2.0
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
 
     eos_event = stream._event_ch.events[0]
     final_event = stream._event_ch.events[1]
@@ -898,13 +969,15 @@ async def test_streaming_final_transcript_uses_current_audio_position_without_va
     stream._audio_position = 1.25
 
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते आप कैसे हैं",
-            "language": "hi-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते आप कैसे हैं",
+                "language": "hi-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     final_event = stream._event_ch.events[0]
@@ -916,15 +989,17 @@ async def test_streaming_final_transcript_uses_contract_timestamps_when_present(
     stream = _make_stream(endpointing="manual")
 
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "hello",
-            "language": "en-IN",
-            "language_confidence": 0.99,
-            "start_s": 0.7,
-            "end_s": 1.2,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "hello",
+                "language": "en-IN",
+                "language_confidence": 0.99,
+                "start_s": 0.7,
+                "end_s": 1.2,
+            }
+        )
     )
 
     final_event = stream._event_ch.events[0]
@@ -940,19 +1015,23 @@ async def test_streaming_logs_include_server_request_id_after_session_begin(
 
     with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
         await stream._handle_message(
-            {
-                "event": "session.begin",
-                "session_id": "sess_4594d4503cd4",
-                "request_id": "srv_custom-id_v9",
-            }
+            RealtimeMessage.model_validate(
+                {
+                    "event": "session.begin",
+                    "session_id": "sess_4594d4503cd4",
+                    "request_id": "srv_custom-id_v9",
+                }
+            )
         )
         await stream._handle_message(
-            {
-                "event": "transcript.partial",
-                "utterance_idx": 0,
-                "text": "नमस्ते",
-                "confidence": 0.91,
-            }
+            RealtimeMessage.model_validate(
+                {
+                    "event": "transcript.partial",
+                    "utterance_idx": 0,
+                    "text": "नमस्ते",
+                    "confidence": 0.91,
+                }
+            )
         )
 
     partial_records = [
@@ -975,21 +1054,25 @@ async def test_streaming_logs_partial_and_final_transcripts(
 
     with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
         await stream._handle_message(
-            {
-                "event": "transcript.partial",
-                "utterance_idx": 0,
-                "text": "नमस्ते",
-                "confidence": 0.91,
-            }
+            RealtimeMessage.model_validate(
+                {
+                    "event": "transcript.partial",
+                    "utterance_idx": 0,
+                    "text": "नमस्ते",
+                    "confidence": 0.91,
+                }
+            )
         )
         await stream._handle_message(
-            {
-                "event": "transcript.final",
-                "utterance_idx": 0,
-                "text": "नमस्ते आप कैसे हैं",
-                "language": "hi-IN",
-                "language_confidence": 0.99,
-            }
+            RealtimeMessage.model_validate(
+                {
+                    "event": "transcript.final",
+                    "utterance_idx": 0,
+                    "text": "नमस्ते आप कैसे हैं",
+                    "language": "hi-IN",
+                    "language_confidence": 0.99,
+                }
+            )
         )
 
     messages = [record.getMessage() for record in caplog.records]
@@ -1011,7 +1094,7 @@ async def test_streaming_info_logs_essential_data_without_raw_payload(
     }
 
     with caplog.at_level(logging.INFO, logger=stt_streaming.logger.name):
-        await stream._handle_message(final_payload)
+        await stream._handle_message(RealtimeMessage.model_validate(final_payload))
 
     info_records = [
         record
@@ -1026,7 +1109,7 @@ async def test_streaming_info_logs_essential_data_without_raw_payload(
 
     caplog.clear()
     with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
-        await stream._handle_message(final_payload)
+        await stream._handle_message(RealtimeMessage.model_validate(final_payload))
 
     debug_records = [
         record
@@ -1043,8 +1126,12 @@ async def test_streaming_emits_end_of_speech_when_final_never_arrives() -> None:
     """Speech end is reported immediately, without waiting on a final transcript."""
     stream = _make_stream()
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
 
     assert [event.type for event in stream._event_ch.events] == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
@@ -1058,11 +1145,17 @@ async def test_new_speech_start_emits_pending_end_of_speech_for_previous_utteran
     stream = _make_stream()
     stream._audio_position = 1.0
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
     stream._audio_position = 1.5
-    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_end", "utterance_idx": 0})
+    )
     stream._audio_position = 2.0
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 1})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 1})
+    )
 
     assert [event.type for event in stream._event_ch.events] == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
@@ -1099,11 +1192,13 @@ async def test_streaming_usage_metrics_emit_server_authoritative_session_end() -
 
     stream._on_audio_duration_report(1.5)
     await stream._handle_message(
-        {
-            "event": "session.end",
-            "session_id": "sess_123",
-            "audio_duration_s": 2.25,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.end",
+                "session_id": "sess_123",
+                "audio_duration_s": 2.25,
+            }
+        )
     )
 
     usage_events = [
@@ -1125,8 +1220,12 @@ async def test_streaming_session_end_falls_back_to_local_duration_without_server
     stream._request_id = "req_123"
     stream._on_audio_duration_report(1.5)
 
-    await stream._handle_message({"event": "session.end", "request_id": "req_123"})
-    await stream._handle_message({"event": "session.end", "request_id": "req_123"})
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "session.end", "request_id": "req_123"})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "session.end", "request_id": "req_123"})
+    )
 
     usage_events = [
         event
@@ -1144,18 +1243,22 @@ async def test_streaming_usage_accepts_server_duration_smaller_than_local_estima
 
     stream._on_audio_duration_report(5.0)
     await stream._handle_message(
-        {
-            "event": "session.end",
-            "session_id": "sess_123",
-            "audio_duration_s": 2.25,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.end",
+                "session_id": "sess_123",
+                "audio_duration_s": 2.25,
+            }
+        )
     )
     await stream._handle_message(
-        {
-            "event": "session.end",
-            "session_id": "sess_123",
-            "audio_duration_s": 2.25,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.end",
+                "session_id": "sess_123",
+                "audio_duration_s": 2.25,
+            }
+        )
     )
 
     usage_events = [
@@ -1222,23 +1325,27 @@ async def test_streaming_error_handling_distinguishes_fatal_and_non_fatal() -> N
     stream._request_id = "sess_123"
 
     await stream._handle_message(
-        {
-            "event": "error",
-            "code": "chunk_too_large",
-            "message": "chunk too large",
-            "is_fatal": False,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "error",
+                "code": "chunk_too_large",
+                "message": "chunk too large",
+                "is_fatal": False,
+            }
+        )
     )
 
     with pytest.raises(APIStatusError) as excinfo:
         await stream._handle_message(
-            {
-                "event": "error",
-                "code": "model_unavailable",
-                "message": "backend saturated",
-                "is_fatal": True,
-                "status_code": 503,
-            }
+            RealtimeMessage.model_validate(
+                {
+                    "event": "error",
+                    "code": "model_unavailable",
+                    "message": "backend saturated",
+                    "is_fatal": True,
+                    "status_code": 503,
+                }
+            )
         )
 
     assert excinfo.value.status_code == 503
@@ -1262,7 +1369,7 @@ async def test_streaming_error_logs_include_raw_sarvam_payload(
 
     with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
         with pytest.raises(APIStatusError):
-            await stream._handle_message(raw_error)
+            await stream._handle_message(RealtimeMessage.model_validate(raw_error))
 
     info_records = [
         record for record in caplog.records if record.getMessage() == "Sarvam realtime STT error"
@@ -1419,15 +1526,19 @@ async def test_session_end_commits_final_buffered_without_speech_end() -> None:
     stream = _make_stream()
     stream._audio_position = 3.5
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "नमस्ते आप कैसे हैं",
-            "language": "hi-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "नमस्ते आप कैसे हैं",
+                "language": "hi-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     assert [event.type for event in stream._event_ch.events] == [
@@ -1435,11 +1546,13 @@ async def test_session_end_commits_final_buffered_without_speech_end() -> None:
     ]
 
     await stream._handle_message(
-        {
-            "event": "session.end",
-            "request_id": "req_123",
-            "audio_duration_s": 3.5,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.end",
+                "request_id": "req_123",
+                "audio_duration_s": 3.5,
+            }
+        )
     )
 
     assert [event.type for event in stream._event_ch.events] == [
@@ -1470,15 +1583,19 @@ async def test_clean_close_commits_final_buffered_without_speech_end() -> None:
         close_code=1000,
     )
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "hello",
-            "language": "en-IN",
-            "language_confidence": 0.99,
-        }
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "hello",
+                "language": "en-IN",
+                "language_confidence": 0.99,
+            }
+        )
     )
 
     await stream._process_messages(ws)
@@ -1496,16 +1613,22 @@ async def test_terminal_flush_is_idempotent_across_session_end_and_close() -> No
     stream = _make_stream()
     stream._audio_position = 1.0
 
-    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 0,
-            "text": "hello",
-            "language": "en-IN",
-        }
+        RealtimeMessage.model_validate({"event": "vad.speech_start", "utterance_idx": 0})
     )
-    await stream._handle_message({"event": "session.end", "request_id": "req_123"})
+    await stream._handle_message(
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 0,
+                "text": "hello",
+                "language": "en-IN",
+            }
+        )
+    )
+    await stream._handle_message(
+        RealtimeMessage.model_validate({"event": "session.end", "request_id": "req_123"})
+    )
     stream._flush_terminal_utterance()
 
     finals = [
@@ -1545,11 +1668,13 @@ async def test_session_end_tops_up_pending_collector_audio_to_server_total() -> 
     stream._audio_duration_collector.push(1.0)
 
     await stream._handle_message(
-        {
-            "event": "session.end",
-            "request_id": "req_123",
-            "audio_duration_s": 2.5,
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "session.end",
+                "request_id": "req_123",
+                "audio_duration_s": 2.5,
+            }
+        )
     )
 
     usage_events = [
@@ -1683,12 +1808,14 @@ async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None
     stream._audio_position = 6.0
     stream._end_manual_utterance()
     await stream._handle_message(
-        {
-            "event": "transcript.final",
-            "utterance_idx": 1,
-            "text": "second turn",
-            "language": "en-IN",
-        }
+        RealtimeMessage.model_validate(
+            {
+                "event": "transcript.final",
+                "utterance_idx": 1,
+                "text": "second turn",
+                "language": "en-IN",
+            }
+        )
     )
 
     assert [event.type for event in stream._event_ch.events] == [
@@ -1862,3 +1989,38 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert stt_streaming.AUDIO_CHUNK_MS <= 100
     assert len(sent) == 1000 // stt_streaming.AUDIO_CHUNK_MS
     assert {len(payload) for payload in sent} == {expected_bytes}
+
+
+@pytest.mark.parametrize("field", ["request_id", "session_id"])
+async def test_realtime_rejects_nontext_server_identity(field: str) -> None:
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from pydantic import ValidationError
+
+    from livekit.agents import APIConnectionError, APIConnectOptions
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"event": "session.begin", field: 42})
+        await ws.send_json({"event": "transcript.partial", "text": "hello"})
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/listen", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        provider = sarvam.STTRealtime(
+            api_key="test-key", base_url=str(server.make_url("/listen")), http_session=session
+        )
+        try:
+            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                with pytest.raises(APIConnectionError) as failure:
+                    await asyncio.wait_for(anext(stream), 1)
+                assert not failure.value.retryable
+                assert isinstance(failure.value.__cause__, ValidationError)
+                assert failure.value.__cause__.errors()[0]["loc"] == (field,)
+        finally:
+            await provider.aclose()

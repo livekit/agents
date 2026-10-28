@@ -445,7 +445,7 @@ class STT(stt.STT):
         merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
         self._opts.keyterm = merged
         for stream in self._streams:
-            stream.update_session_keyterms(merged)
+            stream._update_session_keyterms(merged)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
@@ -589,7 +589,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._reconnect_event.set()
 
-    def update_session_keyterms(self, keyterms: list[str]) -> None:
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if self._speaking:
             self._pending_keyterm = keyterms
         else:

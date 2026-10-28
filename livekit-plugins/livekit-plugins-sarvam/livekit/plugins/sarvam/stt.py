@@ -339,10 +339,6 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
 
 
-def _string_option(value: object, default: str) -> str:
-    return value if isinstance(value, str) else default
-
-
 def _extract_confidence(
     payload: TranscriptionData,
     instance_logger: logging.Logger,
@@ -555,13 +551,8 @@ class STT(stt.STT):
         Raises:
             ValueError: If mode is explicitly given but not supported by the model.
         """
-        resolved_language = _string_option(
-            LanguageCode(language) if is_given(language) else self._opts.language,
-            self._opts.language,
-        )
-        resolved_model = _string_option(
-            model if is_given(model) else self._opts.model, self._opts.model
-        )
+        resolved_language = LanguageCode(language) if is_given(language) else self._opts.language
+        resolved_model = model if is_given(model) else self._opts.model
         if is_given(model):
             _warn_if_sunset_stt_model(resolved_model)
 
