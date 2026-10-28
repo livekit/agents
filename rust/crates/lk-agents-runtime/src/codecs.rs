@@ -1,19 +1,24 @@
-//! Background file decoding: one admitted native job owns reads, codec state and bounded PCM.
-//! Pulls yield cooperatively; cancellation retains native ownership through worker settlement.
+//! Background decoding: one admitted native job owns reads, codec state and bounded PCM, from a
+//! file, a finite buffer or bytes streamed in as they arrive. Pulls yield cooperatively;
+//! cancellation retains native ownership through worker settlement.
 
 use std::collections::VecDeque;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
+use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_abi::media::decoder::ByteDecoderOptions;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::{AudioFormat, CodecError, Decoder};
 use tokio::sync::Notify;
 
 use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, MediaWorkers};
+
+/// Streamed bytes the native decoder has not read yet; a push beyond it is refused, not queued.
+const MAX_PENDING_INPUT: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DecoderLimits {
@@ -64,9 +69,20 @@ struct Shared {
     ready: Notify,
     limits: DecoderLimits,
     sample_limit: Option<usize>,
+    /// A streaming decoder's input; cancellation closes it so a blocked read returns.
+    input: Option<Arc<StreamInput>>,
 }
 
 impl Shared {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(input) = &self.input {
+            input.close();
+        }
+        self.wake_reader();
+        self.ready.notify_one();
+    }
+
     fn fail(state: &mut State, error: DecoderError) {
         if state.error.is_none() {
             state.error = Some(error);
@@ -212,13 +228,15 @@ impl AudioDecoder {
                 }
                 let mut file = std::fs::File::open(&path)
                     .map_err(|error| DecoderError::WorkerFailed(error.to_string()))?;
-                let emitted = decode_reader(shared, mime, sample_rate, num_channels, &mut file)?;
+                let mut file = Blocks(&mut file);
+                let emitted =
+                    decode_reader(shared, mime, Some(sample_rate), num_channels, &mut file)?;
                 if !looping || !emitted {
                     return Ok(());
                 }
             }
         };
-        Self::start(workers, sample_rate, num_channels, limits, None, decode)
+        Self::start(workers, Some(sample_rate), num_channels, limits, None, None, decode)
     }
 
     /// A finite head uses the same admission, bounded output and cleanup receipt as file audio.
@@ -241,36 +259,78 @@ impl AudioDecoder {
             .ok_or(DecoderError::InvalidLimits)?;
         let sample_rate = options.sample_rate;
         let num_channels = options.num_channels;
-        Self::start(workers, sample_rate, num_channels, limits, Some(sample_limit), move |shared| {
-            if options.mime == "audio/pcm" || options.mime.is_empty() {
-                let (source_rate, source_channels) =
-                    options.pcm_format.ok_or(DecoderError::InvalidLimits)?;
-                decode_pcm(
-                    shared,
-                    &options.data,
-                    AudioFormat::new(source_rate, source_channels),
-                    sample_rate,
-                    num_channels,
-                )
-            } else {
-                decode_reader(
-                    shared,
-                    &options.mime,
-                    sample_rate,
-                    num_channels,
-                    &mut std::io::Cursor::new(options.data),
-                )
-                .map(|_| ())
+        let target = Some(sample_rate);
+        Self::start(
+            workers,
+            target,
+            num_channels,
+            limits,
+            Some(sample_limit),
+            None,
+            move |shared| {
+                if options.mime == "audio/pcm" || options.mime.is_empty() {
+                    let (source_rate, source_channels) =
+                        options.pcm_format.ok_or(DecoderError::InvalidLimits)?;
+                    decode_pcm(
+                        shared,
+                        &options.data,
+                        AudioFormat::new(source_rate, source_channels),
+                        sample_rate,
+                        num_channels,
+                    )
+                } else {
+                    decode_reader(
+                        shared,
+                        &options.mime,
+                        target,
+                        num_channels,
+                        &mut Blocks(std::io::Cursor::new(options.data)),
+                    )
+                    .map(|_| ())
+                }
+            },
+        )
+    }
+
+    /// Bytes pushed as they arrive through the returned input, decoded by one admitted native
+    /// job. `sample_rate` `None` keeps the source's rate. EOF follows `end_input` and delivery
+    /// of everything it queued.
+    pub fn open_stream(
+        workers: &MediaWorkers,
+        mime: &str,
+        sample_rate: Option<u32>,
+        num_channels: u16,
+        limits: DecoderLimits,
+    ) -> Result<(Self, DecoderInput), DecoderError> {
+        #[cfg(not(feature = "media-ffmpeg"))]
+        if lk_agents_media::mime_to_av_format(Some(mime)) != Some("wav") {
+            return Err(CodecError::UnsupportedMime {
+                mime: mime.into(),
+                reason: "container decoding needs the runtime media-ffmpeg feature",
             }
-        })
+            .into());
+        }
+        let input = Arc::new(StreamInput::default());
+        let pending = input.clone();
+        let mime = mime.to_owned();
+        let decoder =
+            Self::start(workers, sample_rate, num_channels, limits, None, Some(input.clone()), {
+                move |shared| {
+                    decode_reader(shared, &mime, sample_rate, num_channels, &mut &*pending)
+                        .map(drop)
+                }
+            })?;
+        let input = DecoderInput { shared: decoder.shared.clone(), input };
+        Ok((decoder, input))
     }
 
     fn start(
         workers: &MediaWorkers,
-        sample_rate: u32,
+        sample_rate: Option<u32>,
         num_channels: u16,
         limits: DecoderLimits,
         sample_limit: Option<usize>,
+        input: Option<Arc<StreamInput>>,
         decode: impl FnOnce(&Arc<Shared>) -> Result<(), DecoderError> + Send + 'static,
     ) -> Result<Self, DecoderError> {
         if !limits.format.is_valid()
@@ -279,8 +339,9 @@ impl AudioDecoder {
             || limits.output_chunk_samples > limits.output_samples
             || num_channels == 0
             || num_channels > limits.format.max_channels
-            || !(limits.format.min_sample_rate..=limits.format.max_sample_rate)
-                .contains(&sample_rate)
+            || sample_rate.is_some_and(|rate| {
+                !(limits.format.min_sample_rate..=limits.format.max_sample_rate).contains(&rate)
+            })
             || limits.output_chunk_samples % usize::from(num_channels) != 0
         {
             return Err(DecoderError::InvalidLimits);
@@ -298,6 +359,7 @@ impl AudioDecoder {
             ready: Notify::new(),
             limits,
             sample_limit,
+            input,
         });
         let resource = shared.clone();
         let worker = workers.try_spawn(MediaWorkerClass::Decoder, move || {
@@ -369,25 +431,16 @@ impl AudioDecoder {
         Ok(())
     }
 
-    pub async fn close(&mut self, timeout: Duration) -> Result<(), DecoderError> {
-        self.cancel();
+    /// Cancel and observe native settlement; the worker's admission is released by then.
+    pub async fn close(&mut self) -> Result<(), DecoderError> {
+        self.shared.cancel();
         if let Some(worker) = self.worker.as_mut() {
-            match tokio::time::timeout(timeout, worker).await {
-                Err(_) => return Err(DecoderError::IncompleteCleanup),
-                Ok(Err(error)) => {
-                    self.worker = None;
-                    return Err(DecoderError::WorkerFailed(error.to_string()));
-                }
-                Ok(Ok(_)) => self.worker = None,
-            }
+            let settled = worker.await;
+            self.worker = None;
+            // A cancelled decode's own outcome is not a close failure.
+            let _ = settled.map_err(|error| DecoderError::WorkerFailed(error.to_string()))?;
         }
         Ok(())
-    }
-
-    fn cancel(&self) {
-        self.shared.cancelled.store(true, Ordering::Release);
-        self.shared.wake_reader();
-        self.shared.ready.notify_one();
     }
 }
 
@@ -395,29 +448,159 @@ impl Drop for AudioDecoder {
     fn drop(&mut self) {
         // The admitted worker retains both its permit and shared state until native teardown.
         // Drop only requests cancellation; an explicit close observes the cleanup receipt.
-        self.cancel();
+        self.shared.cancel();
     }
 }
 
-fn decode_reader<R: Read>(
+/// A streaming decoder's encoded input. Pushing never waits for the native decoder.
+pub struct DecoderInput {
+    shared: Arc<Shared>,
+    input: Arc<StreamInput>,
+}
+
+impl DecoderInput {
+    /// Refused after EOF, cancellation or the end of decoding (whose failure the output side
+    /// reports), and past [`MAX_PENDING_INPUT`].
+    pub fn push(&self, data: Vec<u8>) -> Result<(), DecoderError> {
+        if self.shared.state.lock().unwrap_or_else(|e| e.into_inner()).done {
+            return Err(DecoderError::InputClosed);
+        }
+        self.input.push(data)
+    }
+
+    /// No more input: the decoder drains what was queued, then its output ends.
+    pub fn end_input(&self) {
+        self.input.state().ended = true;
+        self.input.ready.notify_all();
+    }
+
+    /// Stop decoding now; the output side still observes settlement.
+    pub fn cancel(&self) {
+        self.shared.cancel();
+    }
+}
+
+/// Encoded input as the native decoder reads it. A WAV stream restarts only at a chunk boundary
+/// (providers concatenate files, one per push), so the WAV decoder takes chunks whole.
+trait Chunks {
+    /// The next chunk, `None` at the end of input.
+    fn next_chunk(&mut self) -> std::io::Result<Option<Vec<u8>>>;
+}
+
+/// A file or a finite buffer, in 4 KiB chunks.
+struct Blocks<R>(R);
+
+impl<R: Read> Chunks for Blocks<R> {
+    fn next_chunk(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        let mut chunk = vec![0; 4096];
+        let n = self.0.read(&mut chunk)?;
+        chunk.truncate(n);
+        Ok((n > 0).then_some(chunk))
+    }
+}
+
+/// Pushed chunks waiting for the native decoder.
+#[derive(Default)]
+struct StreamInput {
+    state: Mutex<Pending>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct Pending {
+    chunks: VecDeque<Vec<u8>>,
+    bytes: usize,
+    ended: bool,
+    closed: bool,
+}
+
+impl StreamInput {
+    fn state(&self) -> MutexGuard<'_, Pending> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn push(&self, data: Vec<u8>) -> Result<(), DecoderError> {
+        let mut pending = self.state();
+        if pending.ended || pending.closed {
+            return Err(DecoderError::InputClosed);
+        }
+        if pending.bytes.saturating_add(data.len()) > MAX_PENDING_INPUT {
+            return Err(DecoderError::Overflow("encoded input"));
+        }
+        pending.bytes += data.len();
+        pending.chunks.push_back(data);
+        self.ready.notify_all();
+        Ok(())
+    }
+
+    /// Discards what is queued; a blocked read returns the end of input.
+    fn close(&self) {
+        let mut pending = self.state();
+        pending.closed = true;
+        pending.chunks.clear();
+        pending.bytes = 0;
+        self.ready.notify_all();
+    }
+}
+
+/// Blocks the native worker until a chunk arrives or input ends.
+impl Chunks for &StreamInput {
+    fn next_chunk(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        let mut pending = self.state();
+        loop {
+            if pending.closed {
+                return Ok(None);
+            }
+            if let Some(chunk) = pending.chunks.pop_front() {
+                pending.bytes -= chunk.len();
+                return Ok(Some(chunk));
+            }
+            if pending.ended {
+                return Ok(None);
+            }
+            pending = self.ready.wait(pending).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+/// Chunks as the byte stream a demuxer reads.
+#[cfg(feature = "media-ffmpeg")]
+struct Joined<'a, C: ?Sized> {
+    chunks: &'a mut C,
+    chunk: Vec<u8>,
+    read: usize,
+}
+
+#[cfg(feature = "media-ffmpeg")]
+impl<C: Chunks + ?Sized> Read for Joined<'_, C> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        while self.read == self.chunk.len() {
+            match self.chunks.next_chunk()? {
+                Some(chunk) => (self.chunk, self.read) = (chunk, 0),
+                None => return Ok(0),
+            }
+        }
+        let n = bytes.len().min(self.chunk.len() - self.read);
+        bytes[..n].copy_from_slice(&self.chunk[self.read..self.read + n]);
+        self.read += n;
+        Ok(n)
+    }
+}
+
+fn decode_reader(
     shared: &Arc<Shared>,
     mime: &str,
-    sample_rate: u32,
+    sample_rate: Option<u32>,
     num_channels: u16,
-    input: &mut R,
+    input: &mut dyn Chunks,
 ) -> Result<bool, DecoderError> {
     let mut emitted = false;
     if lk_agents_media::mime_to_av_format(Some(mime)) == Some("wav") {
-        let mut decoder =
-            Decoder::new_bounded(mime, Some(sample_rate), num_channels, shared.limits.format)?;
-        let mut bytes = vec![0; 4096];
-        loop {
-            let n =
-                input.read(&mut bytes).map_err(|e| DecoderError::WorkerFailed(e.to_string()))?;
-            if n == 0 {
-                break;
-            }
-            let pcm = decoder.push(&bytes[..n])?;
+        let mut decoder = Decoder::wav(sample_rate, whole_pushes(shared.limits.format))?;
+        while let Some(chunk) =
+            input.next_chunk().map_err(|e| DecoderError::WorkerFailed(e.to_string()))?
+        {
+            let pcm = decoder.push(&chunk)?;
             if let Some(format) = decoder.output_format() {
                 let pcm = remix(&pcm, format.num_channels, num_channels)?;
                 shared.output(AudioFormat::new(format.sample_rate, num_channels), &pcm)?;
@@ -436,10 +619,10 @@ fn decode_reader<R: Read>(
         {
             lk_agents_media::ffmpeg::decode_stream(
                 lk_agents_media::mime_to_av_format(Some(mime)),
-                sample_rate,
+                sample_rate.unwrap_or(0),
                 num_channels,
                 shared.limits.format,
-                input,
+                &mut Joined { chunks: input, chunk: Vec::new(), read: 0 },
                 |format, samples| {
                     emitted |= !samples.is_empty();
                     shared.output(format, samples).map_err(|e| CodecError::Ffmpeg {
@@ -545,7 +728,12 @@ impl lk_agents_abi::media::decoder::FileDecoder for AudioDecoder {
         &mut self,
         timeout: Duration,
     ) -> lk_agents_abi::utils::spawner::BoxFuture<'_, Result<(), String>> {
-        Box::pin(async move { self.close(timeout).await.map_err(|error| error.to_string()) })
+        Box::pin(async move {
+            match tokio::time::timeout(timeout, self.close()).await {
+                Ok(closed) => closed.map_err(|error| error.to_string()),
+                Err(_) => Err(DecoderError::IncompleteCleanup.to_string()),
+            }
+        })
     }
 }
 
@@ -571,7 +759,63 @@ lk_agents_abi::inventory::submit! {
     }
 }
 
-fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
+/// `_core.AudioDecoder`, the native half of `utils.codecs.AudioStreamDecoder`: input is queued
+/// without waiting, frames are awaited, and EOF never blocks the host loop.
+pub struct StreamDecoder {
+    input: DecoderInput,
+    output: tokio::sync::Mutex<AudioDecoder>,
+}
+
+fn failure(error: impl std::fmt::Display) -> CodecFailure {
+    CodecFailure(error.to_string())
+}
+
+impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
+    fn new(
+        mime: String,
+        sample_rate: Option<u32>,
+        num_channels: u16,
+    ) -> Result<Self, CodecFailure> {
+        let workers = crate::process::workers().map_err(failure)?;
+        let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
+        let (output, input) =
+            AudioDecoder::open_stream(&workers, &mime, sample_rate, num_channels, limits)
+                .map_err(failure)?;
+        Ok(Self { input, output: tokio::sync::Mutex::new(output) })
+    }
+
+    fn push(&self, data: &[u8]) -> Result<(), CodecFailure> {
+        self.input.push(data.to_vec()).map_err(failure)
+    }
+
+    fn end_input(&self) {
+        self.input.end_input();
+    }
+
+    async fn next(&self) -> Result<Option<AudioFrame>, CodecFailure> {
+        self.output.lock().await.next().await.map_err(failure)
+    }
+
+    async fn aclose(&self) -> Result<(), CodecFailure> {
+        // Cancelling first ends a pending `next`, which releases the output to close it.
+        self.input.cancel();
+        self.output.lock().await.close().await.map_err(failure)
+    }
+}
+
+pub use lk_agents_media::StreamBuffer;
+
+#[cfg(feature = "python")]
+pub use lk_agents_media::blingfire::MediaTokenization;
+
+/// A WAV push decodes whole: the input that carried it bounds its size, and a provider's
+/// concatenated files restart only at a push boundary.
+pub(crate) fn whole_pushes(limits: DecodeLimits) -> DecodeLimits {
+    DecodeLimits { max_samples_per_frame: i32::MAX as usize, ..limits }
+}
+
+/// Two seconds of queued PCM, delivered in 10 ms chunks.
+pub(crate) fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
     let output_samples =
         (sample_rate as usize).saturating_mul(usize::from(num_channels)).saturating_mul(2);
     DecoderLimits {
@@ -672,7 +916,7 @@ mod tests {
             samples.extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
         }
         assert_eq!(samples, vec![150; 480]);
-        decoder.close(Duration::from_secs(1)).await.unwrap();
+        decoder.close().await.unwrap();
     }
 
     fn byte_options(data: Vec<u8>) -> ByteDecoderOptions {
@@ -713,7 +957,7 @@ mod tests {
             if source_rate as u32 == target_rate {
                 assert_eq!(samples, vec![150; 2400]);
             }
-            decoder.close(Duration::from_secs(1)).await.unwrap();
+            decoder.close().await.unwrap();
         }
     }
 
@@ -739,14 +983,14 @@ mod tests {
             }
         }
         assert!(samples <= 240, "excess decoded audio must never enter the output queue");
-        decoder.close(Duration::from_secs(1)).await.unwrap();
+        decoder.close().await.unwrap();
         let mut valid =
             AudioDecoder::open_bytes(&workers, byte_options(vec![0; 480]), limits()).unwrap();
         assert!(
             valid.next().await.unwrap().is_some(),
             "refused heads must release decoder admission"
         );
-        valid.close(Duration::from_secs(1)).await.unwrap();
+        valid.close().await.unwrap();
     }
 
     #[cfg(feature = "media-ffmpeg")]
@@ -772,7 +1016,7 @@ mod tests {
             }
         }
         assert!(samples <= 480);
-        decoder.close(Duration::from_secs(1)).await.unwrap();
+        decoder.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -832,6 +1076,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stream_keeps_its_slot_until_cancellation_settles_then_refuses_input() {
+        let workers = workers();
+        let open = || AudioDecoder::open_stream(&workers, "audio/wav", Some(24_000), 1, limits());
+        let (mut first, input) = open().unwrap();
+        // A header alone leaves the native reader waiting for more input.
+        input.push(wav(1, &[1; 480])[..44].to_vec()).unwrap();
+        assert!(matches!(
+            open(),
+            Err(DecoderError::WorkerAdmission(MediaWorkerError::Exhausted(
+                MediaWorkerClass::Decoder
+            )))
+        ));
+        first.close().await.unwrap();
+        assert!(matches!(input.push(vec![0; 4]), Err(DecoderError::InputClosed)));
+
+        let (mut second, input) = open().unwrap();
+        let encoded = wav(1, &[7; 480]);
+        for chunk in encoded.chunks(37) {
+            input.push(chunk.to_vec()).unwrap();
+        }
+        input.end_input();
+        let mut samples = Vec::new();
+        while let Some(frame) = second.next().await.unwrap() {
+            samples.extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+        }
+        assert_eq!(samples, vec![7; 480]);
+        assert!(matches!(input.push(vec![0; 4]), Err(DecoderError::InputClosed)));
+        second.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn looping_file_backpressure_keeps_its_slot_until_cancelled_decode_settles() {
         let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
         let file = AudioFile::wav("looping", &pcm);
@@ -854,10 +1129,10 @@ mod tests {
                 MediaWorkerClass::Decoder
             )))
         ));
-        decoder.close(Duration::from_secs(1)).await.unwrap();
+        decoder.close().await.unwrap();
         let mut replacement =
             AudioDecoder::open_file(&workers, file.path(), false, 24_000, 1, limits).unwrap();
-        replacement.close(Duration::from_secs(1)).await.unwrap();
+        replacement.close().await.unwrap();
     }
 
     #[cfg(unix)]
@@ -904,7 +1179,7 @@ mod tests {
             delivered += 1;
         }
         assert_eq!(delivered, 16_000);
-        decoder.close(Duration::from_secs(1)).await.unwrap();
+        decoder.close().await.unwrap();
         control_task.await.unwrap();
     }
 }

@@ -39,13 +39,13 @@ pub use lk_agents_net::source;
 pub mod a2a;
 pub use lk_agents_core::a2a::card as a2a_card;
 pub mod agent_run;
+pub mod audio_emitter;
 pub mod avatar_output;
 pub mod codecs;
 pub mod host;
 #[cfg(feature = "media-images")]
 pub mod images;
 pub mod mcp;
-pub mod media_codecs;
 pub mod process;
 pub mod recording;
 pub mod storage;

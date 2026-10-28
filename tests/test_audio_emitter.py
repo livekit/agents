@@ -124,7 +124,7 @@ async def test_timed_transcripts_have_timestamps():
     def produce(e):
         e.push(_make_pcm(SR, NC, 200))
         e.push_timed_transcript(TimedString(text="hello", start_time=0.0, end_time=0.1))
-        e.push_timed_transcript(TimedString(text="world", start_time=0.1, end_time=0.2))
+        e.push_timed_transcript([TimedString(text="world", start_time=0.1, end_time=0.2)])
         e.end_input()
 
     _, events = await _run_emitter(produce)
@@ -358,11 +358,12 @@ async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixt
 @pytest.mark.asyncio
 @pytest.mark.no_concurrent
 async def test_compressed_finalization_delivers_the_complete_tail_before_join_returns():
-    from livekit.agents import _core
-
     encoded = Path(__file__).with_name("change-sophie.opus").read_bytes()
-    decoder = _core.AudioDecoder("audio/ogg", sample_rate=SR, num_channels=NC)
-    expected = decoder.push(encoded) + decoder.flush()
+    decoder = utils.codecs.AudioStreamDecoder(sample_rate=SR, num_channels=NC, format="audio/ogg")
+    decoder.push(encoded)
+    decoder.end_input()
+    expected = b"".join([bytes(frame.data) async for frame in decoder])
+    await decoder.aclose()
 
     def produce(emitter):
         for offset in range(0, len(encoded), 997):
@@ -375,5 +376,31 @@ async def test_compressed_finalization_delivers_the_complete_tail_before_join_re
     try:
         assert events[-1].is_final
         assert b"".join(bytes(event.frame.data) for event in events) == expected
+    finally:
+        await emitter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+async def test_each_compressed_segment_ends_after_its_decoded_audio():
+    encoded = Path(__file__).with_name("change-sophie.opus").read_bytes()
+
+    def produce(emitter):
+        for segment in ("a", "b"):
+            emitter.start_segment(segment_id=segment)
+            for offset in range(0, len(encoded), 997):
+                emitter.push(encoded[offset : offset + 997])
+            emitter.end_segment()
+        emitter.end_input()
+
+    emitter, events = await asyncio.wait_for(
+        _run_emitter(produce, stream=True, expect_finals=2, mime_type="audio/ogg"), timeout=30
+    )
+    try:
+        finals = [i for i, event in enumerate(events) if event.is_final]
+        first = b"".join(bytes(event.frame.data) for event in events[: finals[0]])
+        second = b"".join(bytes(event.frame.data) for event in events[finals[0] + 1 : finals[1]])
+        assert first and first == second
+        assert [event.segment_id for event in events[: finals[0] + 1]] == ["a"] * (finals[0] + 1)
     finally:
         await emitter.aclose()

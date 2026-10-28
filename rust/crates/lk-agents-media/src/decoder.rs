@@ -1,9 +1,9 @@
-//! `AudioStreamDecoder` (`utils/codecs/decoder.py:337-515`) as one synchronous calculator: `push`
-//! returns the PCM its bytes produced; the channel, executor and framing are the driver's.
+//! The WAV half of `AudioStreamDecoder` (`utils/codecs/decoder.py:337-515`) as one synchronous
+//! calculator: `push` returns the PCM its bytes produced; the channel, executor and framing are the
+//! runtime's.
 
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
-use crate::mime::mime_to_av_format;
 use crate::wav::WavDecoder;
 use crate::{Quality, Resampler};
 
@@ -63,29 +63,16 @@ impl DecodeLimits {
     }
 }
 
-enum Inner {
-    Wav(WavDecoder),
-    #[cfg(feature = "ffmpeg")]
-    Ffmpeg(crate::ffmpeg::FfmpegDecoder),
-}
-
-/// Called from the decoding thread when output (or an error) is ready to drain with an empty
-/// [`Decoder::push`]; must not block.
-pub type OnOutput = std::sync::Arc<dyn Fn() + Send + Sync>;
-
 /// One decoder decodes one stream, as in the reference.
 pub struct Decoder {
-    closed: bool,
-    inner: Inner,
-    /// `None` keeps the source's rate. `num_channels` is advisory on the WAV path, as the
-    /// reference's `_WavInlineDecoder` only resamples the rate; the ffmpeg path honours it.
+    wav: WavDecoder,
+    /// `None` keeps the source's rate. The channel count is the file's, as the reference's
+    /// `_WavInlineDecoder` only resamples the rate.
     target_rate: Option<u32>,
-    #[allow(dead_code)]
-    target_channels: u16,
     /// Per `(source format -> target rate)`: a provider may concatenate WAV files of different formats.
     resampler: Option<(AudioFormat, Box<dyn Resampler>)>,
     output_format: Option<AudioFormat>,
-    limits: Option<DecodeLimits>,
+    limits: DecodeLimits,
     partial: Vec<i16>,
     partial_format: Option<AudioFormat>,
 }
@@ -94,102 +81,29 @@ impl std::fmt::Debug for Decoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // No `derive`: `SoxrResampler` wraps a raw `soxr_t` and is not `Debug`.
         f.debug_struct("Decoder")
-            .field(
-                "kind",
-                &match self.inner {
-                    Inner::Wav(_) => "wav",
-                    #[cfg(feature = "ffmpeg")]
-                    Inner::Ffmpeg(_) => "ffmpeg",
-                },
-            )
             .field("target_rate", &self.target_rate)
-            .field("target_channels", &self.target_channels)
             .field("output_format", &self.output_format)
             .field("resampling", &self.resampler.is_some())
             .finish()
     }
 }
 
-/// Incremental bytes-to-PCM calculator.
+/// Incremental WAV-to-PCM calculator; compressed containers decode on the runtime's workers.
 impl Decoder {
-    /// Decode a media type, probing an unknown type when FFmpeg is enabled. Compressed
-    /// containers execute on the caller's admitted pool; `sample_rate=None` keeps the source rate.
-    pub fn with_workers(
-        workers: &crate::workers::MediaWorkers,
-        mime: &str,
-        sample_rate: Option<u32>,
-        num_channels: u16,
-    ) -> Result<Self> {
-        #[cfg(not(feature = "ffmpeg"))]
-        let _ = workers;
-        let av_format = mime_to_av_format(Some(mime));
-        let inner = match av_format {
-            Some("wav") => Inner::Wav(WavDecoder::new()),
-            #[cfg(feature = "ffmpeg")]
-            other => Inner::Ffmpeg(crate::ffmpeg::FfmpegDecoder::new(
-                workers,
-                other,
-                sample_rate.unwrap_or(0),
-                num_channels,
-            )?),
-            #[cfg(not(feature = "ffmpeg"))]
-            Some(other) => {
-                return Err(CodecError::UnsupportedMime {
-                    mime: mime.to_owned(),
-                    reason: match other {
-                        "mp3" => "mp3 needs a demuxer",
-                        "aac" => "aac needs a demuxer",
-                        "flac" => "flac needs a demuxer",
-                        "ogg" => "ogg/opus needs a demuxer",
-                        "webm" => "matroska/webm needs a demuxer",
-                        _ => "this container needs a demuxer",
-                    },
-                });
-            }
-            #[cfg(not(feature = "ffmpeg"))]
-            None => {
-                return Err(CodecError::UnsupportedMime {
-                    mime: mime.to_owned(),
-                    reason: "unrecognised media type, and probing needs a demuxer",
-                });
-            }
-        };
-        Ok(Self::from_inner(inner, sample_rate, num_channels, None))
-    }
-
-    /// Construct the supplied-chunk WAV calculator with runtime-selected transform bounds.
-    pub fn new_bounded(
-        mime: &str,
-        sample_rate: Option<u32>,
-        num_channels: u16,
-        limits: DecodeLimits,
-    ) -> Result<Self> {
+    /// `sample_rate=None` keeps the source rate.
+    pub fn wav(sample_rate: Option<u32>, limits: DecodeLimits) -> Result<Self> {
         if !limits.is_valid() {
             return Err(CodecError::DecodeLimit("invalid limits"));
         }
-        if mime_to_av_format(Some(mime)) != Some("wav") {
-            return Err(CodecError::DecodeLimit("container decoding requires a runtime worker"));
-        }
-        Ok(Self::from_inner(Inner::Wav(WavDecoder::new()), sample_rate, num_channels, Some(limits)))
-    }
-
-    fn from_inner(
-        inner: Inner,
-        sample_rate: Option<u32>,
-        num_channels: u16,
-        limits: Option<DecodeLimits>,
-    ) -> Self {
-        Self {
-            inner,
+        Ok(Self {
+            wav: WavDecoder::new(),
             target_rate: sample_rate,
-            target_channels: num_channels,
             resampler: None,
             output_format: None,
             limits,
             partial: Vec::new(),
             partial_format: None,
-            closed: false,
-        }
+        })
     }
 
     /// `None` until the first header is parsed.
@@ -197,152 +111,64 @@ impl Decoder {
         self.output_format
     }
 
-    /// `(sample_rate, num_channels)` of what `push` emits, or `None` before the first header. For
-    /// WAV the file's channel count wins over the requested one, as in the reference.
-    pub fn output_format_pair(&self) -> Option<(u32, u16)> {
-        self.output_format.map(|f| (f.sample_rate, f.num_channels))
-    }
-
-    /// [`Decoder::push`] as little-endian PCM bytes; often empty, which is not an error.
-    pub fn push_bytes(&mut self, data: &[u8]) -> Result<Vec<u8>> {
-        self.push(data).map(|pcm| crate::pcm_bytes(&pcm))
-    }
-
-    /// [`Decoder::flush`] as little-endian PCM bytes: the demuxer's and the resampler's tails.
-    // The GIL is released while the decode thread finishes: its `on_output` may be waiting on it.
-    pub fn flush_bytes(&mut self) -> Result<Vec<u8>> {
-        self.flush().map(|pcm| crate::pcm_bytes(&pcm))
-    }
-
-    /// A container decodes on its own thread, so its PCM is ready between pushes: `on_output`
-    /// says when. A WAV decodes inside `push` and never calls it.
-    pub fn set_on_output(&self, on_output: Option<OnOutput>) {
-        match &self.inner {
-            Inner::Wav(_) => drop(on_output),
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(f) => f.set_on_output(on_output),
-        }
-    }
-
     /// Routinely empty: a push that only carried a header decodes to nothing.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<i16>> {
-        if self.closed {
-            return Err(CodecError::InputClosed);
-        }
-        match &mut self.inner {
-            Inner::Wav(w) => {
-                let segments = w.push(bytes)?;
-                let mut out = Vec::new();
-                for seg in segments {
-                    if let Some(limits) = self.limits {
-                        limits.validate(
-                            seg.format,
-                            self.target_rate,
-                            seg.samples.len().saturating_add(self.partial.len()),
-                        )?;
-                    }
-                    let channels = usize::from(seg.format.num_channels);
-                    if channels == 0 {
-                        return Err(CodecError::DecodeLimit("channels"));
-                    }
-                    if self.partial_format.is_some_and(|format| format != seg.format)
-                        && !self.partial.is_empty()
-                    {
-                        return Err(CodecError::TruncatedWav);
-                    }
-                    self.partial_format = Some(seg.format);
-                    if self.partial.is_empty() && seg.samples.len() % channels == 0 {
-                        out.extend(Self::convert(
-                            &mut self.resampler,
-                            &mut self.output_format,
-                            self.target_rate,
-                            seg.format,
-                            &seg.samples,
-                        )?);
-                        continue;
-                    }
-                    self.partial.extend(seg.samples);
-                    let complete = self.partial.len() / channels * channels;
-                    out.extend(Self::convert(
-                        &mut self.resampler,
-                        &mut self.output_format,
-                        self.target_rate,
-                        seg.format,
-                        &self.partial[..complete],
-                    )?);
-                    self.partial.drain(..complete);
-                }
-                Ok(out)
+        let segments = self.wav.push(bytes)?;
+        let mut out = Vec::new();
+        for seg in segments {
+            self.limits.validate(
+                seg.format,
+                self.target_rate,
+                seg.samples.len().saturating_add(self.partial.len()),
+            )?;
+            let channels = usize::from(seg.format.num_channels);
+            if channels == 0 {
+                return Err(CodecError::DecodeLimit("channels"));
             }
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(f) => {
-                let pcm = f.push(bytes)?;
-                self.output_format = f.output_format();
-                Ok(pcm)
+            if self.partial_format.is_some_and(|format| format != seg.format)
+                && !self.partial.is_empty()
+            {
+                return Err(CodecError::TruncatedWav);
             }
+            self.partial_format = Some(seg.format);
+            if self.partial.is_empty() && seg.samples.len() % channels == 0 {
+                out.extend(Self::convert(
+                    &mut self.resampler,
+                    &mut self.output_format,
+                    self.target_rate,
+                    seg.format,
+                    &seg.samples,
+                )?);
+                continue;
+            }
+            self.partial.extend(seg.samples);
+            let complete = self.partial.len() / channels * channels;
+            out.extend(Self::convert(
+                &mut self.resampler,
+                &mut self.output_format,
+                self.target_rate,
+                seg.format,
+                &self.partial[..complete],
+            )?);
+            self.partial.drain(..complete);
         }
+        Ok(out)
     }
 
+    /// The resampler's tail; the stream stays open.
     pub fn flush(&mut self) -> Result<Vec<i16>> {
-        match &mut self.inner {
-            Inner::Wav(w) => {
-                w.flush();
-                Ok(match self.resampler.as_mut() {
-                    Some((fmt, r)) => {
-                        flush_tail(*fmt, self.target_rate.unwrap_or(fmt.sample_rate), r.as_mut())?
-                    }
-                    None => Vec::new(),
-                })
+        self.wav.flush();
+        Ok(match self.resampler.as_mut() {
+            Some((fmt, r)) => {
+                flush_tail(*fmt, self.target_rate.unwrap_or(fmt.sample_rate), r.as_mut())?
             }
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(f) => {
-                let pcm = f.flush()?;
-                self.output_format = f.output_format();
-                Ok(pcm)
-            }
-        }
-    }
-
-    /// Drain ready container PCM without accepting input or waiting for native work.
-    pub fn drain(&mut self) -> Result<Vec<i16>> {
-        match &mut self.inner {
-            Inner::Wav(_) => Ok(Vec::new()),
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(decoder) => {
-                let pcm = decoder.drain()?;
-                self.output_format = decoder.output_format();
-                Ok(pcm)
-            }
-        }
-    }
-
-    /// Signal EOF without blocking; the owner awaits native settlement before draining.
-    pub fn end_input(&mut self) -> Option<crate::workers::MediaWorker<()>> {
-        self.closed = true;
-        match &mut self.inner {
-            Inner::Wav(_) => None,
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(decoder) => decoder.end_input(),
-        }
-    }
-
-    /// Cancel a live container and hand native settlement back to its owner.
-    pub fn close(&mut self) -> Option<crate::workers::MediaWorker<()>> {
-        self.closed = true;
-        match &mut self.inner {
-            Inner::Wav(_) => None,
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(decoder) => decoder.close(),
-        }
+            None => Vec::new(),
+        })
     }
 
     /// Validate terminal input before draining. `flush` remains available for mid-stream drift.
     pub fn finish(&mut self) -> Result<Vec<i16>> {
-        match &self.inner {
-            Inner::Wav(wav) => wav.end_input()?,
-            #[cfg(feature = "ffmpeg")]
-            Inner::Ffmpeg(_) => {}
-        }
+        self.wav.end_input()?;
         if !self.partial.is_empty() {
             return Err(CodecError::TruncatedWav);
         }
@@ -417,8 +243,15 @@ mod tests {
     use super::*;
     use crate::wav::tests::wav_file;
 
-    fn workers() -> crate::workers::MediaWorkers {
-        crate::workers::MediaWorkers::new(Default::default()).unwrap()
+    fn limits() -> DecodeLimits {
+        DecodeLimits {
+            min_sample_rate: 8_000,
+            max_sample_rate: 192_000,
+            max_channels: 8,
+            max_streams: 8,
+            max_expansion_ratio: 24,
+            max_samples_per_frame: 1 << 20,
+        }
     }
 
     /// A deterministic ramp, long enough that soxr's filter is holding history.
@@ -432,27 +265,11 @@ mod tests {
     #[test]
     fn a_wav_mime_type_decodes_with_no_features_enabled() {
         let want: Vec<i16> = vec![3, -3, 300, -300];
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(24_000), 1).unwrap();
+        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
         let got = d.push(&wav_file(24_000, 1, &want)).unwrap();
         assert_eq!(got, want);
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
         assert!(d.flush().unwrap().is_empty());
-    }
-
-    // Catches: accepting a container this build cannot decode and returning empty PCM, which
-    // reads downstream as "the TTS sent silence" rather than "this binary cannot decode mp3".
-    // `AudioEmitter` raises `NotImplementedError` for exactly this reason and the replacement
-    // must be no quieter.
-    #[cfg(not(feature = "ffmpeg"))]
-    #[test]
-    fn a_container_mime_type_is_refused_when_ffmpeg_is_not_compiled_in() {
-        for mime in ["audio/mpeg", "audio/aac", "audio/flac", "audio/ogg", "audio/webm;codecs=opus"]
-        {
-            let err = Decoder::with_workers(&workers(), mime, Some(48_000), 1).unwrap_err();
-            assert!(matches!(err, CodecError::UnsupportedMime { .. }), "{mime}: {err:?}");
-            // The message has to name the feature, or the next person greps the codebase for it.
-            assert!(err.to_string().contains("ffmpeg"), "{mime}: {err}");
-        }
     }
 
     // Catches: a rate mismatch refused (before PLAN.md F1 it was `ResampleRequired`) or emitted
@@ -467,7 +284,7 @@ mod tests {
             (48_000, 24_000, 1, 2400, 4700..=4900),
             (24_000, 48_000, 2, 4800, 1150..=1250),
         ] {
-            let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(rate), ch).unwrap();
+            let mut d = Decoder::wav(Some(rate), limits()).unwrap();
             let total =
                 d.push(&wav_file(src, ch, &ramp(n))).unwrap().len() + d.flush().unwrap().len();
             assert_eq!(total % usize::from(ch), 0, "whole frames");
@@ -480,7 +297,7 @@ mod tests {
     // Catches: `sample_rate=None` read as 48 kHz. The reference keeps the source's rate then.
     #[test]
     fn no_requested_rate_keeps_the_sources_rate() {
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", None, 1).unwrap();
+        let mut d = Decoder::wav(None, limits()).unwrap();
         assert_eq!(d.push(&wav_file(16_000, 1, &ramp(160))).unwrap(), ramp(160));
         assert_eq!(d.output_format(), Some(AudioFormat::new(16_000, 1)));
     }
@@ -490,7 +307,7 @@ mod tests {
     // cuts itself off".
     #[test]
     fn flush_releases_the_resamplers_tail() {
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(48_000), 1).unwrap();
+        let mut d = Decoder::wav(Some(48_000), limits()).unwrap();
         let pushed = d.push(&wav_file(24_000, 1, &ramp(2400))).unwrap();
         let tail = d.flush().unwrap();
         assert!(!tail.is_empty(), "the held interpolation/filter tail must be released");
@@ -509,7 +326,7 @@ mod tests {
     // 4800 samples. A dropped tail or a stale resampler both make that number wrong.
     #[test]
     fn a_format_change_drains_the_old_resampler_before_building_a_new_one() {
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(24_000), 1).unwrap();
+        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
         let mut total = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap().len();
         total += d.push(&wav_file(16_000, 1, &ramp(1600))).unwrap().len();
         total += d.flush().unwrap().len();
@@ -524,7 +341,7 @@ mod tests {
     // early return, and then the join between the two files is a click.
     #[test]
     fn a_change_to_a_matching_rate_still_drains_the_old_resampler_first() {
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(48_000), 1).unwrap();
+        let mut d = Decoder::wav(Some(48_000), limits()).unwrap();
         let first = d.push(&wav_file(24_000, 1, &ramp(2400))).unwrap();
         let second = d.push(&wav_file(48_000, 1, &ramp(240))).unwrap();
         assert!(
@@ -547,7 +364,7 @@ mod tests {
     // the reference on every stereo WAV. Pinned so the divergence is a decision, not a drift.
     #[test]
     fn the_wav_path_keeps_the_files_channel_count_rather_than_the_requested_one() {
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(24_000), 1).unwrap();
+        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
         let interleaved: Vec<i16> = vec![1, -1, 2, -2, 3, -3];
         assert_eq!(d.push(&wav_file(24_000, 2, &interleaved)).unwrap(), interleaved);
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 2)));
@@ -558,7 +375,7 @@ mod tests {
     #[test]
     fn a_push_that_only_carries_a_header_decodes_to_nothing_without_failing() {
         let file = wav_file(24_000, 1, &[9, 8, 7]);
-        let mut d = Decoder::with_workers(&workers(), "audio/wav", Some(24_000), 1).unwrap();
+        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
         assert!(d.push(&file[..44]).unwrap().is_empty());
         assert_eq!(d.output_format(), None);
         assert_eq!(d.push(&file[44..]).unwrap(), vec![9, 8, 7]);

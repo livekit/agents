@@ -88,10 +88,6 @@ pub trait HostEntry: Send + Sync + 'static {
     /// once).
     fn enter_now(&self, call: Self::Call) -> Result<Self::Value, Self::Error>;
 
-    /// Runs a synchronous callback in a copy of its captured host context, without awaiting.
-    fn enter_now_in(&self, context: &HostRef, call: Self::Call)
-    -> Result<Self::Value, Self::Error>;
-
     /// The failure a refused call reports, labelled with the call.
     fn refused(&self, label: &'static str, refusal: Refusal) -> Self::Error;
 }

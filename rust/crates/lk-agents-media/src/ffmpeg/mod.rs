@@ -1,20 +1,16 @@
 //! The ffmpeg half, over `csrc/lk_agents_media.c`'s `extern "C"` shim (hand-written ffmpeg struct
-//! layouts read wrong memory instead of failing to link). The demuxer needs a blocking read, so
-//! decode runs on its own thread against [`StreamBuffer`]: the split across `push` calls varies,
-//! but the total over `push`* + `flush` is deterministic.
+//! layouts read wrong memory instead of failing to link). The demuxer needs a blocking read: the
+//! caller runs [`decode_stream`] on a thread that may block in its reader.
 
 use std::ffi::{CString, c_char, c_int, c_uint, c_void};
-#[allow(clippy::disallowed_types, reason = "S0: migrate codec worker state to runtime")]
-use std::sync::{Arc, Mutex};
 
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
-use crate::stream_buffer::StreamBuffer;
 
 mod decode;
 mod encode;
 
-pub use decode::{FfmpegDecoder, decode_stream};
+pub use decode::decode_stream;
 pub use encode::OggOpusEncoder;
 
 #[repr(C)]

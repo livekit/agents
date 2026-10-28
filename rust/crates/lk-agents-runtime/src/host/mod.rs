@@ -43,20 +43,6 @@ pub fn call_now<E: HostEntry>(entry: &E, call: E::Call) -> Result<E::Value, E::E
     entry.enter_now(call)
 }
 
-/// Runs a synchronous callback in its captured context after checking its declared scopes.
-pub fn call_now_in<E: HostEntry>(
-    entry: &E,
-    label: &'static str,
-    scope: &(impl HostContext + ?Sized),
-    requires: &[Scope],
-    call: E::Call,
-) -> Result<E::Value, E::Error> {
-    match admit(scope, requires) {
-        Ok(context) => entry.enter_now_in(context, call),
-        Err(refusal) => Err(entry.refused(label, refusal)),
-    }
-}
-
 /// Queues `call` on `notices`, after the notifications before it, to run in a copy of the context
 /// `scope` captured. Not awaited: a refusal or a host failure is logged.
 pub fn notify<N: HostNotices>(

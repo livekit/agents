@@ -1,6 +1,6 @@
 //! `AudioEmitter` (`tts/tts.py:835`). A state machine, not a push sink: after 0.15 s sent it
 //! compares wall clock against audio duration and arms its own flush timer ([`on_drift`](AudioEmitter::on_drift)).
-//! PCM only: the driver decodes. No channel, so a misuse error surfaces from the call that made it.
+//! PCM only: the runtime decodes. No channel, so a misuse error surfaces from the call that made it.
 
 use std::time::Duration;
 
@@ -8,11 +8,19 @@ use crate::TimedString;
 use crate::{AudioByteStream, Frame, Ts};
 use crate::{AudioFrame, SynthesizedAudio};
 
-pub mod driver;
-pub use driver::{Cmd, EmitterDriver, EmitterHost, HostEffect, PumpError};
+/// What the machine asks of its owner, in order.
+pub enum HostEffect {
+    Send(Box<SynthesizedAudio>),
+    /// Relative, so the clocks need not agree.
+    Arm(Duration),
+    Cancel,
+    Dump(Box<SegmentDump>),
+    Dropped(usize),
+    ProviderIds(Vec<String>),
+}
 
-/// What the machine asked for, in order: recorded, not called, so the machine lock is never held
-/// across a host call.
+/// What the machine asked for, in order: recorded, not called, so no host call happens while the
+/// machine is borrowed.
 pub type Effects = Vec<HostEffect>;
 
 /// Below this much audio sent, the drift check is skipped (`tts/tts.py:1063`).
@@ -29,6 +37,15 @@ const MARKER_DIVISOR: u32 = 100;
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EmitterError {
+    /// A mime type nothing in this build decodes, refused before any byte is framed as PCM.
+    #[error("AudioEmitter: {0}")]
+    #[host(kind = "NotImplementedError")]
+    UnsupportedMime(String),
+    #[error("AudioEmitter: decode failed: {0}")]
+    Decode(String),
+    /// The runtime or the host output failed underneath the emitter.
+    #[error("AudioEmitter: {0}")]
+    Unavailable(String),
     #[error("AudioEmitter already started")]
     AlreadyStarted,
     #[error("AudioEmitter isn't started")]
@@ -47,7 +64,7 @@ pub enum EmitterError {
     NoSegment,
 }
 
-/// Pulled out by the driver when `LK_DUMP_TTS` is on; the binding supplies the local-time stamp.
+/// Pulled out by the owner when `LK_DUMP_TTS` is on; the host appends the local-time stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentDump {
     pub label: String,
@@ -61,19 +78,13 @@ pub struct SegmentDump {
 }
 
 impl SegmentDump {
-    pub const DIR: &'static str = "lk_dump";
-
-    /// `dump_segment()`'s file name; `stamp` is the host's local-time `strftime`.
-    pub fn file_name(&self, stamp: &str) -> String {
+    /// `dump_segment()`'s file name before its `_<local time>.wav`.
+    pub fn name(&self) -> String {
         if self.streaming {
-            format!("{}_{}_{}_{}.wav", self.label, self.request_id, self.segment_id, stamp)
+            format!("{}_{}_{}", self.label, self.request_id, self.segment_id)
         } else {
-            format!("{}_{}_{}.wav", self.label, self.request_id, stamp)
+            format!("{}_{}", self.label, self.request_id)
         }
-    }
-
-    pub fn path(&self, stamp: &str) -> std::path::PathBuf {
-        std::path::Path::new(Self::DIR).join(self.file_name(stamp))
     }
 
     /// `rtc.combine_audio_frames(frames).to_wav_bytes()`.
@@ -125,7 +136,7 @@ pub struct AudioEmitter {
     /// Indexed by `pushed_duration`.
     audio_durations: Vec<f64>,
     provider_request_ids: Vec<String>,
-    /// Pulled by the driver so the span write survives a `start_segment()` that is then rejected
+    /// Pulled by the owner so the span write survives a `start_segment()` that is then rejected
     /// (the reference's order).
     pending_ids: Option<Vec<String>>,
 
@@ -214,6 +225,15 @@ impl AudioEmitter {
 
     pub fn num_segments(&self) -> usize {
         self.num_segments
+    }
+
+    /// The PCM format `push` takes, set by `initialize`.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn num_channels(&self) -> u16 {
+        self.num_channels
     }
 
     pub fn request_id(&self) -> &str {
@@ -315,7 +335,12 @@ impl AudioEmitter {
 
     /// `push_frame`: an already framed chunk, sent as it is, skipping the progressive re-chunking
     /// of [`push`](Self::push). For adapters over a TTS whose emitter already framed its audio.
-    pub fn push_frame(&mut self, now: Ts, frame: Frame, eff: &mut Effects) -> Result<(), EmitterError> {
+    pub fn push_frame(
+        &mut self,
+        now: Ts,
+        frame: Frame,
+        eff: &mut Effects,
+    ) -> Result<(), EmitterError> {
         if !self.live()? {
             return Ok(());
         }

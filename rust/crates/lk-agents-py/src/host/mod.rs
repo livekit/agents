@@ -22,8 +22,6 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyCFunction, PyTuple};
 use tokio::sync::oneshot;
 
-/// Python callbacks for the generated TTS emitter, entered through HostInvoker.
-pub(crate) mod emitter;
 #[cfg(test)]
 mod cancellation_tests;
 #[cfg(test)]
@@ -258,25 +256,6 @@ impl HostEntry for Entry {
         Python::attach(|py| {
             let (callable, arguments) = call(py)?;
             callable.call1(arguments).map(Bound::unbind)
-        })
-    }
-
-    fn enter_now_in(&self, context: &HostRef, call: HostCall) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| {
-            let (_, ctx) = captured_pair(py, context)?;
-            let ctx = ctx.call_method0("copy")?;
-            let call = Mutex::new(Some(call));
-            let callback = PyCFunction::new_closure(py, None, None, move |args, _| {
-                let py = args.py();
-                let call = call
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .take()
-                    .expect("a synchronous host callback is entered once");
-                let (callable, arguments) = call(py)?;
-                callable.call1(arguments).map(Bound::unbind)
-            })?;
-            ctx.call_method1("run", (callback,)).map(Bound::unbind)
         })
     }
 

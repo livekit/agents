@@ -1,20 +1,14 @@
 //! Codec and byte-pipe host contracts; native execution is supplied by the runtime.
 
-use std::sync::Arc;
+use crate::AudioFrame;
 
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
 pub struct CodecFailure(pub String);
 
-/// A decoder has PCM or a failure ready for its loop to drain.
-#[crate::host(proxy(host = "typing.Callable"))]
-pub trait DecoderOutput: Send + Sync {
-    #[host(notify, name = "__call__")]
-    fn ready(&self);
-}
-
-/// Incremental container bytes to little-endian interleaved PCM.
+/// Container bytes decoded on one admitted native worker: input is queued without waiting for
+/// the decoder, and decoded frames are awaited.
 #[crate::host(class(name = "AudioDecoder"))]
 pub trait AudioDecoder: Send + Sync + Sized + 'static {
     #[host(new)]
@@ -24,20 +18,19 @@ pub trait AudioDecoder: Send + Sync + Sized + 'static {
         #[host(default = 1)] num_channels: u16,
     ) -> Result<Self, CodecFailure>;
 
-    #[host(getter)]
-    fn output_format(&self) -> Option<(u32, u16)>;
-
-    #[host(call, detach)]
-    fn push(&self, data: &[u8]) -> Result<Vec<u8>, CodecFailure>;
-
-    /// Blocks only the invoking native thread while the admitted decoder drains.
-    #[host(call, detach)]
-    fn flush(&self) -> Result<Vec<u8>, CodecFailure>;
-
+    /// Refused after `end_input`, `aclose` or a decode failure.
     #[host(call)]
-    fn set_on_output(&self, #[host(default = None)] on_output: Option<Arc<dyn DecoderOutput>>);
+    fn push(&self, data: &[u8]) -> Result<(), CodecFailure>;
 
-    /// Cancel pending input and observe release of the native decoder's worker admission.
+    /// No more input: `next` returns `None` once everything pushed is decoded.
+    #[host(call)]
+    fn end_input(&self);
+
+    /// The next decoded frame, at the requested format; `None` at the end of input.
+    #[host(await)]
+    async fn next(&self) -> Result<Option<AudioFrame>, CodecFailure>;
+
+    /// Cancel decoding and observe release of the native decoder's worker admission.
     #[host(await)]
     async fn aclose(&self) -> Result<(), CodecFailure>;
 }

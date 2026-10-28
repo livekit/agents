@@ -20,19 +20,3 @@ pub struct NamedToolChoiceFunction {
 pub struct NamedToolChoice {
     pub function: NamedToolChoiceFunction,
 }
-
-// --- the audio emitter's one constructor -----------------------------------------------------
-
-/// The kwargs `tts.SynthesizedAudio(**kwargs)` is constructed from, as the emitter passes them.
-// Four of the seven fields: `started_time` and `timed_transcript` ride in the frame's `userdata`.
-// Every field has a default host-side, so a missing key here would be silent.
-#[derive(Host)]
-#[binding(emit)]
-pub struct SynthesizedAudioKwargs {
-    /// The `rtc.AudioFrame` the binding built, with `USERDATA_TIMED_TRANSCRIPT` already set on it.
-    #[binding(py)]
-    pub frame: (),
-    pub request_id: String,
-    pub segment_id: String,
-    pub is_final: bool,
-}

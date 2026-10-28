@@ -152,9 +152,12 @@ async def run(budget: MediaBudget) -> list[dict[str, object]]:
             "cold_constructor_after_import",
             lambda: _core.AudioDecoder("audio/wav", sample_rate=24000, num_channels=1),
         )
-        pcm = timed("push_10s_48khz_to_24khz", lambda: decoder.push(data))
-        tail = timed("flush", decoder.flush)
-        samples = (len(pcm) + len(tail)) // 2
+        timed("push_10s_48khz_to_24khz", lambda: decoder.push(data))
+        timed("end_input", decoder.end_input)
+        samples = 0
+        while (frame := await decoder.next()) is not None:
+            samples += frame.samples_per_channel
+        await decoder.aclose()
         if samples != 240_000:
             raise RuntimeError(f"ten-second WAV yielded {samples} samples, expected 240000")
         recorder = timed(
@@ -168,7 +171,7 @@ async def run(budget: MediaBudget) -> list[dict[str, object]]:
             "delivered_samples": samples,
             "source_samples": 480_000,
             "source_bytes": len(data),
-            "delivered_pcm_bytes": len(pcm) + len(tail),
+            "delivered_pcm_bytes": samples * 2,
             "calls": calls,
         }
 

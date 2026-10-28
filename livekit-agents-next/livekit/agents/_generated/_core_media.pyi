@@ -5,12 +5,11 @@
 
 from __future__ import annotations
 
-from typing import Callable
-
 from livekit import rtc
+from livekit.agents.utils.aio import Chan
 
 class AudioEmitter:
-    def __init__(self, *, label: str, dst_ch: object) -> None: ...
+    def __init__(self, *, label: str, dst_ch: Chan) -> None: ...
     def initialize(
         self,
         *,
@@ -23,13 +22,18 @@ class AudioEmitter:
     ) -> None: ...
     def start_segment(self, *, segment_id: str) -> None: ...
     def end_segment(self) -> None: ...
-    def push(self, data: object) -> None: ...
+    def push(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
-    def push_timed_transcript(self, delta_text: object) -> None: ...
+    def push_timed_transcript(
+        self,
+        delta_text: livekit.agents.types.TimedString | list[livekit.agents.types.TimedString],
+    ) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
-    async def join(self) -> None: ...
-    async def aclose(self) -> None: ...
+    async def join(self) -> None:
+        """Waits for compressed input to finish decoding; reports a decode failure."""
+    async def aclose(self) -> None:
+        """Discards pending audio and observes native settlement; never reports a synthesis failure."""
     def pushed_duration(self, idx: int = -1) -> float: ...
     @property
     def num_segments(self) -> int: ...
@@ -38,7 +42,9 @@ class AudioEmitter:
     def output_closed(self) -> bool: ...
 
 class AudioDecoder:
-    """Incremental container bytes to little-endian interleaved PCM."""
+    """Container bytes decoded on one admitted native worker: input is queued without waiting for
+    the decoder, and decoded frames are awaited.
+    """
     def __init__(
         self,
         mime: str,
@@ -46,14 +52,14 @@ class AudioDecoder:
         sample_rate: int | None = 48000,
         num_channels: int = 1,
     ) -> None: ...
-    @property
-    def output_format(self) -> tuple[int, int] | None: ...
-    def push(self, data: bytes | bytearray | memoryview | list[int]) -> bytes: ...
-    def flush(self) -> bytes:
-        """Blocks only the invoking native thread while the admitted decoder drains."""
-    def set_on_output(self, on_output: Callable | None = None) -> None: ...
+    def push(self, data: bytes | bytearray | memoryview | list[int]) -> None:
+        """Refused after `end_input`, `aclose` or a decode failure."""
+    def end_input(self) -> None:
+        """No more input: `next` returns `None` once everything pushed is decoded."""
+    async def next(self) -> rtc.AudioFrame | None:
+        """The next decoded frame, at the requested format; `None` at the end of input."""
     async def aclose(self) -> None:
-        """Cancel pending input and observe release of the native decoder's worker admission."""
+        """Cancel decoding and observe release of the native decoder's worker admission."""
 
 class StreamBuffer:
     """A byte pipe: normal EOF drains buffered bytes; close discards them immediately."""

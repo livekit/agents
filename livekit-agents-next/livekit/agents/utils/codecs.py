@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 
 from livekit import rtc
 
 from .. import _core
 from ..log import logger
-from . import aio
 
 __all__ = [
     "AudioStreamDecoder",
@@ -41,56 +39,46 @@ class AudioStreamDecoder:
             num_channels: The output channel count.
             format: The input's media type (``"audio/mpeg"``); probed when ``None``.
         """
-        self._decoder = _core.AudioDecoder(
-            format.lower() if format else "",
-            sample_rate=sample_rate,
-            num_channels=num_channels or 1,
-        )
-        self._output_ch = aio.Chan[rtc.AudioFrame]()
-        loop = asyncio.get_event_loop()
-        self._decoder.set_on_output(lambda: loop.call_soon_threadsafe(self._drain))
-
-    def _drain(self) -> None:
-        self.push(b"")
-
-    def _emit(self, pcm: bytes) -> None:
-        if pcm and (fmt := self._decoder.output_format) is not None:
-            sample_rate, num_channels = fmt
-            self._output_ch.send_nowait(
-                rtc.AudioFrame(
-                    data=pcm,
-                    sample_rate=sample_rate,
-                    num_channels=num_channels,
-                    samples_per_channel=len(pcm) // (2 * num_channels),
-                )
+        self._decoder: _core.AudioDecoder | None = None
+        self._ended = False
+        try:
+            self._decoder = _core.AudioDecoder(
+                format.lower() if format else "",
+                sample_rate=sample_rate,
+                num_channels=num_channels or 1,
             )
+        except RuntimeError:
+            logger.exception("error decoding audio")
 
     def push(self, chunk: bytes) -> None:
-        if self._output_ch.closed:
+        if self._decoder is None or self._ended:
             return
         try:
-            self._emit(self._decoder.push(chunk))
+            self._decoder.push(chunk)
         except RuntimeError:
             logger.exception("error decoding audio")
-            self._output_ch.close()
+            self.end_input()
 
     def end_input(self) -> None:
-        if self._output_ch.closed:
-            return
-        try:
-            self._emit(self._decoder.flush())
-        except RuntimeError:
-            logger.exception("error decoding audio")
-        self._decoder.set_on_output(None)
-        self._output_ch.close()
+        self._ended = True
+        if self._decoder is not None:
+            self._decoder.end_input()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
 
     async def __anext__(self) -> rtc.AudioFrame:
-        return await self._output_ch.__anext__()
+        frame: rtc.AudioFrame | None = None
+        if self._decoder is not None:
+            try:
+                frame = await self._decoder.next()
+            except RuntimeError:
+                logger.exception("error decoding audio")
+        if frame is None:
+            raise StopAsyncIteration
+        return frame
 
     async def aclose(self) -> None:
-        self._decoder.set_on_output(None)
-        self._output_ch.close()
-        await self._decoder.aclose()
+        decoder, self._decoder = self._decoder, None
+        if decoder is not None:
+            await decoder.aclose()

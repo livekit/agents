@@ -11,13 +11,9 @@
 //! is the right trade: adding two muxers to the shipped binary to make a test convenient would be
 //! shipping code for a test's benefit.
 
-fn workers() -> crate::workers::MediaWorkers {
-    crate::workers::MediaWorkers::new(Default::default()).unwrap()
-}
-
 use super::*;
 use crate::wav::tests::wav_file;
-use crate::{AudioFormat, Decoder};
+use crate::{AudioFormat, Decoder, mime_to_av_format};
 
 /// 802 bytes. Produced by:
 ///   ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=0.1" \
@@ -109,14 +105,36 @@ fn sine(rate: u32, freq: f64, samples: usize) -> Vec<i16> {
         .collect()
 }
 
-/// push in `chunk` sized pieces, then flush; returns everything.
-fn decode_chunked(d: &mut FfmpegDecoder, bytes: &[u8], chunk: usize) -> Vec<i16> {
-    let mut out = Vec::new();
-    for c in bytes.chunks(chunk) {
-        out.extend(d.push(c).unwrap());
+/// `bytes` as `mime`, read at most `chunk` bytes at a time as a network stream delivers them.
+fn decode(
+    mime: &str,
+    rate: Option<u32>,
+    channels: u16,
+    bytes: &[u8],
+    chunk: usize,
+) -> Result<(Vec<i16>, AudioFormat)> {
+    struct Chunked<'a>(&'a [u8], usize);
+    impl std::io::Read for Chunked<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.len().min(self.1).min(out.len());
+            out[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
     }
-    out.extend(d.flush().unwrap());
-    out
+    let mut pcm = Vec::new();
+    let format = decode_stream(
+        mime_to_av_format(Some(mime)),
+        rate.unwrap_or(0),
+        channels,
+        decode_limits(),
+        &mut Chunked(bytes, chunk),
+        |_, samples| {
+            pcm.extend_from_slice(samples);
+            Ok(())
+        },
+    )?;
+    Ok((pcm, format))
 }
 
 // Catches: the ffmpeg path and the WAV fast path disagreeing on the same bytes. They are two
@@ -128,10 +146,9 @@ fn the_ffmpeg_path_and_the_wav_fast_path_decode_the_same_file_identically() {
     let want = sine(24_000, 440.0, 2400);
     let file = wav_file(24_000, 1, &want);
 
-    let mut ff = FfmpegDecoder::new(&workers(), Some("wav"), 24_000, 1).unwrap();
-    let via_ffmpeg = decode_chunked(&mut ff, &file, 4096);
+    let (via_ffmpeg, _) = decode("audio/wav", Some(24_000), 1, &file, 4096).unwrap();
 
-    let mut fast = Decoder::with_workers(&workers(), "audio/wav", Some(24_000), 1).unwrap();
+    let mut fast = Decoder::wav(Some(24_000), decode_limits()).unwrap();
     let mut via_fast = fast.push(&file).unwrap();
     via_fast.extend(fast.flush().unwrap());
 
@@ -146,9 +163,7 @@ fn the_ffmpeg_path_and_the_wav_fast_path_decode_the_same_file_identically() {
 #[test]
 fn an_mp3_decodes_to_the_tone_it_holds_rather_than_to_its_own_bytes() {
     let mp3 = unhex(TONE_MP3_HEX);
-    let mut d = Decoder::with_workers(&workers(), "audio/mpeg", Some(24_000), 1).unwrap();
-    let mut pcm = d.push(&mp3).unwrap();
-    pcm.extend(d.flush().unwrap());
+    let (pcm, format) = decode("audio/mpeg", Some(24_000), 1, &mp3, mp3.len()).unwrap();
 
     assert!(pcm.len() > 1_500, "0.1 s at 24 kHz is ~2400 samples, got {}", pcm.len());
     assert!(pcm.len() < 4_000, "far more audio than the file holds: {}", pcm.len());
@@ -161,7 +176,7 @@ fn an_mp3_decodes_to_the_tone_it_holds_rather_than_to_its_own_bytes() {
         let other = tone_strength(&pcm, 24_000, f);
         assert!(other * 10.0 < at440, "energy at {f} Hz: {other:.3} vs {at440:.3} at 440");
     }
-    assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
+    assert_eq!(format, AudioFormat::new(24_000, 1));
 }
 
 // Catches: the pre-connect path staying broken. `audio/webm;codecs=opus` is the literal mime type
@@ -170,14 +185,12 @@ fn an_mp3_decodes_to_the_tone_it_holds_rather_than_to_its_own_bytes() {
 #[test]
 fn the_exact_mime_type_the_js_sdk_sends_for_pre_connect_audio_decodes() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
-    let mut d =
-        Decoder::with_workers(&workers(), "audio/webm;codecs=opus", Some(48_000), 1).unwrap();
-    let mut pcm = d.push(&webm).unwrap();
-    pcm.extend(d.flush().unwrap());
+    let (pcm, format) =
+        decode("audio/webm;codecs=opus", Some(48_000), 1, &webm, webm.len()).unwrap();
 
     assert!(pcm.len() > 3_000, "0.1 s at 48 kHz is ~4800 samples, got {}", pcm.len());
     assert!(tone_strength(&pcm, 48_000, 440.0) > 0.8, "not a 440 Hz tone");
-    assert_eq!(d.output_format(), Some(AudioFormat::new(48_000, 1)));
+    assert_eq!(format, AudioFormat::new(48_000, 1));
 }
 
 // Catches: a demuxer that is fed in small pieces losing or duplicating audio at the boundaries.
@@ -186,12 +199,10 @@ fn the_exact_mime_type_the_js_sdk_sends_for_pre_connect_audio_decodes() {
 #[test]
 fn a_container_delivered_in_ragged_chunks_decodes_to_the_same_audio_as_one_push() {
     let mp3 = unhex(TONE_MP3_HEX);
-    let mut whole = FfmpegDecoder::new(&workers(), Some("mp3"), 24_000, 1).unwrap();
-    let baseline = decode_chunked(&mut whole, &mp3, mp3.len());
+    let (baseline, _) = decode("audio/mpeg", Some(24_000), 1, &mp3, mp3.len()).unwrap();
 
     for chunk in [1usize, 7, 37, 101, 499] {
-        let mut d = FfmpegDecoder::new(&workers(), Some("mp3"), 24_000, 1).unwrap();
-        let got = decode_chunked(&mut d, &mp3, chunk);
+        let (got, _) = decode("audio/mpeg", Some(24_000), 1, &mp3, chunk).unwrap();
         assert_eq!(got, baseline, "chunk size {chunk}");
     }
 }
@@ -202,13 +213,8 @@ fn a_container_delivered_in_ragged_chunks_decodes_to_the_same_audio_as_one_push(
 #[test]
 fn the_requested_output_rate_is_honoured_rather_than_the_sources() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
-    let mut at48 = Decoder::with_workers(&workers(), "audio/webm", Some(48_000), 1).unwrap();
-    let mut a = at48.push(&webm).unwrap();
-    a.extend(at48.flush().unwrap());
-
-    let mut at24 = Decoder::with_workers(&workers(), "audio/webm", Some(24_000), 1).unwrap();
-    let mut b = at24.push(&webm).unwrap();
-    b.extend(at24.flush().unwrap());
+    let (a, _) = decode("audio/webm", Some(48_000), 1, &webm, webm.len()).unwrap();
+    let (b, _) = decode("audio/webm", Some(24_000), 1, &webm, webm.len()).unwrap();
 
     let ratio = b.len() as f64 / a.len() as f64;
     assert!((ratio - 0.5).abs() < 0.05, "24 kHz output should be half as long, ratio {ratio}");
@@ -221,11 +227,9 @@ fn the_requested_output_rate_is_honoured_rather_than_the_sources() {
 #[test]
 fn the_requested_channel_count_is_honoured_on_the_ffmpeg_path() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
-    let mut d = Decoder::with_workers(&workers(), "audio/webm", Some(48_000), 2).unwrap();
-    let mut pcm = d.push(&webm).unwrap();
-    pcm.extend(d.flush().unwrap());
+    let (pcm, format) = decode("audio/webm", Some(48_000), 2, &webm, webm.len()).unwrap();
     assert_eq!(pcm.len() % 2, 0);
-    assert_eq!(d.output_format(), Some(AudioFormat::new(48_000, 2)));
+    assert_eq!(format, AudioFormat::new(48_000, 2));
     let left: Vec<i16> = pcm.iter().step_by(2).copied().collect();
     let right: Vec<i16> = pcm.iter().skip(1).step_by(2).copied().collect();
     assert_eq!(left, right, "a mono source upmixed to stereo must give identical channels");
@@ -237,9 +241,8 @@ fn the_requested_channel_count_is_honoured_on_the_ffmpeg_path() {
 // sent silence" and gets blamed on the provider.
 #[test]
 fn bytes_that_are_not_the_declared_container_fail_with_a_named_error() {
-    let mut d = Decoder::with_workers(&workers(), "audio/mpeg", Some(24_000), 1).unwrap();
-    let _ = d.push(b"this is not an mp3 file, not even slightly, no frame sync anywhere at all");
-    let err = d.flush().unwrap_err();
+    let garbage = b"this is not an mp3 file, not even slightly, no frame sync anywhere at all";
+    let err = decode("audio/mpeg", Some(24_000), 1, garbage, garbage.len()).unwrap_err();
     assert!(matches!(err, CodecError::Ffmpeg { .. }), "{err:?}");
 }
 
@@ -307,9 +310,7 @@ fn pcm_survives_an_encode_and_decode_round_trip() {
     let mut ogg = e.push(&src).unwrap();
     ogg.extend(e.finish().unwrap());
 
-    let mut d = Decoder::with_workers(&workers(), "audio/ogg", Some(48_000), 1).unwrap();
-    let mut back = d.push(&ogg).unwrap();
-    back.extend(d.flush().unwrap());
+    let (back, _) = decode("audio/ogg", Some(48_000), 1, &ogg, ogg.len()).unwrap();
 
     // Opus is lossy and adds ~6.5 ms of algorithmic delay, so the length is close, not equal.
     let ratio = back.len() as f64 / src.len() as f64;
@@ -346,12 +347,10 @@ fn the_encoder_emits_pages_as_it_goes_rather_than_only_at_finish() {
 #[test]
 fn no_requested_rate_keeps_the_containers_rate() {
     let mp3 = unhex(TONE_MP3_HEX);
-    let mut d = Decoder::with_workers(&workers(), "audio/mpeg", None, 1).unwrap();
-    let mut pcm = d.push(&mp3).unwrap();
-    pcm.extend(d.flush().unwrap());
+    let (pcm, format) = decode("audio/mpeg", None, 1, &mp3, mp3.len()).unwrap();
     assert!(pcm.len() > 1_500 && pcm.len() < 4_000, "0.1 s at 24 kHz, got {}", pcm.len());
     assert!(tone_strength(&pcm, 24_000, 440.0) > 0.7, "not a 440 Hz tone at the source rate");
-    assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
+    assert_eq!(format, AudioFormat::new(24_000, 1));
 }
 
 #[test]
@@ -429,46 +428,4 @@ fn a_reader_that_overreports_its_buffer_is_refused_at_the_ffi_boundary() {
             .unwrap_err();
     assert!(matches!(error, CodecError::Ffmpeg { op: "read", ref detail }
         if detail == "input callback returned more bytes than its supplied buffer"));
-}
-
-#[test]
-fn streaming_decoders_share_admission_and_a_refused_push_can_be_retried() {
-    use crate::workers::{MediaWorkerLimits, MediaWorkers};
-    let workers =
-        MediaWorkers::new(MediaWorkerLimits { decoders: 1, ..Default::default() }).unwrap();
-    let mut first = FfmpegDecoder::new(&workers, Some("mp3"), 24_000, 1).unwrap();
-    first.push(&[]).unwrap();
-    let mut second = FfmpegDecoder::new(&workers, Some("mp3"), 24_000, 1).unwrap();
-    let mp3 = unhex(TONE_MP3_HEX);
-    assert!(matches!(second.push(&mp3), Err(CodecError::Worker(_))));
-    // EOF settles the first native job before its admission can be reused.
-    let _ = first.flush();
-    let mut pcm = second.push(&mp3).unwrap();
-    pcm.extend(second.flush().unwrap());
-    assert!(tone_strength(&pcm, 24_000, 440.0) > 0.7);
-}
-
-#[test]
-fn cancellation_settlement_releases_the_injected_decoder_slot() {
-    use crate::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
-    let workers =
-        MediaWorkers::new(MediaWorkerLimits { decoders: 1, ..Default::default() }).unwrap();
-    let mut decoder = FfmpegDecoder::new(&workers, Some("mp3"), 24_000, 1).unwrap();
-    decoder.push(&[]).unwrap();
-    let receipt = decoder.close().expect("a running decoder owns its receipt");
-    receipt.wait().unwrap();
-    let _replacement = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
-}
-
-#[test]
-fn closed_decoder_rejects_input_without_reacquiring_worker_admission() {
-    use crate::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
-    let workers =
-        MediaWorkers::new(MediaWorkerLimits { decoders: 1, ..Default::default() }).unwrap();
-    let mut decoder = FfmpegDecoder::new(&workers, Some("mp3"), 24_000, 1).unwrap();
-    decoder.push(&[]).unwrap();
-    decoder.close().unwrap().wait().unwrap();
-    let _other_stream = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
-    let error = decoder.push(&[]).expect_err("closed decoder must reject input");
-    assert_eq!(error.to_string(), "decoder input is closed");
 }
