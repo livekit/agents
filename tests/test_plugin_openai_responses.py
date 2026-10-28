@@ -577,7 +577,7 @@ class _UsageResponsesWS:
         pass
 
 
-async def test_plugin_stream_has_no_ws_receive_timeout() -> None:
+async def test_plugin_ws_receive_uses_conn_timeout() -> None:
     llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
     transport = _UsageResponsesWS(
         [
@@ -604,7 +604,7 @@ async def test_plugin_stream_has_no_ws_receive_timeout() -> None:
     finally:
         await llm_model.aclose()
 
-    assert transport.receive_timeouts == [None]
+    assert transport.receive_timeouts == [0.05]
 
 
 async def _usage_from_frames(frames: list[dict]) -> agents_llm.CompletionUsage:
