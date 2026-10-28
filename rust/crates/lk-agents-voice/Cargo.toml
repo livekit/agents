@@ -40,7 +40,7 @@ tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 # libsoxr behind the driver's, the input leg's and the pre-connect buffer's rate conversions
-# (`lk_agents_media::new_resampler`). Off, every conversion is `lk-agents-abi`'s linear one and the
+# (`lk_agents_media::new_resampler`). Off, every conversion uses `lk-agents-media`'s linear fallback and the
 # crate's check closure compiles no resampler C: `cargo check -p lk-agents-voice --no-default-features`
 # (blingfire's C++ stays: the TTS leg's sentence batching is not optional).
 default = ["native-audio"]

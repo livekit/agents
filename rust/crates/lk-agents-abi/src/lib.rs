@@ -34,8 +34,8 @@ pub mod resources;
 pub mod storage;
 pub mod stt;
 pub mod telemetry;
-pub mod tokenize;
 pub mod text_session;
+pub mod tokenize;
 pub mod tts;
 pub mod turn;
 pub mod types;
@@ -66,7 +66,7 @@ pub use stt::stt::FallbackSttStream;
 pub use tts::emitter::{AudioEmitter, EmitterError, SegmentDump};
 #[cfg(feature = "python")]
 pub use tts::tts::{FallbackTtsStream, InferenceTtsStream};
-pub use utils::resample::{LinearResampler, Quality, ResampleError, Resampler};
+pub use utils::resample::{Quality, ResampleError, Resampler};
 
 pub use llm::llm::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};
 pub use llm::realtime::{
@@ -134,19 +134,21 @@ pub use metrics::base::{EotInferenceMetrics, InterruptionMetrics};
 pub use tts::timed::TimedString;
 
 pub use utils::bound_clock::BoundClock;
-pub use utils::lock;
 pub use utils::byte_stream::{AudioByteStream, Frame};
 pub use utils::clock::{
-    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, simulated_epoch, timeout,
-    unix_now, unix_secs,
+    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, simulated_epoch,
+    timeout, unix_now, unix_secs,
 };
 pub use utils::duplex::{WebSocketSink, WebSocketStream};
-pub use utils::filters::{ExpFilter, FilterError, MovingAverage};
+pub use utils::filters::FilterError;
 pub use utils::frame::FrameId;
+pub use utils::lock;
 pub use utils::maybe::Maybe;
 pub use utils::strings::{camel_to_snake_case, is_cloud_url};
 pub use utils::timer::{TimerId, TimerSet};
 
 pub use utils::bounded_lossy::{AUDIO_QUEUE_FRAMES, BoundedLossy, LossyTx, Pushed};
 pub use utils::monotone::Monotone;
-pub use utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner, SpawnerExt, TaskSet, TokioSpawner};
+pub use utils::spawner::{
+    Abort, AbortHandle, BoxFuture, Spawner, SpawnerExt, TaskSet, TokioSpawner,
+};

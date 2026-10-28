@@ -60,11 +60,11 @@ impl TtsProxy {
         };
         let sample_rate = {
             let v = obj.call_method0("_core_sample_rate")?;
-            v.extract::<u32>()?
+            ::lk_agents_abi::python::number_from_py::<u32>(&v, "Tts._core_sample_rate")?
         };
         let num_channels = {
             let v = obj.call_method0("_core_num_channels")?;
-            v.extract::<u16>()?
+            ::lk_agents_abi::python::number_from_py::<u16>(&v, "Tts._core_num_channels")?
         };
         let markup_provider = {
             let v = obj.call_method0("_core_markup_provider")?;

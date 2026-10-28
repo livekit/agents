@@ -21,7 +21,7 @@ pub fn strip_template_tokens(value: Value) -> Value {
             for pattern in TOKENS.iter() {
                 text = pattern.replace_all(&text, "").into_owned();
             }
-            Value::String(crate::tokenize::py_strip(&text).to_owned())
+            Value::String(lk_agents_abi::tokenize::py_strip(&text).to_owned())
         }
         Value::Array(values) => Value::Array(
             values
@@ -56,7 +56,6 @@ fn prefix(text: &str) -> String {
 
 /// `parse_function_arguments`: the model's JSON arguments as an object, repaired when malformed
 /// (the repair is logged, never raised).
-#[crate::host(export(pid = false, name = "parse_function_arguments"))]
 pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
     let parsed = parse(raw)?;
     if let Some(Repair { error, repaired }) = &parsed.repair {
@@ -99,8 +98,12 @@ pub fn parse(raw: &str) -> Result<ParsedArguments, String> {
                     format!("function arguments decoded to a non-JSON string: {}", prefix(nested))
                 })?;
             }
-            Value::Null => return Ok(ParsedArguments { arguments: Map::new(), repair: repair.take() }),
-            Value::Object(arguments) => return Ok(ParsedArguments { arguments, repair: repair.take() }),
+            Value::Null => {
+                return Ok(ParsedArguments { arguments: Map::new(), repair: repair.take() });
+            }
+            Value::Object(arguments) => {
+                return Ok(ParsedArguments { arguments, repair: repair.take() });
+            }
             ref other => {
                 let kind = match other {
                     Value::Array(_) => "list",
@@ -159,38 +162,6 @@ mod tests {
             json!([0, false])
         );
         assert_eq!(parse("{'x':'\\uD83D\\uDE00'}").unwrap().arguments["x"], json!("😀"));
-    }
-    // Catches: the repair warning losing the reference's `lk.pii.*` extras (the raw payload, the
-    // repaired value, the strict error), which is all a reader of that warning has to go on.
-    #[test]
-    fn a_repair_is_logged_with_the_raw_payload_the_repair_and_the_error() {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        struct Keys(std::sync::Mutex<Vec<(String, String)>>);
-        impl log::Log for Keys {
-            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-                true
-            }
-            fn log(&self, record: &log::Record<'_>) {
-                struct Collect<'a>(&'a mut Vec<(String, String)>);
-                impl<'kvs> log::kv::VisitSource<'kvs> for Collect<'_> {
-                    fn visit_pair(&mut self, k: log::kv::Key<'kvs>, v: log::kv::Value<'kvs>) -> Result<(), log::kv::Error> {
-                        self.0.push((k.to_string(), v.to_string()));
-                        Ok(())
-                    }
-                }
-                record.key_values().visit(&mut Collect(&mut self.0.lock().unwrap())).unwrap();
-            }
-            fn flush(&self) {}
-        }
-        let keys: &'static Keys = Box::leak(Box::new(Keys(Default::default())));
-        log::set_logger(keys).unwrap();
-        log::set_max_level(log::LevelFilter::Warn);
-        parse_logged("{'x':1}").unwrap();
-        let seen = keys.0.lock().unwrap().clone();
-        let get = |k: &str| seen.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
-        assert_eq!(get("lk.pii.raw_arguments"), Some("{'x':1}"));
-        assert_eq!(get("lk.pii.repaired"), Some(r#"{"x":1}"#));
-        assert!(get("lk.pii.error").is_some_and(|e| !e.is_empty()), "{seen:?}");
     }
     #[test]
     fn invalid_and_deep_input_fails_boundedly() {

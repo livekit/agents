@@ -105,7 +105,9 @@ fn to_image_content(img: &SerializedImage) -> Value {
 }
 
 /// `anthropic.py:130`. Strict schemas are unpacked from `function` and keep `strict: true`.
-pub fn to_fnc_ctx(tools: &[crate::llm::provider_format::ToolSchema]) -> Result<Vec<Value>, FormatError> {
+pub fn to_fnc_ctx(
+    tools: &[crate::llm::provider_format::ToolSchema],
+) -> Result<Vec<Value>, FormatError> {
     let mut schemas = Vec::new();
     for tool in tools {
         let entry = match tool {
@@ -130,14 +132,16 @@ pub fn to_fnc_ctx(tools: &[crate::llm::provider_format::ToolSchema]) -> Result<V
                 out.insert("input_schema".into(), field(schema, "parameters")?.clone());
                 Value::Object(out)
             }
-            crate::llm::provider_format::ToolSchema::Raw { name, raw_schema } => serde_json::json!({
-                "name": name,
-                "description": raw_schema.get("description").cloned().unwrap_or_else(|| "".into()),
-                "input_schema": raw_schema
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| Value::Object(Map::new())),
-            }),
+            crate::llm::provider_format::ToolSchema::Raw { name, raw_schema } => {
+                serde_json::json!({
+                    "name": name,
+                    "description": raw_schema.get("description").cloned().unwrap_or_else(|| "".into()),
+                    "input_schema": raw_schema
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or_else(|| Value::Object(Map::new())),
+                })
+            }
             // The reference iterates `tool_ctx.function_tools`, which cannot contain one.
             crate::llm::provider_format::ToolSchema::Provider(_) => continue,
         };

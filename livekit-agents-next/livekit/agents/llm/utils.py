@@ -156,7 +156,7 @@ def build_legacy_openai_schema(
 ) -> dict[str, Any]:
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    return _core.build_legacy_openai_schema(  # type: ignore[no-any-return]
+    return _core.build_legacy_openai_schema(
         *tool_schema(function_tool), internally_tagged=internally_tagged
     )
 
@@ -165,7 +165,7 @@ def build_strict_openai_schema(
     function_tool: FunctionTool,
 ) -> dict[str, Any]:
     """strict mode tool description"""
-    return _core.build_strict_openai_schema(*tool_schema(function_tool))  # type: ignore[no-any-return]
+    return _core.build_strict_openai_schema(*tool_schema(function_tool))
 
 
 ResponseFormatT = TypeVar("ResponseFormatT", default=None)
@@ -213,7 +213,7 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
         if isinstance(json_schema_type, TypeAdapter)
         else json_schema_type.model_json_schema()
     )
-    return _core.to_openai_response_format(name, raw)  # type: ignore[no-any-return]
+    return _core.to_openai_response_format(name, raw)
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
@@ -258,7 +258,7 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
     """A tool call's raw JSON arguments as a dict, repaired when malformed (leaked chat-template
     tokens stripped, double encoding unwrapped). Raises ``ValueError`` when unrecoverable or not
     a dict."""
-    return _core.parse_function_arguments(json_arguments)  # type: ignore[no-any-return]
+    return _core.parse_function_arguments(json_arguments)
 
 
 def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, Any] | None:
@@ -359,9 +359,9 @@ def validated_arguments(
     # _ensure_strict_json_schema): null means "use the default". Resolve
     # the sentinel, including in nested models, before validation.
     schema = model_type.model_json_schema()
-    args_dict = _core.inject_schema_defaults(args_dict, schema)
+    resolved = _core.inject_schema_defaults(args_dict, schema)
 
-    model = model_type.model_validate(args_dict)  # can raise ValidationError
+    model = model_type.model_validate(resolved)  # can raise ValidationError
     return _shallow_model_dump(model)
 
 
@@ -453,7 +453,7 @@ def strip_thinking_tokens(
     visible, state._buffer, state._end_marker = _core.strip_thinking(
         content, state.start_tag, state.end_tag, state._buffer, state._end_marker, final
     )
-    return visible  # type: ignore[no-any-return]
+    return visible
 
 
 def _is_valid_function_output(value: Any) -> bool:

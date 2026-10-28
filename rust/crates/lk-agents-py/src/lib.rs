@@ -16,12 +16,12 @@ use pyo3::prelude::*;
 extern crate lk_agents_rtc as _;
 extern crate lk_agents_voice as _;
 
+/// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
+pub mod avatar_output;
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
 /// Entering the host: a call in its operation's captured context, host streams and notices.
 pub mod host;
-/// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
-pub mod avatar_output;
 /// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over the core's `NodeFactory`.
 pub mod nodes;
 /// `init(role)` and the registration table.
@@ -42,6 +42,9 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type ExpFilter = lk_agents_runtime::filters::ExpFilter;
+    type MovingAverage = lk_agents_runtime::filters::MovingAverage;
+    type LlmAlgorithms = lk_agents_runtime::llm_algorithms::LlmAlgorithms;
     type ProviderAttempts = lk_agents_runtime::cores::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;

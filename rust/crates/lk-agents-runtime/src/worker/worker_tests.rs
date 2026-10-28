@@ -869,3 +869,19 @@ async fn accepting_tcp_without_registering_does_not_restore_the_retry_budget() {
     assert_eq!(wire.lock().unwrap().attempts, 2, "only registration restores the retry budget");
     assert!(error.to_string().contains("registration timed out"));
 }
+
+// Catches: skipping the 5-sample average, so one CPU spike marks a healthy worker as full.
+#[test]
+fn default_load_calc_averages_five_samples() {
+    let mut c = crate::worker::DefaultLoadCalc::new();
+    assert_eq!(c.get(), 0.0, "empty window must read 0, or a cold worker is never available");
+    for s in [1.0, 0.0, 0.0, 0.0, 0.0] {
+        c.add_sample(s);
+    }
+    assert!((c.get() - 0.2).abs() < 1e-6, "{}", c.get());
+    // Window slides: the spike falls out after five more samples.
+    for _ in 0..5 {
+        c.add_sample(0.0);
+    }
+    assert_eq!(c.get(), 0.0);
+}

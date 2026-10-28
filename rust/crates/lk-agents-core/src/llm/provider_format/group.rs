@@ -2,8 +2,7 @@
 //! the context.
 
 use std::borrow::Cow;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput, Role};
 
@@ -40,7 +39,10 @@ pub fn convert_mid_conversation_instructions<'a>(
             }
             continue;
         }
-        if matches!(item, ChatItem::Message(_) | ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)) {
+        if matches!(
+            item,
+            ChatItem::Message(_) | ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
+        ) {
             preamble_allowed = false;
         }
         items.push(Cow::Borrowed(item));
@@ -102,7 +104,6 @@ pub struct Grouping<'a> {
     pub dropped: Vec<Dropped>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `utils.py:54`. Messages and calls group by `group_id` when set (#4170), else by the `id` before
 /// the first `/`; outputs attach by `call_id`.
 pub fn group_tool_calls<'a>(
@@ -111,7 +112,7 @@ pub fn group_tool_calls<'a>(
     let mut keys: Vec<ChatItemGroup<'a>> = Vec::new();
     // `item_groups` is an `OrderedDict`: re-assigning keeps position, and a non-groupable item
     // whose `id` collides replaces that group. An index over a `Vec` reproduces both.
-    let mut index: HashMap<&'a str, usize> = HashMap::new();
+    let mut index: BTreeMap<&'a str, usize> = BTreeMap::new();
     let mut tool_outputs: Vec<&'a FunctionCallOutput> = Vec::new();
     let mut dropped: Vec<Dropped> = Vec::new();
 
@@ -150,7 +151,7 @@ pub fn group_tool_calls<'a>(
     }
 
     // One flat `call_id -> group` map first, so with a shared `call_id` the last group wins.
-    let mut call_id_to_group: HashMap<&str, usize> = HashMap::new();
+    let mut call_id_to_group: BTreeMap<&str, usize> = BTreeMap::new();
     for (i, group) in keys.iter().enumerate() {
         for call in &group.tool_calls {
             call_id_to_group.insert(call.call_id.as_str(), i);
@@ -174,10 +175,9 @@ pub fn group_tool_calls<'a>(
     Ok(Grouping { groups: keys, dropped })
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 fn upsert<'g, 'a>(
     keys: &'g mut Vec<ChatItemGroup<'a>>,
-    index: &mut HashMap<&'a str, usize>,
+    index: &mut BTreeMap<&'a str, usize>,
     id: &'a str,
 ) -> &'g mut ChatItemGroup<'a> {
     let i = *index.entry(id).or_insert_with(|| {
@@ -187,7 +187,6 @@ fn upsert<'g, 'a>(
     &mut keys[i]
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `utils.py:126`. Keep the equal-length early return: a balanced but mismatched group is left as
 /// it is.
 fn remove_invalid_tool_calls(group: &mut ChatItemGroup<'_>, dropped: &mut Vec<Dropped>) {
@@ -195,8 +194,9 @@ fn remove_invalid_tool_calls(group: &mut ChatItemGroup<'_>, dropped: &mut Vec<Dr
         return;
     }
 
-    let call_ids: HashSet<&str> = group.tool_calls.iter().map(|c| c.call_id.as_str()).collect();
-    let output_ids: HashSet<&str> = group.tool_outputs.iter().map(|o| o.call_id.as_str()).collect();
+    let call_ids: BTreeSet<&str> = group.tool_calls.iter().map(|c| c.call_id.as_str()).collect();
+    let output_ids: BTreeSet<&str> =
+        group.tool_outputs.iter().map(|o| o.call_id.as_str()).collect();
 
     group.tool_calls.retain(|c| {
         let keep = output_ids.contains(c.call_id.as_str());
@@ -227,7 +227,9 @@ mod tests {
     use lk_agents_abi::ChatContext;
 
     use super::*;
-    use crate::llm::provider_format::testkit::{call, ctx, handoff, msg, msg_with, out, text_content};
+    use crate::llm::provider_format::testkit::{
+        call, ctx, handoff, msg, msg_with, out, text_content,
+    };
 
     fn convert(c: &ChatContext) -> Vec<Cow<'_, ChatItem>> {
         convert_mid_conversation_instructions(c, Role::User, DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE)
@@ -378,7 +380,7 @@ mod tests {
         );
     }
 
-    // Catches: `item_groups` as a HashMap, or appending on re-assignment.
+    // Catches: `item_groups` as a BTreeMap, or appending on re-assignment.
     #[test]
     fn a_colliding_user_message_replaces_the_group_in_place() {
         let items = vec![

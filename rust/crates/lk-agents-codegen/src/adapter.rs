@@ -124,6 +124,7 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         "type {name}Impl = <crate::Selected as super::Implementations>::{};\n",
         c.rust_name
     ));
+    s.push_str(&numeric_extractors(c)?);
     if c.form == Form::Functions {
         for m in &c.methods {
             s.push('\n');
@@ -145,8 +146,10 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     } else {
         ""
     };
+    let host_module = &c.host_module;
+    let subclass = if c.subclass { "subclass, " } else { "" };
     s.push_str(&format!(
-        "#[pyclass({frozen}name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}({visibility}{held});\n\n#[pymethods]\nimpl {name} {{\n"
+        "#[pyclass({frozen}{subclass}name = \"{name}\", module = \"{host_module}\")]\npub struct {name}({visibility}{held});\n\n#[pymethods]\nimpl {name} {{\n"
     ));
     let methods = c.methods.iter().map(|m| method(decls, c, m)).collect::<Result<Vec<_>, _>>()?;
     s.push_str(&methods.join("\n"));
@@ -159,19 +162,60 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     Ok(s)
 }
 
+/// PyO3's `from_py_with` accepts a function path, so extractors live beside the adapters.
+fn extractor_name(c: &Class, m: &Method, p: &Param) -> String {
+    format!(
+        "_extract_{}_{}_{}",
+        crate::decl::resolve::snake(&c.rust_name),
+        m.rust_name.trim_start_matches("r#"),
+        p.name.trim_start_matches("r#")
+    )
+}
+
+fn numeric_extractors(c: &Class) -> Result<String, String> {
+    let mut source = String::new();
+    for method in &c.methods {
+        for parameter in &method.params {
+            if !native(&parameter.ty) || !contains_number(&parameter.ty) {
+                continue;
+            }
+            let at = format!("{}::{}", c.trait_path, method.rust_name);
+            let conversion =
+                from_object("obj", &parameter.ty, &format!("{:?}", parameter.name), &at)?;
+            source.push_str(&format!(
+                "\nfn {}(obj: &Bound<'_, PyAny>) -> PyResult<{}> {{\n    {conversion}\n}}\n",
+                extractor_name(c, method, parameter),
+                parameter.ty.rust()
+            ));
+        }
+    }
+    Ok(source)
+}
+
 fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String> {
     let at = format!("{}::{}", c.trait_path, m.rust_name);
     let call = format!("<{}Impl as {}>::{}", c.name, c.trait_path, m.rust_name);
     // Functions are module items, methods are indented in their `impl`.
-    let ind = if m.kind == MethodKind::Function { "" } else { "    " };
+    let ind = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
+        ""
+    } else {
+        "    "
+    };
+    let guard = if m.pid.unwrap_or(c.pid) {
+        format!("{ind}    ::lk_agents_abi::python::check_pid()?;\n")
+    } else {
+        String::new()
+    };
     let mut s = doc(&m.doc, ind);
     match m.kind {
         MethodKind::New => s.push_str(&format!("{ind}#[new]\n")),
         MethodKind::Getter => s.push_str(&format!("{ind}#[getter]\n")),
-        MethodKind::Function => s.push_str("#[pyfunction]\n"),
+        MethodKind::Function | MethodKind::AsyncFunction => s.push_str("#[pyfunction]\n"),
         MethodKind::Call | MethodKind::Await | MethodKind::Next => {}
     }
-    if m.name != m.rust_name && !matches!(m.kind, MethodKind::Function | MethodKind::Next) {
+    if m.name != m.rust_name
+        && !matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction | MethodKind::Next)
+    {
         s.push_str(&format!("{ind}#[pyo3(name = \"{}\")]\n", m.name));
     }
     if !m.params.is_empty() {
@@ -181,13 +225,18 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     let mut prelude = String::new();
     for p in &m.params {
         let (ty, convert) = input(&at, p)?;
-        args.push(format!("{}: {ty}", p.name));
+        let extraction = if native(&p.ty) && contains_number(&p.ty) {
+            format!("#[pyo3(from_py_with = {})] ", extractor_name(c, m, p))
+        } else {
+            String::new()
+        };
+        args.push(format!("{extraction}{}: {ty}", p.name));
         if let Some(convert) = convert {
             prelude.push_str(&format!("{ind}    let {} = {convert};\n", p.name));
         }
     }
     let receiver = match m.kind {
-        MethodKind::New | MethodKind::Function => None,
+        MethodKind::New | MethodKind::Function | MethodKind::AsyncFunction => None,
         _ if m.mutable => Some("&mut self"),
         _ => Some("&self"),
     };
@@ -200,7 +249,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     let (ret_ty, wrap) = output(&at, decls, c, &m.ret.ok)?;
     let fn_name = match m.kind {
         MethodKind::New => "new".to_owned(),
-        MethodKind::Function => m.name.clone(),
+        MethodKind::Function | MethodKind::AsyncFunction => m.name.clone(),
         _ => m.rust_name.clone(),
     };
     match m.kind {
@@ -212,13 +261,21 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 }
             };
             s.push_str(&format!(
-                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
+                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
                 item.replace("{}", "out").replace("{py}", "py")
+            ));
+        }
+        MethodKind::AsyncFunction => {
+            s.push_str(&format!(
+                "pub fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}    ::lk_agents_abi::python::future_into_py(py, async move {{\n        let out = {call}({}).await{err};\n        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n    }})\n}}\n",
+                ["py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
+                passed.join(", "),
+                wrap.replace("{}", "out").replace("{py}", "py")
             ));
         }
         MethodKind::Await => {
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            let out = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            let out = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", "out").replace("{py}", "py")
@@ -227,10 +284,14 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         _ => {
             let needs_py = ret_ty.contains("'py");
             // A function is registered from `mod.rs`.
-            let vis = if m.kind == MethodKind::Function { "pub " } else { "" };
+            let vis = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
+                "pub "
+            } else {
+                ""
+            };
             let generics = if needs_py { "<'py>" } else { "" };
             let this = match m.kind {
-                MethodKind::New | MethodKind::Function => None,
+                MethodKind::New | MethodKind::Function | MethodKind::AsyncFunction => None,
                 _ if m.mutable => Some("&mut self.0".to_owned()),
                 _ => Some("&self.0".to_owned()),
             };
@@ -254,7 +315,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 )
             };
             s.push_str(&format!(
-                "{ind}{vis}fn {fn_name}{generics}({all_args}) -> PyResult<{ret_ty}> {{\n{ind}    ::lk_agents_abi::python::check_pid()?;\n{prelude}{body}{ind}}}\n"
+                "{ind}{vis}fn {fn_name}{generics}({all_args}) -> PyResult<{ret_ty}> {{\n{guard}{prelude}{body}{ind}}}\n"
             ));
         }
     }
@@ -331,6 +392,9 @@ fn signature(params: &[Param]) -> String {
             star = true;
         }
         match &p.default {
+            None if matches!(p.ty, Ty::Maybe(_)) => {
+                parts.push(format!("{} = ::lk_agents_abi::Maybe::NotGiven", p.name))
+            }
             None => parts.push(p.name.clone()),
             Some(d) => parts.push(format!("{} = {}", p.name, rust_literal(d, &p.ty))),
         }
@@ -359,9 +423,20 @@ fn native(ty: &Ty) -> bool {
         // A declared record crosses by its generated conversion functions, not a pyo3 trait.
         Ty::Record(r) => r.in_place || !matches!(r.host, HostForm::Record { .. }),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Error(_) => true,
-        Ty::Optional(t) | Ty::List(t) => native(t),
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
         Ty::Tuple(ts) => ts.iter().all(native),
+        _ => false,
+    }
+}
+
+/// Numeric leaves use the ABI extractor so Python booleans cannot stand in for numbers.
+fn contains_number(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int(_) | Ty::Float => true,
+        Ty::Optional(inner) | Ty::Maybe(inner) | Ty::List(inner) => contains_number(inner),
+        Ty::Map(key, value) => contains_number(key) || contains_number(value),
+        Ty::Tuple(items) => items.iter().any(contains_number),
         _ => false,
     }
 }
@@ -374,6 +449,10 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     }
     let path = format!("{:?}", p.name);
     match &p.ty {
+        Ty::Maybe(inner) => Ok((
+            "::lk_agents_abi::Maybe<Bound<'_, PyAny>>".into(),
+            Some(maybe_input(&p.name, inner, &path, at)?),
+        )),
         Ty::Optional(inner) => {
             if p.default.as_ref().is_some_and(|d| *d != Literal::None) {
                 return Err(format!(
@@ -402,9 +481,30 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     }
 }
 
+/// Convert a supplied value while preserving the existing omission sentinel.
+fn maybe_input(value: &str, inner: &Ty, path: &str, at: &str) -> Result<String, String> {
+    Ok(format!(
+        "match {value} {{ ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given(({})?) }}",
+        from_object("value", inner, path, at)?
+    ))
+}
+
 /// `PyResult<T>` of the object `v`.
 pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<String, String> {
     Ok(match ty {
+        Ty::Int(integer) => {
+            format!("::lk_agents_abi::python::number_from_py::<{}>(&{v}, {path})", integer.rust())
+        }
+        Ty::Float => format!("::lk_agents_abi::python::number_from_py::<f64>(&{v}, {path})"),
+        Ty::Maybe(inner) => format!(
+            "Ok({})",
+            maybe_input(
+                &format!("{v}.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()?"),
+                inner,
+                path,
+                at
+            )?
+        ),
         Ty::Json => format!("::lk_agents_abi::python::value_from_py(&{v}, {path})"),
         Ty::JsonObject => format!(
             "match ::lk_agents_abi::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
@@ -450,7 +550,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Duration => format!(
             "::lk_agents_abi::python::number_from_py::<f64>(&{v}, {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
         ),
-        Ty::Optional(inner) if !native(inner) => format!(
+        Ty::Optional(inner) => format!(
             "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
             from_object(v, inner, path, at)?
         ),

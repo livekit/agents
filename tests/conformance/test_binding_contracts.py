@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -151,3 +154,37 @@ async def test_cancelling_native_wait_does_not_cancel_playout(case: dict[str, An
     finally:
         waiter.cancel()
         await asyncio.gather(waiter, return_exceptions=True)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+def test_pure_algorithms_remain_usable_after_fork() -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import os
+import traceback
+from livekit.agents import _core
+
+_core.GetDtmfResult(user_input="1")
+filtered = _core.ExpFilter(0.5, initial=8.0)
+child = os.fork()
+if child == 0:
+    try:
+        assert filtered.apply(1, 0.0) == 4.0
+        assert _core.MovingAverage(2).add_sample(3.0) is None
+        assert _core.parse_function_arguments('{"x": 1}') == {"x": 1}
+        assert _core.to_strict_json_schema({"type": "object"})["type"] == "object"
+    except BaseException:
+        traceback.print_exc()
+        os._exit(1)
+    os._exit(0)
+_, status = os.waitpid(child, 0)
+assert os.waitstatus_to_exitcode(status) == 0
+""",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

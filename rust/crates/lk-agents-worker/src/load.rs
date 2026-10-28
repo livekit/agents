@@ -1,25 +1,25 @@
-//! Worker capacity, status, and idle-process calculations.
+//! Worker CPU smoothing, capacity, status, and idle-process calculations.
 
-use lk_agents_abi::MovingAverage;
+use lk_agents_abi::utils::filters::MovingAverage;
 
 /// Sampled independently by each worker.
 #[derive(Debug)]
-pub struct DefaultLoadCalc {
-    avg: MovingAverage,
+pub struct DefaultLoadCalc<Filter: MovingAverage> {
+    avg: Filter,
 }
 
-impl Default for DefaultLoadCalc {
+impl<Filter: MovingAverage> Default for DefaultLoadCalc<Filter> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DefaultLoadCalc {
+impl<Filter: MovingAverage> DefaultLoadCalc<Filter> {
     /// Five samples at the load-update interval cover 2.5 seconds.
     pub const WINDOW: usize = 5;
 
     pub fn new() -> Self {
-        DefaultLoadCalc { avg: MovingAverage::new(Self::WINDOW) }
+        DefaultLoadCalc { avg: Filter::new(Self::WINDOW) }
     }
 
     /// Normalised to `0.0..=1.0`.
@@ -108,4 +108,3 @@ pub enum WorkerStatus {
     Available,
     Full,
 }
-

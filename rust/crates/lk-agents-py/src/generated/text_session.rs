@@ -13,6 +13,14 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
 type TextSessionRunnerImpl = <crate::Selected as super::Implementations>::TextSessionRunner;
 
+fn _extract_text_session_runner_new_max_depth(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "max_depth")
+}
+
+fn _extract_text_session_runner_progress_operation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "operation")
+}
+
 #[pyclass(frozen, name = "TextSessionRunner", module = "livekit.agents._core")]
 pub struct TextSessionRunner(::std::sync::Arc<TextSessionRunnerImpl>);
 
@@ -20,7 +28,7 @@ pub struct TextSessionRunner(::std::sync::Arc<TextSessionRunnerImpl>);
 impl TextSessionRunner {
     #[new]
     #[pyo3(signature = (root_agent, agents, max_depth))]
-    fn new(root_agent: ::std::string::String, agents: Bound<'_, PyAny>, max_depth: usize) -> PyResult<TextSessionRunner> {
+    fn new(root_agent: ::std::string::String, agents: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_text_session_runner_new_max_depth)] max_depth: usize) -> PyResult<TextSessionRunner> {
         ::lk_agents_abi::python::check_pid()?;
         let agents = agents.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::text_session::text_session_agent_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(root_agent, agents, max_depth).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -45,7 +53,7 @@ impl TextSessionRunner {
     }
 
     #[pyo3(signature = (invocation_id, operation, message))]
-    fn progress(&self, invocation_id: ::std::string::String, operation: u64, message: ::std::string::String) -> PyResult<()> {
+    fn progress(&self, invocation_id: ::std::string::String, #[pyo3(from_py_with = _extract_text_session_runner_progress_operation)] operation: u64, message: ::std::string::String) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(&self.0, &invocation_id, operation, message).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())

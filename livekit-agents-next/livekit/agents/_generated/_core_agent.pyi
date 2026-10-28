@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from livekit.agents.llm import LLM
@@ -16,7 +17,7 @@ class RunEvents:
     """The observed events of one invocation and the position `next_event` reads from. Each call
     returns the index of the event it matched.
     """
-    def __init__(self, events: list[ObservedEvent]) -> None: ...
+    def __init__(self, events: Sequence[ObservedEvent]) -> None: ...
     def at(self, index: int, expected: EventExpectation | None) -> int:
         """The event at `index` (from the end when negative), meeting `expected` when given."""
     def next_event(self, expected: EventExpectation | None) -> int:

@@ -95,7 +95,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", 
 
 [features]
 # libsoxr behind the fallback TTS's and the VAD machine's rate conversions
-# (`lk_agents_media::new_resampler`); off, `lk-agents-abi`'s linear one. On by default.
+# (`lk_agents_media::new_resampler`); off, `lk-agents-media`'s linear one. On by default.
 default = ["native-audio"]
 native-audio = ["lk-agents-media/resample"]
 # The network-reaching, `#[ignore]`d live tests (`tests/inference/live_*.rs`).

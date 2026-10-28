@@ -13,6 +13,26 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/recorder.rs.
 type SessionRecorderImpl = <crate::Selected as super::Implementations>::SessionRecorder;
 
+fn _extract_session_recorder_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+}
+
+fn _extract_session_recorder_new_t0(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "t0")).map(Some) }
+}
+
+fn _extract_session_recorder_new_bitrate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "bitrate")
+}
+
+fn _extract_session_recorder_flush_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_session_recorder_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")).map(Some) }
+}
+
 /// One admitted runtime worker owns opening, encoding, writes and finalization.
 #[pyclass(frozen, name = "SessionRecorder", module = "livekit.agents._core")]
 pub struct SessionRecorder(::std::sync::Arc<SessionRecorderImpl>);
@@ -21,7 +41,7 @@ pub struct SessionRecorder(::std::sync::Arc<SessionRecorderImpl>);
 impl SessionRecorder {
     #[new]
     #[pyo3(signature = (path, *, sample_rate = 48000, t0 = None, bitrate = 64000))]
-    fn new(path: ::std::string::String, sample_rate: u32, t0: ::std::option::Option<f64>, bitrate: u32) -> PyResult<SessionRecorder> {
+    fn new(path: ::std::string::String, #[pyo3(from_py_with = _extract_session_recorder_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_session_recorder_new_t0)] t0: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)] bitrate: u32) -> PyResult<SessionRecorder> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(path, sample_rate, t0, bitrate).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(SessionRecorder(::std::sync::Arc::new(out)))
@@ -60,7 +80,7 @@ impl SessionRecorder {
     }
 
     #[pyo3(signature = (now))]
-    fn flush<'py>(&self, py: Python<'py>, now: f64) -> PyResult<Bound<'py, PyAny>> {
+    fn flush<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_session_recorder_flush_now)] now: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -71,7 +91,7 @@ impl SessionRecorder {
     }
 
     #[pyo3(signature = (now = None))]
-    fn finish<'py>(&self, py: Python<'py>, now: ::std::option::Option<f64>) -> PyResult<Bound<'py, PyAny>> {
+    fn finish<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_session_recorder_finish_now)] now: ::std::option::Option<f64>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {

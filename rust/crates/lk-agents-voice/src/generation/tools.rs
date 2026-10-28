@@ -267,7 +267,7 @@ fn repaired_arguments(raw: &str) -> Option<String> {
     if raw.trim().is_empty() || serde_json::from_str::<serde_json::Value>(raw).is_ok() {
         return None;
     }
-    let parsed = lk_agents_abi::llm::tool_arguments::parse(raw).ok()?;
+    let parsed = lk_agents_core::llm::tool_arguments::parse(raw).ok()?;
     parsed.repair.as_ref()?;
     Some(serde_json::Value::Object(parsed.arguments).to_string())
 }

@@ -249,6 +249,11 @@ pub struct Refusal {
 #[derive(Debug, Clone)]
 pub struct Class {
     pub form: Form,
+    /// Whether this class or function group checks for fork inheritance by default.
+    pub pid: bool,
+    /// Python identity and subclass support declared by the class contract.
+    pub host_module: String,
+    pub subclass: bool,
     /// The host class name (`_core.InferenceLlm`); the trait's for functions.
     pub name: String,
     /// The trait's identifier: the `Implementations` associated type is named after it.
@@ -293,6 +298,8 @@ pub struct Method {
     /// The host name; the Rust one unless `name = ".."`.
     pub name: String,
     pub kind: MethodKind,
+    /// Override the class or function group fork guard for this entry.
+    pub pid: Option<bool>,
     pub params: Vec<Param>,
     pub ret: Ret,
     pub doc: Vec<String>,
@@ -307,6 +314,8 @@ pub enum MethodKind {
     Call,
     /// A module function: no receiver, synchronous.
     Function,
+    /// An async module function with no receiver.
+    AsyncFunction,
     /// An `async fn` on `&self`, awaited by the host.
     Await,
     /// A read-only property on `&self`.
@@ -371,6 +380,8 @@ pub enum Ty {
     JsonObject,
     /// `Option<T>`: the value or the explicit null.
     Optional(Box<Ty>),
+    /// Input omission is distinct from a given value, including an explicit null.
+    Maybe(Box<Ty>),
     List(Box<Ty>),
     /// `BTreeMap<K, V>`: a dict, its keys converted by their declared kind.
     Map(Box<Ty>, Box<Ty>),
@@ -501,6 +512,7 @@ impl Ty {
                 "::serde_json::Map<::std::string::String, ::serde_json::Value>".into()
             }
             Ty::Optional(t) => format!("::std::option::Option<{}>", t.rust()),
+            Ty::Maybe(t) => format!("::lk_agents_abi::Maybe<{}>", t.rust()),
             Ty::List(t) => format!("::std::vec::Vec<{}>", t.rust()),
             Ty::Map(k, v) => format!("::std::collections::BTreeMap<{}, {}>", k.rust(), v.rust()),
             Ty::Set(t) => format!("::std::collections::BTreeSet<{}>", t.rust()),

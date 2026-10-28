@@ -1,5 +1,5 @@
 //! Every media format the agent speaks: container decode to PCM, ogg/opus encode, image encode,
-//! and resampling, kept below the purity line (nothing in tiers 0/1 may depend on this crate).
+//! filters and resampling, shared by the subject cores and runtime.
 //! Pure Rust by default; `blingfire`, `images`, `ffmpeg` and `resample` add the C/C++ parts.
 //! On the decode path a drift flush must not tear the [`Decoder`] down: the watchdog fires
 //! mid-container (`tts/tts.py:1300-1310`).
@@ -12,12 +12,14 @@ pub mod decoder;
 pub mod error;
 #[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;
+pub mod filters;
 pub mod frame_resampler;
 #[cfg(feature = "images")]
 pub mod images;
 pub mod mime;
 pub mod mixer;
 pub mod recorder;
+pub mod resample;
 #[cfg(feature = "resample")]
 pub mod soxr;
 pub mod stream_buffer;
@@ -25,9 +27,11 @@ pub mod wav;
 
 pub use decoder::Decoder;
 pub use error::{CodecError, Result};
+pub use filters::{ExpFilter, MovingAverage};
 pub use frame_resampler::{FrameResampler, OnChange};
-pub use lk_agents_abi::{LinearResampler, Quality, ResampleError, Resampler};
+pub use lk_agents_abi::{Quality, ResampleError, Resampler};
 pub use mime::{DecodePlan, UnknownMime, decode_plan, mime_to_av_format};
+pub use resample::LinearResampler;
 #[cfg(feature = "resample")]
 pub use soxr::SoxrResampler;
 pub use stream_buffer::StreamBuffer;

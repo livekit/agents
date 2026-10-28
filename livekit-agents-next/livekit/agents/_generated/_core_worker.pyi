@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .worker_cli import CliArgs
 
 def job_timeline(
@@ -30,7 +32,7 @@ def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | No
     the URL and the agent are known; a worker registered without a deployment is `default`.
     """
 
-def parse_cli(argv: list[str]) -> CliArgs: ...
+def parse_cli(argv: Sequence[str]) -> CliArgs: ...
 
 def entrypoint_module(path: str | None) -> tuple[str, str]: ...
 

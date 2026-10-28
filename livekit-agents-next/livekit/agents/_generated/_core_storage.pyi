@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from livekit.agents.storage.context import TurnHost
 
 from .._core import ChatItem, Streams, Thread, _core_A2ADoor
@@ -21,7 +23,7 @@ class Storage:
         thread_id: str,
         lane: str,
         *,
-        initial_history: list[ChatItem] | None = None,
+        initial_history: Sequence[ChatItem] | None = None,
     ) -> _core_VoiceStore: ...
     def __init__(
         self,
@@ -102,18 +104,23 @@ class _core_ContextActivation:
     """Activation state and revision/schema decisions. Application type validation stays in the host."""
     def __init__(
         self,
-        scopes: list[ContextScope],
+        scopes: Sequence[ContextScope],
         routing_state: object | None,
         read_only: bool,
     ) -> None: ...
-    async def load(self, scope_id: str, identity: str, fields: list[ContextField]) -> ContextValues:
+    async def load(
+        self,
+        scope_id: str,
+        identity: str,
+        fields: Sequence[ContextField],
+    ) -> ContextValues:
         """Check manifests before restoring values or accepting defaults for absent fields."""
     async def save(
         self,
         scope_id: str,
         identity: str,
         revision: int,
-        fields: list[ContextField],
+        fields: Sequence[ContextField],
     ) -> ContextValues:
         """Stage the validated fields; a stale activation cannot overwrite a newer revision."""
     @property

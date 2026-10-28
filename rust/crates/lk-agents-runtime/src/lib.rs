@@ -32,30 +32,30 @@ extern crate lk_agents_inference as _;
 #[cfg(feature = "python")]
 extern crate lk_agents_media as _;
 
-pub mod agent_run;
-pub mod codecs;
-#[cfg(feature = "media-images")]
-pub mod images;
-pub mod evals;
-pub mod fallback;
-pub mod media_workers;
-pub mod recording;
-pub mod avatar;
-pub mod avatar_output;
-pub mod host;
 pub mod a2a;
 pub mod a2a_auth;
 pub mod a2a_card;
 pub mod a2a_client;
-pub mod http;
-pub mod llm;
+pub mod agent_run;
+pub mod avatar;
+pub mod avatar_output;
+pub mod codecs;
 pub mod duplex;
-pub mod realtime;
+pub mod evals;
+pub mod fallback;
+pub mod host;
+pub mod http;
+#[cfg(feature = "media-images")]
+pub mod images;
+pub mod llm;
 pub mod mcp;
+pub mod media_workers;
 pub mod process;
+pub mod realtime;
+pub mod recording;
 pub mod source;
-pub mod storage;
 pub mod sse;
+pub mod storage;
 pub mod stt;
 pub mod task;
 pub mod telemetry;
@@ -68,3 +68,6 @@ pub mod text_session;
 pub mod worker;
 
 pub mod vad;
+
+pub mod llm_algorithms;
+pub use lk_agents_media::filters;

@@ -1,6 +1,8 @@
 //! Worker I/O, process resources, host callbacks and effect execution.
 
-pub use lk_agents_worker::{DefaultLoadCalc, LoadInputs, WorkerStatus};
+pub use lk_agents_worker::{LoadInputs, WorkerStatus};
+/// Wire worker smoothing policy to the shared media filter.
+pub type DefaultLoadCalc = lk_agents_worker::DefaultLoadCalc<lk_agents_media::MovingAverage>;
 
 /// Log target for every line: the Python logger name, so `pyo3-log` routes them to it.
 pub(crate) const LOG: &str = "livekit.agents";

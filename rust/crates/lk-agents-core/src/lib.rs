@@ -15,6 +15,7 @@ pub mod agent;
 pub mod agent_run;
 pub mod approval;
 pub mod assertions;
+pub mod llm;
 pub mod request;
 pub mod text_session;
 pub mod tool_calls;

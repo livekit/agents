@@ -172,8 +172,11 @@ fn class(c: &Class, imports: &mut Imports) -> String {
 }
 
 fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
-    let mut params =
-        if m.kind == MethodKind::Function { Vec::new() } else { vec!["self".to_owned()] };
+    let mut params = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
+        Vec::new()
+    } else {
+        vec!["self".to_owned()]
+    };
     let mut star = false;
     for p in &m.params {
         if p.kw_only && !star {
@@ -182,18 +185,25 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         }
         let ty = annotation(c, &p.ty, Dir::In, imports);
         params.push(match &p.default {
-            Some(d) => format!("{}: {ty} = {}", p.name, py_literal(d)),
-            None => format!("{}: {ty}", p.name),
+            Some(d) => format!("{}: {ty} = {}", p.name.trim_start_matches("r#"), py_literal(d)),
+            None if matches!(p.ty, Ty::Maybe(_)) => {
+                format!("{}: {ty} = ...", p.name.trim_start_matches("r#"))
+            }
+            None => format!("{}: {ty}", p.name.trim_start_matches("r#")),
         });
     }
     let ret = annotation(c, &m.ret.ok, Dir::Out, imports);
     let mut s = String::new();
-    let ind = if m.kind == MethodKind::Function { "" } else { "    " };
+    let ind = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
+        ""
+    } else {
+        "    "
+    };
     let doc = docstring(&m.doc, &format!("{ind}    "));
     let tail = if doc.is_empty() { " ...\n".to_owned() } else { format!("\n{doc}") };
     let (head, name, ret) = match m.kind {
         MethodKind::Function | MethodKind::Call => ("def", m.name.as_str(), ret),
-        MethodKind::Await => ("async def", m.name.as_str(), ret),
+        MethodKind::Await | MethodKind::AsyncFunction => ("async def", m.name.as_str(), ret),
         MethodKind::New => ("def", "__init__", "None".to_owned()),
         MethodKind::Getter => {
             s.push_str("    @property\n");
@@ -241,12 +251,26 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(c, t, dir, imports)),
+        Ty::Maybe(t) => {
+            imports.add("..types", "NotGivenOr");
+            format!("NotGivenOr[{}]", annotation(c, t, dir, imports))
+        }
         Ty::List(t) if dir == Dir::In && matches!(**t, Ty::Int(crate::decl::Int::U8)) => {
             "bytes | bytearray | list[int]".into()
         }
+        Ty::List(t) if dir == Dir::In => {
+            imports.add("collections.abc", "Sequence");
+            format!("Sequence[{}]", annotation(c, t, dir, imports))
+        }
         Ty::List(t) => format!("list[{}]", annotation(c, t, dir, imports)),
         Ty::Map(k, t) => {
-            format!("dict[{}, {}]", annotation(c, k, dir, imports), annotation(c, t, dir, imports))
+            let map = if dir == Dir::In {
+                imports.add("collections.abc", "Mapping");
+                "Mapping"
+            } else {
+                "dict"
+            };
+            format!("{map}[{}, {}]", annotation(c, k, dir, imports), annotation(c, t, dir, imports))
         }
         Ty::Set(t) => format!("frozenset[{}]", annotation(c, t, dir, imports)),
         Ty::Tuple(ts) => format!(

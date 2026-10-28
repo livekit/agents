@@ -1,0 +1,140 @@
+//! GENERATED FILE -- DO NOT EDIT.
+//!
+//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
+//! `#[host(class)]` and declared `#[host(proxy)]` traits of `lk-agents-abi`.
+//!
+//! The `utils` classes.
+
+// A host signature takes the parameters it declares.
+#![allow(clippy::too_many_arguments)]
+
+use pyo3::prelude::*;
+
+// Declared in rust/crates/lk-agents-abi/src/utils/filters.rs.
+type ExpFilterImpl = <crate::Selected as super::Implementations>::ExpFilter;
+
+fn _extract_exp_filter_new_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "alpha")
+}
+
+fn _extract_exp_filter_new_max_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?) })
+}
+
+fn _extract_exp_filter_new_min_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?) })
+}
+
+fn _extract_exp_filter_new_initial(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?) })
+}
+
+fn _extract_exp_filter_reset_alpha(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "alpha"))?) })
+}
+
+fn _extract_exp_filter_reset_initial(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?) })
+}
+
+fn _extract_exp_filter_reset_min_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?) })
+}
+
+fn _extract_exp_filter_reset_max_val(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?) })
+}
+
+fn _extract_exp_filter_apply_exp(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "exp")
+}
+
+fn _extract_exp_filter_apply_sample(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Maybe<f64>> {
+    Ok(match obj.extract::<::lk_agents_abi::Maybe<Bound<'_, PyAny>>>()? { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((::lk_agents_abi::python::number_from_py::<f64>(&value, "sample"))?) })
+}
+
+fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "alpha")
+}
+
+#[pyclass(subclass, name = "ExpFilter", module = "livekit.agents.utils.exp_filter")]
+pub struct ExpFilter(ExpFilterImpl);
+
+#[pymethods]
+impl ExpFilter {
+    #[new]
+    #[pyo3(signature = (alpha, max_val = ::lk_agents_abi::Maybe::NotGiven, min_val = ::lk_agents_abi::Maybe::NotGiven, initial = ::lk_agents_abi::Maybe::NotGiven))]
+    fn new(#[pyo3(from_py_with = _extract_exp_filter_new_alpha)] alpha: f64, #[pyo3(from_py_with = _extract_exp_filter_new_max_val)] max_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_new_min_val)] min_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_new_initial)] initial: ::lk_agents_abi::Maybe<f64>) -> PyResult<ExpFilter> {
+        let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::new(alpha, max_val, min_val, initial).map_err(|e: ::lk_agents_abi::FilterError| <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(ExpFilter(out))
+    }
+
+    #[pyo3(signature = (alpha = ::lk_agents_abi::Maybe::NotGiven, initial = ::lk_agents_abi::Maybe::NotGiven, min_val = ::lk_agents_abi::Maybe::NotGiven, max_val = ::lk_agents_abi::Maybe::NotGiven))]
+    fn reset(&mut self, #[pyo3(from_py_with = _extract_exp_filter_reset_alpha)] alpha: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_initial)] initial: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_min_val)] min_val: ::lk_agents_abi::Maybe<f64>, #[pyo3(from_py_with = _extract_exp_filter_reset_max_val)] max_val: ::lk_agents_abi::Maybe<f64>) -> PyResult<()> {
+        <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (exp, sample = ::lk_agents_abi::Maybe::NotGiven))]
+    fn apply(&mut self, #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64, #[pyo3(from_py_with = _extract_exp_filter_apply_sample)] sample: ::lk_agents_abi::Maybe<f64>) -> PyResult<f64> {
+        let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::apply(&mut self.0, exp, sample).map_err(|e: ::lk_agents_abi::FilterError| <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    #[getter]
+    fn value(&self) -> PyResult<::std::option::Option<f64>> {
+        let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::value(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (alpha))]
+    fn update_base(&mut self, #[pyo3(from_py_with = _extract_exp_filter_update_base_alpha)] alpha: f64) -> PyResult<()> {
+        <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::update_base(&mut self.0, alpha);
+        Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/utils/filters.rs.
+type MovingAverageImpl = <crate::Selected as super::Implementations>::MovingAverage;
+
+fn _extract_moving_average_new_window_size(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "window_size")
+}
+
+fn _extract_moving_average_add_sample_sample(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "sample")
+}
+
+#[pyclass(subclass, name = "MovingAverage", module = "livekit.agents.utils.moving_average")]
+pub struct MovingAverage(MovingAverageImpl);
+
+#[pymethods]
+impl MovingAverage {
+    #[new]
+    #[pyo3(signature = (window_size))]
+    fn new(#[pyo3(from_py_with = _extract_moving_average_new_window_size)] window_size: usize) -> PyResult<MovingAverage> {
+        let out = <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::new(window_size);
+        Ok(MovingAverage(out))
+    }
+
+    #[pyo3(signature = (sample))]
+    fn add_sample(&mut self, #[pyo3(from_py_with = _extract_moving_average_add_sample_sample)] sample: f64) -> PyResult<()> {
+        <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::add_sample(&mut self.0, sample);
+        Ok(())
+    }
+
+    fn get_avg(&self) -> PyResult<f64> {
+        let out = <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::get_avg(&self.0);
+        Ok(out)
+    }
+
+    fn reset(&mut self) -> PyResult<()> {
+        <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::reset(&mut self.0);
+        Ok(())
+    }
+
+    fn size(&self) -> PyResult<usize> {
+        let out = <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::size(&self.0);
+        Ok(out)
+    }
+}

@@ -3,6 +3,8 @@
 use super::tree::Crate;
 use super::*;
 
+mod callables;
+
 const LIB: &str = "pub mod errors; pub mod llm; pub mod utils; pub use llm::chat::Item;";
 
 const ERRORS: &str = r#"
@@ -58,7 +60,8 @@ fn read(llm: &str) -> Result<Declarations, String> {
             ("llm.rs", "pub mod chat; pub mod class;"),
             ("llm/chat.rs", CHAT),
             ("llm/class.rs", llm),
-            ("utils.rs", "pub mod stream;"),
+            ("utils.rs", "pub mod stream; pub mod maybe;"),
+            ("utils/maybe.rs", "pub enum Maybe<T> { NotGiven, Given(T) }"),
             ("utils/stream.rs", "pub trait StreamSource<T> {}"),
         ],
     )?;
@@ -272,7 +275,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
     assert_eq!(stub.path, "_core_llm.pyi");
     for want in [
         "def __init__(self, model: str, *, extra: dict[str, object] | None = None) -> None: ...",
-        "    def chat(\n        self,\n        items: list[Item],\n        *,\n        conn: APIConnectOptions,\n        reporter: LLM | None = None,\n    ) -> NativeStream: ...",
+        "    def chat(\n        self,\n        items: Sequence[Item],\n        *,\n        conn: APIConnectOptions,\n        reporter: LLM | None = None,\n    ) -> NativeStream: ...",
         "def report(self) -> dict[str, object]: ...",
         "async def ping(self, timeout: float = 1.5) -> None: ...",
         "async def recv(self) -> dict[str, object] | None: ...",

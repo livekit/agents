@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .._core import ChatItem
 from .telemetry import LogRecordWire, ProjectedReportEvent, RecordingOptions, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
 
@@ -65,7 +67,7 @@ class _core_TelemetryPolicy:
         kind: TelemetryValueKind,
         length: int,
         depth: int,
-        children: list[int],
+        children: Sequence[int],
     ) -> int:
         """Conservative retained bytes for an SDK scalar or collection. Child charges are already
         bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
@@ -73,7 +75,7 @@ class _core_TelemetryPolicy:
     def record_bytes(
         self,
         kind: TelemetryRecordKind,
-        fields: list[int],
+        fields: Sequence[int],
         event_count: int,
         link_count: int,
     ) -> int:
@@ -217,7 +219,7 @@ class _core_TelemetryWorker:
     def release(self, key: str) -> None: ...
     def record_drop(self, kind: str, count: int) -> None:
         """`kind` is one of `dropped`, `failed`, `conflict`; unknown categories are refused."""
-    def admit_metric(self, name: str, attributes: list[tuple[str, str]]) -> bool:
+    def admit_metric(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool:
         """Refuse unbounded labels/series before host SDK instrument creation."""
     def wait(self, key: str, timeout: float) -> bool:
         """Off-loop cleanup only. A deadline never detaches work or releases its capacity early."""

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Self
 
 from livekit.agents.types import APIConnectOptions
@@ -84,7 +85,7 @@ class AgentClient:
         thread_id: str | None = None,
         task_id: str | None = None,
         metadata: MessageMetadata | None = None,
-        chat_ctx: list[ChatItem] | None = None,
+        chat_ctx: Sequence[ChatItem] | None = None,
     ) -> Reply: ...
     async def _core_subscribe(self, task_id: str, thread_id: str) -> Reply: ...
     async def cancel(
@@ -123,14 +124,14 @@ class _core_RemoteInteraction:
         endpoint: str,
         tool_id: str,
         function_call: ChatItem,
-        history: list[ChatItem],
+        history: Sequence[ChatItem],
     ) -> None: ...
     def message(
         self,
         arguments: object,
         structured: bool,
         offers_extension: bool,
-        history: list[ChatItem],
+        history: Sequence[ChatItem],
     ) -> Message: ...
     def update(self, update: TaskUpdate) -> RemoteEvent: ...
     def cancelled(self) -> None: ...

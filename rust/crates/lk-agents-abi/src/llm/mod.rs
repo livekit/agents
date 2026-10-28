@@ -6,7 +6,6 @@ pub mod ctx_diff;
 pub mod events;
 pub mod fallback;
 pub mod inference;
-pub mod json_repair;
 pub mod llm;
 pub mod mcp;
 #[cfg(feature = "serde")]
@@ -16,5 +15,4 @@ pub mod realtime;
 pub mod realtime_native;
 pub mod schema;
 pub mod to_dict;
-pub mod tool_arguments;
 pub mod tool_executor;

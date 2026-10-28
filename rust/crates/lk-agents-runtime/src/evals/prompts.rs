@@ -247,7 +247,7 @@ pub fn checked(judgment: Judgment) -> Result<Judgment, String> {
 
 /// `check_intent`'s arguments: repaired JSON, then a lax boolean.
 pub fn parse_intent(arguments: &str) -> Result<(bool, String), String> {
-    let value = lk_agents_abi::llm::json_repair::repair(arguments)?;
+    let value = lk_agents_core::llm::json_repair::repair(arguments)?;
     let success = match value.get("success") {
         Some(Value::Bool(b)) => *b,
         Some(Value::Number(n)) if n.as_i64() == Some(1) => true,

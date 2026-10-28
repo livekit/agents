@@ -1,8 +1,7 @@
 //! `_provider_format/google.py`. Results accumulate under a synthetic `tool` role (so they never
 //! share a turn with a user message), later rewritten to `user`. Gemini needs a final user turn.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use lk_agents_abi::ChatContext;
 use serde_json::{Map, Value};
@@ -17,9 +16,8 @@ pub struct GoogleFormatData {
     pub system_messages: Vec<String>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Keyed by `call_id`; the follow-up is rejected without them.
-pub type ThoughtSignatures = HashMap<String, Vec<u8>>;
+pub type ThoughtSignatures = BTreeMap<String, Vec<u8>>;
 
 pub fn to_chat_ctx(
     chat_ctx: &ChatContext,
@@ -93,7 +91,7 @@ fn to_image_part(img: &SerializedImage) -> Value {
         let mime_type = img.mime_type.as_deref().filter(|m| !m.is_empty()).unwrap_or("image/jpeg");
         return serde_json::json!({ "file_data": { "file_uri": url, "mime_type": mime_type } });
     }
-        // No assert here, unlike other dialects: neither arm set emits `data: null`.
+    // No assert here, unlike other dialects: neither arm set emits `data: null`.
     let data = match &img.data_bytes {
         Some(bytes) => bytes_value(bytes),
         None => Value::Null,
@@ -110,7 +108,8 @@ pub fn to_fnc_ctx(
     tool_behavior: Option<&str>,
     use_parameters_json_schema: bool,
 ) -> Result<Vec<Value>, FormatError> {
-    let missing = |key: &str| FormatError::MalformedToolSchema { detail: format!("missing {key:?}") };
+    let missing =
+        |key: &str| FormatError::MalformedToolSchema { detail: format!("missing {key:?}") };
     let mut out = Vec::new();
     for tool in tools {
         let (name, description, json_schema) = match tool {
@@ -138,7 +137,8 @@ pub fn to_fnc_ctx(
         if use_parameters_json_schema {
             schema.insert("parameters_json_schema".into(), none_if_falsy(json_schema));
         } else {
-            let json_schema = if is_truthy(&json_schema) { json_schema } else { Value::Object(Map::new()) };
+            let json_schema =
+                if is_truthy(&json_schema) { json_schema } else { Value::Object(Map::new()) };
             schema.insert("parameters".into(), none_if_falsy(simplify_schema(json_schema)?));
         }
         if let Some(behavior) = tool_behavior {
@@ -156,12 +156,43 @@ fn none_if_falsy(value: Value) -> Value {
 /// Every key Gemini's `types.Schema` accepts (field name and camelCase alias), and the JSON Schema
 /// keywords the simplifier still reads. Gemini refuses any other key.
 const GEMINI_SCHEMA_KEYS: &[&str] = &[
-    "additional_properties", "additionalProperties", "any_of", "anyOf", "default", "defs",
-    "description", "enum", "example", "format", "items", "max_items", "maxItems", "max_length",
-    "maxLength", "max_properties", "maxProperties", "maximum", "min_items", "minItems",
-    "min_length", "minLength", "min_properties", "minProperties", "minimum", "nullable", "pattern",
-    "properties", "property_ordering", "propertyOrdering", "ref", "required", "title", "type",
-    "$ref", "prefixItems", "const",
+    "additional_properties",
+    "additionalProperties",
+    "any_of",
+    "anyOf",
+    "default",
+    "defs",
+    "description",
+    "enum",
+    "example",
+    "format",
+    "items",
+    "max_items",
+    "maxItems",
+    "max_length",
+    "maxLength",
+    "max_properties",
+    "maxProperties",
+    "maximum",
+    "min_items",
+    "minItems",
+    "min_length",
+    "minLength",
+    "min_properties",
+    "minProperties",
+    "minimum",
+    "nullable",
+    "pattern",
+    "properties",
+    "property_ordering",
+    "propertyOrdering",
+    "ref",
+    "required",
+    "title",
+    "type",
+    "$ref",
+    "prefixItems",
+    "const",
 ];
 
 const GEMINI_TYPES: &[(&str, &str)] = &[
@@ -207,9 +238,12 @@ fn simplify(schema: &mut Value, defs: &Value, refs: &mut Vec<String>) -> Result<
         let reference = reference.as_str().unwrap_or_default();
         let key = reference.strip_prefix("#/$defs/").unwrap_or(reference).to_owned();
         if refs.contains(&key) {
-            return Err(unsupported("Recursive `$ref`s in JSON Schema are not supported by Gemini".into()));
+            return Err(unsupported(
+                "Recursive `$ref`s in JSON Schema are not supported by Gemini".into(),
+            ));
         }
-        let mut def = defs.get(&key).cloned().ok_or_else(|| unsupported(format!("unknown $ref {key:?}")))?;
+        let mut def =
+            defs.get(&key).cloned().ok_or_else(|| unsupported(format!("unknown $ref {key:?}")))?;
         refs.push(key);
         let simplified = simplify(&mut def, defs, refs);
         refs.pop();
@@ -287,7 +321,9 @@ fn simplify(schema: &mut Value, defs: &Value, refs: &mut Vec<String>) -> Result<
 
     match obj.get("type").and_then(Value::as_str) {
         Some("OBJECT") => {
-            if let Some(Value::Object(properties)) = obj.get_mut("properties").filter(|p| is_truthy(p)) {
+            if let Some(Value::Object(properties)) =
+                obj.get_mut("properties").filter(|p| is_truthy(p))
+            {
                 for value in properties.values_mut() {
                     simplify(value, defs, refs)?;
                 }
@@ -447,8 +483,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(
-                &to_fnc_ctx(std::slice::from_ref(&raw), Some("NON_BLOCKING"), false)
-                    .unwrap()
+                &to_fnc_ctx(std::slice::from_ref(&raw), Some("NON_BLOCKING"), false).unwrap()
             )
             .unwrap(),
             r#"[{"name":"t","description":"d","parameters":null,"behavior":"NON_BLOCKING"}]"#

@@ -13,6 +13,14 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/a2a/auth.rs.
 type _core_CredentialsImpl = <crate::Selected as super::Implementations>::Credentials;
 
+fn _extract_credentials_project_token_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "ttl_seconds")
+}
+
+fn _extract_credentials_thread_grant_token_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "ttl_seconds")
+}
+
 #[pyclass(frozen, name = "_core_Credentials", module = "livekit.agents._core")]
 pub struct _core_Credentials(::std::sync::Arc<_core_CredentialsImpl>);
 
@@ -41,14 +49,14 @@ impl _core_Credentials {
     }
 
     #[pyo3(signature = (*, identity = "worker".to_owned(), ttl_seconds = 3600))]
-    fn project_token(&self, identity: ::std::string::String, ttl_seconds: u64) -> PyResult<::std::string::String> {
+    fn project_token(&self, identity: ::std::string::String, #[pyo3(from_py_with = _extract_credentials_project_token_ttl_seconds)] ttl_seconds: u64) -> PyResult<::std::string::String> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_CredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::project_token(&self.0, identity, ttl_seconds).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     #[pyo3(signature = (grant, *, identity = "".to_owned(), ttl_seconds = 3600))]
-    fn thread_grant_token(&self, grant: Bound<'_, PyAny>, identity: ::std::string::String, ttl_seconds: u64) -> PyResult<::std::string::String> {
+    fn thread_grant_token(&self, grant: Bound<'_, PyAny>, identity: ::std::string::String, #[pyo3(from_py_with = _extract_credentials_thread_grant_token_ttl_seconds)] ttl_seconds: u64) -> PyResult<::std::string::String> {
         ::lk_agents_abi::python::check_pid()?;
         let grant = crate::generated::records::a2a_auth::auth_grant_from_py(&grant)?;
         let out = <_core_CredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::thread_grant_token(&self.0, grant, identity, ttl_seconds).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -227,6 +235,14 @@ impl AgentClient {
 // Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
 type _core_A2ADoorImpl = <crate::Selected as super::Implementations>::A2ADoor;
 
+fn _extract_a2_a_door_dispatch_body(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "body") }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_a2_a_door_dispatch_body_size(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<usize>(&obj, "body_size")).map(Some) }
+}
+
 #[pyclass(frozen, name = "_core_A2ADoor", module = "livekit.agents._core")]
 pub struct _core_A2ADoor(pub(crate) ::std::sync::Arc<_core_A2ADoorImpl>);
 
@@ -240,7 +256,7 @@ impl _core_A2ADoor {
     }
 
     #[pyo3(signature = (body, principal, *, version = None, offset = None, body_size = None, host_context = None))]
-    fn dispatch<'py>(&self, py: Python<'py>, body: ::std::vec::Vec<u8>, principal: Bound<'_, PyAny>, version: ::std::option::Option<::std::string::String>, offset: ::std::option::Option<::std::string::String>, body_size: ::std::option::Option<usize>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
+    fn dispatch<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body)] body: ::std::vec::Vec<u8>, principal: Bound<'_, PyAny>, version: ::std::option::Option<::std::string::String>, offset: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body_size)] body_size: ::std::option::Option<usize>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let principal = crate::generated::records::a2a_auth::auth_principal_from_py(&principal)?;
         let this = ::std::sync::Arc::clone(&self.0);

@@ -1,9 +1,8 @@
 //! Building the `chat.completions.create` body: `LLM.chat()`'s kwargs composition and
 //! `LLMStream._run()`'s final assembly, as two pure functions over `serde_json::Map`.
 
-use crate::abi::{ToolChoice, ToolSpec};
+use crate::abi::ToolChoice;
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
-use lk_agents_abi::errors::ApiError;
 use serde_json::{Map, Value, json};
 
 /// The OpenAI wire form of a [`ToolChoice`]; the named form is rebuilt, dropping extra keys.
@@ -18,21 +17,6 @@ pub fn tool_choice_to_json(choice: &ToolChoice) -> Value {
 }
 
 /// `ToolContext.parse_function_tools("openai", strict=True)`; the gateway always uses strict.
-pub fn tool_schemas(tools: &[ToolSpec]) -> Result<Vec<Value>, ApiError> {
-    tools
-        .iter()
-        // The inference gateway's chat-completions endpoint supports client functions only.
-        .filter(|tool| tool.provider_tool.is_none())
-        .map(|tool| {
-            lk_agents_abi::llm::schema::build_strict_openai_schema(
-                &tool.name,
-                Some(&tool.description),
-                &tool.json_schema,
-            )
-            .map_err(|e| ApiError::new(format!("tool {:?} has an unusable schema: {e}", tool.name)))
-        })
-        .collect()
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct ChatArgs {
@@ -129,23 +113,6 @@ mod tests {
         pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
     }
 
-    #[test]
-    fn gateway_chat_completions_ignores_all_server_side_provider_declarations() {
-        for family in [None, Some("openai"), Some("xai"), Some("gemini"), Some("mistral")] {
-            let declaration = ToolSpec {
-                name: "provider_id".into(),
-                description: String::new(),
-                json_schema: Value::Null,
-                flags: Default::default(),
-                provider_tool: Some(lk_agents_abi::llm::llm::ProviderToolDeclaration {
-                    provider: family.map(str::to_owned),
-                    payload: json!({"type": "web_search"}),
-                }),
-            };
-            assert!(tool_schemas(&[declaration]).unwrap().is_empty());
-        }
-    }
-
     // Catches: "fixing" the precedence so per-call arguments win.
     #[test]
     fn the_instance_kwargs_override_the_per_call_ones() {
@@ -188,25 +155,6 @@ mod tests {
     }
 
     // Catches: a tool schema reaching the gateway un-strict, or a bad schema failing silently.
-    #[test]
-    fn tool_schemas_are_built_in_the_strict_openai_form() {
-        let tool = crate::abi::ToolSpec {
-            provider_tool: None,
-            name: "lookup".into(),
-            description: "look it up".into(),
-            json_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
-            flags: Default::default(),
-        };
-        let built = tool_schemas(std::slice::from_ref(&tool)).expect("a usable schema");
-        assert_eq!(built.len(), 1);
-        assert_eq!(built[0]["type"], json!("function"));
-        assert_eq!(built[0]["function"]["name"], json!("lookup"));
-        assert_eq!(built[0]["function"]["strict"], json!(true));
-        assert_eq!(built[0]["function"]["description"], json!("look it up"));
-        assert_eq!(built[0]["function"]["parameters"]["additionalProperties"], json!(false));
-        assert_eq!(built[0]["function"]["parameters"]["required"], json!(["q"]));
-        assert!(tool_schemas(&[]).unwrap().is_empty());
-    }
 
     // Catches: R2b on `if not self._tools`.
     #[test]

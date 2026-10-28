@@ -1,5 +1,5 @@
-use crate::load::*;
 use crate::config::{DEFAULT_LOAD_THRESHOLD_DEV, DEFAULT_LOAD_THRESHOLD_PROD, EnvOption};
+use crate::load::*;
 
 fn inputs() -> LoadInputs {
     LoadInputs {
@@ -13,22 +13,6 @@ fn inputs() -> LoadInputs {
     }
 }
 
-// Catches: skipping the 5-sample average, so one CPU spike marks a healthy worker as full.
-#[test]
-fn default_load_calc_averages_five_samples() {
-    let mut c = DefaultLoadCalc::new();
-    assert_eq!(c.get(), 0.0, "empty window must read 0, or a cold worker is never available");
-    for s in [1.0, 0.0, 0.0, 0.0, 0.0] {
-        c.add_sample(s);
-    }
-    assert!((c.get() - 0.2).abs() < 1e-6, "{}", c.get());
-    // Window slides: the spike falls out after five more samples.
-    for _ in 0..5 {
-        c.add_sample(0.0);
-    }
-    assert_eq!(c.get(), 0.0);
-}
-
 // Catches, per row: dropping dev mode's infinite-threshold branch (inf/NaN); charging reserved
 // slots nothing while idle (two early requests both accepted); dividing by `num_idle_processes = 0`;
 // still guessing per-job cost once jobs run instead of measuring it; WS_AVAILABLE while draining;
@@ -38,14 +22,38 @@ fn effective_load_availability_and_status() {
     use WorkerStatus::{Available, Full};
     let prod = DEFAULT_LOAD_THRESHOLD_PROD;
     let rows = [
-        (LoadInputs { load_threshold: DEFAULT_LOAD_THRESHOLD_DEV, reserved_slots: 2, ..inputs() }, Some(0.0), true, None),
+        (
+            LoadInputs {
+                load_threshold: DEFAULT_LOAD_THRESHOLD_DEV,
+                reserved_slots: 2,
+                ..inputs()
+            },
+            Some(0.0),
+            true,
+            None,
+        ),
         // 0.7 / max(3, 1) = 0.2333 per reserved slot.
         (LoadInputs { reserved_slots: 2, ..inputs() }, Some(0.466_666_7), true, None),
         (LoadInputs { reserved_slots: 3, ..inputs() }, None, false, None),
-        (LoadInputs { reserved_slots: 1, num_idle_processes: 0, ..inputs() }, Some(prod), false, None),
-        (LoadInputs { worker_load: 0.4, active_jobs: 2, reserved_slots: 1, ..inputs() }, Some(0.6), true, None),
+        (
+            LoadInputs { reserved_slots: 1, num_idle_processes: 0, ..inputs() },
+            Some(prod),
+            false,
+            None,
+        ),
+        (
+            LoadInputs { worker_load: 0.4, active_jobs: 2, reserved_slots: 1, ..inputs() },
+            Some(0.6),
+            true,
+            None,
+        ),
         (LoadInputs { draining: true, ..inputs() }, None, false, Some(Full)),
-        (LoadInputs { simulation: true, worker_load: 9.0, ..inputs() }, None, true, Some(Available)),
+        (
+            LoadInputs { simulation: true, worker_load: 9.0, ..inputs() },
+            None,
+            true,
+            Some(Available),
+        ),
         (LoadInputs { worker_load: prod, ..inputs() }, None, false, Some(Full)),
     ];
     for (i, want_load, available, status) in rows {

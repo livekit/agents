@@ -13,6 +13,30 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
 type StorageImpl = <crate::Selected as super::Implementations>::Storage;
 
+fn _extract_storage_new_lease_ttl(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "lease_ttl")).map(Some) }
+}
+
+fn _extract_storage_new_renew_interval(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "renew_interval")).map(Some) }
+}
+
+fn _extract_storage_create_thread_idle_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "idle_ttl_seconds")
+}
+
+fn _extract_storage_list_threads_limit(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "limit")).map(Some) }
+}
+
+fn _extract_storage_update_thread_idle_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<i64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i64>(&obj, "idle_ttl_seconds")).map(Some) }
+}
+
+fn _extract_storage_get_thread_items_limit(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "limit")).map(Some) }
+}
+
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
 #[pyclass(frozen, name = "Storage", module = "livekit.agents._core")]
@@ -36,7 +60,7 @@ impl Storage {
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
     #[new]
     #[pyo3(signature = (*, directory = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None))]
-    fn new(directory: ::std::option::Option<::std::string::String>, url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, lease_ttl: ::std::option::Option<f64>, renew_interval: ::std::option::Option<f64>) -> PyResult<Storage> {
+    fn new(directory: ::std::option::Option<::std::string::String>, url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_storage_new_renew_interval)] renew_interval: ::std::option::Option<f64>) -> PyResult<Storage> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::new(directory, url, api_key, api_secret, lease_ttl, renew_interval).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(Storage(::std::sync::Arc::new(out)))
@@ -66,7 +90,7 @@ impl Storage {
     /// A new `AT_` thread, returned once its metadata and database exist. `attributes` maps
     /// strings to strings.
     #[pyo3(signature = (*, scope = None, attributes = None, idle_ttl_seconds = 0))]
-    fn create_thread<'py>(&self, py: Python<'py>, scope: ::std::option::Option<::std::string::String>, attributes: Option<Bound<'_, PyAny>>, idle_ttl_seconds: i64) -> PyResult<Bound<'py, PyAny>> {
+    fn create_thread<'py>(&self, py: Python<'py>, scope: ::std::option::Option<::std::string::String>, attributes: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_storage_create_thread_idle_ttl_seconds)] idle_ttl_seconds: i64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -91,7 +115,7 @@ impl Storage {
 
     /// The threads of one scope, newest first; `before` is the previous page's cursor.
     #[pyo3(signature = (scope, *, before = None, limit = None))]
-    fn list_threads<'py>(&self, py: Python<'py>, scope: ::std::string::String, before: ::std::option::Option<::std::string::String>, limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
+    fn list_threads<'py>(&self, py: Python<'py>, scope: ::std::string::String, before: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_list_threads_limit)] limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -104,7 +128,7 @@ impl Storage {
     /// Merges `attributes` (an empty value deletes the key) and sets the idle TTL when given:
     /// the activity boundary that moves expiry.
     #[pyo3(signature = (thread_id, *, attributes = None, idle_ttl_seconds = None))]
-    fn update_thread<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, attributes: Option<Bound<'_, PyAny>>, idle_ttl_seconds: ::std::option::Option<i64>) -> PyResult<Bound<'py, PyAny>> {
+    fn update_thread<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, attributes: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_storage_update_thread_idle_ttl_seconds)] idle_ttl_seconds: ::std::option::Option<i64>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -129,7 +153,7 @@ impl Storage {
 
     /// The thread's chat items, oldest first, of one agent's lane when `agent` is given.
     #[pyo3(signature = (thread_id, *, agent = None, after = None, limit = None))]
-    fn get_thread_items<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, agent: ::std::option::Option<::std::string::String>, after: ::std::option::Option<::std::string::String>, limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
+    fn get_thread_items<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, agent: ::std::option::Option<::std::string::String>, after: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_get_thread_items_limit)] limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -202,6 +226,10 @@ impl Storage {
 // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
 type _core_ContextActivationImpl = <crate::Selected as super::Implementations>::ContextActivation;
 
+fn _extract_context_activation_save_revision(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "revision")
+}
+
 /// Activation state and revision/schema decisions. Application type validation stays in the host.
 #[pyclass(frozen, name = "_core_ContextActivation", module = "livekit.agents._core")]
 pub struct _core_ContextActivation(::std::sync::Arc<_core_ContextActivationImpl>);
@@ -233,7 +261,7 @@ impl _core_ContextActivation {
 
     /// Stage the validated fields; a stale activation cannot overwrite a newer revision.
     #[pyo3(signature = (scope_id, identity, revision, fields))]
-    fn save<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, revision: i64, fields: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    fn save<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, #[pyo3(from_py_with = _extract_context_activation_save_revision)] revision: i64, fields: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let fields = fields.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_field_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from livekit.agents.types import APIConnectOptions
 
 def inference_resolve_api_key(explicit: str | None = None) -> str:
@@ -51,14 +53,14 @@ class InferenceAvatar:
         room_sid: str,
         livekit_url: str | None = None,
         agent_identity: str,
-        headers: list[tuple[str, str]],
+        headers: Sequence[tuple[str, str]],
     ) -> int:
         """Creates the provider session for the agent `agent_identity` in `room_name` and returns the
         audio sample rate the avatar takes. A second call while one runs, or once a session was
         created, is refused. Cancelling the call stops creating; a session created anyway is
         terminated. `livekit_url` defaults to `LIVEKIT_URL`; `headers` are `get_inference_headers()`.
         """
-    async def aclose(self, headers: list[tuple[str, str]]) -> None:
+    async def aclose(self, headers: Sequence[tuple[str, str]]) -> None:
         """Stops creating and terminates every held session so it stops billing now. Returns once
         that cleanup settled or its deadline passed (then logged); a failed terminate keeps the
         session held, so a second call retries.

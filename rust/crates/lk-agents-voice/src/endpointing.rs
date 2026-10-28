@@ -1,5 +1,6 @@
 use crate::agent_activity::options::EndpointingMode;
-use lk_agents_abi::{ExpFilter, Maybe, Ts};
+use lk_agents_abi::{Maybe, Ts};
+use lk_agents_media::ExpFilter;
 use std::time::Duration;
 
 /// User speech within this of the agent starting isn't a backchannel: TTS leading silence means

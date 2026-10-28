@@ -13,6 +13,34 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
 type _core_TelemetryPolicyImpl = <crate::Selected as super::Implementations>::TelemetryPolicy;
 
+fn _extract_telemetry_policy_export_action_held_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "held_count")
+}
+
+fn _extract_telemetry_policy_value_bytes_length(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "length")
+}
+
+fn _extract_telemetry_policy_value_bytes_depth(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "depth")
+}
+
+fn _extract_telemetry_policy_value_bytes_children(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<usize>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<usize>(&item, "children") }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_telemetry_policy_record_bytes_fields(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<usize>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<usize>(&item, "fields") }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_telemetry_policy_record_bytes_event_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "event_count")
+}
+
+fn _extract_telemetry_policy_record_bytes_link_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "link_count")
+}
+
 /// The host supplies SDK fields and lengths; shared policy decides what may be retained/exported.
 #[pyclass(frozen, name = "_core_TelemetryPolicy", module = "livekit.agents._core")]
 pub struct _core_TelemetryPolicy(::std::sync::Arc<_core_TelemetryPolicyImpl>);
@@ -127,7 +155,7 @@ impl _core_TelemetryPolicy {
 
     /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
     #[pyo3(signature = (registered, signal_enabled, job_open, held_count, recording_disabled))]
-    fn export_action<'py>(&self, py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
+    fn export_action<'py>(&self, py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, #[pyo3(from_py_with = _extract_telemetry_policy_export_action_held_count)] held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::export_action(&self.0, registered, signal_enabled, job_open, held_count, recording_disabled);
         Ok(crate::generated::records::telemetry::telemetry_export_action_to_py(py, out)?)
@@ -173,7 +201,7 @@ impl _core_TelemetryPolicy {
     /// Conservative retained bytes for an SDK scalar or collection. Child charges are already
     /// bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
     #[pyo3(signature = (kind, length, depth, children))]
-    fn value_bytes(&self, kind: Bound<'_, PyAny>, length: usize, depth: usize, children: ::std::vec::Vec<usize>) -> PyResult<usize> {
+    fn value_bytes(&self, kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_policy_value_bytes_length)] length: usize, #[pyo3(from_py_with = _extract_telemetry_policy_value_bytes_depth)] depth: usize, #[pyo3(from_py_with = _extract_telemetry_policy_value_bytes_children)] children: ::std::vec::Vec<usize>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
         let kind = crate::generated::records::telemetry::telemetry_value_kind_from_py(&kind)?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::value_bytes(&self.0, kind, length, depth, children);
@@ -182,7 +210,7 @@ impl _core_TelemetryPolicy {
 
     /// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
     #[pyo3(signature = (kind, fields, event_count, link_count))]
-    fn record_bytes(&self, kind: Bound<'_, PyAny>, fields: ::std::vec::Vec<usize>, event_count: usize, link_count: usize) -> PyResult<usize> {
+    fn record_bytes(&self, kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_policy_record_bytes_fields)] fields: ::std::vec::Vec<usize>, #[pyo3(from_py_with = _extract_telemetry_policy_record_bytes_event_count)] event_count: usize, #[pyo3(from_py_with = _extract_telemetry_policy_record_bytes_link_count)] link_count: usize) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
         let kind = crate::generated::records::telemetry::telemetry_record_kind_from_py(&kind)?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::record_bytes(&self.0, kind, fields, event_count, link_count);
@@ -192,6 +220,26 @@ impl _core_TelemetryPolicy {
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
 type _core_SessionReportProjectionImpl = <crate::Selected as super::Implementations>::SessionReportProjection;
+
+fn _extract_session_report_projection_event_limit_items(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "items")
+}
+
+fn _extract_session_report_projection_accepts_event_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+}
+
+fn _extract_session_report_projection_accepts_event_event_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "event_bytes")
+}
+
+fn _extract_session_report_projection_project_event_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+}
+
+fn _extract_session_report_projection_event_record_timestamp(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timestamp")
+}
 
 #[pyclass(frozen, name = "_core_SessionReportProjection", module = "livekit.agents._core")]
 pub struct _core_SessionReportProjection(::std::sync::Arc<_core_SessionReportProjectionImpl>);
@@ -229,7 +277,7 @@ impl _core_SessionReportProjection {
 
     /// Optional observations beyond this prefix are omitted without failing the transcript.
     #[pyo3(signature = (items))]
-    fn event_limit(&self, items: usize) -> PyResult<usize> {
+    fn event_limit(&self, #[pyo3(from_py_with = _extract_session_report_projection_event_limit_items)] items: usize) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_limit(&self.0, items);
         Ok(out)
@@ -237,7 +285,7 @@ impl _core_SessionReportProjection {
 
     /// Admission precedes host SDK serialization and native JSON extraction.
     #[pyo3(signature = (retained_bytes, event_bytes))]
-    fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> PyResult<bool> {
+    fn accepts_event(&self, #[pyo3(from_py_with = _extract_session_report_projection_accepts_event_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_session_report_projection_accepts_event_event_bytes)] event_bytes: usize) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::accepts_event(&self.0, retained_bytes, event_bytes);
         Ok(out)
@@ -252,7 +300,7 @@ impl _core_SessionReportProjection {
     }
 
     #[pyo3(signature = (event, retained_bytes))]
-    fn project_event<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>, retained_bytes: usize) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    fn project_event<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_session_report_projection_project_event_retained_bytes)] retained_bytes: usize) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         ::lk_agents_abi::python::check_pid()?;
         let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project_event(&self.0, event, retained_bytes);
@@ -260,7 +308,7 @@ impl _core_SessionReportProjection {
     }
 
     #[pyo3(signature = (event, identity, timestamp, disabled))]
-    fn event_record(&self, event: Bound<'_, PyAny>, identity: (::std::string::String, ::std::string::String, ::std::string::String), timestamp: f64, disabled: bool) -> PyResult<::std::option::Option<::lk_agents_abi::LogRecordWire>> {
+    fn event_record(&self, event: Bound<'_, PyAny>, identity: (::std::string::String, ::std::string::String, ::std::string::String), #[pyo3(from_py_with = _extract_session_report_projection_event_record_timestamp)] timestamp: f64, disabled: bool) -> PyResult<::std::option::Option<::lk_agents_abi::LogRecordWire>> {
         ::lk_agents_abi::python::check_pid()?;
         let event = crate::generated::records::telemetry::projected_report_event_from_py(&event)?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_record(&self.0, event, identity, timestamp, disabled);
@@ -271,6 +319,18 @@ impl _core_SessionReportProjection {
 // Declared in rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs.
 type LoopMonitorImpl = <crate::Selected as super::Implementations>::LoopMonitor;
 
+fn _extract_loop_monitor_new_warn_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "warn_threshold")
+}
+
+fn _extract_loop_monitor_new_error_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "error_threshold")
+}
+
+fn _extract_loop_monitor_new_tick_interval(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "tick_interval")).map(Some) }
+}
+
 /// A loop's watchdog: runtime owns thresholds, timing, admission and cleanup, while the host
 /// supplies asyncio scheduling, stack samples and OpenTelemetry emission.
 #[pyclass(frozen, name = "LoopMonitor", module = "livekit.agents._core")]
@@ -280,7 +340,7 @@ pub struct LoopMonitor(::std::sync::Arc<LoopMonitorImpl>);
 impl LoopMonitor {
     #[new]
     #[pyo3(signature = (event_loop, *, warn_threshold, error_threshold, tick_interval, name, emit_spans, report, span_of))]
-    fn new(event_loop: ::lk_agents_abi::HostRef, warn_threshold: f64, error_threshold: f64, tick_interval: ::std::option::Option<f64>, name: ::std::string::String, emit_spans: bool, report: ::lk_agents_abi::HostRef, span_of: ::lk_agents_abi::HostRef) -> PyResult<LoopMonitor> {
+    fn new(event_loop: ::lk_agents_abi::HostRef, #[pyo3(from_py_with = _extract_loop_monitor_new_warn_threshold)] warn_threshold: f64, #[pyo3(from_py_with = _extract_loop_monitor_new_error_threshold)] error_threshold: f64, #[pyo3(from_py_with = _extract_loop_monitor_new_tick_interval)] tick_interval: ::std::option::Option<f64>, name: ::std::string::String, emit_spans: bool, report: ::lk_agents_abi::HostRef, span_of: ::lk_agents_abi::HostRef) -> PyResult<LoopMonitor> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <LoopMonitorImpl as ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor>::new(event_loop, warn_threshold, error_threshold, tick_interval, name, emit_spans, report, span_of).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(LoopMonitor(::std::sync::Arc::new(out)))
@@ -325,6 +385,18 @@ pub fn _core_loop_monitor_thresholds_from_env() -> PyResult<::std::option::Optio
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/observation.rs.
 type _core_EventRetentionImpl = <crate::Selected as super::Implementations>::EventRetention;
+
+fn _extract_event_retention_admit_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+}
+
+fn _extract_event_retention_admit_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+}
+
+fn _extract_event_retention_expire_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+}
 
 /// Bounded retention of a session report's host event snapshots. The native policy retains only
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
@@ -376,14 +448,14 @@ impl _core_EventRetention {
     /// Expire old entries, then admit only within the item and byte budgets. The adapter removes
     /// exactly the returned prefix before appending the newly admitted snapshot.
     #[pyo3(signature = (retained_bytes, now_ns))]
-    fn admit(&self, retained_bytes: usize, now_ns: u64) -> PyResult<(usize, bool)> {
+    fn admit(&self, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&self.0, retained_bytes, now_ns);
         Ok(out)
     }
 
     #[pyo3(signature = (now_ns))]
-    fn expire(&self, now_ns: u64) -> PyResult<usize> {
+    fn expire(&self, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&self.0, now_ns);
         Ok(out)
@@ -399,6 +471,10 @@ impl _core_EventRetention {
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/upload.rs.
 type _core_SessionReportUploadImpl = <crate::Selected as super::Implementations>::SessionReportUpload;
+
+fn _extract_session_report_upload_upload_start_time_millis(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "start_time_millis")
+}
 
 /// Credentials for the session recording endpoint and host OTLP exporters.
 #[pyclass(frozen, name = "_core_SessionReportUpload", module = "livekit.agents._core")]
@@ -433,7 +509,7 @@ impl _core_SessionReportUpload {
     /// Returns false only when the project disabled recording. Export failures are reported once
     /// to the caller, which decides where to surface them without failing the conversation.
     #[pyo3(signature = (base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled))]
-    fn upload<'py>(&self, py: Python<'py>, base_url: ::std::string::String, room_id: ::std::string::String, job_id: ::std::string::String, simulated: bool, redaction_enabled: bool, start_time_millis: i64, transcript: ::std::option::Option<::std::string::String>, audio_path: ::std::option::Option<::std::string::String>, disabled: bool) -> PyResult<Bound<'py, PyAny>> {
+    fn upload<'py>(&self, py: Python<'py>, base_url: ::std::string::String, room_id: ::std::string::String, job_id: ::std::string::String, simulated: bool, redaction_enabled: bool, #[pyo3(from_py_with = _extract_session_report_upload_upload_start_time_millis)] start_time_millis: i64, transcript: ::std::option::Option<::std::string::String>, audio_path: ::std::option::Option<::std::string::String>, disabled: bool) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -446,6 +522,14 @@ impl _core_SessionReportUpload {
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/upload.rs.
 type _core_PreparedTranscriptImpl = <crate::Selected as super::Implementations>::PreparedTranscript;
+
+fn _extract_prepared_transcript_check_input_items(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "items")
+}
+
+fn _extract_prepared_transcript_check_input_item_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "item_bytes")
+}
 
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
 /// append it from admitted SDK work; no whole-history extraction crosses a binding call.
@@ -479,7 +563,7 @@ impl _core_PreparedTranscript {
     /// Validate host collection lengths and the shared retained-byte verdict before converting an
     /// item's fields. These scalar facts cannot allocate an unbounded native item.
     #[pyo3(signature = (items, item_bytes))]
-    fn check_input(&self, items: usize, item_bytes: usize) -> PyResult<()> {
+    fn check_input(&self, #[pyo3(from_py_with = _extract_prepared_transcript_check_input_items)] items: usize, #[pyo3(from_py_with = _extract_prepared_transcript_check_input_item_bytes)] item_bytes: usize) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <_core_PreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::check_input(&self.0, items, item_bytes).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -524,6 +608,26 @@ impl _core_PreparedTranscript {
 // Declared in rust/crates/lk-agents-abi/src/telemetry/work.rs.
 type _core_TelemetryWorkerImpl = <crate::Selected as super::Implementations>::TelemetryWorker;
 
+fn _extract_telemetry_worker_submit_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+}
+
+fn _extract_telemetry_worker_reserve_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+}
+
+fn _extract_telemetry_worker_record_drop_count(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "count")
+}
+
+fn _extract_telemetry_worker_wait_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+}
+
+fn _extract_telemetry_worker_wait_async_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+}
+
 /// Process-owned SDK work. Constructing another handle shares the same queue and worker ceiling.
 #[pyclass(frozen, name = "_core_TelemetryWorker", module = "livekit.agents._core")]
 pub struct _core_TelemetryWorker(::std::sync::Arc<_core_TelemetryWorkerImpl>);
@@ -540,7 +644,7 @@ impl _core_TelemetryWorker {
     /// Refuses overload or a duplicate live key before retaining the callback. `retained_bytes`
     /// includes the immutable SDK batch captured by the callback; no producer waits for capacity.
     #[pyo3(signature = (key, callback, retained_bytes))]
-    fn submit(&self, key: ::std::string::String, callback: ::lk_agents_abi::HostRef, retained_bytes: usize) -> PyResult<bool> {
+    fn submit(&self, key: ::std::string::String, callback: ::lk_agents_abi::HostRef, #[pyo3(from_py_with = _extract_telemetry_worker_submit_retained_bytes)] retained_bytes: usize) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::submit(&self.0, key, callback, retained_bytes);
         Ok(out)
@@ -548,7 +652,7 @@ impl _core_TelemetryWorker {
 
     /// Retention admission for an SDK batch queue, independent of cleanup callback slots.
     #[pyo3(signature = (key, retained_bytes))]
-    fn reserve(&self, key: ::std::string::String, retained_bytes: usize) -> PyResult<bool> {
+    fn reserve(&self, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_reserve_retained_bytes)] retained_bytes: usize) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::reserve(&self.0, key, retained_bytes);
         Ok(out)
@@ -563,7 +667,7 @@ impl _core_TelemetryWorker {
 
     /// `kind` is one of `dropped`, `failed`, `conflict`; unknown categories are refused.
     #[pyo3(signature = (kind, count))]
-    fn record_drop(&self, kind: ::std::string::String, count: u64) -> PyResult<()> {
+    fn record_drop(&self, kind: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_record_drop_count)] count: u64) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::record_drop(&self.0, kind, count);
         Ok(())
@@ -579,14 +683,14 @@ impl _core_TelemetryWorker {
 
     /// Off-loop cleanup only. A deadline never detaches work or releases its capacity early.
     #[pyo3(signature = (key, timeout))]
-    fn wait(&self, key: ::std::string::String, timeout: f64) -> PyResult<bool> {
+    fn wait(&self, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_wait_timeout)] timeout: f64) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::wait(&self.0, key, timeout);
         Ok(out)
     }
 
     #[pyo3(signature = (key, timeout))]
-    fn wait_async<'py>(&self, py: Python<'py>, key: ::std::string::String, timeout: f64) -> PyResult<Bound<'py, PyAny>> {
+    fn wait_async<'py>(&self, py: Python<'py>, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_wait_async_timeout)] timeout: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {

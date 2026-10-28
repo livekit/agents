@@ -5,22 +5,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from livekit.agents._core_view import AvailabilityObserver
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
+from livekit.agents.llm.utils import SerializedImage
 from livekit.agents.types import APIConnectOptions
 
 from .._core import ChatItem
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
+from .tool_context import DuplicateMode, DuplicateScope
 
 class FallbackLlm:
     """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""
     def __init__(
         self,
-        llms: list[LLM[Any]],
+        llms: Sequence[LLM[Any]],
         *,
         attempt_timeout: float = 5.0,
         max_retry_per_llm: int = 0,
@@ -35,7 +38,7 @@ class FallbackLlm:
         self,
         chat_ctx_host: object,
         *,
-        tools: list[dict[str, object]],
+        tools: Sequence[dict[str, object]],
         tools_host: object | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: object | None = None,
@@ -65,7 +68,7 @@ class InferenceLlm:
         """A client of `model` on the gateway at `base_url`. Starts nothing."""
     def identified(
         self,
-        headers: list[tuple[str, str]],
+        headers: Sequence[tuple[str, str]],
         reporter: LLM[Any] | None = None,
     ) -> InferenceLlm:
         """This client as a session of the job `headers` (`get_inference_headers()`) identifies
@@ -86,15 +89,15 @@ class InferenceLlm:
         """Read by the next `chat()`. `extra_kwargs` replaces the persistent options."""
     def chat(
         self,
-        items: list[ChatItem],
+        items: Sequence[ChatItem],
         *,
-        tools: list[dict[str, object]],
+        tools: Sequence[dict[str, object]],
         conn_options: APIConnectOptions,
         parallel_tool_calls: bool | None = None,
         tool_choice: str | dict[str, object] | None = None,
         response_format: object | None = None,
         extra_kwargs: dict[str, object] | None = None,
-        headers: list[tuple[str, str]] | None = None,
+        headers: Sequence[tuple[str, str]] | None = None,
     ) -> InferenceLlmChunks:
         """Opens a completion of `items`; no I/O until the first pull. `headers` identify the
         caller's job, read in its context.
@@ -120,12 +123,12 @@ class McpSession:
     def __init__(self, client_session_timeout_seconds: float) -> None: ...
     @property
     def connected(self) -> bool: ...
-    def set_allowed_tools(self, allowed: list[str]) -> None: ...
+    def set_allowed_tools(self, allowed: Sequence[str]) -> None: ...
     def invalidate_cache(self) -> None: ...
     async def connect_http(
         self,
         url: str,
-        headers: list[tuple[str, str]],
+        headers: Sequence[tuple[str, str]],
         transport: str,
         timeout: float,
         sse_read_timeout: float,
@@ -133,8 +136,8 @@ class McpSession:
     async def connect_stdio(
         self,
         command: str,
-        args: list[str],
-        env: list[tuple[str, str]],
+        args: Sequence[str],
+        env: Sequence[tuple[str, str]],
         cwd: str | None,
     ) -> None: ...
     async def connect_host(self, transport: _Streams, host_context: object | None) -> None: ...
@@ -167,6 +170,74 @@ def mcp_render_result(tool_name: str, result: object) -> str: ...
 
 def mcp_check_result(result: object) -> None: ...
 
+async def to_provider_format(
+    format: str,
+    items: Sequence[ChatItem],
+    *,
+    images: Mapping[str, SerializedImage] | None = None,
+    inject_dummy_user_message: bool = True,
+    inject_trailing_user_message: bool = False,
+    thought_signatures: Mapping[str, bytes | bytearray | list[int]] | None = None,
+) -> tuple[list[object], object]: ...
+
+def convert_mid_conversation_instructions(
+    items: Sequence[ChatItem],
+    *,
+    role: str,
+    template: str,
+) -> list[tuple[int, ChatItem | None]]: ...
+
+def to_fnc_ctx(
+    format: str,
+    tools: Sequence[object],
+    *,
+    tool_behavior: str | None = None,
+    use_parameters_json_schema: bool = False,
+) -> list[object]: ...
+
+def to_strict_json_schema(
+    schema: object,
+    *,
+    null_sentinel_for_defaults: bool = False,
+) -> dict[str, object]: ...
+
+def resolve_ref(*, root: dict[str, object], ref: str) -> dict[str, object]: ...
+
+def inject_schema_defaults(value: object, schema: object, root: object | None = None) -> object: ...
+
+def build_legacy_openai_schema(
+    name: str,
+    description: str | None,
+    parameters: object,
+    *,
+    internally_tagged: bool = False,
+) -> dict[str, object]: ...
+
+def build_strict_openai_schema(
+    name: str,
+    description: str | None,
+    parameters: object,
+) -> dict[str, object]: ...
+
+def to_openai_response_format(name: str, schema: object) -> dict[str, object]: ...
+
+def parse_function_arguments(raw: str) -> dict[str, object]: ...
+
+def duplicate_key(
+    name: str,
+    args: object | None,
+    scope: DuplicateScope,
+) -> tuple[str, str | None]: ...
+
+def decide_duplicate(
+    name: str,
+    mode: DuplicateMode,
+    confirm_duplicate: bool | None,
+    in_flight: Sequence[tuple[str, bool]],
+) -> tuple[str, object | None]: ...
+
+def inject_confirm_duplicate(parameters: object) -> dict[str, object]: ...
+
 class NativeRealtimeModel:
     def __init__(self, config: NativeRealtimeConfig) -> None: ...
     @property
@@ -177,13 +248,13 @@ class NativeRealtimeModel:
     def label(self) -> str: ...
     def capabilities(self) -> dict[str, object]: ...
     def update_options(self, options: RealtimeOptions) -> None: ...
-    def bind_identification(self, headers: list[tuple[str, str]]) -> None: ...
+    def bind_identification(self, headers: Sequence[tuple[str, str]]) -> None: ...
 
 class RealtimeFallbackModel:
     """The generated facade holds native resources; host provider objects use the shared bridge."""
     def __init__(
         self,
-        models: list[object],
+        models: Sequence[object],
         *,
         cooldown: float = 10.0,
         regenerate_on_swap: bool = True,

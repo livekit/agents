@@ -121,7 +121,9 @@ async def to_chat_ctx(
         thought_signatures=thought_signatures,
     )
     cls = _DATA.get(format)
-    return cast("ProviderMessages", messages), cls(**data) if cls is not None else None
+    return cast("ProviderMessages", messages), cls(
+        **cast("dict[str, Any]", data)
+    ) if cls is not None else None
 
 
 def to_fnc_ctx(
@@ -150,9 +152,12 @@ def to_fnc_ctx(
         elif responses and provider_tool_type and isinstance(tool, provider_tool_type):
             if hasattr(tool, "to_dict"):
                 specs.append(["provider", tool.to_dict()])
-    return _core.to_fnc_ctx(  # type: ignore[no-any-return]
-        format,
-        specs,
-        tool_behavior=None if tool_behavior == "UNSPECIFIED" else tool_behavior,
-        use_parameters_json_schema=use_parameters_json_schema,
+    return cast(
+        "list[dict[str, Any]]",
+        _core.to_fnc_ctx(
+            format,
+            specs,
+            tool_behavior=None if tool_behavior == "UNSPECIFIED" else tool_behavior,
+            use_parameters_json_schema=use_parameters_json_schema,
+        ),
     )

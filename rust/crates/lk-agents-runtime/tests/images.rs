@@ -14,7 +14,7 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
         image_permits.push(permit);
     }
     assert!(!image_permits.is_empty());
-    let (messages, _) = lk_agents_abi::llm::provider_format::host::prepare_provider_format(
+    let (messages, _) = <lk_agents_runtime::llm_algorithms::LlmAlgorithms as lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(
         "openai".into(),
         vec![ChatMessage::text("user", Role::User, "hello", std::time::UNIX_EPOCH).into()],
         None,

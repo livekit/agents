@@ -9,19 +9,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::llm::provider_format::PreResolved;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk,
     LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
 };
+use lk_agents_core::llm::provider_format::PreResolved;
 use lk_agents_inference::headers::{Headers, identification_headers};
 use lk_agents_inference::llm::lifecycle::{
     LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy,
 };
 use lk_agents_inference::llm::request::ChatArgs;
-use lk_agents_inference::llm::{LlmOptions, build_request, models};
+use lk_agents_inference::llm::{LlmOptions, models};
+mod request;
 use lk_agents_inference::transport::HttpRequest;
+use request::build_request;
 use tokio::sync::mpsc;
 
 use crate::http::{GatewayHttp, Reporter, Stamped};

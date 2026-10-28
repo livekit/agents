@@ -1,236 +1,85 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
+//! Chat and tool-format exports; implementations live in their owning cores and runtime.
+use super::tools::{DuplicateKey, DuplicateMode, DuplicateScope};
+use super::{SerializedImage, StrictError};
+use crate::llm::schema::SchemaError;
+use crate::{ChatItem, Role};
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
-//! `to_provider_format` and `to_fnc_ctx` as the host calls them. Images arrive pre-serialised, so
-//! each is encoded once; dropped items are logged with the reference's warning, not raised.
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
-
-use serde_json::{Value, json};
-
-use super::{
-    DropReason, Formatted, PreResolved, SerializedImage, ToolSchema, anthropic, aws, google,
-    mistralai, openai,
-};
-use crate::{ChatContext, ChatItem};
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// `ChatContext.to_provider_format(format, ...)` -> `(messages, data)`. `data` is `None` for OpenAI
-/// and a dict for the dialects that hoist something out of band.
-pub fn to_provider_format(
-    format: &str,
-    items: Vec<ChatItem>,
-    images: Option<HashMap<String, SerializedImage>>,
-    inject_dummy_user_message: bool,
-    inject_trailing_user_message: bool,
-    thought_signatures: Option<HashMap<String, Vec<u8>>>,
-) -> Result<(Vec<Value>, Value), String> {
-    let ctx = ChatContext::new(items);
-    let images = PreResolved::from_pairs(images.unwrap_or_default());
-    let e = |e: super::FormatError| e.to_string();
-    let hoisted = |system_messages: &[String]| json!({ "system_messages": system_messages });
-    Ok(match format {
-        "openai" => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null),
-        "openai.responses" => {
-            finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null)
-        }
-        "anthropic" => {
-            let opts =
-                anthropic::Options { inject_dummy_user_message, inject_trailing_user_message };
-            finish(anthropic::to_chat_ctx(&ctx, &images, opts).map_err(e)?, |d| {
-                hoisted(&d.system_messages)
-            })
-        }
-        "aws" => {
-            finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?, |d| {
-                hoisted(&d.system_messages)
-            })
-        }
-        "google" => {
-            let f = google::to_chat_ctx(
-                &ctx,
-                &images,
-                inject_dummy_user_message,
-                thought_signatures.as_ref(),
-            );
-            finish(f.map_err(e)?, |d| hoisted(&d.system_messages))
-        }
-        "mistralai" => {
-            let f = mistralai::to_conversations_ctx(&ctx, &images, inject_dummy_user_message);
-            finish(f.map_err(e)?, |d| json!({ "instructions": d.instructions }))
-        }
-        _ => {
-            return Err(format!(
-                "unknown provider format {format:?}: expected one of 'openai', 'openai.responses', \
-                 'anthropic', 'aws', 'google', 'mistralai'"
-            ));
-        }
-    })
+#[crate::host(functions(pid = false))]
+pub trait LlmAlgorithms {
+    #[host(function, pid = true, name = "to_provider_format")]
+    async fn prepare_provider_format(
+        format: String,
+        items: Vec<ChatItem>,
+        #[host(kw, default = None)] images: Option<BTreeMap<String, SerializedImage>>,
+        #[host(default = true)] inject_dummy_user_message: bool,
+        #[host(default = false)] inject_trailing_user_message: bool,
+        #[host(default = None)] thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
+    ) -> Result<(Vec<Value>, Value), LlmAlgorithmError>;
+    #[host(function, pid = true)]
+    fn convert_mid_conversation_instructions(
+        items: Vec<ChatItem>,
+        #[host(kw)] role: Role,
+        template: &str,
+    ) -> Vec<(usize, Option<ChatItem>)>;
+    #[host(function, pid = true)]
+    fn to_fnc_ctx(
+        format: &str,
+        tools: Vec<Value>,
+        #[host(kw, default = None)] tool_behavior: Option<String>,
+        #[host(default = false)] use_parameters_json_schema: bool,
+    ) -> Result<Vec<Value>, LlmAlgorithmError>;
+    #[host(function)]
+    fn to_strict_json_schema(
+        schema: &Value,
+        #[host(kw, default = false)] null_sentinel_for_defaults: bool,
+    ) -> Result<Map<String, Value>, StrictError>;
+    #[host(function)]
+    fn resolve_ref(
+        #[host(kw)] root: &Map<String, Value>,
+        r#ref: &str,
+    ) -> Result<Map<String, Value>, StrictError>;
+    #[host(function)]
+    fn inject_schema_defaults(
+        value: &Value,
+        schema: &Value,
+        #[host(default = None)] root: Option<Value>,
+    ) -> Result<Value, SchemaError>;
+    #[host(function)]
+    fn build_legacy_openai_schema(
+        name: &str,
+        description: Option<String>,
+        parameters: Value,
+        #[host(kw, default = false)] internally_tagged: bool,
+    ) -> Map<String, Value>;
+    #[host(function)]
+    fn build_strict_openai_schema(
+        name: &str,
+        description: Option<String>,
+        parameters: &Value,
+    ) -> Result<Map<String, Value>, SchemaError>;
+    #[host(function)]
+    fn to_openai_response_format(
+        name: &str,
+        schema: &Value,
+    ) -> Result<Map<String, Value>, SchemaError>;
+    #[host(function)]
+    fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, LlmAlgorithmError>;
+    #[host(function, pid = true)]
+    fn duplicate_key(name: &str, args: Option<Value>, scope: DuplicateScope) -> DuplicateKey;
+    #[host(function, name = "decide_duplicate")]
+    fn decide_duplicate_wire(
+        name: &str,
+        mode: DuplicateMode,
+        confirm_duplicate: Option<bool>,
+        in_flight: Vec<(String, bool)>,
+    ) -> (String, Option<Value>);
+    #[host(function)]
+    fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value>;
 }
 
-/// Provider formatting and inline-image base64 preparation on an admitted formatting worker.
-#[crate::host(export(
-    name = "to_provider_format",
-    kw_only = "images",
-    defaults(inject_dummy_user_message = true, inject_trailing_user_message = false)
-))]
-pub async fn prepare_provider_format(
-    format: String,
-    items: Vec<ChatItem>,
-    images: Option<std::collections::BTreeMap<String, SerializedImage>>,
-    inject_dummy_user_message: bool,
-    inject_trailing_user_message: bool,
-    thought_signatures: Option<std::collections::BTreeMap<String, Vec<u8>>>,
-) -> Result<(Vec<Value>, Value), String> {
-    crate::utils::workers::try_spawn(crate::utils::workers::WorkerClass::Formatting, move || {
-        to_provider_format(
-            &format,
-            items,
-            images.map(|images| images.into_iter().collect()),
-            inject_dummy_user_message,
-            inject_trailing_user_message,
-            thought_signatures.map(|signatures| signatures.into_iter().collect()),
-        )
-    })
-    .map_err(|error| error.to_string())?
-    .await?
-}
-
-/// `convert_mid_conversation_instructions(chat_ctx, role=, template=)` as `(index, rewritten)`: the
-/// input item each output item comes from, and the message replacing it when it was rewritten, so
-/// the host keeps its own objects for the rest.
-#[crate::host(export(kw_only = "role"))]
-pub fn convert_mid_conversation_instructions(
-    items: Vec<ChatItem>,
-    role: crate::Role,
-    template: &str,
-) -> Vec<(usize, Option<ChatItem>)> {
-    let ctx = ChatContext::new(items);
-    let index =
-        |found: &dyn Fn(&ChatItem) -> bool| ctx.items.iter().position(found).unwrap_or_default();
-    super::convert_mid_conversation_instructions(&ctx, role, template)
-        .into_iter()
-        .map(|item| match item {
-            std::borrow::Cow::Borrowed(kept) => (index(&|i| std::ptr::eq(i, kept)), None),
-            std::borrow::Cow::Owned(new) => (index(&|i| i.id() == new.id()), Some(new)),
-        })
-        .collect()
-}
-
-fn finish<D>(f: Formatted<D>, data: impl FnOnce(&D) -> Value) -> (Vec<Value>, Value) {
-    for d in &f.dropped {
-        let message = match d.reason {
-            DropReason::OutputWithoutCall => {
-                "function output missing the corresponding function call, ignoring"
-            }
-            DropReason::CallWithoutOutput => {
-                "function call missing the corresponding function output, ignoring"
-            }
-        };
-        log::warn!(target: "livekit.agents", call_id = d.call_id.as_str(), function_name = d.tool_name.as_str(); "{message}");
-    }
-    let data = data(&f.data);
-    (f.messages, data)
-}
-
-/// `to_fnc_ctx(tools)` for a dialect; each tool is the host's `[kind, schema, name]` (`name` only for
-/// `raw`). `tool_behavior` and `use_parameters_json_schema` are Gemini-only (Gemini Live rejects
-/// `parameters_json_schema`, googleapis/python-genai#1147).
-#[crate::host(export(kw_only = "tool_behavior", defaults(use_parameters_json_schema = false)))]
-pub fn to_fnc_ctx(
-    format: &str,
-    tools: Vec<Value>,
-    tool_behavior: Option<&str>,
-    use_parameters_json_schema: bool,
-) -> Result<Vec<Value>, String> {
-    let specs = tools.into_iter().map(tool_schema).collect::<Result<Vec<_>, _>>()?;
-    let e = |e: super::FormatError| e.to_string();
-    // Mistral has no rewrapper, and an unknown format gets the same message.
-    Ok(match format {
-        "openai" => openai::to_fnc_ctx(&specs),
-        // Not a flag: the Responses API spreads raw schemas flat and includes `ProviderTool`s.
-        "openai.responses" => openai::to_responses_fnc_ctx(&specs),
-        "anthropic" => anthropic::to_fnc_ctx(&specs).map_err(e)?,
-        "aws" => aws::to_fnc_ctx(&specs).map_err(e)?,
-        "google" => {
-            // `UNSPECIFIED` is spelled by omitting `tool_behavior`.
-            if let Some(b) = tool_behavior.filter(|b| !matches!(*b, "BLOCKING" | "NON_BLOCKING")) {
-                return Err(format!(
-                    "unknown tool_behavior {b:?}: expected 'BLOCKING' or 'NON_BLOCKING'"
-                ));
-            }
-            google::to_fnc_ctx(&specs, tool_behavior, use_parameters_json_schema).map_err(e)?
-        }
-        _ => {
-            return Err(format!(
-                "{format:?} has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"
-            ));
-        }
-    })
-}
-
-fn tool_schema(tool: Value) -> Result<ToolSchema, String> {
-    let Value::Array(mut parts) = tool else {
-        return Err(format!("a tool schema is [kind, schema, name], got {tool}"));
-    };
-    parts.resize(3, Value::Null);
-    let (name, payload) = (parts.pop().unwrap_or_default(), parts.pop().unwrap_or_default());
-    let kind = parts.pop().and_then(|k| k.as_str().map(str::to_owned)).unwrap_or_default();
-    Ok(match kind.as_str() {
-        "raw" => ToolSchema::Raw {
-            name: name.as_str().ok_or("a raw tool schema carries its name")?.to_owned(),
-            raw_schema: payload,
-        },
-        "legacy" => ToolSchema::Legacy(payload),
-        "strict" => ToolSchema::Strict(payload),
-        "provider" => ToolSchema::Provider(payload),
-        _ => {
-            return Err(format!(
-                "unknown tool schema kind {kind:?}: expected 'raw', 'legacy', 'strict' or 'provider'"
-            ));
-        }
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: a dropped instruction shifting the indices the host maps back to its own items.
-    #[test]
-    fn converted_items_point_back_at_the_items_they_come_from() {
-        use super::super::testkit::msg;
-        use crate::Role;
-        let items = vec![
-            msg("s0", Role::System, &["p"]),
-            msg("s1", Role::System, &[""]),
-            msg("u", Role::User, &["hi"]),
-            msg("s2", Role::Developer, &["mid"]),
-        ];
-        let plan = convert_mid_conversation_instructions(items, Role::User, "<{content}>");
-        let indices: Vec<usize> = plan.iter().map(|(i, _)| *i).collect();
-        assert_eq!(indices, [0, 2, 3]);
-        assert!(plan[0].1.is_none() && plan[1].1.is_none());
-        let rewritten = plan[2].1.as_ref().and_then(ChatItem::as_message).unwrap();
-        assert_eq!(
-            (rewritten.role, rewritten.raw_text_content().as_deref()),
-            (Role::User, Some("<mid>"))
-        );
-    }
-
-    // Catches: an unknown tool kind or `tool_behavior` defaulting instead of refusing.
-    #[test]
-    fn unknown_words_are_refused() {
-        assert!(to_fnc_ctx("openai", vec![json!(["mcp", {}])], None, false).is_err());
-        for refused in ["UNSPECIFIED", "blocking"] {
-            assert!(to_fnc_ctx("google", vec![], Some(refused), false).is_err());
-        }
-        assert!(to_fnc_ctx("google", vec![], Some("NON_BLOCKING"), false).is_ok());
-    }
-}
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct LlmAlgorithmError(pub String);

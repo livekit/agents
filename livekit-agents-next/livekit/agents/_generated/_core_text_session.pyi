@@ -5,10 +5,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .text_session import TextSessionAgent, TextSessionDelivery, TextSessionRequest, TextSessionState, TextSessionUpdate
 
 class TextSessionRunner:
-    def __init__(self, root_agent: str, agents: list[TextSessionAgent], max_depth: int) -> None: ...
+    def __init__(
+        self,
+        root_agent: str,
+        agents: Sequence[TextSessionAgent],
+        max_depth: int,
+    ) -> None: ...
     def run(self, request: TextSessionRequest) -> TextSessionUpdates: ...
     def release(self, delivery: TextSessionDelivery) -> None:
         """Acknowledge selected presentation before the child can release its parent."""

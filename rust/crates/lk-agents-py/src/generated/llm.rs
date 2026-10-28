@@ -13,6 +13,18 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
 type FallbackLlmImpl = <crate::Selected as super::Implementations>::FallbackLlm;
 
+fn _extract_fallback_llm_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")
+}
+
+fn _extract_fallback_llm_new_max_retry_per_llm(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "max_retry_per_llm")
+}
+
+fn _extract_fallback_llm_new_retry_interval(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "retry_interval")
+}
+
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
 #[pyclass(frozen, name = "FallbackLlm", module = "livekit.agents._core")]
 pub struct FallbackLlm(::std::sync::Arc<FallbackLlmImpl>);
@@ -21,7 +33,7 @@ pub struct FallbackLlm(::std::sync::Arc<FallbackLlmImpl>);
 impl FallbackLlm {
     #[new]
     #[pyo3(signature = (llms, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
-    fn new(llms: Bound<'_, PyAny>, attempt_timeout: f64, max_retry_per_llm: u32, retry_interval: f64, sticky: bool, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackLlm> {
+    fn new(llms: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_llm_new_attempt_timeout)] attempt_timeout: f64, #[pyo3(from_py_with = _extract_fallback_llm_new_max_retry_per_llm)] max_retry_per_llm: u32, #[pyo3(from_py_with = _extract_fallback_llm_new_retry_interval)] retry_interval: f64, sticky: bool, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackLlm> {
         ::lk_agents_abi::python::check_pid()?;
         let llms = llms.try_iter().and_then(|items| items.map(|item| { let item = item?; super::llm::LlmProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
         let on_availability = on_availability.map(|v| super::llm::ChainObserverProxy::from_host(&v)).transpose()?;
@@ -229,6 +241,18 @@ pub fn llm_usage_chunk(chunk: Bound<'_, PyAny>) -> PyResult<::std::option::Optio
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 type McpSessionImpl = <crate::Selected as super::Implementations>::McpSession;
 
+fn _extract_mcp_session_new_client_session_timeout_seconds(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "client_session_timeout_seconds")
+}
+
+fn _extract_mcp_session_connect_http_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+}
+
+fn _extract_mcp_session_connect_http_sse_read_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "sse_read_timeout")
+}
+
 /// An SDK session whose owner cancels and joins independently of request borrowers.
 #[pyclass(frozen, name = "McpSession", module = "livekit.agents._core")]
 pub struct McpSession(::std::sync::Arc<McpSessionImpl>);
@@ -237,7 +261,7 @@ pub struct McpSession(::std::sync::Arc<McpSessionImpl>);
 impl McpSession {
     #[new]
     #[pyo3(signature = (client_session_timeout_seconds))]
-    fn new(client_session_timeout_seconds: f64) -> PyResult<McpSession> {
+    fn new(#[pyo3(from_py_with = _extract_mcp_session_new_client_session_timeout_seconds)] client_session_timeout_seconds: f64) -> PyResult<McpSession> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(client_session_timeout_seconds).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(McpSession(::std::sync::Arc::new(out)))
@@ -264,7 +288,7 @@ impl McpSession {
     }
 
     #[pyo3(signature = (url, headers, transport, timeout, sse_read_timeout))]
-    fn connect_http<'py>(&self, py: Python<'py>, url: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, transport: ::std::string::String, timeout: f64, sse_read_timeout: f64) -> PyResult<Bound<'py, PyAny>> {
+    fn connect_http<'py>(&self, py: Python<'py>, url: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, transport: ::std::string::String, #[pyo3(from_py_with = _extract_mcp_session_connect_http_timeout)] timeout: f64, #[pyo3(from_py_with = _extract_mcp_session_connect_http_sse_read_timeout)] sse_read_timeout: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -393,6 +417,121 @@ pub fn mcp_check_result(result: Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/provider_format/host.rs.
+type LlmAlgorithmsImpl = <crate::Selected as super::Implementations>::LlmAlgorithms;
+
+fn _extract_llm_algorithms_prepare_provider_format_thought_signatures(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::vec::Vec<u8>>>> {
+    if obj.is_none() { Ok(None) } else { (obj.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, item.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "thought_signatures") }).collect::<PyResult<Vec<_>>>())?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())).map(Some) }
+}
+
+#[pyfunction]
+#[pyo3(signature = (format, items, *, images = None, inject_dummy_user_message = true, inject_trailing_user_message = false, thought_signatures = None))]
+pub fn to_provider_format<'py>(py: Python<'py>, format: ::std::string::String, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, images: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::lk_agents_abi::llm::provider_format::SerializedImage>>, inject_dummy_user_message: bool, inject_trailing_user_message: bool, #[pyo3(from_py_with = _extract_llm_algorithms_prepare_provider_format_thought_signatures)] thought_signatures: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::vec::Vec<u8>>>) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    ::lk_agents_abi::python::future_into_py(py, async move {
+        let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::types::PyList::new(py, x0.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), ::lk_agents_abi::python::value_to_py(py, &x1)?])?.into_any() }, py))
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (items, *, role, template))]
+pub fn convert_mid_conversation_instructions(items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, role: ::lk_agents_abi::Role, template: ::std::string::String) -> PyResult<::std::vec::Vec<(usize, ::std::option::Option<::lk_agents_abi::ChatItem>)>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::convert_mid_conversation_instructions(items, role, &template);
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (format, tools, *, tool_behavior = None, use_parameters_json_schema = false))]
+pub fn to_fnc_ctx<'py>(py: Python<'py>, format: ::std::string::String, tools: Bound<'_, PyAny>, tool_behavior: ::std::option::Option<::std::string::String>, use_parameters_json_schema: bool) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let tools = tools.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::value_from_py(&item, "tools") }).collect::<PyResult<Vec<_>>>())?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (schema, *, null_sentinel_for_defaults = false))]
+pub fn to_strict_json_schema<'py>(py: Python<'py>, schema: Bound<'_, PyAny>, null_sentinel_for_defaults: bool) -> PyResult<Bound<'py, PyAny>> {
+    let schema = ::lk_agents_abi::python::value_from_py(&schema, "schema")?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_strict_json_schema(&schema, null_sentinel_for_defaults).map_err(|e: ::lk_agents_abi::llm::provider_format::StrictError| <::lk_agents_abi::llm::provider_format::StrictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (*, root, r#ref))]
+pub fn resolve_ref<'py>(py: Python<'py>, root: Bound<'_, PyAny>, r#ref: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+    let root = match ::lk_agents_abi::python::value_from_py(&root, "root")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("root", ": expected a dict"))) }?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::resolve_ref(&root, &r#ref).map_err(|e: ::lk_agents_abi::llm::provider_format::StrictError| <::lk_agents_abi::llm::provider_format::StrictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (value, schema, root = None))]
+pub fn inject_schema_defaults<'py>(py: Python<'py>, value: Bound<'_, PyAny>, schema: Bound<'_, PyAny>, root: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    let value = ::lk_agents_abi::python::value_from_py(&value, "value")?;
+    let schema = ::lk_agents_abi::python::value_from_py(&schema, "schema")?;
+    let root = root.map(|v| ::lk_agents_abi::python::value_from_py(&v, "root")).transpose()?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::inject_schema_defaults(&value, &schema, root).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, description, parameters, *, internally_tagged = false))]
+pub fn build_legacy_openai_schema<'py>(py: Python<'py>, name: ::std::string::String, description: ::std::option::Option<::std::string::String>, parameters: Bound<'_, PyAny>, internally_tagged: bool) -> PyResult<Bound<'py, PyAny>> {
+    let parameters = ::lk_agents_abi::python::value_from_py(&parameters, "parameters")?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::build_legacy_openai_schema(&name, description, parameters, internally_tagged);
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, description, parameters))]
+pub fn build_strict_openai_schema<'py>(py: Python<'py>, name: ::std::string::String, description: ::std::option::Option<::std::string::String>, parameters: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let parameters = ::lk_agents_abi::python::value_from_py(&parameters, "parameters")?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::build_strict_openai_schema(&name, description, &parameters).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, schema))]
+pub fn to_openai_response_format<'py>(py: Python<'py>, name: ::std::string::String, schema: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let schema = ::lk_agents_abi::python::value_from_py(&schema, "schema")?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_openai_response_format(&name, &schema).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (raw))]
+pub fn parse_function_arguments<'py>(py: Python<'py>, raw: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::parse_function_arguments(&raw).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, args, scope))]
+pub fn duplicate_key(name: ::std::string::String, args: Option<Bound<'_, PyAny>>, scope: ::lk_agents_abi::llm::mcp::DuplicateScope) -> PyResult<(::std::string::String, ::std::option::Option<::std::string::String>)> {
+    ::lk_agents_abi::python::check_pid()?;
+    let args = args.map(|v| ::lk_agents_abi::python::value_from_py(&v, "args")).transpose()?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::duplicate_key(&name, args, scope);
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, mode, confirm_duplicate, in_flight))]
+pub fn decide_duplicate<'py>(py: Python<'py>, name: ::std::string::String, mode: ::lk_agents_abi::llm::mcp::DuplicateMode, confirm_duplicate: ::std::option::Option<bool>, in_flight: ::std::vec::Vec<(::std::string::String, bool)>) -> PyResult<Bound<'py, PyAny>> {
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::decide_duplicate_wire(&name, mode, confirm_duplicate, in_flight);
+    Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, match x1 { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? }])?.into_any() })
+}
+
+#[pyfunction]
+#[pyo3(signature = (parameters))]
+pub fn inject_confirm_duplicate<'py>(py: Python<'py>, parameters: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let parameters = ::lk_agents_abi::python::value_from_py(&parameters, "parameters")?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::inject_confirm_duplicate(&parameters);
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
 type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
 
@@ -468,6 +607,10 @@ impl NativeRealtimeModel {
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
 type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
 
+fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "cooldown")
+}
+
 /// The generated facade holds native resources; host provider objects use the shared bridge.
 #[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
 pub struct RealtimeFallbackModel(::std::sync::Arc<RealtimeFallbackModelImpl>);
@@ -476,7 +619,7 @@ pub struct RealtimeFallbackModel(::std::sync::Arc<RealtimeFallbackModelImpl>);
 impl RealtimeFallbackModel {
     #[new]
     #[pyo3(signature = (models, *, cooldown = 10.0, regenerate_on_swap = true, on_availability = None))]
-    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, cooldown: f64, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
+    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(models, cooldown, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))

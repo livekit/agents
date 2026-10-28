@@ -2,7 +2,7 @@
 //! `description or ""` fallback are behaviour.
 
 use crate::llm::provider_format::to_strict_json_schema;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::llm::schema::defaults::SchemaError;
 
@@ -10,67 +10,76 @@ use crate::llm::schema::defaults::SchemaError;
 ///
 /// `internally_tagged` gives the flat form the Responses API and Bedrock want; the default is
 /// `{"type": "function", "function": {...}}`. A `None` or empty description emits `""`.
-#[crate::host(export(pid = false, kw_only = "internally_tagged", defaults(internally_tagged = false)))]
 pub fn build_legacy_openai_schema(
     name: &str,
     description: Option<&str>,
     parameters: Value,
     internally_tagged: bool,
-) -> Value {
+) -> Map<String, Value> {
     let description = description.unwrap_or("");
     if internally_tagged {
-        json!({
-            "name": name,
-            "description": description,
-            "parameters": parameters,
-            "type": "function",
-        })
+        Map::from_iter([
+            ("name".into(), json!(name)),
+            ("description".into(), json!(description)),
+            ("parameters".into(), parameters),
+            ("type".into(), json!("function")),
+        ])
     } else {
-        json!({
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": parameters,
-            },
-        })
+        Map::from_iter([
+            ("type".into(), json!("function")),
+            (
+                "function".into(),
+                json!({
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                }),
+            ),
+        ])
     }
 }
 
 /// `build_strict_openai_schema` (`utils.py:229`) — strict-mode tool description. Defaulted fields
 /// become nullable so the model can decline them; [`inject_schema_defaults`](crate::llm::schema::inject_schema_defaults)
 /// swaps the null back.
-#[crate::host(export(pid = false))]
 pub fn build_strict_openai_schema(
     name: &str,
     description: Option<&str>,
     parameters: &Value,
-) -> Result<Value, SchemaError> {
+) -> Result<Map<String, Value>, SchemaError> {
     let parameters = to_strict_json_schema(parameters, true)?;
-    Ok(json!({
-        "type": "function",
-        "function": {
-            "name": name,
-            "strict": true,
-            "description": description.unwrap_or(""),
-            "parameters": parameters,
-        },
-    }))
+    Ok(Map::from_iter([
+        ("type".into(), json!("function")),
+        (
+            "function".into(),
+            json!({
+                "name": name,
+                "strict": true,
+                "description": description.unwrap_or(""),
+                "parameters": parameters,
+            }),
+        ),
+    ]))
 }
 
 /// `to_openai_response_format` (`utils.py:288`) — structured-output response format. No null
 /// sentinel: nothing resolves it on the decode side, so defaulted fields stay required.
-#[crate::host(export(pid = false))]
-pub fn to_openai_response_format(name: &str, schema: &Value) -> Result<Value, SchemaError> {
+pub fn to_openai_response_format(
+    name: &str,
+    schema: &Value,
+) -> Result<Map<String, Value>, SchemaError> {
     let schema = to_strict_json_schema(schema, false)?;
-    Ok(json!({
-        "type": "json_schema",
-        "json_schema": {
-            "schema": schema,
-            "name": name,
-            "strict": true,
-        },
-    }))
+    Ok(Map::from_iter([
+        ("type".into(), json!("json_schema")),
+        (
+            "json_schema".into(),
+            json!({
+                "schema": schema,
+                "name": name,
+                "strict": true,
+            }),
+        ),
+    ]))
 }
 
 #[cfg(test)]

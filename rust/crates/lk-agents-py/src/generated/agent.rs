@@ -13,6 +13,26 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
 type RunEventsImpl = <crate::Selected as super::Implementations>::RunEvents;
 
+fn _extract_run_events_at_index(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "index")
+}
+
+fn _extract_run_events_skip_next_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "count")
+}
+
+fn _extract_run_events_contains_start(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "start")
+}
+
+fn _extract_run_events_contains_stop(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "stop")
+}
+
+fn _extract_run_events_failure_index(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<usize>(&obj, "index")).map(Some) }
+}
+
 /// The observed events of one invocation and the position `next_event` reads from. Each call
 /// returns the index of the event it matched.
 #[pyclass(name = "RunEvents", module = "livekit.agents._core")]
@@ -31,7 +51,7 @@ impl RunEvents {
 
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[pyo3(signature = (index, expected))]
-    fn at(&self, index: i64, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
+    fn at(&self, #[pyo3(from_py_with = _extract_run_events_at_index)] index: i64, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
         let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -57,7 +77,7 @@ impl RunEvents {
     }
 
     #[pyo3(signature = (count))]
-    fn skip_next(&mut self, count: usize) -> PyResult<()> {
+    fn skip_next(&mut self, #[pyo3(from_py_with = _extract_run_events_skip_next_count)] count: usize) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next(&mut self.0, count).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -71,7 +91,7 @@ impl RunEvents {
 
     /// The first event of `start..stop` meeting `expected`.
     #[pyo3(signature = (start, stop, expected))]
-    fn contains(&self, start: usize, stop: usize, expected: Bound<'_, PyAny>) -> PyResult<usize> {
+    fn contains(&self, #[pyo3(from_py_with = _extract_run_events_contains_start)] start: usize, #[pyo3(from_py_with = _extract_run_events_contains_stop)] stop: usize, expected: Bound<'_, PyAny>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
         let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -81,7 +101,7 @@ impl RunEvents {
     /// The message of a failure about the event at `index`, or the current one: `message` and
     /// the events with that one marked.
     #[pyo3(signature = (message, index))]
-    fn failure(&self, message: ::std::string::String, index: ::std::option::Option<usize>) -> PyResult<::std::string::String> {
+    fn failure(&self, message: ::std::string::String, #[pyo3(from_py_with = _extract_run_events_failure_index)] index: ::std::option::Option<usize>) -> PyResult<::std::string::String> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::failure(&self.0, message, index);
         Ok(out)
@@ -90,6 +110,10 @@ impl RunEvents {
 
 // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
 type AgentRunnerImpl = <crate::Selected as super::Implementations>::AgentRunner;
+
+fn _extract_agent_runner_progress_operation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "operation")
+}
 
 /// Runs invocations of one agent definition: each `run` streams its updates, then its settled
 /// result; closing the stream cancels the invocation, whose work still settles.
@@ -123,7 +147,7 @@ impl AgentRunner {
     /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
     /// end is dropped. Refused for an invocation this runner is not running.
     #[pyo3(signature = (invocation_id, operation, message))]
-    fn progress(&self, invocation_id: ::std::string::String, operation: u64, message: ::std::string::String) -> PyResult<()> {
+    fn progress(&self, invocation_id: ::std::string::String, #[pyo3(from_py_with = _extract_agent_runner_progress_operation)] operation: u64, message: ::std::string::String) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(&self.0, &invocation_id, operation, message).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())

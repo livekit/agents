@@ -254,9 +254,8 @@ pub fn to_fnc_ctx(tools: &[crate::llm::provider_format::ToolSchema]) -> Vec<Valu
             crate::llm::provider_format::ToolSchema::Raw { raw_schema, .. } => {
                 Some(serde_json::json!({ "type": "function", "function": raw_schema }))
             }
-            crate::llm::provider_format::ToolSchema::Legacy(schema) | crate::llm::provider_format::ToolSchema::Strict(schema) => {
-                Some(schema.clone())
-            }
+            crate::llm::provider_format::ToolSchema::Legacy(schema)
+            | crate::llm::provider_format::ToolSchema::Strict(schema) => Some(schema.clone()),
             crate::llm::provider_format::ToolSchema::Provider(_) => None,
         })
         .collect()

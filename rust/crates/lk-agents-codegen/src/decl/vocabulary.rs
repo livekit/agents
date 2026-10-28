@@ -3,7 +3,7 @@
 //!
 //! | where | key | meaning |
 //! |---|---|---|
-//! | trait | `class(name = "X", native = Trait)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait |
+//! | trait | `class(name = "X", native = Trait, module = "module", subclass)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait; `module` preserves Python identity, `subclass` allows Python subclasses |
 //! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind`; `view = "module.Class"`: the proxy calls that class's instance over the host object (a host class without the `_core_*` surface) |
 //! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`, or returning nothing (a close: its failure is logged) (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
 //! | proxy method | `call` | a `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL, never awaiting (a read the host answers at once); a failure is the declared error; a host stream it returns is pulled in the call's context (its `context` parameter, else the captured one) |
@@ -24,6 +24,8 @@
 //! | trait method | `getter` | a read-only property on `&self` |
 //! | trait method | `next` | `async fn next(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T` (`__aiter__`/`__anext__`); `None` ends it |
 //! | trait method | `name = "x"` | the host name, when the Rust one cannot be it |
+//! | class/function trait | `class(.., pid = false)`, `functions(pid = false)` | retain the pure export opt-out from the fork guard; defaults to true |
+//! | trait method | `pid = true/false` | override its class or function group fork guard |
 //! | parameter | `kw` | keyword-only from this parameter on |
 //! | parameter | `default = <literal>` | omittable: `None`, `true`/`false`, a number or a string |
 //! | error type | `error(with = path)`, `error(kind = "ValueError")`, `error(original)`, per-variant `kind`/`delegate` | `Result<_, E>` raises through E's `HostException`, the one conversion its declaration expands to |
@@ -110,6 +112,15 @@ pub fn text(at: &str, entries: &[Entry], key: &str) -> Result<Option<String>, St
         None => Ok(None),
         Some(Some(Value::Text(t))) => Ok(Some(t.clone())),
         Some(_) => Err(format!("{at}: `{key}` takes host text, quoted")),
+    }
+}
+
+/// A typed boolean option, distinct from a bare marker or quoted text.
+pub fn boolean(at: &str, entries: &[Entry], key: &str) -> Result<Option<bool>, String> {
+    match find(entries, key).map(|entry| &entry.value) {
+        None => Ok(None),
+        Some(Some(Value::Literal(Literal::Bool(value)))) => Ok(Some(*value)),
+        Some(_) => Err(format!("{at}: `{key}` takes a boolean")),
     }
 }
 

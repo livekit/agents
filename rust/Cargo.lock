@@ -1442,7 +1442,10 @@ dependencies = [
 name = "lk-agents-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "lk-agents-abi",
+ "log",
+ "regex",
  "serde",
  "serde_json",
 ]

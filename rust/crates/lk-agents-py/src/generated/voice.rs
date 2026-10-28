@@ -13,6 +13,18 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 type DataStreamAudioOutputImpl = <crate::Selected as super::Implementations>::DataStreamAudioOutput;
 
+fn _extract_data_stream_audio_output_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some) }
+}
+
+fn _extract_data_stream_audio_output_new_wait_remote_track(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<i32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<i32>(&obj, "wait_remote_track")).map(Some) }
+}
+
+fn _extract_data_stream_audio_output_new_clear_buffer_timeout(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "clear_buffer_timeout")).map(Some) }
+}
+
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
 #[pyclass(frozen, name = "DataStreamAudioOutput", module = "livekit.agents._core")]
 pub struct DataStreamAudioOutput(::std::sync::Arc<DataStreamAudioOutputImpl>);
@@ -21,7 +33,7 @@ pub struct DataStreamAudioOutput(::std::sync::Arc<DataStreamAudioOutputImpl>);
 impl DataStreamAudioOutput {
     #[new]
     #[pyo3(signature = (room, *, destination_identity, sample_rate = None, wait_remote_track = None, clear_buffer_timeout = 2.0, wait_playback_start = false))]
-    fn new(room: ::lk_agents_abi::HostRef, destination_identity: ::std::string::String, sample_rate: ::std::option::Option<u32>, wait_remote_track: ::std::option::Option<i32>, clear_buffer_timeout: ::std::option::Option<f64>, wait_playback_start: bool) -> PyResult<DataStreamAudioOutput> {
+    fn new(room: ::lk_agents_abi::HostRef, destination_identity: ::std::string::String, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_sample_rate)] sample_rate: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_wait_remote_track)] wait_remote_track: ::std::option::Option<i32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_clear_buffer_timeout)] clear_buffer_timeout: ::std::option::Option<f64>, wait_playback_start: bool) -> PyResult<DataStreamAudioOutput> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::new(room, destination_identity, sample_rate, wait_remote_track, clear_buffer_timeout, wait_playback_start).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(DataStreamAudioOutput(::std::sync::Arc::new(out)))
@@ -185,7 +197,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                 }
             };
             let o = out.bind(py);
-            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "AvatarAudioReceiver._core_next_audio"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<u64>())?, (item_1.extract::<bool>())?, (item_2.extract::<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "AvatarAudioReceiver._core_next_audio"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((::lk_agents_abi::python::number_from_py::<u64>(&item_0, "AvatarAudioReceiver._core_next_audio"))?, (item_1.extract::<bool>())?, (if item_2.is_none() { Ok(None) } else { (item_2.extract::<::lk_agents_abi::utils::video::AvatarFrame>()).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -384,7 +396,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::utils::video::AvatarFrame>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -549,7 +561,7 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::std::option::Option<::lk_agents_abi::AudioFrame>>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::AudioFrame>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -716,7 +728,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::std::option::Option<::lk_agents_abi::AudioFrame>>()).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::AudioFrame>()).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -805,7 +817,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::std::option::Option<::lk_agents_abi::voice::rtc::VideoFrameRef>>().map_err(::pyo3::PyErr::from)).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::voice::rtc::VideoFrameRef>().map_err(::pyo3::PyErr::from)).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -877,7 +889,7 @@ impl AudioOutputProxy {
         };
         let sample_rate = {
             let v = obj.call_method0("_core_sample_rate")?;
-            v.extract::<::std::option::Option<u32>>()?
+            if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&v, "AudioOutput._core_sample_rate")).map(Some) }?
         };
         Ok(AudioOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label, tracker, capabilities, sample_rate })
     }
@@ -1259,7 +1271,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 }
             };
             let o = out.bind(py);
-            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<::std::option::Option<::std::string::String>>())?, (item_1.extract::<::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>>().map_err(::pyo3::PyErr::from))?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.extract::<::std::string::String>()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::ChatItem>().map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

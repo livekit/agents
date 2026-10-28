@@ -7,8 +7,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::llm::tool_arguments;
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
-use lk_agents_abi::llm::tool_arguments;
 use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall};
@@ -581,7 +581,7 @@ fn find<'a>(tools: &'a [FunctionToolInfo], name: &str) -> Option<&'a FunctionToo
 /// validates, so a call that omits a default and one that spells it are the same call.
 fn with_defaults(arguments: Map<String, Value>, schema: &Value) -> Map<String, Value> {
     let value = Value::Object(arguments);
-    match lk_agents_abi::llm::schema::inject_schema_defaults(&value, schema, schema) {
+    match crate::llm::schema::inject_schema_defaults(&value, schema, schema) {
         Ok(Value::Object(filled)) => filled,
         _ => match value {
             Value::Object(arguments) => arguments,
