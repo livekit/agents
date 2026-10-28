@@ -9,6 +9,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -170,8 +171,14 @@ class ChunkedStream(tts.ChunkedStream):
 
                         output_emitter.push(audio_data)
 
+                if buffer:
+                    raise APIError(
+                        "Speechmatics returned an incomplete PCM sample", retryable=False
+                    )
                 output_emitter.flush()
 
+        except APIError:
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
