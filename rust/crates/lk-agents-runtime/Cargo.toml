@@ -57,6 +57,7 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 libc = "0.2"
 
 [dev-dependencies]
+bytes = "1"
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false, features = ["dst"] }
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
