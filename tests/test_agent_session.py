@@ -2,8 +2,11 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, VoiceSession
+from livekit.agents import Agent, VoiceSession, utils
 from livekit.agents.llm import ChatContext
+
+from .fake_io import FakeAudioOutput
+from .fake_tts import FakeTTS
 
 pytestmark = pytest.mark.unit
 
@@ -45,6 +48,47 @@ async def test_temporary_options_restore_the_base_after_an_exception() -> None:
         assert session.options["turn_detection_mode"] == "vad"
     finally:
         await session.aclose()
+
+
+def _voiced_session(tts: FakeTTS) -> VoiceSession:
+    session = VoiceSession(vad=None, tts=tts, turn_handling={"turn_detection": None})
+    session.output.audio = FakeAudioOutput()
+    return session
+
+
+def _synthesized(tts: FakeTTS) -> int:
+    streams = 0
+    while True:
+        try:
+            tts.stream_ch.recv_nowait()
+        except utils.aio.ChanEmpty:
+            return streams
+        streams += 1
+
+
+async def test_update_options_replaces_the_session_voice_in_place() -> None:
+    first, second = FakeTTS(fake_audio_duration=0.1), FakeTTS(fake_audio_duration=0.1)
+    async with _voiced_session(first) as session:
+        agent = Agent(instructions="Welcome the caller.", name="reception")
+        await session.start(agent)
+        session.update_options(tts=second)
+        await asyncio.wait_for(session.say("One moment."), timeout=5)
+        assert session.tts is second
+        assert session.current_agent is agent
+        assert _synthesized(first) == 0, "the replaced voice must not speak"
+        assert _synthesized(second) == 1
+
+
+async def test_override_options_speaks_with_the_layer_then_the_base() -> None:
+    base, specialist = FakeTTS(fake_audio_duration=0.1), FakeTTS(fake_audio_duration=0.1)
+    async with _voiced_session(base) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        async with session.override_options(tts=specialist):
+            await asyncio.wait_for(session.say("Let me read the terms back."), timeout=5)
+        await asyncio.wait_for(session.say("Anything else?"), timeout=5)
+        assert session.tts is base
+        assert _synthesized(specialist) == 1
+        assert _synthesized(base) == 1
 
 
 async def test_close_waits_for_recording_before_a_late_close_event() -> None:

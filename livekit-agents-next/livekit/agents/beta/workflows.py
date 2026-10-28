@@ -201,15 +201,8 @@ class WarmTransfer:
             env_sip_trunk=os.environ.get("LIVEKIT_SIP_OUTBOUND_TRUNK"),
             env_sip_number=os.environ.get("LIVEKIT_SIP_NUMBER", ""),
         )
-        self._agent = _briefing_agent(
-            self._transfer,
-            tools=tools,
-            turn_handling=turn_handling,
-            stt=stt,
-            vad=vad,
-            llm=llm,
-            tts=tts,
-        )
+        self._agent = _briefing_agent(self._transfer, tools=tools, llm=llm)
+        self._briefing_audio = _given(stt=stt, vad=vad, tts=tts, turn_handling=turn_handling)
 
     async def run(self, session: VoiceSession) -> WarmTransferResult:
         """Dial and bridge a human participant during this live operation."""
@@ -283,26 +276,26 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
                 "original_caller_number": original_caller_number,
             },
         )
-        self._agent = _briefing_agent(
-            self._transfer,
-            tools=tools,
-            turn_handling=turn_handling,
-            stt=stt,
-            vad=vad,
-            llm=llm,
-            tts=tts,
-        )
+        self._agent = _briefing_agent(self._transfer, tools=tools, llm=llm)
+        self._briefing_audio = _given(stt=stt, vad=vad, tts=tts, turn_handling=turn_handling)
 
 
 def _briefing_agent(
-    transfer: _core.WarmTransfer, *, tools: list[llm.Tool | llm.Toolset] | None, **agent: Any
+    transfer: _core.WarmTransfer,
+    *,
+    tools: list[llm.Tool | llm.Toolset] | None,
+    llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None],
 ) -> Agent:
     """The agent that briefs the human agent: the transfer's instructions and tools."""
     return Agent(
         instructions=transfer.instructions,
         tools=[*(tools or []), *(_transfer_tool(transfer, spec) for spec in transfer.tools())],
-        **agent,
+        llm=llm,
     )
+
+
+def _given(**options: Any) -> dict[str, Any]:
+    return {k: v for k, v in options.items() if is_given(v)}
 
 
 def _conversation(chat_ctx: llm.ChatContext | None) -> list[tuple[str, str]] | None:
@@ -328,11 +321,15 @@ class _TransferHost:
         self._job = job_ctx
         self._room = rtc.Room()
         self._player = BackgroundAudioPlayer()
+        # the briefing session's audio: the transfer's own, else the caller session's
         self._human: VoiceSession = VoiceSession(
-            vad=session.vad or NOT_GIVEN,
-            llm=session.llm or NOT_GIVEN,
-            stt=session.stt or NOT_GIVEN,
-            tts=session.tts or NOT_GIVEN,
+            **{
+                "vad": session.vad or NOT_GIVEN,
+                "llm": session.llm or NOT_GIVEN,
+                "stt": session.stt or NOT_GIVEN,
+                "tts": session.tts or NOT_GIVEN,
+                **transfer._briefing_audio,
+            }
         )
 
     async def _core_start_hold(self) -> PlayHandle | None:

@@ -46,10 +46,12 @@ from ..job import get_job_context
 from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
+from ..stt import STT
 from ..telemetry import trace_types
 from ..telemetry._export import attribute_bytes, policy
 from ..telemetry.metrics import collect_usage, record_span_metric
 from ..telemetry.traces import capture_content_enabled, tracer
+from ..tts import TTS
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -161,6 +163,7 @@ class VoiceActivityVideoSampler:
 
 
 _CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
+
 
 class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
@@ -482,7 +485,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             chat_ctx=to_core_items(self._chat_ctx.items),
             storage=self._voice_store,
             stt=_bindings.core_leg(frame.get("stt", self._stt)),
-            vad=_bindings.core_leg(frame.get("vad", self._vad)),
+            vad=_bindings.core_leg(self._vad),
             llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
             realtime=native,
             realtime_host=realtime,
@@ -494,10 +497,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             on_event=self,
             hooks=hooks,
             options=self._options,
-            agent_turn_handling=frame.get("turn_handling"),
-            agent_min_consecutive_speech_delay=frame.get("min_consecutive_speech_delay"),
-            agent_use_tts_aligned_transcript=frame.get("use_tts_aligned_transcript"),
-            agent_expressive=frame["expressive"],
             tools=frame["tools"],
             tools_host=frame["tools_host"],
             tool_runner=frame["tool_runner"],
@@ -507,7 +506,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             turn_detector=self._turn_detector,
             hook_bound=_HOOK_BOUND,
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
-            interruption_detector=self._interruption_detector(agent, frame, model),
+            interruption_detector=self._interruption_detector(agent, model),
             stt_context=self._stt_context,
             keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
@@ -543,15 +542,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._running.ivr_final(transcript)
 
     def _interruption_detector(
-        self, agent: Agent, frame: dict[str, Any], model: Any
+        self, agent: Agent, model: Any
     ) -> inference.AdaptiveInterruptionDetector | None:
         """The adaptive interruption detector, when the reference's gate builds one."""
         # the developer's STT: a fallback chain's core leg reports its capabilities as a dict
-        stt_caps = getattr(_VoiceBinding(self, agent).stt, "capabilities", None)
-        has_vad = frame.get("vad", self._vad) is not None
-        agent_mode = (
-            agent.interruption_detection if is_given(agent.interruption_detection) else None
-        )
+        stt_caps = getattr(self._stt, "capabilities", None)
+        has_vad = self._vad is not None
         realtime = isinstance(model, RealtimeModel)
         verdict = _core.resolve_interruption_detector(
             stt_aligned_transcript=bool(stt_caps.aligned_transcript) if stt_caps else None,
@@ -564,12 +560,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 vad=has_vad,
                 turn_detection=self._turn_detection_mode,
                 streaming_detector=self._turn_detector is not None,
-                interruption_given=bool(agent_mode or self._interruption_mode),
+                interruption_given=bool(self._interruption_mode),
             ),
             has_vad=has_vad,
             turn_detection=self._turn_detection_mode,
             allow_interruptions=self.options["interruption"]["enabled"],
-            agent_mode=agent_mode,
+            agent_mode=None,
             session_mode=self._interruption_mode,
             hosted=is_hosted(),
             dev_mode=is_dev_mode(),
@@ -752,9 +748,29 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """The driving agent's own context, as the core keeps it."""
         return ChatContext([from_core_item(i) for i in self._running.agent_chat_ctx()])
 
-    def update_options(self, **update: Any) -> None:
-        """Change the turn options and ``expressive`` of a session (``UpdateKwargs``). A setting
-        an ``override_options`` layer holds takes the new value once the layer is released."""
+    def update_options(
+        self,
+        *,
+        stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+    ) -> None:
+        """Change only the supplied settings of the session. A replaced STT, TTS or VAD is
+        installed in place, without restarting the call or interrupting speech; a setting an
+        ``override_options`` layer holds takes the new value once the layer is released."""
+        update = _given(
+            stt=_stt_model(stt),
+            tts=_tts_model(tts),
+            vad=vad,
+            turn_detection=turn_detection,
+            endpointing_opts=endpointing_opts,
+            expressive=expressive,
+            keyterms=keyterms,
+        )
         self._base_options.update(update)
         self._send_options({k: v for k, v in update.items() if not self._layered(k)})
 
@@ -762,17 +778,22 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def override_options(
         self,
         *,
+        stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
     ) -> AsyncIterator[None]:
         """Layer settings over the session's for the block: each takes its value from the
         topmost layer that sets it, else from the base, and the layer is released when the
         block ends, however it ends."""
-        layer: dict[str, Any] = {
-            "turn_detection": turn_detection,
-            "endpointing_opts": endpointing_opts,
-        }
-        layer = {k: v for k, v in layer.items() if is_given(v)}
+        layer = _given(
+            stt=_stt_model(stt),
+            tts=_tts_model(tts),
+            vad=vad,
+            turn_detection=turn_detection,
+            endpointing_opts=endpointing_opts,
+        )
         for key in layer:
             if not self._layered(key):
                 self._base_options.setdefault(key, self._current_option(key))
@@ -797,6 +818,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _current_option(self, key: str) -> Any:
         """The value ``key`` has now, as ``update_options`` takes it."""
+        if key in _MODELS:
+            return getattr(self, f"_{key}")
         resolved = self.options
         if key == "turn_detection":
             return resolved["turn_detection_mode"]
@@ -804,12 +827,25 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return {k: endpointing[k] for k in ("mode", "min_delay", "max_delay", "alpha")}
 
     def _send_options(self, update: dict[str, Any]) -> None:
-        if not update:
+        models = {k: v for k, v in update.items() if k in _MODELS}
+        turn = {k: v for k, v in update.items() if k not in _MODELS}
+        for leg, model in models.items():
+            setattr(self, f"_{leg}", model)
+        if "vad" in models:
+            self._using_default_vad = False
+        if models and self._core is not None:
+            # a replaced leg goes under the node the running agent overrides, as at its install
+            nodes = self._nodes(self.current_agent)
+            self._core.update_models(
+                **{leg: _bindings.core_leg(model) for leg, model in models.items()},
+                **{f"{leg}_node": nodes[f"{leg}_node"] for leg in models if f"{leg}_node" in nodes},
+            )
+        if not turn:
             return
         if self._core is None:
-            self._options.update(update)
+            self._options.update(turn)
         else:
-            self._core.update_turn_options(update)
+            self._core.update_turn_options(turn)
 
     # --- frames --------------------------------------------------------------------------
 
@@ -831,20 +867,13 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "agent_host": agent,
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),
-            "turn_handling": agent._turn_handling or None,
-            "expressive": agent.expressive,
         }
-        if is_given(agent._min_consecutive_speech_delay):
-            frame["min_consecutive_speech_delay"] = agent._min_consecutive_speech_delay
-        if is_given(agent._use_tts_aligned_transcript):
-            frame["use_tts_aligned_transcript"] = agent._use_tts_aligned_transcript
-        if is_given(agent._vad):
-            frame["vad"] = _bindings.core_leg(agent._vad)
-        # every leg a node may wrap is given, so the previous frame's node never stays on it
+        # every leg a node may wrap is given, so the previous frame's node never stays on it; the
+        # session's STT and TTS stay as they are, under the agent's nodes
         binding = _VoiceBinding(self, agent)
         for leg in ("stt", "llm", "tts"):
             value = getattr(binding, leg)
-            if is_given(getattr(agent, f"_{leg}")) or not isinstance(value, llm.RealtimeModel):
+            if (leg == "llm" and is_given(agent._llm)) or not isinstance(value, llm.RealtimeModel):
                 frame[leg] = _bindings.core_leg(value)
         return {**frame, **self._nodes(agent)}
 
@@ -1308,6 +1337,21 @@ class _AgentHooks:
 
 
 _NODES = ("llm_node", "tts_node", "stt_node", "transcription_node", "realtime_audio_output_node")
+
+# the providers `update_options` replaces; each is the session's own, never an agent's
+_MODELS = ("stt", "tts", "vad")
+
+
+def _given(**options: Any) -> dict[str, Any]:
+    return {k: v for k, v in options.items() if is_given(v)}
+
+
+def _stt_model(model: NotGivenOr[stt.STT | str | None]) -> NotGivenOr[stt.STT | None]:
+    return inference.STT.from_model_string(model) if isinstance(model, str) else model
+
+
+def _tts_model(model: NotGivenOr[tts.TTS | str | None]) -> NotGivenOr[tts.TTS | None]:
+    return inference.TTS.from_model_string(model) if isinstance(model, str) else model
 
 
 class _AgentNodes:

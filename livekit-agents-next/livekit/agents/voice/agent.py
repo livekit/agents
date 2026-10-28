@@ -27,7 +27,6 @@ from livekit import rtc
 
 from .. import _core, inference, llm, stt, tts
 from .._generated.agent_run import AgentDefinition, Retries
-from .._generated.tool_executor import ToolHandlingOptions
 from .._generated.vad import VAD
 from ..llm import (
     LLM,
@@ -57,18 +56,16 @@ from ..types import (
 )
 from ..utils import is_given
 from .events import Context_T, UserTurnExceededEvent
-from .turn import TurnHandlingOptions
 
 if TYPE_CHECKING:
     from .._generated.agent_run import RunSettled
-    from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
+    from ..inference import LLMModels, RealtimeModels
     from .agent_host import AgentHost
     from .agent_run import _TextRun
-    from .agent_session import ExpressiveOptions, VoiceSession
+    from .agent_session import VoiceSession
     from .events import RunContext
     from .run_result import RunResult, RunUsage
     from .run_stream import RunStream
-    from .turn import TurnDetectionMode
 
 
 _P = ParamSpec("_P")
@@ -91,14 +88,14 @@ class _VoiceBinding(NamedTuple):
     agent: Agent
     origin: str | None = None
 
-    # the providers the agent's default nodes call: its own, else the session's
+    # the providers the agent's default nodes call: the session's, and the agent's own LLM
     @property
     def stt(self) -> stt.STT | None:
-        return self.agent._stt if is_given(self.agent._stt) else self.session.stt
+        return self.session.stt
 
     @property
     def vad(self) -> VAD | None:
-        return self.agent._vad if is_given(self.agent._vad) else self.session.vad
+        return self.session.vad
 
     @property
     def llm(self) -> LLM | RealtimeModel | None:
@@ -106,7 +103,7 @@ class _VoiceBinding(NamedTuple):
 
     @property
     def tts(self) -> tts.TTS | None:
-        return self.agent._tts if is_given(self.agent._tts) else self.session.tts
+        return self.session.tts
 
     @property
     def llm_conn_options(self) -> APIConnectOptions:
@@ -172,17 +169,9 @@ class Agent(Generic[Context_T, Output_T]):
         | Callable[..., Awaitable[Output_T]]
         | Callable[..., Output_T]
         | None = None,
-        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
-        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
-        tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[
             llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
         ] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
-        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
-        use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if not isinstance(instructions, str):
             raise TypeError("instructions must be a string")
@@ -208,28 +197,12 @@ class Agent(Generic[Context_T, Output_T]):
         self._output_type: type[Any] = _output_type_of(self._output_spec)
         self._host_instance: AgentHost | None = None
 
-        if isinstance(stt, str):
-            stt = inference.STT.from_model_string(stt)
-
         if isinstance(llm, str):
             llm = inference.llm_from_model_string(llm)
-
-        if isinstance(tts, str):
-            tts = inference.TTS.from_model_string(tts)
-
-        self._stt = stt
         # a duplex model is wrapped on the way in, so nothing downstream sees one
         self._llm: NotGivenOr[LLM | RealtimeModel | None] = (
             DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else llm
         )
-        self._tts = tts
-        self._vad = vad
-        self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
-
-        self._min_consecutive_speech_delay = min_consecutive_speech_delay
-        self._use_tts_aligned_transcript = use_tts_aligned_transcript
-        # the agent layer of the turn options, as written: the core resolves it over the session's
-        self._turn_handling: TurnHandlingOptions = turn_handling if is_given(turn_handling) else {}
 
     @property
     def name(self) -> str:
@@ -284,10 +257,6 @@ class Agent(Generic[Context_T, Output_T]):
         if isinstance(binding, _VoiceBinding):
             return _ReadOnlyChatContext(binding.session._agent_chat_ctx().items)
         return binding.chat_ctx
-
-    @property
-    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
-        return (self._turn_handling.get("interruption") or {}).get("mode", NOT_GIVEN)
 
     @property
     def output_type(self) -> type[Output_T]:
@@ -781,32 +750,6 @@ class Agent(Generic[Context_T, Output_T]):
         return binding
 
     @property
-    def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
-        """
-        Retrieves the turn detection mode for identifying conversational turns.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides a turn detection,
-        the session's turn detection mode will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
-        """  # noqa: E501
-        return self._turn_handling.get("turn_detection", NOT_GIVEN)
-
-    @property
-    def stt(self) -> NotGivenOr[stt.STT | None]:
-        """
-        Retrieves the Speech-To-Text component for the agent.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides an STT component,
-        the session's STT will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[stt.STT | None]: An optional STT component.
-        """  # noqa: E501
-        return self._stt
-
-    @property
     def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
         """
         Retrieves the Language Model or RealtimeModel used for text generation.
@@ -818,109 +761,6 @@ class Agent(Generic[Context_T, Output_T]):
             NotGivenOr[llm.LLM | llm.RealtimeModel | None]: The language model for text generation.
         """  # noqa: E501
         return self._llm
-
-    @property
-    def tts(self) -> NotGivenOr[tts.TTS | None]:
-        """
-        Retrieves the Text-To-Speech component for the agent.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides a TTS component,
-        the session's TTS will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
-        """  # noqa: E501
-        return self._tts
-
-    @property
-    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
-        """
-        Retrieves the expressive TTS delivery setting for the agent.
-
-        If this property was not set at Agent creation, the ``VoiceSession``'s ``expressive``
-        value will be used at runtime instead. When set, it overrides the session value for
-        this agent's turns, matching how ``llm`` and ``tts`` overrides behave.
-
-        Returns:
-            NotGivenOr[bool | ExpressiveOptions]: Whether expressive delivery is enabled,
-                or its configuration.
-        """
-        return self._expressive
-
-    @property
-    def vad(self) -> NotGivenOr[VAD | None]:
-        """
-        Retrieves the Voice Activity Detection component for the agent.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides a VAD component,
-        the session's VAD will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[vad.VAD | None]: An optional VAD component for detecting voice activity.
-        """  # noqa: E501
-        return self._vad
-
-    @property
-    def allow_interruptions(self) -> NotGivenOr[bool]:
-        """
-        Indicates whether interruptions (e.g., stopping TTS playback) are allowed.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides a value for
-        allowing interruptions, the session's value will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[bool]: Whether interruptions are permitted.
-        """
-        return (self._turn_handling.get("interruption") or {}).get("enabled", NOT_GIVEN)
-
-    @property
-    def min_endpointing_delay(self) -> NotGivenOr[float]:
-        """
-        Minimum time-in-seconds since the last detected speech before the agent
-        declares the user’s turn complete. In VAD mode this effectively behaves
-        like max(VAD silence, min_endpointing_delay); in STT mode it is applied
-        after the STT end-of-speech signal, so it can be additive with the STT
-        provider’s endpointing delay.
-
-        If this property was set at Agent creation, it will be used at runtime instead of the session's value.
-        """
-        return self._turn_handling.get("endpointing", {}).get("min_delay", NOT_GIVEN)
-
-    @property
-    def max_endpointing_delay(self) -> NotGivenOr[float]:
-        """
-        Maximum time-in-seconds the agent will wait before terminating the turn.
-
-        If this property was set at Agent creation, it will be used at runtime instead of the session's value.
-        """
-        return self._turn_handling.get("endpointing", {}).get("max_delay", NOT_GIVEN)
-
-    @property
-    def min_consecutive_speech_delay(self) -> NotGivenOr[float]:
-        """
-        Retrieves the minimum consecutive speech delay for the agent.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides a value for
-        the minimum consecutive speech delay, the session's value will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[float]: The minimum consecutive speech delay.
-        """
-        return self._min_consecutive_speech_delay
-
-    @property
-    def use_tts_aligned_transcript(self) -> NotGivenOr[bool]:
-        """
-        Indicates whether to use TTS-aligned transcript as the input of
-        the ``transcription_node``.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides a value for
-        the use of TTS-aligned transcript, the session's value will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[bool]: Whether to use TTS-aligned transcript.
-        """
-        return self._use_tts_aligned_transcript
 
     @property
     def session(self) -> VoiceSession:
