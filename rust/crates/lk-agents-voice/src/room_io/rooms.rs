@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `_core.FakeRoom` (a whole turn on a virtual clock) and `_core.OfflineRoom` (what `lk agent
 //! console` / `daemon` pass as `room`). Both are the Rust room itself where an `Arc<dyn RtcRoom>`
 //! is taken (`as_dyn`), never proxied back through Python.

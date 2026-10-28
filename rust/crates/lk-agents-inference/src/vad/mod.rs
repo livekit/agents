@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `inference/vad.py`: the Silero VAD, its model from the linked native provider
 //! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The logic is in
 //! [`machine`]; this gives it the `(Sink, Source)` shape and runs it on a task, and is the session's

@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! Gateway STT adapter. `lifecycle` owns synchronous completion decisions, `machine` builds
 //! speech observations, and `wire` validates gateway messages. This module executes socket and
 //! media work and owns stream cancellation, bounded queues and pump settlement.

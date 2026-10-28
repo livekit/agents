@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! The warm transfer (`beta.workflows.WarmTransfer`): while the caller waits on hold, a second
 //! session in a room of its own dials a human agent, briefs them on the call, and either moves
 //! them into the caller's room or reports why not. The core runs the sequence and decides; the

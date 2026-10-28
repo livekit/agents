@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `MCPServer` over an `rmcp` session: stdio and streamable HTTP are rmcp's transports, SSE is
 //! [`connect_sse`], a subclass's `client_streams()` is [`McpTransport`]. An injected `_client` is
 //! [`McpClient`], which answers `list_tools`/`call_tool` itself.

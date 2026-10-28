@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `_pipeline_reply_task`: the one task every speech runs, its steps and their follow-ups.
 
 use super::forward::{Voice, voice_leg};

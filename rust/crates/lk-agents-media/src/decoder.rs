@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `AudioStreamDecoder` (`utils/codecs/decoder.py:337-515`) as one synchronous calculator: `push`
 //! returns the PCM its bytes produced; the channel, executor and framing are the driver's.
 
