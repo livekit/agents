@@ -36,6 +36,7 @@ pub mod turn;
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;
     type ChoiceParser = lk_agents_inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_inference::llm::parse::CompletionWire;

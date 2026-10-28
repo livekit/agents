@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any, Protocol
 
+from ._generated._core_agent import *  # noqa: F401, F403
 from ._generated._core_classes import *  # noqa: F401, F403
 from ._generated._core_classes import ChatItem
 from ._generated._core_llm import *  # noqa: F401, F403

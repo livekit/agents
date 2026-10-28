@@ -10,6 +10,53 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+type AgentRunnerImpl = <crate::Selected as super::Implementations>::AgentRunner;
+
+/// Runs invocations of one agent definition: each `run` streams its updates, then its settled
+/// result; closing the stream cancels the invocation, whose work still settles.
+#[pyclass(frozen, name = "AgentRunner", module = "livekit.agents._core")]
+pub struct AgentRunner(::std::sync::Arc<AgentRunnerImpl>);
+
+#[pymethods]
+impl AgentRunner {
+    /// The runner of `definition` on `llm`, its callbacks run by `host`.
+    #[new]
+    #[pyo3(signature = (definition, llm, host))]
+    fn new(definition: ::lk_agents_abi::agent::AgentDefinition, llm: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<AgentRunner> {
+        ::lk_agents_abi::python::check_pid()?;
+        let llm = <dyn ::lk_agents_abi::Llm as ::lk_agents_abi::python::HostProxy>::from_host(&llm, None)?;
+        let host = super::agent::AgentHostProxy::from_host(&host)?;
+        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(definition, llm, host).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+        Ok(AgentRunner(::std::sync::Arc::new(out)))
+    }
+
+    /// Starts one invocation; nothing runs until the first pull.
+    #[pyo3(signature = (request))]
+    fn run(&self, request: ::lk_agents_abi::agent::run::RunRequest) -> PyResult<AgentRunUpdates> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+        Ok(AgentRunUpdates(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
+    }
+}
+
+/// One stream of `::lk_agents_abi::agent::run::RunUpdate` items: `recv()` resolves to the next, `None` at the end.
+#[pyclass(frozen, name = "AgentRunUpdates", module = "livekit.agents._core")]
+pub struct AgentRunUpdates(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::agent::run::RunUpdate>);
+
+#[pymethods]
+impl AgentRunUpdates {
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        self.0.recv(py)
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        self.0.aclose(py)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/agent.rs.
 
 /// [`::lk_agents_abi::agent::AgentHost`] over a host `livekit.agents.voice.agent_host.AgentHost`:

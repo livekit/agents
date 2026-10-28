@@ -583,10 +583,8 @@ impl Resolver<'_> {
             let pat = format!("{at}({})", ident.ident);
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
             voc::only(&pat, &entries, &["context"])?;
-            if voc::find(&entries, "context").is_some() {
-                if context.replace(params.len()).is_some() {
-                    return Err(format!("{at}: one parameter is the call's #[host(context)]"));
-                }
+            if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
+                return Err(format!("{at}: one parameter is the call's #[host(context)]"));
             }
             let (by_ref, ty) = match &*pt.ty {
                 syn::Type::Reference(r) if r.mutability.is_none() => {

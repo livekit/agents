@@ -13,10 +13,8 @@ use lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
-use lk_agents_core::agent_run::{
-    CallId, Effect, Event, Output, OutputVerdict, RenderId, RequestId, RunError, RunResult,
-    StreamEvent, ValidationId,
-};
+use lk_agents_abi::agent::run::{Output, RunSettled, RunUpdate, ValidationId};
+use lk_agents_core::agent_run::{CallId, Effect, Event, OutputVerdict, RenderId, RequestId};
 use lk_agents_abi::agent::AgentDefinition;
 use lk_agents_core::{AgentError, AgentRun, RunInput, approval};
 use tokio::sync::{mpsc, oneshot};
@@ -25,23 +23,6 @@ use crate::host::HostInvoker;
 
 /// Events the work in flight may report ahead of the driver.
 const EVENT_QUEUE: usize = 64;
-
-/// What the consumer of a run receives, in order.
-#[derive(Debug)]
-pub enum RunUpdate {
-    Stream(StreamEvent),
-    /// Cancelled work missed its cleanup deadline; the runtime still owns it (decision 14).
-    IncompleteCleanup(Vec<String>),
-    /// The last update.
-    Finished(Result<RunSettled, RunError>),
-}
-
-#[derive(Debug)]
-pub struct RunSettled {
-    pub result: RunResult,
-    /// The value the host validated, when the output is one.
-    pub output: Option<HostRef>,
-}
 
 /// What a run executes against.
 #[derive(Clone)]
@@ -306,7 +287,7 @@ impl Driver {
                 self.finished = true;
                 let settled = result.map(|result| {
                     let output = match result.outcome {
-                        lk_agents_core::agent_run::RunOutcome::Completed {
+                        lk_agents_abi::agent::run::RunOutcome::Completed {
                             output: Output::Validated(v),
                         } => self.outputs.remove(&v),
                         _ => None,
@@ -431,5 +412,8 @@ async fn stream_request(
     }
 }
 
+mod runner;
 #[cfg(test)]
 mod tests;
+
+pub use runner::{Runner, Updates};

@@ -33,9 +33,9 @@ use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_outcome;
 use model_step::{ModelStep, Purpose};
-pub use result::{
-    CallId, Output, RenderId, RequestId, RunError, RunOutcome, RunResult, RunUsage, StreamEvent,
-    ToolResultStatus, ValidationId,
+pub use result::{CallId, RenderId, RequestId};
+use lk_agents_abi::agent::run::{
+    Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
 };
 use tool_calls::{FinalCandidate, Recorded, ToolCalls};
 

@@ -1,0 +1,110 @@
+//! [`AgentRunner`], the host's class: each `run` starts one invocation ([`start`]) on the process
+//! runtime and hands its updates out as a stream whose drop cancels it.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunRequest, RunUpdate};
+use lk_agents_abi::agent::{AgentDefinition, AgentHost, Invocation};
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::resources::{LlmRef, ResourceId};
+use lk_agents_abi::utils::clock::RealClock;
+use lk_agents_abi::utils::stream::StreamSource;
+use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
+use lk_agents_core::RunInput;
+use lk_agents_core::tool_outcome::Mode;
+use tokio::sync::mpsc;
+
+use super::{AgentRunHandle, Ports, start};
+
+/// How long cancelled work may take to settle before it is reported incomplete.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Updates the consumer may lag behind by before the run waits for it.
+const UPDATE_QUEUE: usize = 16;
+
+pub struct Runner {
+    definition: AgentDefinition,
+    llm: Arc<dyn Llm>,
+    host: Arc<dyn AgentHost>,
+    clock: Arc<dyn Clock>,
+}
+
+impl AgentRunner for Runner {
+    type Updates = Updates;
+
+    fn new(
+        definition: AgentDefinition,
+        llm: Arc<dyn Llm>,
+        host: Arc<dyn AgentHost>,
+    ) -> Result<Self, InvalidRun> {
+        lk_agents_core::agent::validate(&definition).map_err(|e| InvalidRun(e.to_string()))?;
+        Ok(Runner { definition, llm, host, clock: Arc::new(RealClock::new()) })
+    }
+
+    fn run(&self, request: RunRequest) -> Result<Updates, InvalidRun> {
+        let ChatItem::Message(message) = request.message else {
+            return Err(InvalidRun("a run's message is a chat message".into()));
+        };
+        let runtime = crate::process::handle().map_err(|e| InvalidRun(e.to_string()))?;
+        let input = RunInput {
+            invocation_id: request.invocation_id.clone(),
+            message,
+            history: request.history,
+            answer_tool: request.answer_tool,
+            delegated: request.delegated,
+            mode: Mode::Text,
+            llm: Some(LlmRef { id: ResourceId(0), provider: self.llm.id() }),
+            wall: WallAnchor::of(&*self.clock),
+            cleanup_timeout: CLEANUP_TIMEOUT,
+        };
+        let ports = Ports {
+            llm: self.llm.clone(),
+            host: self.host.clone(),
+            clock: self.clock.clone(),
+            conn_options: request.conn_options,
+            entry: Invocation {
+                operation: 0,
+                invocation_id: request.invocation_id,
+                agent_name: self.definition.name.clone(),
+                function_call: None,
+                approval: None,
+                host_context: Some(request.host_context),
+            },
+        };
+        let (handle, updates) =
+            start(&runtime, self.definition.clone(), input, ports, UPDATE_QUEUE)
+                .map_err(|e| InvalidRun(e.to_string()))?;
+        Ok(Updates { run: handle, updates, clock: self.clock.clone() })
+    }
+}
+
+/// One invocation's updates. Dropping it cancels the run; its work still settles.
+pub struct Updates {
+    run: AgentRunHandle,
+    updates: mpsc::Receiver<RunUpdate>,
+    clock: Arc<dyn Clock>,
+}
+
+#[async_trait::async_trait]
+impl StreamSource<RunUpdate> for Updates {
+    async fn next(&mut self) -> Result<Option<RunUpdate>, ProviderError> {
+        Ok(self.updates.recv().await)
+    }
+
+    fn cancel_safe(&self) -> bool {
+        true
+    }
+
+    /// Cancels the run and waits, until `deadline`, for its work to settle.
+    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
+        self.run.cancel();
+        let clock = self.clock.clone();
+        Closed::bounded(
+            &*clock,
+            deadline,
+            async move { while self.updates.recv().await.is_some() {} },
+        )
+        .await
+    }
+}

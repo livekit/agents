@@ -11,7 +11,8 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::{Map, Value};
 
-use super::result::{CallId, StreamEvent, ToolResultStatus};
+use super::result::CallId;
+use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
 use super::Effect;
 use crate::agent::{self, FINAL_RESULT_TOOL, WRAPPED_RESULT_KEY};
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec, ReadBack};

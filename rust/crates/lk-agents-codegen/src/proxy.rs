@@ -56,12 +56,19 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             params.join(", "),
         )),
         ProxyCall::Await => {
-            let err = m.ret.err.as_ref().ok_or_else(|| format!("{at}: an awaited call declares its error"))?;
+            let err = m
+                .ret
+                .err
+                .as_ref()
+                .ok_or_else(|| format!("{at}: an awaited call declares its error"))?;
             let ok = m.ret.ok.rust();
             let (ret, refused, wrap) = match &m.ret.refusal {
                 None => (format!("::std::result::Result<{ok}, {err}>"), String::new(), "out"),
                 Some(r) => (
-                    format!("::std::result::Result<::std::result::Result<{ok}, {}>, {err}>", r.rust),
+                    format!(
+                        "::std::result::Result<::std::result::Result<{ok}, {}>, {err}>",
+                        r.rust
+                    ),
                     format!(
                         "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
                         r.module, r.class, r.rust

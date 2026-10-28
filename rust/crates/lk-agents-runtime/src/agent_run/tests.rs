@@ -19,7 +19,7 @@ use lk_agents_abi::{
     ChatMessage, ChoiceDelta, Closed, FunctionToolCall, LlmChunk, LlmStream, ProviderId, RealClock,
     Role, StreamSource, ToolSpec, WallAnchor,
 };
-use lk_agents_core::agent_run::{RunOutcome, StreamEvent};
+use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use serde_json::{Map, Value, json};
@@ -428,4 +428,60 @@ async fn cancel_closes_the_model_stream_in_flight() {
     let updates = drain(&mut s.updates).await;
     assert!(matches!(finished(&updates), Err(RunError::Cancelled)));
     assert_eq!(s.closed.load(Ordering::SeqCst), 1);
+}
+
+// Catches: the host's runner accepting a definition the core refuses (the error surfacing only on
+// the first run), or a run whose stream ends before the settled result, or whose result is not the
+// model's text.
+#[tokio::test]
+async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_result() {
+    use lk_agents_abi::agent::run::{AgentRunner as _, Output, RunRequest};
+
+
+    let registry: Arc<dyn RefRegistry> = Arc::new(Registry::default());
+    let llm = || -> Arc<dyn Llm> {
+        Arc::new(ScriptedLlm {
+            replies: Mutex::new(vec![Reply::Text("Monday works.")].into()),
+            closed: Arc::new(AtomicUsize::new(0)),
+        })
+    };
+    let host = FakeHost::new(Body::Returns, registry.clone());
+    let definition = |tools: Vec<FunctionToolInfo>| AgentDefinition {
+        name: "scheduler".into(),
+        instructions: "Book.".into(),
+        dynamic_instructions: false,
+        tools,
+        output: OutputSpec::Text { validated: false },
+        retries: Retries::default(),
+    };
+    let invalid = definition(vec![tool("find_slot"), tool("find_slot")]);
+    let refused = super::Runner::new(invalid, llm(), host.clone()).err().expect("refused");
+    assert!(refused.0.contains("find_slot"), "{refused}");
+
+    let runner = super::Runner::new(definition(vec![]), llm(), host).unwrap();
+    let mut updates = runner
+        .run(RunRequest {
+            invocation_id: "run_1".into(),
+            message: lk_agents_abi::ChatItem::Message(ChatMessage::text(
+                "m1",
+                Role::User,
+                "Monday?",
+                std::time::UNIX_EPOCH,
+            )),
+            history: vec![],
+            answer_tool: None,
+            delegated: false,
+            conn_options: Default::default(),
+            host_context: HostRef::new(0, &registry),
+        })
+        .unwrap();
+    let mut last = None;
+    while let Some(update) = updates.next().await.unwrap() {
+        last = Some(update);
+    }
+    let Some(RunUpdate::Finished(Ok(settled))) = last else { panic!("{last:?}") };
+    let RunOutcome::Completed { output: Output::Text(text) } = settled.result.outcome else {
+        panic!("{:?}", settled.result.outcome)
+    };
+    assert_eq!(text, "Monday works.");
 }
