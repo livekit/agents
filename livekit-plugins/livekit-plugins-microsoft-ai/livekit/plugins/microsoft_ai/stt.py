@@ -224,7 +224,6 @@ class STT(stt.STT):
         """Open a transcription stream; flush commits a turn, end_input also drains finals."""
         if self._closed:
             raise RuntimeError("Microsoft AI STT is closed")
-        positive_timeout(conn_options.timeout, "conn_options.timeout")
         selected_language = language if utils.is_given(language) else self._language
         if selected_language is not None and not selected_language.strip():
             raise ValueError("language must be nonempty when supplied")
@@ -244,6 +243,12 @@ class SpeechStream(stt.RecognizeStream):
     def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:
         # Core resets its retry budget after a long attempt. Own a finite, connect-only
         # budget instead: replaying already-consumed audio could lose or duplicate words.
+        if conn_options.pool_timeout is not None or conn_options.total_timeout is not None:
+            raise APIError(
+                "microsoft_ai streaming requires pool_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(
             stt=stt, conn_options=replace(conn_options, max_retry=0), sample_rate=SAMPLE_RATE
         )
@@ -326,7 +331,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _attempt(self) -> None:
         tasks: list[asyncio.Task[None]] = []
         try:
-            await asyncio.wait_for(self._handshake(), self._conn_options.timeout)
+            await self._handshake()
             assert self._ws is not None
             sender = asyncio.create_task(self._send(self._ws))
             receiver = asyncio.create_task(self._receive(self._ws))
@@ -350,24 +355,27 @@ class SpeechStream(stt.RecognizeStream):
                 self._commit_future = None
             if self._ws is not None:
                 try:
-                    await asyncio.wait_for(self._ws.close(), self._conn_options.timeout)
+                    await asyncio.wait_for(self._ws.close(), self._conn_options.total_timeout)
                 except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError):
                     logger.warning("Microsoft AI STT socket cleanup failed")
                 self._ws = None
 
     async def _handshake(self) -> None:
-        ws = await self._stt._client.session().ws_connect(
-            self._stt._client.url,
-            headers=self._stt._client.headers,
-            heartbeat=10.0,
-            max_msg_size=1024 * 1024,
+        ws = await asyncio.wait_for(
+            self._stt._client.session().ws_connect(
+                self._stt._client.url,
+                headers=self._stt._client.headers,
+                heartbeat=10.0,
+                max_msg_size=1024 * 1024,
+            ),
+            self._conn_options.connect_timeout,
         )
         self._ws = ws
-        created = await self._receive_event(ws)
+        created = await asyncio.wait_for(self._receive_event(ws), self._conn_options.read_timeout)
         if created.get("type") != "session.created":
             raise APIError("Microsoft AI STT expected session.created", retryable=False)
-        await ws.send_json(_session_update(self._stt.model, self._language_hint))
-        updated = await self._receive_event(ws)
+        await self._write(ws, _session_update(self._stt.model, self._language_hint))
+        updated = await asyncio.wait_for(self._receive_event(ws), self._conn_options.read_timeout)
         if updated.get("type") != "session.updated":
             raise APIError("Microsoft AI STT expected session.updated", retryable=False)
 
@@ -393,7 +401,7 @@ class SpeechStream(stt.RecognizeStream):
         return event
 
     async def _write(self, ws: _WebSocket, data: dict[str, object]) -> None:
-        await asyncio.wait_for(ws.send_json(data), self._conn_options.timeout)
+        await asyncio.wait_for(ws.send_json(data), self._conn_options.write_timeout)
 
     async def _append(
         self, ws: _WebSocket, frame: rtc.AudioFrame, *, account_input: bool = True
@@ -418,7 +426,7 @@ class SpeechStream(stt.RecognizeStream):
         self._committed_item_id = None
         try:
             await self._write(ws, {"type": "input_audio_buffer.commit"})
-            await asyncio.wait_for(self._commit_future, self._conn_options.timeout)
+            await asyncio.wait_for(self._commit_future, self._conn_options.read_timeout)
             self._segment_samples = 0
         finally:
             self._commit_future = None
@@ -566,7 +574,7 @@ class SpeechStream(stt.RecognizeStream):
             done, _ = await asyncio.wait([producer, consumer], return_when=asyncio.FIRST_COMPLETED)
             if producer in done:
                 await producer
-                await asyncio.wait_for(consumer, self._conn_options.timeout)
+                await asyncio.wait_for(consumer, self._conn_options.total_timeout)
             else:
                 # Live input may remain open indefinitely; surface the consumer's error now.
                 await consumer

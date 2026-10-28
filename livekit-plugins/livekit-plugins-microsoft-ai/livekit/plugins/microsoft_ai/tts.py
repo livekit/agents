@@ -39,7 +39,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-from ._http import Configuration, HTTPClient, positive_timeout, status_error
+from ._http import Configuration, HTTPClient, status_error
 
 _WAV_FORMATS = {
     8000: "riff-8khz-16bit-mono-pcm",
@@ -130,7 +130,6 @@ class TTS(tts.TTS):
         http_session: Optional caller-owned aiohttp session.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
-        request_timeout: Total request/body deadline in seconds.
         max_text_length: Client-side character limit, not a claimed provider limit.
         max_audio_bytes: Maximum complete WAV response size in bytes.
 
@@ -151,7 +150,6 @@ class TTS(tts.TTS):
         headers: Mapping[str, str] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         env_file: str | Path | None = None,
-        request_timeout: float = 30.0,
         max_text_length: int = 4096,
         max_audio_bytes: int = 10 * 1024 * 1024,
     ) -> None:
@@ -173,7 +171,6 @@ class TTS(tts.TTS):
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        positive_timeout(request_timeout, "request_timeout")
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
@@ -219,7 +216,6 @@ class TTS(tts.TTS):
                 "X-Microsoft-OutputFormat": _WAV_FORMATS[sample_rate],
             }
         )
-        self._request_timeout = request_timeout
         self._max_text_length = max_text_length
         self._max_audio_bytes = max_audio_bytes
         self._streams: weakref.WeakSet[ChunkedStream] = weakref.WeakSet()
@@ -244,7 +240,6 @@ class TTS(tts.TTS):
             raise ValueError("Microsoft AI TTS text exceeds max_text_length")
         if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]", text):
             raise ValueError("Microsoft AI TTS text contains characters invalid in XML")
-        positive_timeout(conn_options.timeout, "conn_options.timeout")
         stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -264,14 +259,13 @@ class ChunkedStream(tts.ChunkedStream):
         self._closed = False
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             async with self._tts._client.session().post(
                 self._tts._client.url,
                 headers=self._tts._client.headers,
                 data=_ssml(self.input_text, self._tts._opts),
-                timeout=aiohttp.ClientTimeout(
-                    total=self._tts._request_timeout, connect=self._conn_options.timeout
-                ),
+                timeout=http_timeout,
                 allow_redirects=False,
             ) as response:
                 if response.status != 200:
