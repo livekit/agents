@@ -236,7 +236,7 @@ impl AgentClient {
 type _core_A2ADoorImpl = <crate::Selected as super::Implementations>::A2ADoor;
 
 fn _extract_a2_a_door_dispatch_body(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "body") }).collect::<PyResult<Vec<_>>>())
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { let bytes = ::lk_agents_abi::python::retained_bytes(&obj, "body", None)?; Ok(obj.py().detach(move || bytes.to_vec())) } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "body") }).collect::<PyResult<Vec<_>>>()) } }
 }
 
 fn _extract_a2_a_door_dispatch_body_size(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {

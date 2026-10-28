@@ -16,6 +16,8 @@ use pyo3::prelude::*;
 extern crate lk_agents_rtc as _;
 extern crate lk_agents_voice as _;
 
+/// Channel and Python metadata glue for the generated TTS emitter.
+pub mod audio_emitter;
 /// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
 pub mod avatar_output;
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
@@ -44,6 +46,10 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type MediaTokenization = lk_agents_runtime::media_codecs::MediaTokenization;
+    type AudioDecoder = lk_agents_runtime::media_codecs::AudioDecoder;
+    type StreamBuffer = lk_agents_runtime::media_codecs::StreamBuffer;
+    type AudioEmitter = crate::audio_emitter::AudioEmitter;
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
     type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;

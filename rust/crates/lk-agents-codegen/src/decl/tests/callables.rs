@@ -174,8 +174,8 @@ fn input_maps_accept_covariant_mapping_values_while_results_remain_dicts() {
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
     assert!(text.contains("from collections.abc import Mapping"), "{text}");
-    assert!(text.contains("values: Mapping[str, bytes | bytearray | list[int]]"), "{text}");
-    assert!(text.contains("-> dict[str, list[int]]"), "{text}");
+    assert!(text.contains("values: Mapping[str, bytes | bytearray | memoryview | list[int]]"), "{text}");
+    assert!(text.contains("-> dict[str, bytes]"), "{text}");
     assert!(text.contains("values: Sequence[object]"), "{text}");
     assert!(text.contains("-> list[object]"), "{text}");
 }

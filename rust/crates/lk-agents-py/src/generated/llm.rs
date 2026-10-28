@@ -567,7 +567,7 @@ pub fn mcp_check_result(result: Bound<'_, PyAny>) -> PyResult<()> {
 type LlmAlgorithmsImpl = <crate::Selected as super::Implementations>::LlmAlgorithms;
 
 fn _extract_llm_algorithms_prepare_provider_format_thought_signatures(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::vec::Vec<u8>>>> {
-    if obj.is_none() { Ok(None) } else { (obj.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, item.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "thought_signatures") }).collect::<PyResult<Vec<_>>>())?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())).map(Some) }
+    if obj.is_none() { Ok(None) } else { (obj.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, { if item.is_instance_of::<::pyo3::types::PyBytes>() || item.is_instance_of::<::pyo3::types::PyByteArray>() || item.is_instance_of::<::pyo3::types::PyMemoryView>() { let bytes = ::lk_agents_abi::python::retained_bytes(&item, "thought_signatures", None)?; Ok(item.py().detach(move || bytes.to_vec())) } else { item.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "thought_signatures") }).collect::<PyResult<Vec<_>>>()) } }?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())).map(Some) }
 }
 
 #[pyfunction]

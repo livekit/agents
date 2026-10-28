@@ -40,6 +40,7 @@ pub mod host;
 #[cfg(feature = "media-images")]
 pub mod images;
 pub mod mcp;
+pub mod media_codecs;
 pub mod process;
 pub mod recording;
 pub mod storage;
@@ -53,6 +54,8 @@ pub mod worker;
 
 pub mod vad;
 
+/// Synchronous media algorithms used by the generated host adapters.
+pub use lk_agents_media as media;
 pub use lk_agents_media::filters;
 
 /// The voice session queue owner and its I/O effect execution.

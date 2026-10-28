@@ -286,7 +286,6 @@ mod tests {
         assert!((total as i64 - expected as i64).abs() <= 2, "produced {total}, want ~{expected}");
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn concurrent_sessions_neither_crash_nor_corrupt_each_others_audio() {
         // The B25 shape, run as a stress test with **no test-side lock**: libsoxr's FFT cache is
@@ -310,51 +309,61 @@ mod tests {
         // `cargo nextest` gives every test its own process and cannot see any of this; the threads
         // are spawned here so it reproduces under both runners.
         const N: usize = 24;
+        let workers = crate::workers::MediaWorkers::new(Default::default()).unwrap();
         let gate = std::sync::Arc::new(std::sync::Barrier::new(N + 1));
 
         let victim = {
             let gate = std::sync::Arc::clone(&gate);
-            std::thread::spawn(move || {
-                let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
-                let tone = sine(1000.0, 48_000, 20, 1);
-                let mut out = Vec::new();
-                // Warm, so the victim is mid-stream when the creators are released.
-                for _ in 0..5 {
-                    out.extend_from_slice(r.push(&tone).unwrap());
-                }
-                gate.wait();
-                for _ in 0..200 {
-                    out.extend_from_slice(r.push(&tone).unwrap());
-                }
-                out.extend_from_slice(r.flush().unwrap());
-                let hz = dominant_hz(&out, 16_000);
-                assert!((hz - 1000.0).abs() < 25.0, "victim's tone moved to {hz} Hz");
-            })
+            workers
+                .try_spawn(crate::workers::MediaWorkerClass::Decoder, move || {
+                    let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
+                    let tone = sine(1000.0, 48_000, 20, 1);
+                    let mut out = Vec::new();
+                    // Warm, so the victim is mid-stream when the creators are released.
+                    for _ in 0..5 {
+                        out.extend_from_slice(r.push(&tone).unwrap());
+                    }
+                    gate.wait();
+                    for _ in 0..200 {
+                        out.extend_from_slice(r.push(&tone).unwrap());
+                    }
+                    out.extend_from_slice(r.flush().unwrap());
+                    let hz = dominant_hz(&out, 16_000);
+                    assert!((hz - 1000.0).abs() < 25.0, "victim's tone moved to {hz} Hz");
+                })
+                .unwrap()
         };
 
         let mut creators = Vec::new();
         for i in 0..N {
             let gate = std::sync::Arc::clone(&gate);
-            creators.push(std::thread::spawn(move || {
-                gate.wait();
-                // A distinct rate per thread: every one designs its own filter.
-                let out_rate = 8_000 + (i as u32) * 1_000;
-                let mut r = SoxrResampler::new(48_000, out_rate, 1, Quality::Medium)
-                    .expect("construction must not race");
-                let tone = sine(1000.0, 48_000, 20, 1);
-                let mut out = Vec::new();
-                for _ in 0..10 {
-                    out.extend_from_slice(r.push(&tone).unwrap());
-                }
-                out.extend_from_slice(r.flush().unwrap());
-                let hz = dominant_hz(&out, out_rate);
-                assert!((hz - 1000.0).abs() < 25.0, "tone at {out_rate} Hz moved to {hz} Hz");
-            }));
+            creators.push(
+                workers
+                    .try_spawn(crate::workers::MediaWorkerClass::Decoder, move || {
+                        gate.wait();
+                        // A distinct rate per thread: every one designs its own filter.
+                        let out_rate = 8_000 + (i as u32) * 1_000;
+                        let mut r = SoxrResampler::new(48_000, out_rate, 1, Quality::Medium)
+                            .expect("construction must not race");
+                        let tone = sine(1000.0, 48_000, 20, 1);
+                        let mut out = Vec::new();
+                        for _ in 0..10 {
+                            out.extend_from_slice(r.push(&tone).unwrap());
+                        }
+                        out.extend_from_slice(r.flush().unwrap());
+                        let hz = dominant_hz(&out, out_rate);
+                        assert!(
+                            (hz - 1000.0).abs() < 25.0,
+                            "tone at {out_rate} Hz moved to {hz} Hz"
+                        );
+                    })
+                    .unwrap(),
+            );
         }
         for h in creators {
-            h.join().expect("a construction thread panicked or crashed");
+            h.wait().expect("a construction thread panicked or crashed");
         }
-        victim.join().expect("the victim's audio was corrupted or it crashed");
+        victim.wait().expect("the victim's audio was corrupted or it crashed");
     }
 
     #[test]

@@ -83,7 +83,6 @@ python = [
     "lk-agents-inference/native-audio",
     "lk-agents-voice/python",
     "lk-agents-voice/native-audio",
-    "lk-agents-media/python",
     "lk-agents-media/blingfire",
 ]
 

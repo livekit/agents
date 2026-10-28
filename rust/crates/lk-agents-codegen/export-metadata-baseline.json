@@ -3,7 +3,6 @@
   "binding|rust/crates/lk-agents-a2a/src/lib.rs|struct Checkpoint|binding (extract , from_items , tag = \"kind\" , tag_value = \"checkpoint\")",
   "binding|rust/crates/lk-agents-a2a/src/lib.rs|struct Output|binding (extract , from_items , tag = \"kind\" , tag_value = \"output\")",
   "class|rust/crates/lk-agents-inference/src/llm/mod.rs|struct ResponseState|lk_agents_abi :: class (name = \"LlmResponseState\" , mutable)",
-  "class|rust/crates/lk-agents-media/src/stream_buffer.rs|struct StreamBuffer|lk_agents_abi :: class",
   "class|rust/crates/lk-agents-rtc/src/events.rs|struct AudioFrameSender|lk_agents_abi :: class",
   "class|rust/crates/lk-agents-rtc/src/events.rs|struct ByteChunks|lk_agents_abi :: class",
   "class|rust/crates/lk-agents-rtc/src/events.rs|struct ByteStreamSender|lk_agents_abi :: class",

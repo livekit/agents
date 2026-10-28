@@ -93,3 +93,4 @@ class AudioStreamDecoder:
     async def aclose(self) -> None:
         self._decoder.set_on_output(None)
         self._output_ch.close()
+        await self._decoder.aclose()

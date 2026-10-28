@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import wave
+from pathlib import Path
 
 import pytest
 
@@ -352,3 +353,27 @@ async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixt
     warnings = [record for record in caplog.records if "incomplete PCM" in record.message]
     assert len(warnings) == 1
     assert warnings[0].levelname == "WARNING"
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+async def test_compressed_finalization_delivers_the_complete_tail_before_join_returns():
+    from livekit.agents import _core
+
+    encoded = Path(__file__).with_name("change-sophie.opus").read_bytes()
+    decoder = _core.AudioDecoder("audio/ogg", sample_rate=SR, num_channels=NC)
+    expected = decoder.push(encoded) + decoder.flush()
+
+    def produce(emitter):
+        for offset in range(0, len(encoded), 997):
+            emitter.push(encoded[offset : offset + 997])
+        emitter.end_input()
+
+    emitter, events = await asyncio.wait_for(
+        _run_emitter(produce, mime_type="audio/ogg"), timeout=30
+    )
+    try:
+        assert events[-1].is_final
+        assert b"".join(bytes(event.frame.data) for event in events) == expected
+    finally:
+        await emitter.aclose()

@@ -1,6 +1,6 @@
 //! Admitted native workers for codec, recording, image and model work (decision 84): a bounded pool
 //! of plain threads, no async runtime. Callers that must not block their loop hand work here and
-//! await its [`Receipt`]. Admission refuses overload synchronously; a running job keeps its
+//! await its [`MediaWorker`]. Admission refuses overload synchronously; a running job keeps its
 //! capacity until it settles, so a caller dropping its receipt never frees capacity early.
 
 use std::collections::VecDeque;
@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-pub use lk_agents_abi::utils::workers::{
+pub use lk_agents_abi::media::workers::{
     WorkerClass as MediaWorkerClass, WorkerError as MediaWorkerError,
 };
 
@@ -141,20 +141,35 @@ struct Slot<T> {
 /// The completion of one admitted job. Awaiting it observes the result; dropping it leaves the
 /// job running with its capacity.
 pub struct MediaWorker<T> {
-    slot: Arc<Mutex<Slot<T>>>,
+    slot: Arc<(Mutex<Slot<T>>, Condvar)>,
 }
 
 impl<T> Future for MediaWorker<T> {
     type Output = Result<T, WorkerPanicked>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut slot = self.slot.lock().unwrap_or_else(|p| p.into_inner());
+        let mut slot = self.slot.0.lock().unwrap_or_else(|p| p.into_inner());
         match slot.result.take() {
             Some(result) => Poll::Ready(result),
             None => {
                 slot.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
+        }
+    }
+}
+
+impl<T> MediaWorker<T> {
+    /// Observe settlement from another native worker or a synchronous caller.
+    /// Async callers must await the receipt instead of blocking their executor.
+    pub fn wait(self) -> Result<T, WorkerPanicked> {
+        let (slot, ready) = &*self.slot;
+        let mut slot = slot.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if let Some(result) = slot.result.take() {
+                return result;
+            }
+            slot = ready.wait(slot).unwrap_or_else(|p| p.into_inner());
         }
     }
 }
@@ -251,7 +266,7 @@ impl MediaWorkers {
         permit: MediaWorkerPermit,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> MediaWorker<T> {
-        let slot = Arc::new(Mutex::new(Slot { result: None, waker: None }));
+        let slot = Arc::new((Mutex::new(Slot { result: None, waker: None }), Condvar::new()));
         let settled = slot.clone();
         let job: Job = Box::new(move || {
             let result =
@@ -259,10 +274,11 @@ impl MediaWorkers {
             // Capacity is released by settlement, before the caller observes the result.
             drop(permit);
             let waker = {
-                let mut slot = settled.lock().unwrap_or_else(|p| p.into_inner());
+                let mut slot = settled.0.lock().unwrap_or_else(|p| p.into_inner());
                 slot.result = Some(result);
                 slot.waker.take()
             };
+            settled.1.notify_all();
             if let Some(waker) = waker {
                 waker.wake();
             }

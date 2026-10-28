@@ -141,7 +141,7 @@ impl Resolver<'_> {
         voc::only(
             &at,
             &entries,
-            &["new", "call", "await", "getter", "function", "next", "name", "pid"],
+            &["new", "call", "await", "getter", "function", "next", "name", "pid", "detach"],
         )?;
         let kinds: Vec<MethodKind> = [
             ("new", MethodKind::New),
@@ -162,6 +162,15 @@ impl Resolver<'_> {
         };
         if kind == MethodKind::Function && f.sig.asyncness.is_some() {
             kind = MethodKind::AsyncFunction;
+        }
+        let detach = match voc::find(&entries, "detach") {
+            Some(flag) if flag.value.is_some() || !flag.nested.is_empty() => {
+                return Err(format!("{at}: detach is a bare flag"));
+            }
+            value => value.is_some(),
+        };
+        if detach && !matches!(kind, MethodKind::Call | MethodKind::Function) {
+            return Err(format!("{at}: detach requires a synchronous call or function"));
         }
         let receiver = f.sig.receiver();
         let shape_ok = match kind {
@@ -272,6 +281,7 @@ impl Resolver<'_> {
             mutable: receiver.is_some_and(|r| r.mutability.is_some()),
             name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
             kind,
+            detach,
             pid: voc::boolean(&at, &entries, "pid")?,
             params,
             ret,
@@ -471,6 +481,7 @@ impl Resolver<'_> {
                     (["bool"], []) => Ty::Bool,
                     (["f64"], []) => Ty::Float,
                     (["std" | "core", "time", "Duration"], []) => Ty::Duration,
+                    (["isize"], []) => Ty::Int(Int::Isize),
                     (["u8"], []) => Ty::Int(Int::U8),
                     (["u16"], []) => Ty::Int(Int::U16),
                     (["u32"], []) => Ty::Int(Int::U32),

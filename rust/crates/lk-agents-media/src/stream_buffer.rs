@@ -20,7 +20,6 @@ struct Inner {
 ///
 /// A byte pipe: write from one thread, read from another. The first paragraph is the class's
 /// `__doc__`, and the same sentence heads the impl's doc, which the `.pyi` is written from.
-#[lk_agents_abi::class]
 #[derive(Default)]
 pub struct StreamBuffer {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -32,9 +31,7 @@ pub struct StreamBuffer {
 ///
 /// Allows writing from one thread and reading from another. Unused by the decoder; exported
 /// because it is in the reference's `utils.codecs.__all__`.
-#[lk_agents_abi::host(object)]
 impl StreamBuffer {
-    #[host(new)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -43,7 +40,6 @@ impl StreamBuffer {
     ///
     /// A write after `end_input` is dropped rather than reordered behind the EOF the reader has
     /// already been promised.
-    #[host(method)]
     pub fn write(&self, data: &[u8]) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if g.closed || g.eof {
@@ -78,7 +74,6 @@ impl StreamBuffer {
     }
 
     /// No more bytes are coming. The reader drains what is buffered, then sees EOF.
-    #[host(method)]
     pub fn end_input(&self) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         g.eof = true;
@@ -86,7 +81,6 @@ impl StreamBuffer {
     }
 
     /// Stop now. The reader sees EOF immediately, buffered bytes and all.
-    #[host(method)]
     pub fn close(&self) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         g.closed = true;
@@ -95,14 +89,12 @@ impl StreamBuffer {
     }
 
     /// Bytes written but not yet read.
-    #[host(method(name = "__len__"))]
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).data.len()
     }
 
     /// `read(size=-1)`: blocks (the binding releases the GIL) until data is available, EOF is
     /// signalled, or the buffer is closed. `-1` reads what is available now, not the whole stream.
-    #[host(method(name = "read", detach, defaults(size = -1)))]
     pub fn read_up_to(&self, size: isize) -> Vec<u8> {
         if size == 0 {
             return Vec::new();
@@ -115,6 +107,27 @@ impl StreamBuffer {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl lk_agents_abi::media::codecs::StreamBuffer for StreamBuffer {
+    fn new() -> Self {
+        Self::new()
+    }
+    fn write(&self, data: &[u8]) {
+        self.write(data);
+    }
+    fn end_input(&self) {
+        self.end_input();
+    }
+    fn close(&self) {
+        self.close();
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn read(&self, size: isize) -> Vec<u8> {
+        self.read_up_to(size)
     }
 }
 
@@ -159,20 +172,22 @@ mod tests {
     // Catches: a non-blocking read. If `read` returned 0 on an empty-but-open buffer, ffmpeg's
     // AVIO would take it for end of stream and `avformat_open_input` would fail on any stream
     // whose first chunk lands after the demuxer's first probe read -- i.e. every network TTS.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_read_on_an_empty_open_buffer_waits_for_the_writer() {
         let b = Arc::new(StreamBuffer::new());
         let w = b.clone();
-        let h = std::thread::spawn(move || {
-            let mut buf = [0u8; 4];
-            let n = w.read(&mut buf);
-            (n, buf)
-        });
+        let workers = crate::workers::MediaWorkers::new(Default::default()).unwrap();
+        let h = workers
+            .try_spawn(crate::workers::MediaWorkerClass::Decoder, move || {
+                let mut buf = [0u8; 4];
+                let n = w.read(&mut buf);
+                (n, buf)
+            })
+            .unwrap();
         // No sleep: the reader either blocks (and this write wakes it) or it already returned 0,
         // which is the failure this test is for. Either way `join` decides it.
         b.write(b"abcd");
-        let (n, buf) = h.join().unwrap();
+        let (n, buf) = h.wait().unwrap();
         assert_eq!(n, 4);
         assert_eq!(&buf, b"abcd");
     }

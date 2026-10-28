@@ -102,7 +102,7 @@ class _core_A2ADoor:
     def max_payload_bytes(self) -> int: ...
     async def dispatch(
         self,
-        body: bytes | bytearray | list[int],
+        body: bytes | bytearray | memoryview | list[int],
         principal: AuthPrincipal,
         *,
         version: str | None = None,

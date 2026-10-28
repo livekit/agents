@@ -1,6 +1,7 @@
 //! `_decode_loop` (`utils/codecs/decoder.py:404-475`) -- demux, decode, resample to s16.
 
 use super::*;
+use crate::workers::{MediaWorker, MediaWorkerClass, MediaWorkers};
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate codec worker state to runtime")]
 #[derive(Default)]
@@ -49,7 +50,8 @@ extern "C" fn pcm_trampoline(opaque: *mut c_void, pcm: *const i16, n: c_int) -> 
 pub struct FfmpegDecoder {
     input: Arc<StreamBuffer>,
     shared: Arc<Shared>,
-    handle: Option<std::thread::JoinHandle<()>>,
+    handle: Option<MediaWorker<()>>,
+    workers: MediaWorkers,
     format: Option<CString>,
     out_rate: u32,
     out_channels: u16,
@@ -59,11 +61,17 @@ pub struct FfmpegDecoder {
 impl FfmpegDecoder {
     /// `format_short_name` is the libav container name (`"mp3"`, `"webm"`), or `None` to probe;
     /// an `out_rate` of 0 keeps the source's rate.
-    pub fn new(format_short_name: Option<&str>, out_rate: u32, out_channels: u16) -> Result<Self> {
+    pub fn new(
+        workers: &MediaWorkers,
+        format_short_name: Option<&str>,
+        out_rate: u32,
+        out_channels: u16,
+    ) -> Result<Self> {
         Ok(FfmpegDecoder {
             input: Arc::new(StreamBuffer::new()),
             shared: Arc::default(),
             handle: None,
+            workers: workers.clone(),
             // Checked at the boundary even though `mime_to_av_format` only returns literals.
             format: match format_short_name {
                 Some(s) => Some(CString::new(s).map_err(|_| CodecError::Ffmpeg {
@@ -92,10 +100,9 @@ impl FfmpegDecoder {
         *self.shared.src.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate codec worker launch to runtime")]
-    fn start(&mut self) {
+    fn start(&mut self) -> Result<()> {
         if self.handle.is_some() {
-            return;
+            return Ok(());
         }
         let input = self.input.clone();
         let shared = self.shared.clone();
@@ -104,9 +111,8 @@ impl FfmpegDecoder {
         let out_channels = self.out_channels as c_int;
 
         self.handle = Some(
-            std::thread::Builder::new()
-                .name("lk-agents-media-decode".into())
-                .spawn(move || {
+            self.workers
+                .try_spawn(MediaWorkerClass::Decoder, move || {
                     let mut err = ErrBuf::new();
                     let name = fmt.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
                     // SAFETY: `input` outlives the C decoder -- it is dropped at the end of this
@@ -157,8 +163,9 @@ impl FfmpegDecoder {
                     }
                     unsafe { lk_dec_free(d) };
                 })
-                .expect("spawning the decode thread"),
+                .map_err(|e| CodecError::Worker(e.to_string()))?,
         );
+        Ok(())
     }
 
     fn drain(&mut self) -> Result<Vec<i16>> {
@@ -180,16 +187,23 @@ impl FfmpegDecoder {
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<i16>> {
+        self.start()?;
         self.input.write(bytes);
-        self.start();
         self.drain()
+    }
+
+    /// Stop native input immediately and return ownership of its settlement receipt.
+    pub fn close(&mut self) -> Option<MediaWorker<()>> {
+        self.set_on_output(None);
+        self.input.close();
+        self.handle.take()
     }
 
     /// Joins the decode thread, so everything the container held is decoded on return.
     pub fn flush(&mut self) -> Result<Vec<i16>> {
         self.input.end_input();
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            h.wait().map_err(|e| CodecError::Worker(e.to_string()))?;
         }
         self.drain()
     }
@@ -199,9 +213,7 @@ impl Drop for FfmpegDecoder {
     fn drop(&mut self) {
         // `aclose()`: close the input so the blocking read returns and the thread ends on its own.
         // Not joined: a drop can run under the host's lock that a pending `on_output` waits on.
-        self.set_on_output(None);
-        self.input.close();
-        self.handle.take();
+        self.close();
     }
 }
 

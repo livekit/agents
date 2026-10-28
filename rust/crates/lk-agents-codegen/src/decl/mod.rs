@@ -329,6 +329,8 @@ pub struct Method {
     /// The host name; the Rust one unless `name = ".."`.
     pub name: String,
     pub kind: MethodKind,
+    /// Release the host lock while executing this synchronous native operation.
+    pub detach: bool,
     /// Override the class or function group fork guard for this entry.
     pub pid: Option<bool>,
     pub params: Vec<Param>,
@@ -515,6 +517,7 @@ pub enum HostForm {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Int {
+    Isize,
     U8,
     U16,
     U32,
@@ -596,6 +599,7 @@ impl Ty {
 impl Int {
     pub fn rust(self) -> &'static str {
         match self {
+            Int::Isize => "isize",
             Int::U8 => "u8",
             Int::U16 => "u16",
             Int::U32 => "u32",

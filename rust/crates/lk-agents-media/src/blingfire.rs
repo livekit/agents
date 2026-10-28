@@ -150,11 +150,6 @@ pub type Sentence = (String, usize, usize);
 ///   makes the synthesiser breathe after "Sure."
 /// * **`retain_format` keeps the raw slice**; otherwise newlines collapse to single spaces and the
 ///   result is trimmed. A TTS reading `"...end.\n\nNext..."` aloud must not pause twice.
-#[lk_agents_abi::host(export(
-    pid = false,
-    kw_only = "retain_format",
-    defaults(min_sentence_len = 20, retain_format = false)
-))]
 pub fn split_sentences(
     text: &str,
     min_sentence_len: usize,
@@ -197,6 +192,19 @@ pub fn split_sentences(
     }
 
     Ok(out)
+}
+
+pub struct MediaTokenization;
+
+impl lk_agents_abi::media::codecs::MediaTokenization for MediaTokenization {
+    fn split_sentences(
+        text: &str,
+        min_sentence_len: usize,
+        retain_format: bool,
+    ) -> Result<Vec<(String, usize, usize)>, lk_agents_abi::media::codecs::CodecFailure> {
+        split_sentences(text, min_sentence_len, retain_format)
+            .map_err(|error| lk_agents_abi::media::codecs::CodecFailure(error.to_string()))
+    }
 }
 
 /// `re.sub(r"\s*\n+\s*", " ", s).strip()`: only runs containing a newline collapse. Python's `\s`

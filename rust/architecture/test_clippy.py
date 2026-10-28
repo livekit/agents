@@ -22,6 +22,24 @@ class ClippyContracts(unittest.TestCase):
         global HELPER
         HELPER = clippy.build_helper(ROOT)
 
+    def test_pool_diagnostics_do_not_hide_a_policed_macro_caller(self):
+        pool = {
+            "file_name": "crates/lk-agents-media/src/workers.rs",
+            "line_start": 1,
+            "column_start": 1,
+            "is_primary": True,
+        }
+        message = {
+            "code": {"code": "clippy::disallowed_types"},
+            "message": "use of a disallowed type `std::sync::Mutex`",
+            "spans": [pool],
+        }
+        self.assertEqual(clippy.compiler_locations([message], ROOT), [])
+        caller = {**pool, "file_name": "crates/lk-agents-media/src/stream_buffer.rs"}
+        pool["expansion"] = {"span": caller}
+        locations = clippy.compiler_locations([message], ROOT)
+        self.assertEqual([site[0] for site in locations], ["rust/" + caller["file_name"]])
+
     def test_new_and_broadened_exemptions_fail_even_when_counts_match(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fixture.rs"

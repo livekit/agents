@@ -8,7 +8,6 @@
 from ._core_handwritten import (
     AdaptiveNoiseGate as AdaptiveNoiseGate,
     AgentNodes as AgentNodes,
-    AudioEmitter as AudioEmitter,
     DuplexRealtimeModel as DuplexRealtimeModel,
     EndpointServer as EndpointServer,
     EndpointStream as EndpointStream,
@@ -70,7 +69,6 @@ from ._generated._core_classes import (
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
     AcceptArguments as AcceptArguments,
     AudioByteStream as AudioByteStream,
-    AudioDecoder as AudioDecoder,
     AudioFrameSender as AudioFrameSender,
     AudioOutputCapabilities as AudioOutputCapabilities,
     AudioStreamOptions as AudioStreamOptions,
@@ -128,7 +126,6 @@ from ._generated._core_classes import (
     SpeechHandle as SpeechHandle,
     StaleHandle as StaleHandle,
     StartJobFields as StartJobFields,
-    StreamBuffer as StreamBuffer,
     StreamBytesOptions as StreamBytesOptions,
     StreamTextOptions as StreamTextOptions,
     SttStreamAdapter as SttStreamAdapter,
@@ -209,7 +206,6 @@ from ._generated._core_classes import (
     session_messages_topic as session_messages_topic,
     session_state_option_fields as session_state_option_fields,
     speech_priorities as speech_priorities,
-    split_sentences as split_sentences,
     status_retryable as status_retryable,
     stt_batch_metrics as stt_batch_metrics,
     stt_fallback_capabilities as stt_fallback_capabilities,
@@ -290,6 +286,12 @@ from ._generated._core_llm import (
     to_openai_response_format as to_openai_response_format,
     to_provider_format as to_provider_format,
     to_strict_json_schema as to_strict_json_schema,
+)
+from ._generated._core_media import (
+    AudioDecoder as AudioDecoder,
+    AudioEmitter as AudioEmitter,
+    StreamBuffer as StreamBuffer,
+    split_sentences as split_sentences,
 )
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,

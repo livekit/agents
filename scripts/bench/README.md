@@ -21,6 +21,12 @@ uv run --no-sync python -m scripts.bench.sessions \
 uv run --no-sync python -m scripts.bench.reports \
   --sessions 1 8 32 64 --items 10000 --output bench-reports.json --check
 
+# Real image encoding, cold decoder construction, WAV resampling and Python-thread progress
+PYTHONPATH=livekit-agents-next:. uv run --no-sync python scripts/bench/media.py --output media.json
+# Real native images, 32 Ogg streams and ten-second recording bursts (run from rust/)
+cargo test -p lk-agents-runtime --test media_measurements --features media-images,media-ffmpeg \
+  -- --ignored --nocapture
+
 # Direct audio data-plane steps at 1/8/32 instances
 cargo build --manifest-path rust/Cargo.toml -p lk-agents-bench-steps --release --locked
 rust/target/release/lk-agents-bench-steps --check > bench-steps.json

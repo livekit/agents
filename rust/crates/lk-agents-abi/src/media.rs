@@ -3,3 +3,9 @@
 pub mod decoder;
 
 pub mod images;
+
+pub mod emitter;
+
+pub mod workers;
+
+pub mod codecs;

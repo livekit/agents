@@ -287,7 +287,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             ));
         }
         _ => {
-            let needs_py = ret_ty.contains("'py");
+            let needs_py = ret_ty.contains("'py") || m.detach;
             // A function is registered from `mod.rs`.
             let vis = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
                 "pub "
@@ -307,10 +307,15 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 .chain(args)
                 .collect::<Vec<_>>()
                 .join(", ");
-            let value = format!(
-                "{call}({}){err}",
+            let invocation = format!(
+                "{call}({})",
                 this.into_iter().chain(passed).collect::<Vec<_>>().join(", ")
             );
+            let value = if m.detach {
+                format!("py.detach(|| {invocation}){err}")
+            } else {
+                format!("{invocation}{err}")
+            };
             let body = if m.ret.ok == Ty::Unit {
                 format!("{ind}    {value};\n{ind}    Ok(())\n")
             } else {
@@ -408,6 +413,11 @@ fn signature(params: &[Param]) -> String {
 }
 
 fn rust_literal(d: &Literal, ty: &Ty) -> String {
+    if let Ty::Optional(inner) = ty
+        && *d != Literal::None
+    {
+        return format!("Some({})", rust_literal(d, inner));
+    }
     match d {
         Literal::None => "None".into(),
         Literal::Bool(b) => b.to_string(),
@@ -556,6 +566,10 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Proxy { rust, declared: None, .. } => {
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v}, None)")
         }
+        Ty::List(inner) if **inner == Ty::Int(crate::decl::Int::U8) => format!(
+            "{{ if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ let bytes = ::lk_agents_abi::python::retained_bytes(&{v}, {path}, None)?; Ok({v}.py().detach(move || bytes.to_vec())) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }} }}",
+            from_object("item", inner, path, at)?
+        ),
         Ty::List(inner) => format!(
             "{v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>())",
             from_object("item", inner, path, at)?

@@ -315,8 +315,9 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             format!("NotGivenOr[{}]", annotation(c, t, dir, imports))
         }
         Ty::List(t) if dir == Dir::In && matches!(**t, Ty::Int(crate::decl::Int::U8)) => {
-            "bytes | bytearray | list[int]".into()
+            "bytes | bytearray | memoryview | list[int]".into()
         }
+        Ty::List(t) if matches!(**t, Ty::Int(crate::decl::Int::U8)) => "bytes".into(),
         Ty::List(t) if dir == Dir::In => {
             imports.add("collections.abc", "Sequence");
             format!("Sequence[{}]", annotation(c, t, dir, imports))

@@ -13,10 +13,7 @@ from pathlib import Path
 
 import tomllib
 
-CORES = {
-    f"lk-agents-{name}"
-    for name in ("core", "voice", "media", "rtc")
-}
+CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media", "rtc")}
 PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
 UNRESTRICTED = (
@@ -93,7 +90,8 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-core": {"lk-agents-abi"},
             "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
             # inference -> core (chat formatting, schemas, JSON repair) is pending owner approval.
-            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"} | {"lk-agents-core"},
+            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"}
+            | {"lk-agents-core"},
             # net -> core (the A2A client executes core::a2a decisions) is pending owner approval.
             "lk-agents-net": {"lk-agents-abi"} | {"lk-agents-core"},
             "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
@@ -600,10 +598,11 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
         if code not in {f"clippy::{lint}" for lint in LINTS}:
             continue
         candidates = []
-        unrestricted = False
+        unrestricted = []
         for span in message["spans"]:
             if not span["is_primary"]:
                 continue
+            in_worker_pool = False
             while span:
                 path = Path(span["file_name"])
                 if not path.is_absolute():
@@ -612,9 +611,7 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
                     relative = path.resolve().relative_to(root).as_posix()
                 except ValueError:
                     relative = ""
-                if relative.startswith(UNRESTRICTED):
-                    unrestricted = True
-                    break
+                in_worker_pool |= relative.startswith(UNRESTRICTED)
                 if relative.startswith("rust/crates/") and policed(relative):
                     candidates.append(
                         (
@@ -627,9 +624,10 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
                     )
                     break
                 span = (span.get("expansion") or {}).get("span")
-        if not candidates and unrestricted:
-            continue
+            unrestricted.append(in_worker_pool)
         if not candidates:
+            if unrestricted and all(unrestricted):
+                continue
             spans = ", ".join(span["file_name"] for span in message["spans"] if span["is_primary"])
             raise ValueError(
                 f"unmapped core policy diagnostic {code}: {message['message']}: "

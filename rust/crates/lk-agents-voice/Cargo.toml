@@ -52,4 +52,4 @@ native-audio = ["lk-agents-media/resample"]
 # for a queue owner of its own). Enabled by the fuzzer and runtime conformance tests.
 dst = []
 # The Python binding, expanded in place: only `lk-agents-py` enables it.
-python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-rtc/python", "lk-agents-media/python"]
+python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-rtc/python"]

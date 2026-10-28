@@ -218,7 +218,7 @@ async def to_provider_format(
     images: Mapping[str, SerializedImage] | None = None,
     inject_dummy_user_message: bool = True,
     inject_trailing_user_message: bool = False,
-    thought_signatures: Mapping[str, bytes | bytearray | list[int]] | None = None,
+    thought_signatures: Mapping[str, bytes | bytearray | memoryview | list[int]] | None = None,
 ) -> tuple[list[object], object]: ...
 
 def convert_mid_conversation_instructions(

@@ -28,10 +28,6 @@ ffmpeg = []
 resample = ["dep:soxr-sys"]
 # The image encoder `to_provider_format` needs (`images/`). Off by default for the same reason.
 images = ["dep:image"]
-# The Python binding, expanded in place: every `#[host(..)]` item here becomes its pyo3 class or
-# function (`lk-agents-bindgen`), registered on `_core` through `lk_agents_abi::python`. Enabled by
-# `lk-agents-py` only; without it this crate has no pyo3.
-python = ["dep:pyo3", "lk-agents-abi/python"]
 
 [dependencies]
 thiserror = { workspace = true }
@@ -54,8 +50,6 @@ soxr-sys = { version = "0.1.3", optional = true }
 # Provider image records live in ABI; this crate produces them without putting encoders in ABI.
 lk-agents-abi = { path = "../lk-agents-abi" }
 image = { workspace = true, optional = true }
-# `python` only. pyo3's attribute macros spell `::pyo3`, so the crate that expands them names it.
-pyo3 = { workspace = true, optional = true }
 
 [build-dependencies]
 # Compiles the native wrappers when `ffmpeg` or `blingfire` is enabled.

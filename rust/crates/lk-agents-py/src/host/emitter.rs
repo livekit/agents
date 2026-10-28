@@ -1,19 +1,23 @@
-//! `tts.AudioEmitter`: the pyclass over `lk_agents_abi::tts::emitter`'s machine plus the container
-//! decoder in front of it.
+//! Python channel, metadata and loop callbacks for the generated TTS emitter class.
 
 use std::collections::VecDeque;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+
 use std::time::Duration;
 
 use lk_agents_abi::SynthesizedAudio as CoreAudio;
 use lk_agents_abi::tts::emitter::{
-    AudioEmitter as Machine, Cmd, EmitterDriver, EmitterError, EmitterHost, HostEffect, PumpError, SegmentDump,
+    AudioEmitter as Machine, Cmd, EmitterDriver, EmitterError, EmitterHost, HostEffect, PumpError,
+    SegmentDump,
 };
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyByteArray, PyBytes, PyList, PyType};
+
+type Finalization = tokio::sync::watch::Receiver<Option<Result<(), Arc<PyErr>>>>;
 
 fn emitter_error_to_py(e: EmitterError) -> PyErr {
     lk_agents_abi::python::HostException::to_py_err(&e)
@@ -27,7 +31,11 @@ fn cached<'py>(
     name: &str,
 ) -> PyResult<&'py Bound<'py, PyType>> {
     slot.get_or_try_init(py, || {
-        py.import(module)?.getattr(name)?.cast_into::<PyType>().map(|t| t.unbind()).map_err(PyErr::from)
+        py.import(module)?
+            .getattr(name)?
+            .cast_into::<PyType>()
+            .map(|t| t.unbind())
+            .map_err(PyErr::from)
     })
     .map(|t| t.bind(py))
 }
@@ -38,7 +46,6 @@ fn cached<'py>(
 const USERDATA_TIMED_TRANSCRIPT: &str = lk_agents_abi::USERDATA_TIMED_TRANSCRIPT;
 const ATTR_PROVIDER_REQUEST_IDS: &str = lk_agents_abi::telemetry::attrs::PROVIDER_REQUEST_IDS;
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `LK_DUMP_TTS`, read once; a non-integer value disables dumping.
 fn dump_default() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -64,21 +71,20 @@ fn logger(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     py.import("livekit.agents.log")?.getattr("logger")
 }
 
-#[pyclass(frozen, subclass, name = "AudioEmitter", module = "livekit.agents.tts")]
-pub struct AudioEmitter {
+pub(crate) struct State {
+    context: Mutex<lk_agents_abi::HostRef>,
+    compressed: Mutex<bool>,
+    closed: AtomicBool,
+    finalization: Mutex<Option<Finalization>>,
     /// Effects come back through [`PyHost`] with no lock held.
     driver: EmitterDriver,
     dst_ch: Py<PyAny>,
     label: String,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Host `TimedString`s kept verbatim so alignment fields survive; drained as the machine assigns.
     words: Mutex<VecDeque<Py<PyAny>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     event_loop: Mutex<Option<Py<PyAny>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Rebuilt per `initialize`, so one request never gets the tail of the previous one.
-    decoder: Mutex<Option<crate::Decoder>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    decoder: Mutex<Option<lk_agents_runtime::media::Decoder>>,
     timer: Mutex<Option<Py<PyAny>>>,
 }
 
@@ -90,43 +96,42 @@ fn pump_err(e: PumpError<PyErr>) -> PyErr {
 }
 
 /// Called with no lock held, so a `send_nowait` that re-enters the emitter just queues.
-struct PyHost<'a, 'py>(&'a Bound<'py, AudioEmitter>);
+struct PyHost<'a>(&'a Arc<State>);
 
-impl EmitterHost for PyHost<'_, '_> {
+impl EmitterHost for PyHost<'_> {
     type Error = PyErr;
 
     fn deliver(&mut self, effect: HostEffect) -> PyResult<()> {
-        let slf = self.0;
-        let py = slf.py();
-        let me = slf.get();
-        match effect {
-            HostEffect::Send(audio) => me.send(py, *audio),
-            HostEffect::Arm(delay) => AudioEmitter::arm_timer(slf, delay),
-            HostEffect::Cancel => me.cancel_timer(py),
-            HostEffect::Dump(d) => me.write_dump(py, &d),
-            HostEffect::Dropped(n) => {
+        run_now(self.0, move |state, py| match effect {
+            HostEffect::Send(audio) => state.send(py, *audio),
+            HostEffect::Arm(delay) => State::arm_timer(state, py, delay),
+            HostEffect::Cancel => state.cancel_timer(py),
+            HostEffect::Dump(dump) => state.write_dump(py, &dump),
+            HostEffect::Dropped(bytes) => {
                 logger(py)?.call_method1(
                     "warning",
-                    (format!("incomplete PCM sample at end of segment, discarding {n} trailing bytes"),),
+                    (format!(
+                        "incomplete PCM sample at end of segment, discarding {bytes} trailing bytes"
+                    ),),
                 )?;
                 Ok(())
             }
-            HostEffect::ProviderIds(ids) => me.set_provider_ids(py, &ids),
-        }
+            HostEffect::ProviderIds(ids) => state.set_provider_ids(py, &ids),
+        })
     }
 }
 
-#[pymethods]
-impl AudioEmitter {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+impl State {
     /// No `check_pid()`: built per synthesis in whatever process imported the package, and the
     /// reference has no init requirement for `TTS`.
-    #[new]
-    #[pyo3(signature = (*, label, dst_ch))]
-    fn new(label: &str, dst_ch: Py<PyAny>) -> Self {
+    pub(crate) fn new(py: Python<'_>, label: &str, dst_ch: Py<PyAny>) -> PyResult<Self> {
         let mut machine = Machine::new(label);
         machine.set_dump(dump_default());
-        AudioEmitter {
+        Ok(State {
+            context: Mutex::new(capture(py)?),
+            compressed: Mutex::new(false),
+            closed: AtomicBool::new(false),
+            finalization: Mutex::new(None),
             driver: EmitterDriver::new(machine),
             dst_ch,
             label: label.to_string(),
@@ -134,12 +139,19 @@ impl AudioEmitter {
             event_loop: Mutex::new(None),
             decoder: Mutex::new(None),
             timer: Mutex::new(None),
-        }
+        })
     }
 
-    #[pyo3(signature = (*, request_id, sample_rate, num_channels, mime_type, frame_size_ms=200, stream=false))]
-    fn initialize(
-        slf: &Bound<'_, Self>,
+    pub(crate) fn ensure_unstarted(&self) -> PyResult<()> {
+        if self.driver.machine().started() {
+            return Err(emitter_error_to_py(EmitterError::AlreadyStarted));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn initialize(
+        slf: &Arc<Self>,
+        py: Python<'_>,
         request_id: &str,
         sample_rate: u32,
         num_channels: u16,
@@ -147,21 +159,34 @@ impl AudioEmitter {
         frame_size_ms: u32,
         stream: bool,
     ) -> PyResult<()> {
-        let py = slf.py();
-        let me = slf.get();
+        let me = slf;
+        me.ensure_unstarted()?;
 
         // `audio/pcm` and `audio/raw` build no decoder; other containers are decoded. Unknown mime
-        // types are refused by `crate::decode_plan`, as the reference's
+        // types are refused by `lk_agents_runtime::media::decode_plan`, as the reference's
         // `NotImplementedError`.
-        let decoder = match crate::decode_plan(mime_type)
+        let decoder = match lk_agents_runtime::media::decode_plan(mime_type)
             .map_err(|e| PyNotImplementedError::new_err(format!("AudioEmitter: {e}")))?
         {
-            crate::DecodePlan::Passthrough => None,
-            crate::DecodePlan::Decode(mt) => Some(
-                crate::Decoder::new(&mt, Some(sample_rate), num_channels)
-                    .map_err(|e| PyNotImplementedError::new_err(format!("AudioEmitter: {e}")))?,
+            lk_agents_runtime::media::DecodePlan::Passthrough => None,
+            lk_agents_runtime::media::DecodePlan::Decode(mt) => Some(
+                lk_agents_runtime::media::Decoder::with_workers(
+                    &lk_agents_runtime::process::workers()
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+                    &mt,
+                    Some(sample_rate),
+                    num_channels,
+                )
+                .map_err(|e| PyNotImplementedError::new_err(format!("AudioEmitter: {e}")))?,
             ),
         };
+        me.driver
+            .machine()
+            .initialize(request_id, sample_rate, num_channels, frame_size_ms, stream)
+            .map_err(emitter_error_to_py)?;
+        *me.compressed.lock().unwrap_or_else(|e| e.into_inner()) = decoder.is_some()
+            && lk_agents_runtime::media::mime_to_av_format(Some(mime_type)) != Some("wav");
+        me.closed.store(false, Ordering::Release);
         *me.decoder.lock().unwrap_or_else(|e| e.into_inner()) = decoder;
 
         if request_id.is_empty() {
@@ -173,40 +198,42 @@ impl AudioEmitter {
         // Without a running loop the drift watchdog simply never fires.
         *me.event_loop.lock().unwrap_or_else(|e| e.into_inner()) =
             py.import("asyncio")?.call_method0("get_running_loop").ok().map(|l| l.unbind());
-        Self::drain_on_output(slf)?;
+        Self::drain_on_output(slf, py)?;
 
-        me.driver
-            .machine()
-            .initialize(request_id, sample_rate, num_channels, frame_size_ms, stream)
-            .map_err(emitter_error_to_py)?;
         // `stream=False` opens a segment here; drain so no stale queue is left.
-        Self::pump(slf)
+        Self::pump(slf, py)
     }
 
-    #[pyo3(signature = (*, segment_id))]
-    fn start_segment(slf: &Bound<'_, Self>, segment_id: &str) -> PyResult<()> {
-        Self::submit(slf, Cmd::StartSegment(segment_id.to_string()))
+    pub(crate) fn start_segment(slf: &Arc<Self>, py: Python<'_>, segment_id: &str) -> PyResult<()> {
+        Self::submit(slf, py, Cmd::StartSegment(segment_id.to_string()))
     }
 
-    fn end_segment(slf: &Bound<'_, Self>) -> PyResult<()> {
-        Self::submit(slf, Cmd::EndSegment)
+    pub(crate) fn end_segment(slf: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        Self::submit(slf, py, Cmd::EndSegment)
     }
 
     /// `bytes | bytearray | memoryview`, as the reference takes.
-    fn push(slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>) -> PyResult<()> {
-        Self::submit(slf, Cmd::Push(Self::decoded(slf, pcm_arg(data)?)?))
+    pub(crate) fn push(slf: &Arc<Self>, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        Self::submit(slf, py, Cmd::Push(Self::decoded(slf, py, pcm_arg(data)?)?))
     }
 
     /// An already framed `rtc.AudioFrame`, sent as it is.
-    fn push_frame(slf: &Bound<'_, Self>, frame: lk_agents_abi::AudioFrame) -> PyResult<()> {
+    pub(crate) fn push_frame(
+        slf: &Arc<Self>,
+        py: Python<'_>,
+        frame: lk_agents_abi::AudioFrame,
+    ) -> PyResult<()> {
         let samples_per_channel = frame.samples_per_channel;
         let frame = lk_agents_abi::Frame { data: frame.data.to_vec(), samples_per_channel };
-        Self::submit(slf, Cmd::Frame(frame))
+        Self::submit(slf, py, Cmd::Frame(frame))
     }
 
     /// `TimedString | list[TimedString]`.
-    fn push_timed_transcript(slf: &Bound<'_, Self>, delta_text: &Bound<'_, PyAny>) -> PyResult<()> {
-        let py = slf.py();
+    pub(crate) fn push_timed_transcript(
+        slf: &Arc<Self>,
+        py: Python<'_>,
+        delta_text: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
         // A `TimedString` is a `str`, and iterating it would push one word per character.
         let items: Vec<Bound<'_, PyAny>> = match timed_string_type(py) {
             Some(t) if delta_text.is_instance(t)? => vec![delta_text.clone()],
@@ -239,121 +266,225 @@ impl AudioEmitter {
             .collect::<PyResult<_>>()?;
 
         {
-            let me = slf.get();
+            let me = slf;
             let mut q = me.words.lock().unwrap_or_else(|e| e.into_inner());
             for k in kept {
                 q.push_back(k.unbind());
             }
         }
-        Self::submit(slf, Cmd::Words(rust))
+        Self::submit(slf, py, Cmd::Words(rust))
     }
 
-    fn flush(slf: &Bound<'_, Self>) -> PyResult<()> {
-        Self::submit(slf, Cmd::Flush)
+    pub(crate) fn flush(slf: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        Self::submit(slf, py, Cmd::Flush)
     }
 
-    fn end_input(slf: &Bound<'_, Self>) -> PyResult<()> {
+    pub(crate) fn end_input(slf: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        if *slf.compressed.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Self::finish_compressed(slf);
+        }
         // Flush the decoder first, or the last packet's tail is lost. An empty tail is not pushed:
         // the machine counts pushes, and PCM streams never had that boundary.
         // The decoder goes with its tail, and with it the callback holding this emitter.
         let tail = {
-            let decoder = slf.get().decoder.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let decoder = slf.decoder.lock().unwrap_or_else(|e| e.into_inner()).take();
             match decoder {
                 None => Vec::new(),
-                Some(mut d) => slf.py().detach(move || d.flush()).map(|pcm| crate::pcm_bytes(&pcm)).map_err(|e| {
-                    PyRuntimeError::new_err(format!("AudioEmitter: decode flush failed: {e}"))
-                })?,
+                Some(mut d) => py
+                    .detach(move || d.flush())
+                    .map(|pcm| lk_agents_runtime::media::pcm_bytes(&pcm))
+                    .map_err(|e| {
+                        PyRuntimeError::new_err(format!("AudioEmitter: decode flush failed: {e}"))
+                    })?,
             }
         };
         if !tail.is_empty() {
-            Self::submit(slf, Cmd::Push(tail))?;
+            Self::submit(slf, py, Cmd::Push(tail))?;
         }
-        Self::submit(slf, Cmd::EndInput)
+        Self::submit(slf, py, Cmd::EndInput)
     }
 
-    /// `await emitter.join()`. Resolves on the next loop tick so the consumer gets to run.
-    fn join<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
-        if !slf.get().driver.machine().started() {
+    fn finish_compressed(slf: &Arc<Self>) -> PyResult<()> {
+        let pending = slf.finalization.lock().unwrap_or_else(|e| e.into_inner());
+        if pending.is_some() {
+            return Ok(());
+        }
+        drop(pending);
+        let workers = lk_agents_runtime::process::workers()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let runtime = lk_agents_runtime::process::handle()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let permit = workers
+            .try_admit(lk_agents_runtime::media::workers::MediaWorkerClass::Formatting)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let Some(mut decoder) = slf.decoder.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return Ok(());
+        };
+        // The finalizer owns the decoder now; readiness callbacks must not compete to drain it.
+        decoder.set_on_output(None);
+        let receipt = workers.spawn_admitted(permit, move || {
+            decoder.flush().map(|pcm| lk_agents_runtime::media::pcm_bytes(&pcm))
+        });
+        Self::track_finalization(slf, receipt, &runtime);
+        Ok(())
+    }
+
+    fn track_finalization(
+        slf: &Arc<Self>,
+        receipt: impl Future<
+            Output = Result<
+                lk_agents_runtime::media::Result<Vec<u8>>,
+                lk_agents_runtime::media::workers::WorkerPanicked,
+            >,
+        > + Send
+        + 'static,
+        runtime: &tokio::runtime::Handle,
+    ) {
+        let (settled, receiver) = tokio::sync::watch::channel(None);
+        *slf.finalization.lock().unwrap_or_else(|e| e.into_inner()) = Some(receiver);
+        let state = slf.clone();
+        runtime.spawn(async move {
+            let result = match receipt.await {
+                Ok(Ok(_)) if state.closed.load(Ordering::Acquire) => Ok(()),
+                Ok(Ok(tail)) => {
+                    run(&state, Default::default(), move |state, py| {
+                        if state.closed.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        if !tail.is_empty() {
+                            Self::submit(state, py, Cmd::Push(tail))?;
+                        }
+                        Self::submit(state, py, Cmd::EndInput)
+                    })
+                    .await
+                }
+                Ok(Err(error)) => Err(PyRuntimeError::new_err(format!(
+                    "AudioEmitter: decode flush failed: {error}"
+                ))),
+                Err(error) => Err(PyRuntimeError::new_err(error.to_string())),
+            };
+            settled.send_replace(Some(result.map_err(Arc::new)));
+        });
+    }
+
+    pub(crate) async fn finalized(&self) -> PyResult<()> {
+        let pending = self.finalization.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(mut pending) = pending else {
+            return Ok(());
+        };
+        loop {
+            if let Some(result) = pending.borrow_and_update().as_ref() {
+                return match result {
+                    Ok(()) => Ok(()),
+                    Err(error) => Err(Python::attach(|py| error.clone_ref(py))),
+                };
+            }
+            pending
+                .changed()
+                .await
+                .map_err(|_| PyRuntimeError::new_err("audio finalizer ended without settlement"))?;
+        }
+    }
+
+    pub(crate) fn join(slf: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        if !slf.driver.machine().started() {
             return Err(emitter_error_to_py(EmitterError::NotStarted));
         }
-        Self::pump(slf)?;
-        slf.py().import("asyncio")?.call_method1("sleep", (0.0,))
+        Self::pump(slf, py)
     }
 
-    /// `await emitter.aclose()`. Safe before `initialize()`: `ChunkedStream` calls it from a
-    /// `finally`.
-    fn aclose<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
-        let py = slf.py();
-        let me = slf.get();
-        me.driver.stop();
-        me.decoder.lock().unwrap_or_else(|e| e.into_inner()).take();
-        me.words.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        me.cancel_timer(py)?;
-        py.import("asyncio")?.call_method1("sleep", (0.0,))
+    pub(crate) fn aclose(slf: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        slf.closed.store(true, Ordering::Release);
+        slf.driver.stop();
+        let closing = slf
+            .decoder
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .and_then(|mut decoder| decoder.close());
+        slf.words.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        slf.cancel_timer(py)?;
+        if let Some(closing) = closing {
+            let runtime = lk_agents_runtime::process::handle()
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            Self::track_finalization(
+                slf,
+                async move { closing.await.map(|()| Ok(Vec::new())) },
+                &runtime,
+            );
+        }
+        Ok(())
     }
 
-    #[pyo3(signature = (idx=-1))]
-    fn pushed_duration(&self, idx: i64) -> f64 {
+    pub(crate) fn pushed_duration(&self, idx: i64) -> f64 {
         self.driver.machine().pushed_duration(idx)
     }
 
-    #[getter]
-    fn num_segments(&self) -> usize {
+    pub(crate) fn num_segments(&self) -> usize {
         self.driver.machine().num_segments()
     }
 
     /// `_note_provider_request_id`: a plugin may learn the provider's id after `start_segment`.
-    fn _note_provider_request_id(slf: &Bound<'_, Self>, context_id: &str) -> PyResult<()> {
-        let me = slf.get();
+    pub(crate) fn _note_provider_request_id(
+        slf: &Arc<Self>,
+        py: Python<'_>,
+        context_id: &str,
+    ) -> PyResult<()> {
+        let me = slf;
         let (noted, ids) = {
             let mut m = me.driver.machine();
             (m.note_provider_request_id(context_id), m.provider_request_ids().to_vec())
         };
         if noted {
-            me.set_provider_ids(slf.py(), &ids)?;
+            me.set_provider_ids(py, &ids)?;
         }
         Ok(())
     }
 
-    #[getter]
-    fn output_closed(&self, py: Python<'_>) -> PyResult<bool> {
+    pub(crate) fn output_closed(&self, py: Python<'_>) -> PyResult<bool> {
         self.dst_ch.bind(py).getattr("closed")?.extract()
     }
 }
 
-impl AudioEmitter {
+impl State {
     /// A container decodes on its own thread: each time it has PCM, the loop drains it into the
     /// emitter, so decoded audio goes out as it is ready rather than at the next push.
-    fn drain_on_output(slf: &Bound<'_, Self>) -> PyResult<()> {
-        let py = slf.py();
-        let me = slf.get();
-        let Some(ev_loop) =
-            me.event_loop.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.clone_ref(py))
+    fn drain_on_output(slf: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        let me = slf;
+        let Some(ev_loop) = me
+            .event_loop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|l| l.clone_ref(py))
         else {
             return Ok(());
         };
-        let this: Py<AudioEmitter> = slf.clone().unbind();
-        let on_output: crate::decoder::OnOutput = Arc::new(move || {
+        let state = Arc::downgrade(slf);
+        let on_output: lk_agents_runtime::media::decoder::OnOutput = Arc::new(move || {
             Python::attach(|py| {
-                let this = this.clone_ref(py);
+                let state = state.clone();
                 let drain = pyo3::types::PyCFunction::new_closure(
                     py,
                     Some(c"_audio_emitter_decoded"),
                     None,
-                    move |args, _kwargs| -> PyResult<()> {
-                        let bound = this.bind(args.py());
-                        let pcm = AudioEmitter::decoded(bound, Vec::new())?;
-                        if pcm.is_empty() {
+                    move |_args, _kwargs| -> PyResult<()> {
+                        let Some(state) = state.upgrade() else {
                             return Ok(());
-                        }
-                        AudioEmitter::submit(bound, Cmd::Push(pcm))
+                        };
+                        run_now(&state, |state, py| {
+                            let pcm = State::decoded(state, py, Vec::new())?;
+                            if pcm.is_empty() {
+                                return Ok(());
+                            }
+                            State::submit(state, py, Cmd::Push(pcm))
+                        })
                     },
                 );
                 let scheduled = drain.and_then(|drain| {
                     ev_loop.bind(py).call_method1("call_soon_threadsafe", (drain,)).map(drop)
                 });
                 if let Err(err) = scheduled {
-                    // A closed loop: the synthesis is gone with it.
                     err.print(py);
                 }
             })
@@ -365,23 +496,23 @@ impl AudioEmitter {
     }
 
     /// Framing undecoded container bytes would be audible noise, so they pass through unchanged.
-    fn decoded(slf: &Bound<'_, Self>, bytes: Vec<u8>) -> PyResult<Vec<u8>> {
-        let mut guard = slf.get().decoder.lock().unwrap_or_else(|e| e.into_inner());
+    fn decoded(slf: &Arc<Self>, _py: Python<'_>, bytes: Vec<u8>) -> PyResult<Vec<u8>> {
+        let mut guard = slf.decoder.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_mut() {
             None => Ok(bytes),
             Some(d) => d
                 .push(&bytes)
-                .map(|pcm| crate::pcm_bytes(&pcm))
+                .map(|pcm| lk_agents_runtime::media::pcm_bytes(&pcm))
                 .map_err(|e| PyRuntimeError::new_err(format!("AudioEmitter: decode failed: {e}"))),
         }
     }
 
-    fn submit(slf: &Bound<'_, Self>, cmd: Cmd) -> PyResult<()> {
-        slf.get().driver.submit(cmd, &mut PyHost(slf)).map_err(pump_err)
+    fn submit(slf: &Arc<Self>, _py: Python<'_>, cmd: Cmd) -> PyResult<()> {
+        slf.driver.submit(cmd, &mut PyHost(slf)).map_err(pump_err)
     }
 
-    fn pump(slf: &Bound<'_, Self>) -> PyResult<()> {
-        slf.get().driver.pump(&mut PyHost(slf)).map_err(pump_err)
+    fn pump(slf: &Arc<Self>, _py: Python<'_>) -> PyResult<()> {
+        slf.driver.pump(&mut PyHost(slf)).map_err(pump_err)
     }
 
     fn send(&self, py: Python<'_>, audio: CoreAudio) -> PyResult<()> {
@@ -408,9 +539,8 @@ impl AudioEmitter {
         Ok(())
     }
 
-    fn arm_timer(slf: &Bound<'_, Self>, delay: Duration) -> PyResult<()> {
-        let py = slf.py();
-        let me = slf.get();
+    fn arm_timer(slf: &Arc<Self>, py: Python<'_>, delay: Duration) -> PyResult<()> {
+        let me = slf;
         me.cancel_timer(py)?;
         let ev_loop = me
             .event_loop
@@ -421,19 +551,23 @@ impl AudioEmitter {
         let Some(ev_loop) = ev_loop else {
             return Ok(());
         };
-        // Clearing the handle as it fires breaks the emitter -> handle -> callback -> emitter cycle.
-        let this: Py<AudioEmitter> = slf.clone().unbind();
+        let state = Arc::downgrade(slf);
         let cb = pyo3::types::PyCFunction::new_closure(
             py,
             Some(c"_audio_emitter_drift_flush"),
             None,
-            move |args, _kwargs| -> PyResult<()> {
-                let py = args.py();
-                let bound = this.bind(py);
-                *bound.get().timer.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                logger(py)?
-                    .call_method1("debug", ("flush audio emitter due to slow audio generation",))?;
-                AudioEmitter::submit(bound, Cmd::Drift)
+            move |_args, _kwargs| -> PyResult<()> {
+                let Some(state) = state.upgrade() else {
+                    return Ok(());
+                };
+                run_now(&state, |state, py| {
+                    *state.timer.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    logger(py)?.call_method1(
+                        "debug",
+                        ("flush audio emitter due to slow audio generation",),
+                    )?;
+                    State::submit(state, py, Cmd::Drift)
+                })
             },
         )?;
         let handle = ev_loop.bind(py).call_method1("call_later", (delay.as_secs_f64(), cb))?;
@@ -490,8 +624,97 @@ fn pcm_arg(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     Ok(view.call_method0("tobytes")?.cast::<PyBytes>()?.as_bytes().to_vec())
 }
 
+/// Synchronous TTS entry also works before an asyncio loop is running.
+fn capture(py: Python<'_>) -> PyResult<lk_agents_abi::HostRef> {
+    let event_loop = py
+        .import("asyncio")?
+        .call_method0("get_running_loop")
+        .unwrap_or_else(|_| py.None().into_bound(py));
+    let context = py.import("contextvars")?.call_method0("copy_context")?;
+    let pair = pyo3::types::PyTuple::new(py, [event_loop, context])?;
+    Ok(lk_agents_abi::python::intern_host(pair.into_any().unbind()))
+}
 
-lk_agents_abi::register_host!(class AudioEmitter);
+impl State {
+    pub(crate) fn recapture(&self) -> PyResult<()> {
+        *self.context.lock().unwrap_or_else(|p| p.into_inner()) = Python::attach(capture)?;
+        Ok(())
+    }
+}
+
+/// Emitter callbacks require no framework scope: standalone TTS synthesis is supported.
+/// Every entry carries the context captured by the owning synthesis initialization.
+pub(crate) fn run_now<T: Send + 'static>(
+    state: &Arc<State>,
+    call: impl FnOnce(&Arc<State>, Python<'_>) -> PyResult<T> + Send + 'static,
+) -> PyResult<T> {
+    let context = state.context.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let result = Arc::new(Mutex::new(None));
+    lk_agents_runtime::host::call_now_in(
+        &super::Entry,
+        "tts.AudioEmitter",
+        &context,
+        &[],
+        callback(state.clone(), result.clone(), call),
+    )?;
+    let value = result
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
+        .expect("a successful host entry returns its result");
+    Ok(value)
+}
+
+/// Coroutine methods return to the owning Python loop before accessing the channel or timers.
+pub(crate) async fn run<T: Send + 'static>(
+    state: &Arc<State>,
+    entry: lk_agents_abi::invoke::CallContext,
+    call: impl FnOnce(&Arc<State>, Python<'_>) -> PyResult<T> + Send + 'static,
+) -> PyResult<T> {
+    let context = if state.driver.machine().started() {
+        state.context.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    } else {
+        entry.host_context.ok_or_else(|| {
+            PyRuntimeError::new_err("emitter coroutine requires a running event loop")
+        })?
+    };
+    let result = Arc::new(Mutex::new(None));
+    lk_agents_runtime::host::call(
+        &super::Entry,
+        "tts.AudioEmitter",
+        &context,
+        &[],
+        callback(state.clone(), result.clone(), call),
+    )
+    .await?;
+    let value = result
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
+        .expect("a successful host entry returns its result");
+    Ok(value)
+}
+
+fn callback<T: Send + 'static>(
+    state: Arc<State>,
+    output: Arc<Mutex<Option<T>>>,
+    call: impl FnOnce(&Arc<State>, Python<'_>) -> PyResult<T> + Send + 'static,
+) -> super::HostCall {
+    let call = Mutex::new(Some(call));
+    Box::new(move |py| {
+        let callback = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _| {
+            let call = call
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take()
+                .expect("an emitter callback is entered once");
+            let value = call(&state, args.py())?;
+            *output.lock().unwrap_or_else(|p| p.into_inner()) = Some(value);
+            Ok::<_, PyErr>(())
+        })?;
+        Ok((callback.into_any(), pyo3::types::PyTuple::empty(py)))
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -609,10 +832,11 @@ class ReentrantChan(Chan):
         chan: &str,
     ) -> (Bound<'py, PyAny>, Bound<'py, PyAny>) {
         let ch = g.get_item(chan).unwrap().unwrap().call0().unwrap();
-        let em = Py::new(py, AudioEmitter::new("test", ch.clone().unbind()))
-            .unwrap()
-            .into_bound(py)
-            .into_any();
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("label", "test").unwrap();
+        kwargs.set_item("dst_ch", &ch).unwrap();
+        let em =
+            py.get_type::<crate::generated::media::AudioEmitter>().call((), Some(&kwargs)).unwrap();
         (em, ch)
     }
 
@@ -626,6 +850,92 @@ class ReentrantChan(Chan):
         kw.set_item("frame_size_ms", 100).unwrap();
         kw.set_item("stream", stream).unwrap();
         em.call_method("initialize", (), Some(&kw)).unwrap();
+    }
+
+    #[test]
+    fn delivery_uses_the_synthesis_context_without_mutating_the_caller() {
+        attach(|py| {
+            let g = env(py);
+            py.run(c"import contextvars\nowner = contextvars.ContextVar('emitter_owner', default='unset')\nseen = []\nclass ContextChan(Chan):\n    def send_nowait(self, event):\n        seen.append(owner.get())\n        owner.set('callback')\n        super().send_nowait(event)\nowner.set('synthesis')", Some(&g), None).unwrap();
+            let (em, _ch) = make(py, &g, "ContextChan");
+            init(&em, false);
+            let owner = g.get_item("owner").unwrap().unwrap();
+            owner.call_method1("set", ("caller",)).unwrap();
+            em.call_method1("push", (PyBytes::new(py, &[0; 600]),)).unwrap();
+            em.call_method0("end_input").unwrap();
+            let seen = g.get_item("seen").unwrap().unwrap().extract::<Vec<String>>().unwrap();
+            assert!(!seen.is_empty(), "audio must reach the consumer");
+            assert!(seen.iter().all(|value| value == "synthesis"));
+            assert_eq!(owner.call_method0("get").unwrap().extract::<String>().unwrap(), "caller");
+        });
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn close_waits_for_native_finalization_without_blocking_control() {
+        let state = attach(|py| {
+            let g = env(py);
+            let channel = g.get_item("Chan").unwrap().unwrap().call0().unwrap().unbind();
+            Arc::new(State::new(py, "test", channel).unwrap())
+        });
+        state.closed.store(true, Ordering::Release);
+        let workers =
+            lk_agents_runtime::media::workers::MediaWorkers::new(Default::default()).unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let receipt = workers
+            .try_spawn(lk_agents_runtime::media::workers::MediaWorkerClass::Decoder, move || {
+                wait.recv().unwrap();
+            })
+            .unwrap();
+        State::track_finalization(
+            &state,
+            async move { receipt.await.map(|()| Ok(Vec::new())) },
+            &tokio::runtime::Handle::current(),
+        );
+        let completed = Arc::new(AtomicBool::new(false));
+        let control = completed.clone();
+        tokio::spawn(async move {
+            control.store(true, Ordering::Release);
+            release.send(()).unwrap();
+        });
+        state.finalized().await.unwrap();
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn failed_reinitialize_does_not_resurrect_a_closed_synthesis() {
+        let (state, channel) = attach(|py| {
+            let g = env(py);
+            let channel = g.get_item("Chan").unwrap().unwrap().call0().unwrap();
+            let state = Arc::new(State::new(py, "test", channel.clone().unbind()).unwrap());
+            State::initialize(&state, py, "original", 1000, 1, "audio/pcm", 100, false).unwrap();
+            State::aclose(&state, py).unwrap();
+            (state, channel.unbind())
+        });
+        let workers =
+            lk_agents_runtime::media::workers::MediaWorkers::new(Default::default()).unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let receipt = workers
+            .try_spawn(lk_agents_runtime::media::workers::MediaWorkerClass::Formatting, move || {
+                wait.recv().unwrap();
+                Ok(vec![0; 200])
+            })
+            .unwrap();
+        State::track_finalization(&state, receipt, &tokio::runtime::Handle::current());
+        attach(|py| {
+            let error =
+                State::initialize(&state, py, "replacement", 1000, 1, "audio/pcm", 100, false)
+                    .expect_err("an emitter accepts one synthesis");
+            assert!(error.to_string().contains("already started"));
+        });
+        release.send(()).unwrap();
+        state.finalized().await.unwrap();
+        attach(|py| {
+            assert_eq!(
+                channel.bind(py).getattr("items").unwrap().len().unwrap(),
+                0,
+                "late native audio must remain discarded after close and rejected reinitialization"
+            );
+        });
     }
 
     // Catches: `pushed_duration()` defaulting to `0` rather than `-1` (newest segment); retries
@@ -748,5 +1058,4 @@ class ReentrantChan(Chan):
             assert!(err.to_string().contains("previous segment was ended"));
         });
     }
-
 }

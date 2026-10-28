@@ -4,8 +4,6 @@
 //! On the decode path a drift flush must not tear the [`Decoder`] down: the watchdog fires
 //! mid-container (`tts/tts.py:1300-1310`).
 
-#[cfg(feature = "python")]
-pub mod audio_emitter;
 #[cfg(feature = "blingfire")]
 pub mod blingfire;
 pub mod decoder;

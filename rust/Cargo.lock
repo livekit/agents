@@ -1519,7 +1519,6 @@ dependencies = [
  "cc",
  "image",
  "lk-agents-abi",
- "pyo3",
  "soxr-sys",
  "thiserror 2.0.20",
 ]

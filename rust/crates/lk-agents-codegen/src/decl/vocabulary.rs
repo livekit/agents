@@ -24,6 +24,7 @@
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
 //! | trait method | `call` | a synchronous call on `&self` |
 //! | trait method | `await` | an `async fn` on `&self`, awaited by the host |
+//! | class method | `call, detach` | releases the GIL while the synchronous native operation executes; arguments are converted before release and results afterward |
 //! | trait method | `getter` | a read-only property on `&self` |
 //! | trait method | `next` | `async fn next(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T` (`__aiter__`/`__anext__`); `None` ends it |
 //! | trait method | `name = "x"` | the host name, when the Rust one cannot be it |

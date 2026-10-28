@@ -19,7 +19,6 @@ const HANDWRITTEN_STUB: &str = "_core_handwritten";
 const HANDWRITTEN: &[&str] = &[
     "AdaptiveNoiseGate",
     "AgentNodes",
-    "AudioEmitter",
     "DuplexRealtimeModel",
     "EndpointServer",
     "EndpointStream",

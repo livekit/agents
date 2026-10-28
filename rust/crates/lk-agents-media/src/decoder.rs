@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `AudioStreamDecoder` (`utils/codecs/decoder.py:337-515`) as one synchronous calculator: `push`
 //! returns the PCM its bytes produced; the channel, executor and framing are the driver's.
 
@@ -117,24 +109,41 @@ impl std::fmt::Debug for Decoder {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// `AudioStreamDecoder`'s engine: bytes in, interleaved 16-bit PCM out, one decoder per stream.
-#[lk_agents_abi::host(object(
-    name = "AudioDecoder",
-    cell = "mutex",
-    stub = "def set_on_output(self, on_output: Any | None = None) -> None: ..."
-))]
+/// Incremental bytes-to-PCM calculator.
 impl Decoder {
     /// `mime` is a media type, not a container name -- `"audio/mpeg"`, not `"mp3"`. An unknown
     /// or absent type asks ffmpeg to probe; without the `ffmpeg` feature it is an error, because
     /// the alternative is framing an ID3 tag as audio. `sample_rate=None` keeps the source's rate.
-    #[host(new(kw_only = "sample_rate", defaults(sample_rate = Some(48000), num_channels = 1)))]
     pub fn new(mime: &str, sample_rate: Option<u32>, num_channels: u16) -> Result<Self> {
+        Self::with_optional_workers(None, mime, sample_rate, num_channels)
+    }
+
+    /// Compressed containers execute on the caller's admitted native worker pool.
+    pub fn with_workers(
+        workers: &crate::workers::MediaWorkers,
+        mime: &str,
+        sample_rate: Option<u32>,
+        num_channels: u16,
+    ) -> Result<Self> {
+        Self::with_optional_workers(Some(workers), mime, sample_rate, num_channels)
+    }
+
+    fn with_optional_workers(
+        workers: Option<&crate::workers::MediaWorkers>,
+        mime: &str,
+        sample_rate: Option<u32>,
+        num_channels: u16,
+    ) -> Result<Self> {
+        #[cfg(not(feature = "ffmpeg"))]
+        let _ = workers;
         let av_format = mime_to_av_format(Some(mime));
         let inner = match av_format {
             Some("wav") => Inner::Wav(WavDecoder::new()),
             #[cfg(feature = "ffmpeg")]
             other => Inner::Ffmpeg(crate::ffmpeg::FfmpegDecoder::new(
+                workers.ok_or(CodecError::DecodeLimit(
+                    "container decoding requires an injected worker pool",
+                ))?,
                 other,
                 sample_rate.unwrap_or(0),
                 num_channels,
@@ -198,20 +207,17 @@ impl Decoder {
 
     /// `(sample_rate, num_channels)` of what `push` emits, or `None` before the first header. For
     /// WAV the file's channel count wins over the requested one, as in the reference.
-    #[host(getter(name = "output_format"))]
     pub fn output_format_pair(&self) -> Option<(u32, u16)> {
         self.output_format.map(|f| (f.sample_rate, f.num_channels))
     }
 
     /// [`Decoder::push`] as little-endian PCM bytes; often empty, which is not an error.
-    #[host(method(name = "push", err = "RuntimeError"))]
     pub fn push_bytes(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         self.push(data).map(|pcm| crate::pcm_bytes(&pcm))
     }
 
     /// [`Decoder::flush`] as little-endian PCM bytes: the demuxer's and the resampler's tails.
     // The GIL is released while the decode thread finishes: its `on_output` may be waiting on it.
-    #[host(method(name = "flush", err = "RuntimeError", detach))]
     pub fn flush_bytes(&mut self) -> Result<Vec<u8>> {
         self.flush().map(|pcm| crate::pcm_bytes(&pcm))
     }
@@ -302,6 +308,15 @@ impl Decoder {
         }
     }
 
+    /// Cancel a live container and hand native settlement back to its owner.
+    pub fn close(&mut self) -> Option<crate::workers::MediaWorker<()>> {
+        match &mut self.inner {
+            Inner::Wav(_) => None,
+            #[cfg(feature = "ffmpeg")]
+            Inner::Ffmpeg(decoder) => decoder.close(),
+        }
+    }
+
     /// Validate terminal input before draining. `flush` remains available for mid-stream drift.
     pub fn finish(&mut self) -> Result<Vec<i16>> {
         match &self.inner {
@@ -376,26 +391,6 @@ fn flush_tail(src: AudioFormat, target_rate: u32, r: &mut dyn Resampler) -> Resu
         to: target_rate,
         detail: e.to_string(),
     })
-}
-
-/// `on_output()` is called on the decoding thread when PCM is ready; the host hands itself over
-/// to its loop there and drains with an empty `push`.
-#[cfg(feature = "python")]
-#[pyo3::pymethods]
-impl PyAudioDecoder {
-    #[pyo3(signature = (on_output = None))]
-    fn set_on_output(&self, on_output: Option<pyo3::Py<pyo3::PyAny>>) {
-        let on_output = on_output.map(|callback| {
-            std::sync::Arc::new(move || {
-                pyo3::Python::attach(|py| {
-                    if let Err(err) = callback.call0(py) {
-                        err.print(py);
-                    }
-                })
-            }) as OnOutput
-        });
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).set_on_output(on_output);
-    }
 }
 
 #[cfg(test)]
