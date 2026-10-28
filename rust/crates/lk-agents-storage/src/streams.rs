@@ -3,17 +3,9 @@
 
 use std::time::Duration;
 
-use lk_agents_host_derive::Host;
-
 pub const DEFAULT_TTL: Duration = Duration::from_secs(86_400);
 pub const CONTENT_TYPE: &str = "application/json";
 /// The beginning, as the server spells it.
 pub const START: &str = "-1";
 
-/// A created stream: its id (also the task id it answers) and when it expires.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Host)]
-#[python(pydantic, module = "storage", config = "frozen=True")]
-pub struct StreamInfo {
-    pub stream_id: String,
-    pub expires_at: i64,
-}
+pub use lk_agents_abi::storage::StreamInfo;

@@ -23,7 +23,7 @@ from a2a.utils.constants import PROTOCOL_VERSION_1_0, TransportProtocol
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from livekit.agents import Agent, AgentServer, InputRequired, RunContext, llm
+from livekit.agents import Agent, AgentServer, InputRequired, RunContext, RunResult, llm
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.extension import KIND
 from livekit.agents.delegation import A2ADelegate, DelegationFailed
@@ -403,13 +403,8 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
     expert = _expert_that_asks(verbatim=verbatim)
     question = "Which payer, and the member id?"
 
-    async def expert_door(ctx: A2ASessionContext) -> str:
-        result = await expert.run(ctx.message, message_history=ctx.message_history)
-        return (
-            result.output.question
-            if isinstance(result.output, InputRequired)
-            else str(result.output)
-        )
+    async def expert_door(ctx: A2ASessionContext) -> RunResult[str]:
+        return await expert.run(ctx.message, message_history=ctx.message_history)
 
     expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
     expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(
@@ -452,13 +447,8 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
             ),
         )
 
-        async def desk(ctx: A2ASessionContext) -> str:
-            result = await front.run(ctx.message, message_history=ctx.message_history)
-            return (
-                result.output.question
-                if isinstance(result.output, InputRequired)
-                else str(result.output)
-            )
+        async def desk(ctx: A2ASessionContext) -> RunResult[str]:
+            return await front.run(ctx.message, message_history=ctx.message_history)
 
         clinic, _ = make_server(clinic_storage, desk)
         async with http_client(clinic) as clinic_http:
@@ -537,13 +527,8 @@ async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
         """Disclose."""
         return llm.ToolResult(disclaimer, verbatim=True)
 
-    async def expert_door(ctx: A2ASessionContext) -> str:
-        result = await expert.run(ctx.message, message_history=ctx.message_history)
-        return (
-            result.output.question
-            if isinstance(result.output, InputRequired)
-            else str(result.output)
-        )
+    async def expert_door(ctx: A2ASessionContext) -> RunResult[str]:
+        return await expert.run(ctx.message, message_history=ctx.message_history)
 
     expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
     expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(

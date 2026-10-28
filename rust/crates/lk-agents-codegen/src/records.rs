@@ -154,10 +154,10 @@ fn struct_reads(owner: &str, fields: &[Field], obj: &str) -> Result<String, Stri
 }
 
 fn attr_read(owner: &str, f: &Field, obj: &str) -> Result<String, String> {
-    let path = format!("{owner}.{}", f.rust_name);
+    let path = format!("{owner}.{}", f.host_name());
     Ok(format!(
         "::lk_agents_abi::python::attr_with({obj}, {owner:?}, {:?}, |v| {})?",
-        f.rust_name,
+        f.host_name(),
         read(&f.ty, "v", &path)?
     ))
 }
@@ -178,7 +178,7 @@ fn struct_emits(fields: &[Field]) -> Result<(String, String), String> {
 }
 
 fn set(f: &Field, value: &str, indent: &str) -> Result<String, String> {
-    Ok(format!("{indent}kwargs.set_item({:?}, {})?;\n", f.rust_name, emit(&f.ty, value)?))
+    Ok(format!("{indent}kwargs.set_item({:?}, {})?;\n", f.host_name(), emit(&f.ty, value)?))
 }
 
 /// A variant's read suffix (`{ .. }` / `(..)` / nothing), its match-arm pattern and its sets.
@@ -343,7 +343,7 @@ fn model(
             let default =
                 f.default.as_ref().map(|d| format!(" = {}", py_literal(d))).unwrap_or_default();
             let ann = annotation(&f.ty, module, own, out, typing);
-            s.push_str(&format!("    {}: {ann}{default}\n", f.rust_name));
+            s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
         }
         s

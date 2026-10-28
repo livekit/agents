@@ -2,7 +2,6 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
 #     rust/crates/lk-agents-storage/src/schema.rs
-#     rust/crates/lk-agents-storage/src/db.rs
 #     rust/crates/lk-agents-storage/src/run.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -51,36 +50,6 @@ class TaskRow(BaseModel):
     """What the framework keeps to resume the task: the question it waits on the person to
     answer, while it does.
     """
-
-
-class LaneRow(BaseModel):
-    """One lane: a registered agent's state, lease and inbox cursor."""
-
-    model_config = ConfigDict(frozen=True)
-    lane: str
-    version: int
-    """The fencing token: a run loaded at `v` commits only `WHERE version = v`."""
-    state: Any | None = None
-    """The application's typed state, one snapshot per run."""
-    lease_holder: str | None
-    lease_until: int
-    """Unix seconds on agent-db's clock; `0` is released."""
-    waiter: str | None
-    """A worker that failed the lease under `interrupt` and is polling for it."""
-    drained_id: int
-    """The id of the last inbox row a drain consumed."""
-
-
-class TaskPage(BaseModel):
-    """One page of A2A `tasks/list`."""
-
-    model_config = ConfigDict(frozen=True)
-    tasks: list[TaskRow]
-    next_page_token: str
-    """Empty on the last page."""
-    page_size: int
-    total_size: int
-    """Every page's tasks, in all."""
 
 
 class RunUsage(BaseModel):

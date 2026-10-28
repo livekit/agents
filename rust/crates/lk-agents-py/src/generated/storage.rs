@@ -41,8 +41,8 @@ impl Storage {
 
     /// A new `AT_` thread, returned once its metadata and database exist. `attributes` maps
     /// strings to strings.
-    #[pyo3(signature = (*, scope = "".to_owned(), attributes = None, idle_ttl_seconds = 0))]
-    fn create_thread<'py>(&self, py: Python<'py>, scope: ::std::string::String, attributes: Option<Bound<'_, PyAny>>, idle_ttl_seconds: i64) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (*, scope = None, attributes = None, idle_ttl_seconds = 0))]
+    fn create_thread<'py>(&self, py: Python<'py>, scope: ::std::option::Option<::std::string::String>, attributes: Option<Bound<'_, PyAny>>, idle_ttl_seconds: i64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -66,8 +66,8 @@ impl Storage {
     }
 
     /// The threads of one scope, newest first; `before` is the previous page's cursor.
-    #[pyo3(signature = (scope, *, before = "".to_owned(), limit = 0))]
-    fn list_threads<'py>(&self, py: Python<'py>, scope: ::std::string::String, before: ::std::string::String, limit: i64) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (scope, *, before = None, limit = None))]
+    fn list_threads<'py>(&self, py: Python<'py>, scope: ::std::string::String, before: ::std::option::Option<::std::string::String>, limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -104,8 +104,8 @@ impl Storage {
     }
 
     /// The thread's chat items, oldest first, of one agent's lane when `agent` is given.
-    #[pyo3(signature = (thread_id, *, agent = "".to_owned(), after = "".to_owned(), limit = 0))]
-    fn get_thread_items<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, agent: ::std::string::String, after: ::std::string::String, limit: i64) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (thread_id, *, agent = None, after = None, limit = None))]
+    fn get_thread_items<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, agent: ::std::option::Option<::std::string::String>, after: ::std::option::Option<::std::string::String>, limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -117,7 +117,7 @@ impl Storage {
 
     /// The thread's A2A tasks, of one `status` when given.
     #[pyo3(signature = (thread_id, *, status = None))]
-    fn get_thread_tasks<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, status: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+    fn get_thread_tasks<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, status: ::std::option::Option<::lk_agents_abi::storage::TaskState>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {

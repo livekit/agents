@@ -12,10 +12,9 @@ use livekit_protocol::agent::agent_thread::{
     UpdateRequest,
 };
 use lk_agents_abi::storage::{
-    Storage as HostStorageClass, StorageError, ThreadInfo, ThreadItem, ThreadItemPage, ThreadPage,
-    ThreadTask,
+    Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem, ThreadItemPage,
+    ThreadPage, ThreadTask,
 };
-use lk_agents_storage::TaskState;
 use lk_agents_storage::db::TaskQuery;
 use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
@@ -55,6 +54,8 @@ pub struct HostStorage {
 
 /// The holder of a read-only handle: it never takes a lease.
 const READER: &str = "reader";
+/// A local items page when the caller names no limit.
+const LOCAL_PAGE: i64 = 100;
 
 impl HostStorage {
     async fn backend(&self) -> Result<&Backend, StorageError> {
@@ -102,6 +103,11 @@ fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     (seconds > 0).then_some(pbjson_types::Duration { seconds, nanos: 0 })
 }
 
+/// agent-db's page size: `0` lets the server choose.
+fn page_limit(limit: Option<u32>) -> Result<i32, StorageError> {
+    limit.map_or(Ok(0), |l| i32::try_from(l).map_err(|_| StorageError::Invalid("limit".into())))
+}
+
 fn seconds_of(t: Option<pbjson_types::Timestamp>) -> i64 {
     t.map_or(0, |t| t.seconds)
 }
@@ -139,14 +145,35 @@ fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
     })
 }
 
+/// agent-db's task status as the framework's state. agent-db keeps four states: a submitted or
+/// input-required task is `running` there and reads back as `working`.
 fn cloud_task(t: Task) -> ThreadTask {
-    let status = TaskStatus::try_from(t.status).unwrap_or_default();
+    let status = match TaskStatus::try_from(t.status).unwrap_or_default() {
+        TaskStatus::Completed => TaskState::Completed,
+        TaskStatus::Failed => TaskState::Failed,
+        TaskStatus::Canceled => TaskState::Canceled,
+        TaskStatus::Running | TaskStatus::Unspecified => TaskState::Working,
+    };
     ThreadTask {
         task_id: t.task_id,
         thread_id: t.thread_id,
-        name: t.name,
-        status: status.as_str_name().to_lowercase(),
+        name: (!t.name.is_empty()).then_some(t.name),
+        status,
         updated_at: seconds_of(t.updated_at),
+    }
+}
+
+/// The agent-db filter for `state`; the states agent-db does not keep cannot be filtered on.
+fn cloud_status(state: TaskState) -> Result<TaskStatus, StorageError> {
+    match state {
+        TaskState::Working => Ok(TaskStatus::Running),
+        TaskState::Completed => Ok(TaskStatus::Completed),
+        TaskState::Failed => Ok(TaskStatus::Failed),
+        TaskState::Canceled => Ok(TaskStatus::Canceled),
+        other => Err(StorageError::Invalid(format!(
+            "agent-db does not filter tasks by {}",
+            other.as_str()
+        ))),
     }
 }
 
@@ -159,15 +186,16 @@ async fn local_tasks(
     let mut tasks = Vec::new();
     let mut page_token = None;
     loop {
+        // the host's state names the row state of the same spelling
+        let status = status.and_then(|s| lk_agents_storage::TaskState::parse(s.as_str()));
         let query = TaskQuery { status, updated_after: 0, page_size: 100, page_token };
         let page = thread.list_tasks(&query).await?;
         for row in page.tasks {
-            let status = json(&row.status)?.as_str().unwrap_or_default().to_owned();
             tasks.push(ThreadTask {
                 task_id: row.task_id,
                 thread_id: thread_id.to_owned(),
-                name: row.name.unwrap_or_default(),
-                status,
+                name: row.name,
+                status: row.status.into(),
                 updated_at: row.updated_at / 1000,
             });
         }
@@ -226,12 +254,16 @@ impl HostStorageClass for HostStorage {
 
     async fn create_thread(
         &self,
-        scope: String,
+        scope: Option<String>,
         attributes: Option<Map<String, Value>>,
         idle_ttl_seconds: i64,
     ) -> Result<ThreadInfo, StorageError> {
         let attributes = self::attributes(attributes)?;
-        let request = CreateRequest { scope, attributes, idle_ttl: ttl(idle_ttl_seconds) };
+        let request = CreateRequest {
+            scope: scope.unwrap_or_default(),
+            attributes,
+            idle_ttl: ttl(idle_ttl_seconds),
+        };
         Ok(thread_info(self.storage().await?.create_thread(request).await?))
     }
 
@@ -242,11 +274,14 @@ impl HostStorageClass for HostStorage {
     async fn list_threads(
         &self,
         scope: String,
-        before: String,
-        limit: i64,
+        before: Option<String>,
+        limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError> {
-        let limit = i32::try_from(limit).map_err(|_| StorageError::Invalid("limit".into()))?;
-        let request = ListRequest { scope, page_token: before, limit };
+        let request = ListRequest {
+            scope,
+            page_token: before.unwrap_or_default(),
+            limit: page_limit(limit)?,
+        };
         Ok(thread_page(self.storage().await?.list_threads(request).await?))
     }
 
@@ -269,19 +304,17 @@ impl HostStorageClass for HostStorage {
     async fn get_thread_items(
         &self,
         thread_id: String,
-        agent: String,
-        after: String,
-        limit: i64,
+        agent: Option<String>,
+        after: Option<String>,
+        limit: Option<u32>,
     ) -> Result<ThreadItemPage, StorageError> {
         match self.backend().await? {
             Backend::Cloud(cloud) => {
-                let limit =
-                    i32::try_from(limit).map_err(|_| StorageError::Invalid("limit".into()))?;
                 let request = GetItemsRequest {
                     thread_id,
-                    agent,
-                    page_token: after,
-                    limit,
+                    agent: agent.unwrap_or_default(),
+                    page_token: after.unwrap_or_default(),
+                    limit: page_limit(limit)?,
                     ..Default::default()
                 };
                 let page = cloud.threads().items(request).await.map_err(thread_error)?;
@@ -289,11 +322,9 @@ impl HostStorageClass for HostStorage {
                 Ok(ThreadItemPage { items, after: page.next_page_token })
             }
             Backend::Local(local) => {
-                let lane = (!agent.is_empty()).then_some(agent.as_str());
-                let cursor = (!after.is_empty()).then_some(after.as_str());
                 let thread = local.open(&thread_id, READER).await?;
-                let page =
-                    thread.list_items(lane, cursor, if limit == 0 { 100 } else { limit }).await;
+                let limit = limit.map_or(LOCAL_PAGE, i64::from);
+                let page = thread.list_items(agent.as_deref(), after.as_deref(), limit).await;
                 thread.close().await;
                 let page = page?;
                 let items = page
@@ -316,17 +347,11 @@ impl HostStorageClass for HostStorage {
     async fn get_thread_tasks(
         &self,
         thread_id: String,
-        status: Option<String>,
+        status: Option<TaskState>,
     ) -> Result<Vec<ThreadTask>, StorageError> {
         match self.backend().await? {
             Backend::Cloud(cloud) => {
-                let status = status
-                    .map(|s| {
-                        TaskStatus::from_str_name(&s.to_uppercase()).ok_or_else(|| {
-                            StorageError::Invalid(format!("unknown task status {s}"))
-                        })
-                    })
-                    .transpose()?;
+                let status = status.map(cloud_status).transpose()?;
                 let mut tasks = Vec::new();
                 let mut page_token = String::new();
                 loop {
@@ -345,12 +370,6 @@ impl HostStorageClass for HostStorage {
                 }
             }
             Backend::Local(local) => {
-                let status = status
-                    .map(|s| {
-                        serde_json::from_value::<TaskState>(Value::String(s.clone()))
-                            .map_err(|_| StorageError::Invalid(format!("unknown task status {s}")))
-                    })
-                    .transpose()?;
                 let thread = local.open(&thread_id, READER).await?;
                 let tasks = local_tasks(&thread, &thread_id, status).await;
                 thread.close().await;

@@ -10,9 +10,7 @@ from typing import TYPE_CHECKING
 from pydantic import JsonValue
 
 from .. import _core
-from .._generated.storage import EventRow
-from .._generated.storage_class import ThreadInfo
-from .._generated.storage_run import TaskPage, TaskRow
+from .._generated.storage_class import EventRow, TaskPage, TaskRecord, ThreadInfo
 from ..llm import ChatContext
 from ..log import logger
 from .backends import Storage
@@ -75,7 +73,7 @@ class Thread:
         finally:
             core.close()
 
-    async def tasks(self, agent: str | None = None) -> list[TaskRow]:
+    async def tasks(self, agent: str | None = None) -> list[TaskRecord]:
         """The lane's task rows, newest first."""
         core = await self._open()
         try:
@@ -83,7 +81,7 @@ class Thread:
         finally:
             core.close()
 
-    async def task(self, task_id: str) -> TaskRow | None:
+    async def task(self, task_id: str) -> TaskRecord | None:
         """One task, whichever agent's it is."""
         core = await self._open()
         try:
@@ -105,11 +103,11 @@ class Thread:
         finally:
             core.close()
 
-    async def all_tasks(self) -> list[TaskRow]:
+    async def all_tasks(self) -> list[TaskRecord]:
         """Every lane's task rows, oldest first."""
         core = await self._open()
         try:
-            records: list[TaskRow] = []
+            records: list[TaskRecord] = []
             for lane in await core.lanes():
                 records.extend(await core.tasks(lane.lane, limit=500))
         finally:
@@ -118,13 +116,13 @@ class Thread:
         records.sort(key=lambda r: (r.updated_at, r.seq))
         return records
 
-    async def background_tasks(self, agent: str | None = None) -> list[TaskRow]:
+    async def background_tasks(self, agent: str | None = None) -> list[TaskRecord]:
         """The session's submitted tasks, rows with a name rather than turns: every lane's, or
         one agent's."""
         records = await self.tasks(agent) if agent else await self.all_tasks()
         return [record for record in records if record.name]
 
-    async def cancel(self, record: TaskRow, metadata: dict[str, JsonValue]) -> TaskRow | None:
+    async def cancel(self, record: TaskRecord, metadata: dict[str, JsonValue]) -> TaskRecord | None:
         """``tasks/cancel``: a row not yet terminal goes ``canceled`` with ``metadata`` merged in;
         a running turn yields at its next checkpoint and writes nothing over it. The row after:
         unchanged when it became terminal first."""

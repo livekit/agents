@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, InputRequired, RunContext, _core, persisted
-from livekit.agents._generated.storage_run import LaneRow, TaskRow
+from livekit.agents import Agent, InputRequired, RunContext, RunResult, _core, persisted
+from livekit.agents._generated.storage_class import LaneRow, TaskRecord
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
 from livekit.agents.a2a.extension import (
     CHANNEL,
@@ -103,11 +103,11 @@ async def history_items(storage: Storage, thread_id: str, lane: str) -> list[Cha
     return (await Thread(storage, thread_id, agent_name=lane).chat_history()).items
 
 
-async def tasks_of(storage: Storage, thread_id: str, lane: str) -> list[TaskRow]:
+async def tasks_of(storage: Storage, thread_id: str, lane: str) -> list[TaskRecord]:
     return await Thread(storage, thread_id, agent_name=lane).tasks()
 
 
-async def task_of(storage: Storage, thread_id: str, lane: str, task_id: str) -> TaskRow | None:
+async def task_of(storage: Storage, thread_id: str, lane: str, task_id: str) -> TaskRecord | None:
     return next((t for t in await tasks_of(storage, thread_id, lane) if t.task_id == task_id), None)
 
 
@@ -499,9 +499,8 @@ async def test_input_required_pending_call_is_the_next_messages_output(
         """Ask for a photo."""
         return InputRequired("Could you send a photo?")
 
-    async def handler(ctx: A2ASessionContext) -> str | None:
-        result = await fnol.run(ctx.message, message_history=ctx.message_history)
-        return result.output
+    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
+        return await fnol.run(ctx.message, message_history=ctx.message_history)
 
     first = await run_turn(storage, sid, LANE, a2a("my car is damaged", "m1"), "interrupt", handler)
     assert first.task.status == "input-required"
@@ -570,8 +569,8 @@ async def test_needs_approval_asks_then_runs_on_the_approved_call(
         ran.append(date)
         return f"canceled {date}"
 
-    async def handler(ctx: A2ASessionContext) -> str | None:
-        return (await desk.run(ctx.message, message_history=ctx.message_history)).output
+    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
+        return await desk.run(ctx.message, message_history=ctx.message_history)
 
     assert "approved" not in json.dumps(build_legacy_openai_schema(cancel_appointment))
     first = await run_turn(storage, sid, LANE, a2a("cancel monday", "m1"), "interrupt", handler)

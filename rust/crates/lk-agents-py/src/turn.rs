@@ -11,15 +11,22 @@ use lk_agents_a2a::{TurnHost, TurnOptions};
 use lk_agents_abi::python::{
     HostProxy, check_pid, pyo3_async_runtimes, value_from_py, value_to_py,
 };
+use lk_agents_abi::storage as host;
 use lk_agents_abi::{Clock, RealClock};
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::{CommitOptions, Run, RunOptions, Thread};
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::run::{ItemRow, RunOutcome, TaskState};
+use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::storage::{model, models, opt_model, parse_request, to_py_err};
+use crate::storage::{model, parse_request, to_py_err};
+
+/// Core rows as their host records, the classes of `livekit.agents._generated.storage_class`.
+fn records<T, H: From<T>>(rows: Vec<T>) -> Vec<H> {
+    rows.into_iter().map(H::from).collect()
+}
 
 /// One open thread (plan 5.2 `SessionHandle`), from `Storage.open`. Its holder is the worker's
 /// name with the handle's own id appended, so two handles of one worker wait on each other like
@@ -55,7 +62,7 @@ impl PyThread {
         let thread = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let lanes = thread.lanes().await.map_err(to_py_err)?;
-            Python::attach(|py| models(py, "storage_run", "LaneRow", lanes))
+            Python::attach(|py| records::<_, host::LaneRow>(lanes).into_py_any(py))
         })
     }
 
@@ -71,7 +78,7 @@ impl PyThread {
         let thread = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let events = thread.events(after_id, limit).await.map_err(to_py_err)?;
-            Python::attach(|py| models(py, "storage", "EventRow", events))
+            Python::attach(|py| records::<_, host::EventRow>(events).into_py_any(py))
         })
     }
 
@@ -81,7 +88,7 @@ impl PyThread {
         let lane = self.inner.lane(lane);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let items = lane.history().await.map_err(to_py_err)?;
-            Python::attach(|py| models(py, "storage_run", "ItemRow", items))
+            Python::attach(|py| records::<_, host::ItemRow>(items).into_py_any(py))
         })
     }
 
@@ -92,7 +99,7 @@ impl PyThread {
         let lane = self.inner.lane(lane);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let tasks = lane.tasks(None, limit).await.map_err(to_py_err)?;
-            Python::attach(|py| models(py, "storage_run", "TaskRow", tasks))
+            Python::attach(|py| records::<_, host::TaskRecord>(tasks).into_py_any(py))
         })
     }
 
@@ -103,7 +110,7 @@ impl PyThread {
         let thread = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let record = thread.task(&task_id).await.map_err(to_py_err)?;
-            Python::attach(|py| opt_model(py, "storage_run", "TaskRow", &record))
+            Python::attach(|py| record.map(host::TaskRecord::from).into_py_any(py))
         })
     }
 
@@ -113,23 +120,18 @@ impl PyThread {
     fn list_tasks<'py>(
         &self,
         py: Python<'py>,
-        status: Option<&str>,
+        status: Option<host::TaskState>,
         updated_after: i64,
         page_size: i64,
         page_token: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let status = status
-            .map(|s| {
-                TaskState::from_wire(s)
-                    .ok_or_else(|| PyValueError::new_err(format!("task state {s:?}")))
-            })
-            .transpose()?;
+        let status = status.and_then(|s| TaskState::parse(s.as_str()));
         let query = TaskQuery { status, updated_after, page_size, page_token };
         let thread = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let page = thread.list_tasks(&query).await.map_err(to_py_err)?;
-            Python::attach(|py| model(py, "storage_run", "TaskPage", &page))
+            Python::attach(|py| host::TaskPage::from(page).into_py_any(py))
         })
     }
 
@@ -139,7 +141,7 @@ impl PyThread {
         let lane = self.inner.lane(lane);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let info = lane.info().await.map_err(to_py_err)?;
-            Python::attach(|py| opt_model(py, "storage_run", "LaneRow", &info))
+            Python::attach(|py| info.map(host::LaneRow::from).into_py_any(py))
         })
     }
 
@@ -156,7 +158,7 @@ impl PyThread {
         let lane = self.inner.lane(lane);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let rows = lane.db().inbox(pending).await.map_err(to_py_err)?;
-            Python::attach(|py| models(py, "storage", "InboxRow", rows))
+            Python::attach(|py| records::<_, host::InboxRow>(rows).into_py_any(py))
         })
     }
 
@@ -177,7 +179,7 @@ impl PyThread {
         let lane = self.inner.lane(lane);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let record = lane.cancel_task(&task_id, metadata).await.map_err(to_py_err)?;
-            Python::attach(|py| opt_model(py, "storage_run", "TaskRow", &record))
+            Python::attach(|py| record.map(host::TaskRecord::from).into_py_any(py))
         })
     }
 
@@ -246,7 +248,7 @@ impl PyRun {
     /// The history as loaded, `ItemRow`s in order.
     #[getter]
     fn history(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        models(py, "storage_run", "ItemRow", self.history.clone())
+        records::<_, host::ItemRow>(self.history.clone()).into_py_any(py)
     }
 
     /// The state as loaded, `None` for a fresh lane.
@@ -267,7 +269,7 @@ impl PyRun {
         check_pid()?;
         let history: Vec<ItemRow> = history
             .try_iter()?
-            .map(|item| parse_request(&item?, "history item"))
+            .map(|item| ItemRow::try_from(item?.extract::<host::ItemRow>()?).map_err(to_py_err))
             .collect::<PyResult<_>>()?;
         let state = state.map(|s| value_from_py(s, "state")).transpose()?;
         let run = self.run.clone();

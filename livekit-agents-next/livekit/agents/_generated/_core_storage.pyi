@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from .._core import Streams, Thread
-from .storage_class import ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
+from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
 
 class Storage:
     """Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
@@ -32,7 +32,7 @@ class Storage:
     async def create_thread(
         self,
         *,
-        scope: str = "",
+        scope: str | None = None,
         attributes: dict[str, object] | None = None,
         idle_ttl_seconds: int = 0,
     ) -> ThreadInfo:
@@ -41,7 +41,13 @@ class Storage:
         """
     async def get_thread(self, thread_id: str) -> ThreadInfo:
         """Unknown, deleted or expired threads raise `ThreadNotFound`."""
-    async def list_threads(self, scope: str, *, before: str = "", limit: int = 0) -> ThreadPage:
+    async def list_threads(
+        self,
+        scope: str,
+        *,
+        before: str | None = None,
+        limit: int | None = None,
+    ) -> ThreadPage:
         """The threads of one scope, newest first; `before` is the previous page's cursor."""
     async def update_thread(
         self,
@@ -59,16 +65,16 @@ class Storage:
         self,
         thread_id: str,
         *,
-        agent: str = "",
-        after: str = "",
-        limit: int = 0,
+        agent: str | None = None,
+        after: str | None = None,
+        limit: int | None = None,
     ) -> ThreadItemPage:
         """The thread's chat items, oldest first, of one agent's lane when `agent` is given."""
     async def get_thread_tasks(
         self,
         thread_id: str,
         *,
-        status: str | None = None,
+        status: TaskState | None = None,
     ) -> list[ThreadTask]:
         """The thread's A2A tasks, of one `status` when given."""
     async def open(self, thread_id: str, holder: str) -> Thread:

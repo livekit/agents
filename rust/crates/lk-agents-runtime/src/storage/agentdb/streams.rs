@@ -20,6 +20,13 @@ use lk_agents_storage::streams::{CONTENT_TYPE, DEFAULT_TTL, START, StreamInfo};
 use super::conn::TokenMinter;
 use super::http_ok;
 
+/// The streams API's answer to a create.
+#[derive(serde::Deserialize)]
+struct Created {
+    stream_id: String,
+    expires_at: i64,
+}
+
 struct Queue {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     /// Appends handed over and not yet answered.
@@ -74,7 +81,9 @@ impl Streams {
             .await
             .map_err(transport)?;
         let resp = http_ok(resp).await?;
-        resp.json::<StreamInfo>().await.map_err(|e| StorageError::Decode(e.to_string()))
+        let created: Created =
+            resp.json().await.map_err(|e| StorageError::Decode(e.to_string()))?;
+        Ok(StreamInfo { stream_id: created.stream_id, expires_at: created.expires_at })
     }
 
     /// Hands one record to the stream's queue; sent in order, failures logged.

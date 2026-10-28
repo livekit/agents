@@ -4,8 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from livekit.agents._generated.storage import EventRow, InboxRow
-from livekit.agents._generated.storage_run import LaneRow, TaskRow
+from livekit.agents._generated.storage_class import EventRow, InboxRow, LaneRow, TaskRecord
 from livekit.agents.llm import ChatItem
 
 
@@ -27,7 +26,7 @@ class DatabaseDump(BaseModel):
     items: list[Item]
     events: list[EventRow]
     inbox: list[InboxRow]
-    tasks: list[TaskRow]
+    tasks: list[TaskRecord]
 
 
 class QueryResult(BaseModel):

@@ -1,15 +1,16 @@
 //! The storage surface of `_core` the generated `Storage` class does not declare yet: the
-//! response streams handle (`Storage.streams()`) and the record helpers `turn.rs` crosses its
-//! rows with. Records cross as the pydantic models `lk-agents-codegen` writes from the storage
-//! crate's `#[derive(Host)]` records (`livekit.agents._generated.storage*`).
+//! response streams handle (`Storage.streams()`) and the helpers `turn.rs` crosses its turn
+//! records with, the pydantic models `lk-agents-codegen` writes from the A2A crate's
+//! `#[derive(Host)]` records (`livekit.agents._generated.storage_turn`).
 
 use std::sync::Arc;
 
 use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value_to_py};
 use lk_agents_runtime::storage::{QueuedStreams, StreamRead};
+use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -57,35 +58,6 @@ pub(crate) fn model<T: Serialize>(
     validate(py, &model_class(py, module, name)?, &v)
 }
 
-/// An optional record: its model, or `None`.
-pub(crate) fn opt_model<T: Serialize>(
-    py: Python<'_>,
-    module: &str,
-    name: &str,
-    v: &Option<T>,
-) -> PyResult<Py<PyAny>> {
-    match v {
-        Some(v) => model(py, module, name, v),
-        None => Ok(py.None()),
-    }
-}
-
-/// Records as a list of their model's instances, one class lookup for the list.
-pub(crate) fn models<T: Serialize>(
-    py: Python<'_>,
-    module: &str,
-    name: &str,
-    items: impl IntoIterator<Item = T>,
-) -> PyResult<Py<PyAny>> {
-    let class = model_class(py, module, name)?;
-    let out = PyList::empty(py);
-    for item in items {
-        let v = serde_json::to_value(&item).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        out.append(validate(py, &class, &v)?)?;
-    }
-    Ok(out.into_any().unbind())
-}
-
 /// The response streams of one storage (`Storage.streams()`): a task's frames, kept for its
 /// subscribers on any worker.
 #[pyclass(name = "Streams", module = "livekit.agents._core", frozen)]
@@ -113,7 +85,7 @@ impl PyStreams {
         let ttl = ttl_seconds.map(std::time::Duration::from_secs);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let info = streams.create(ttl).await.map_err(to_py_err)?;
-            Python::attach(|py| model(py, "storage", "StreamInfo", &info))
+            Python::attach(|py| info.into_py_any(py))
         })
     }
 

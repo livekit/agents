@@ -147,7 +147,6 @@ pub struct Ask {
 
 /// One lane: a registered agent's state, lease and inbox cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run", config = "frozen=True")]
 #[table("lanes")]
 pub struct LaneRow {
     pub lane: String,
@@ -155,7 +154,6 @@ pub struct LaneRow {
     pub version: i64,
     /// The application's typed state, one snapshot per run.
     #[serde(default)]
-    #[python(default = "None")]
     pub state: Option<Value>,
     pub lease_holder: Option<String>,
     /// Unix seconds on agent-db's clock; `0` is released.
@@ -169,7 +167,6 @@ pub struct LaneRow {
 /// One journal entry: every `AgentSessionEvent`, plus `run_started` and `run_ended`, tagged with
 /// the lane. Append-only, owned by the framework.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage", config = "frozen=True")]
 #[table("events")]
 pub struct EventRow {
     pub id: i64,
@@ -226,7 +223,6 @@ pub struct RunEnded {
 
 /// One message received while the lane was running, under the `inbox` policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage", config = "frozen=True")]
 #[table("inbox")]
 pub struct InboxRow {
     pub id: i64,
@@ -235,7 +231,6 @@ pub struct InboxRow {
     pub task_id: String,
     pub message_id: String,
     #[table(json)]
-    #[python(ty = "dict[str, Any]", import = "typing:Any")]
     pub message: a2a::Message,
     pub received_at: i64,
 }

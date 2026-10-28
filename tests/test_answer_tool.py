@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from a2a.types import a2a_pb2 as pb
 
-from livekit.agents import Agent, InputRequired, RunContext
+from livekit.agents import Agent, InputRequired, RunContext, RunResult
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.storage import Storage
@@ -54,11 +54,8 @@ async def ask(ctx: RunContext, request: str) -> str | InputRequired:
     return f"booked for {request}"
 
 
-async def desk(ctx: A2ASessionContext) -> str:
-    result = await front.run(ctx.message, message_history=ctx.message_history)
-    return (
-        result.output.question if isinstance(result.output, InputRequired) else str(result.output)
-    )
+async def desk(ctx: A2ASessionContext) -> RunResult[str]:
+    return await front.run(ctx.message, message_history=ctx.message_history)
 
 
 async def test_the_answer_goes_to_the_tool_that_asked(thread_storage: Storage) -> None:

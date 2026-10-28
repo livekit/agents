@@ -34,7 +34,7 @@ from google.protobuf import json_format
 from pydantic import JsonValue
 
 from .. import _core
-from .._generated.storage import StreamInfo, TaskData
+from .._generated.storage_class import StreamInfo, TaskData, TaskRecord
 from .._generated.storage_run import TaskRow
 from .._generated.storage_turn import TurnResult
 from ..log import logger
@@ -423,7 +423,9 @@ class A2AService:
             )
         return continued
 
-    def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRow, str]:
+    def _unknown_session(
+        self, message: StoredMessage, call: CallContext
+    ) -> tuple[TaskRow | TaskRecord, str]:
         """Plan 5.12: an id the threads service does not know fails the task ``thread-not-found``."""
         context_id = str(message.get("contextId") or "")
         record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_THREAD_NOT_FOUND)
@@ -431,7 +433,7 @@ class A2AService:
 
     def _unsaved(
         self, thread_id: str, message: StoredMessage, error: StorageError
-    ) -> tuple[TaskRow, str]:
+    ) -> tuple[TaskRow | TaskRecord, str]:
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
         answer, unpersisted, and the client resends (docs/protocol/a2a.md)."""
         logger.warning(
@@ -601,7 +603,7 @@ class A2AService:
                 raise Forbidden(f"the grant does not {flag} this thread")
         return thread_id
 
-    async def _find_task(self, thread_id: str, task_id: str) -> TaskRow | None:
+    async def _find_task(self, thread_id: str, task_id: str) -> TaskRecord | None:
         return await Thread(self._storage, thread_id, agent_name=self.lane).task(task_id)
 
 
@@ -616,9 +618,9 @@ def _message_of(params: Params) -> StoredMessage:
     return message
 
 
-def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str) -> TaskRow:
+def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str) -> TaskRecord:
     """A ``failed`` task the worker could not write, with ``reason`` on its status message."""
-    return TaskRow(
+    return TaskRecord(
         task_id=task_id,
         lane=lane,
         seq=0,
@@ -628,6 +630,7 @@ def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str)
         updated_at=int(time.time() * 1000),
         data=TaskData(
             history=[dict(message)],
+            artifacts=None,
             metadata={REASON: reason},
             status_message={
                 "messageId": shortuuid("msg_"),
@@ -636,7 +639,7 @@ def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str)
                 "metadata": {REASON: reason},
             },
         ),
-        ask=None,
+        internal=None,
     )
 
 

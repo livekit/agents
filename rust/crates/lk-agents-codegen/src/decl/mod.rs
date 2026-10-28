@@ -82,6 +82,13 @@ pub struct Field {
     pub doc: Vec<String>,
 }
 
+impl Field {
+    /// The Python attribute: the Rust name without a raw identifier's `r#` (`r#type` is `type`).
+    pub fn host_name(&self) -> &str {
+        self.rust_name.trim_start_matches("r#")
+    }
+}
+
 /// `#[host(proxy(host = ".."))] trait X` whose methods declare their calls: the core calling a
 /// host object. The generated proxy implements the trait over the object; each call runs in the
 /// host context its `#[host(context)]` parameter carries.

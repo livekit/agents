@@ -21,7 +21,7 @@ from typing import TypeVar
 
 from .. import utils
 from .._core import Run, Thread
-from .._generated.storage_run import ItemRow
+from .._generated.storage_class import ItemRow
 from ..llm import ChatContext
 from ..log import logger
 from .backends import Storage

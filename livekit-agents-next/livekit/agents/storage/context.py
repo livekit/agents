@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from pydantic import JsonValue
 
+from .._generated.storage_class import TaskRecord
 from .._generated.storage_run import RunUsage, TaskRow
 from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
 from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
@@ -103,7 +104,7 @@ class A2ASessionContext:
 
         return "".join(parts)
 
-    async def task(self, task_id: str) -> TaskRow | None:
+    async def task(self, task_id: str) -> TaskRecord | None:
         """One task row of the lane, as it is now."""
         for record in await self.thread.tasks():
             if record.task_id == task_id:

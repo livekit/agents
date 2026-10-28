@@ -15,6 +15,7 @@
 //! * `sqlite` (feature): the statements executed on a SQLite connection the caller owns.
 
 pub mod db;
+pub mod host;
 pub mod lease;
 pub mod run;
 pub mod schema;

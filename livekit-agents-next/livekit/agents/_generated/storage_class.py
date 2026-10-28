@@ -3,10 +3,12 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/storage/mod.rs
+#     rust/crates/lk-agents-abi/src/storage/rows.rs
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, TypeAlias
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -60,8 +62,130 @@ class ThreadTask:
 
     task_id: str
     thread_id: str
-    name: str
-    """The application's task label; empty when none."""
-    status: str
-    """The A2A state: `submitted`, `working`, `input-required`, `completed`, ..."""
+    name: str | None
+    """The application's task label."""
+    status: TaskState
     updated_at: int
+
+
+TaskState: TypeAlias = Literal["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected"]
+"""A task's state: the storage core's `TaskState` as the host reads it."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Ask:
+    """What a task waiting on the person holds: the question and the call that takes the answer."""
+
+    question: str
+    tool: str | None
+    """The tool that asked."""
+    call_id: str | None
+    """The asking call, whose output the answer becomes."""
+    answer_tool: str | None
+    """The tool that takes the answer before the model runs."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class StreamInfo:
+    """A created response stream: its id and when it expires (unix seconds)."""
+
+    stream_id: str
+    expires_at: int
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ItemRow:
+    """One history item of a lane; `payload` is the `ChatContext.ChatItem`."""
+
+    id: str
+    message_id: str | None
+    """The A2A `messageId` of the message this item came from, the idempotency key."""
+    payload: object
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class TaskData:
+    """The A2A `Task` fields a task keeps, as v1 protobuf JSON."""
+
+    history: list[object]
+    artifacts: list[object] | None
+    metadata: dict[str, object]
+    status_message: object | None
+    """`Task.status.message`."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class TaskRecord:
+    """One A2A task of a lane: `id = task_id`, `contextId` the thread id, `status = (status,
+    data.status_message, updated_at)`, plus the fields of `data`.
+    """
+
+    task_id: str
+    lane: str
+    seq: int
+    """Submission order; the lane runs its runnable tasks in it."""
+    name: str | None
+    """An optional application task label."""
+    message_id: str | None
+    status: TaskState
+    updated_at: int
+    """Unix milliseconds."""
+    data: TaskData
+    internal: Ask | None
+    """The question the task waits on the person to answer, while it does."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class TaskPage:
+    """One page of A2A `tasks/list`."""
+
+    tasks: list[TaskRecord]
+    next_page_token: str
+    """Empty on the last page."""
+    page_size: int
+    total_size: int
+    """Every page's tasks, in all."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class LaneRow:
+    """One lane: a registered agent's state, lease and inbox cursor."""
+
+    lane: str
+    version: int
+    """The fencing token: a run loaded at `v` commits only `WHERE version = v`."""
+    state: object | None
+    """The application's typed state, one snapshot per run."""
+    lease_holder: str | None
+    lease_until: int
+    """Unix seconds on agent-db's clock; `0` is released."""
+    waiter: str | None
+    """A worker that failed the lease under `interrupt` and is polling for it."""
+    drained_id: int
+    """The id of the last inbox row a drain consumed."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EventRow:
+    """One journal entry: every `AgentSessionEvent`, plus `run_started` and `run_ended`."""
+
+    id: int
+    ts_ms: int
+    lane: str
+    run_id: str
+    type: str
+    payload: object
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class InboxRow:
+    """One message received while the lane was running, under the `inbox` policy."""
+
+    id: int
+    lane: str
+    task_id: str
+    """The task created for the message; also its answer stream."""
+    message_id: str
+    message: object
+    """The A2A `Message`."""
+    received_at: int

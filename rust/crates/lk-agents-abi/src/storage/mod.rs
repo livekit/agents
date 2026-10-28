@@ -1,7 +1,11 @@
 //! Thread storage as the host sees it: the `Storage` class `AgentDBStorage` and `SQLiteStorage`
 //! configure, the thread records it answers with, and the error every operation fails with.
 
+mod rows;
+
 use serde_json::{Map, Value};
+
+pub use rows::*;
 
 /// A storage failure. `Unavailable` is the one retryable error; a task that ends on it fails
 /// with reason `storage-unavailable`. The host raises the classes of `livekit.agents.storage`.
@@ -118,7 +122,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// Otherwise agentstore through the public API derived from `url` (the project's
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         #[host(kw, default = None)] directory: Option<String>,
         #[host(default = None)] url: Option<String>,
@@ -137,7 +140,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn create_thread(
         &self,
-        #[host(kw, default = "")] scope: String,
+        #[host(kw, default = None)] scope: Option<String>,
         #[host(default = None)] attributes: Option<Map<String, Value>>,
         #[host(default = 0)] idle_ttl_seconds: i64,
     ) -> Result<ThreadInfo, StorageError>;
@@ -151,8 +154,8 @@ pub trait Storage: Send + Sync + Sized + 'static {
     async fn list_threads(
         &self,
         scope: String,
-        #[host(kw, default = "")] before: String,
-        #[host(default = 0)] limit: i64,
+        #[host(kw, default = None)] before: Option<String>,
+        #[host(default = None)] limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError>;
 
     /// Merges `attributes` (an empty value deletes the key) and sets the idle TTL when given:
@@ -174,9 +177,9 @@ pub trait Storage: Send + Sync + Sized + 'static {
     async fn get_thread_items(
         &self,
         thread_id: String,
-        #[host(kw, default = "")] agent: String,
-        #[host(default = "")] after: String,
-        #[host(default = 0)] limit: i64,
+        #[host(kw, default = None)] agent: Option<String>,
+        #[host(default = None)] after: Option<String>,
+        #[host(default = None)] limit: Option<u32>,
     ) -> Result<ThreadItemPage, StorageError>;
 
     /// The thread's A2A tasks, of one `status` when given.
@@ -184,7 +187,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     async fn get_thread_tasks(
         &self,
         thread_id: String,
-        #[host(kw, default = None)] status: Option<String>,
+        #[host(kw, default = None)] status: Option<TaskState>,
     ) -> Result<Vec<ThreadTask>, StorageError>;
 
     /// The existing thread's handle, its writes under `holder`. Takes no lease.
@@ -251,9 +254,8 @@ pub struct ThreadItemPage {
 pub struct ThreadTask {
     pub task_id: String,
     pub thread_id: String,
-    /// The application's task label; empty when none.
-    pub name: String,
-    /// The A2A state: `submitted`, `working`, `input-required`, `completed`, ...
-    pub status: String,
+    /// The application's task label.
+    pub name: Option<String>,
+    pub status: TaskState,
     pub updated_at: i64,
 }

@@ -3,8 +3,7 @@
 //! a connection and hands the [`BatchResult`] back to its [`Decode`]; nothing here performs I/O,
 //! reads a clock or mints an id: lease tokens, timestamps and run ids are supplied.
 
-use lk_agents_host_derive::Host;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::StorageError;
@@ -29,8 +28,7 @@ pub struct TaskQuery {
 }
 
 /// One page of A2A `tasks/list`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run", config = "frozen=True")]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TaskPage {
     pub tasks: Vec<TaskRow>,
     /// Empty on the last page.
