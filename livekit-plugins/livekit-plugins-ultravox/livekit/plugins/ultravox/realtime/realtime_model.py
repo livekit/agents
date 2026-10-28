@@ -12,11 +12,12 @@ import json
 import os
 import time
 import weakref
-from collections.abc import AsyncIterable, Iterator
+from collections.abc import AsyncIterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 import aiohttp
+from pydantic import JsonValue
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
@@ -63,7 +64,7 @@ class _UltravoxOptions:
 
     model_id: str
     voice: str
-    external_voice: NotGivenOr[dict[str, Any]]
+    external_voice: NotGivenOr[Mapping[str, JsonValue]]
     api_key: str
     base_url: str
     system_prompt: str
@@ -119,7 +120,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: UltravoxModel | str = DEFAULT_MODEL,
         voice: UltravoxVoice | str = DEFAULT_VOICE,
-        external_voice: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        external_voice: NotGivenOr[Mapping[str, JsonValue]] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
         system_prompt: str = "You are a helpful assistant.",
@@ -142,7 +143,7 @@ class RealtimeModel(llm.RealtimeModel):
             The Ultravox model to use.
         voice : str | UltravoxVoice
             The voice to use for TTS.
-        external_voice : dict[str, Any], optional
+        external_voice : dict[str, JsonValue], optional
             The Ultravox configuration for an external TTS provider. Mutually exclusive with ``voice``.
         api_key : str, optional
             The Ultravox API key. If None, will try to use environment variables.
@@ -291,7 +292,7 @@ class RealtimeSession(
         self._realtime_model: RealtimeModel = realtime_model
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
-        self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, Any] | bytes]()
+        self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, JsonValue] | bytes]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._main_atask = asyncio.create_task(self._main_task(), name="UltravoxSession._main_task")
@@ -341,7 +342,7 @@ class RealtimeSession(
             # Close old channel before creating new one
             old_ch = self._msg_ch
             old_ch.close()
-            self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, Any] | bytes]()
+            self._msg_ch = utils.aio.Chan[UltravoxEvent | dict[str, JsonValue] | bytes]()
 
             # Clear pending generation state on restart
             if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -416,13 +417,13 @@ class RealtimeSession(
                 # Bridge tool result back to Ultravox using the original invocationId
                 if lk_ultravox_debug:
                     logger.debug(
-                        f"[ultravox] bridging tool result: invocationId={item.call_id} "
+                        f"[ultravox] bridging tool result: invocation_id={item.call_id} "
                         f"is_error={getattr(item, 'is_error', False)} "
                         f"result_len={len(str(getattr(item, 'output', '') or ''))}"
                     )
 
                 tool_result = ClientToolResultEvent(
-                    invocationId=item.call_id,
+                    invocation_id=item.call_id,
                     # a result that wants no reply is recorded without speech
                     agent_reaction="speaks" if item.reply_required else "listens",
                 )
@@ -488,7 +489,7 @@ class RealtimeSession(
         """Push video frames (not supported by Ultravox)."""
         logger.warning("push_video is not supported by Ultravox.")
 
-    def _send_client_event(self, event: UltravoxEvent | dict[str, Any]) -> None:
+    def _send_client_event(self, event: UltravoxEvent | dict[str, JsonValue]) -> None:
         """Send an event to the Ultravox WebSocket."""
         with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
@@ -710,7 +711,10 @@ class RealtimeSession(
                     create_call_url += f"?{query_string}"
 
                 # Build payload with core parameters
-                payload: dict[str, Any] = {
+                selected_tools: list[JsonValue] = list(
+                    parse_tools(list(self._tools.function_tools.values()))
+                )
+                payload: dict[str, JsonValue] = {
                     "systemPrompt": self._realtime_model._opts.system_prompt,
                     "model": self._realtime_model._opts.model_id,
                     "medium": {
@@ -720,11 +724,11 @@ class RealtimeSession(
                             "clientBufferSizeMs": 30000,  # 30 seconds
                         }
                     },
-                    "selectedTools": parse_tools(list(self._tools.function_tools.values())),
+                    "selectedTools": selected_tools,
                 }
 
                 if is_given(self._realtime_model._opts.external_voice):
-                    payload["externalVoice"] = self._realtime_model._opts.external_voice
+                    payload["externalVoice"] = dict(self._realtime_model._opts.external_voice)
                 else:
                     payload["voice"] = self._realtime_model._opts.voice
 
@@ -1173,7 +1177,7 @@ class RealtimeSession(
         if lk_ultravox_debug:
             logger.debug(
                 f"[ultravox] tool_invocation received: tool={event.tool_name} "
-                f"invocationId={event.invocation_id} params_keys={list(event.parameters.keys())}"
+                f"invocation_id={event.invocation_id} params_keys={list(event.parameters.keys())}"
             )
 
         # Emit FunctionCall to maintain framework compatibility
@@ -1295,7 +1299,7 @@ class RealtimeSession(
             )
 
         event = ClientToolResultEvent(
-            invocationId=call_id,
+            invocation_id=call_id,
             result=result,
             agent_reaction="speaks",
         )

@@ -1,29 +1,37 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Sequence
+
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import llm
 from livekit.agents.llm.utils import function_arguments_to_pydantic_model
 
+_JSON_SCHEMA = TypeAdapter(dict[str, JsonValue])
 
-def parse_tools(tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> list[dict[str, Any]]:
+
+def parse_tools(
+    tools: Sequence[
+        llm.FunctionTool[..., Awaitable[object]] | llm.RawFunctionTool[..., Awaitable[object]]
+    ],
+) -> list[dict[str, JsonValue]]:
     """Prepare tools for sending to Ultravox. https://docs.ultravox.ai/essentials/tools#creating-your-first-custom-tool"""
 
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, JsonValue]] = []
     for tool in tools:
         if isinstance(tool, llm.RawFunctionTool):
             raw_fnc_info = tool.info
             name = raw_fnc_info.name
             description = raw_fnc_info.raw_schema.get("description", None)
-            parameters = raw_fnc_info.raw_schema.get("parameters", {})
-        elif isinstance(tool, llm.FunctionTool):
+            parameters = _JSON_SCHEMA.validate_python(raw_fnc_info.raw_schema.get("parameters", {}))
+        else:
             fnc_info = tool.info
             model = function_arguments_to_pydantic_model(tool)
             name = fnc_info.name
             description = fnc_info.description
             parameters = model.model_json_schema()
 
-        def _extract_type(prop: dict[str, Any]) -> str:
+        def _extract_type(prop: dict[str, JsonValue]) -> str:
             """Best-effort guess of a parameter's primitive type."""
             if "type" in prop:
                 assert isinstance(prop["type"], str)
@@ -34,12 +42,27 @@ def parse_tools(tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> list[dic
                 return "array"
             for key in ("anyOf", "oneOf"):
                 if key in prop:
-                    for variant in prop[key]:
+                    variants = prop[key]
+                    if not isinstance(variants, list):
+                        continue
+                    for variant in variants:
                         if isinstance(variant, dict) and "type" in variant:
                             assert isinstance(variant["type"], str)
                             return variant["type"]
             # Fallback to string
             return "string"
+
+        properties = parameters.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ValueError("Tool properties must be a JSON object")
+        required = parameters.get("required", [])
+        if not isinstance(required, list):
+            raise ValueError("Required tool arguments must be an array")
+        property_schemas: dict[str, dict[str, JsonValue]] = {}
+        for pn, schema in properties.items():
+            if not isinstance(schema, dict):
+                raise ValueError("Each tool property must be a JSON schema object")
+            property_schemas[pn] = schema
 
         results.append(
             {
@@ -62,9 +85,9 @@ def parse_tools(tools: list[llm.FunctionTool | llm.RawFunctionTool]) -> list[dic
                                     ),
                                 }
                             ),
-                            "required": pn in parameters.get("required", []),
+                            "required": pn in required,
                         }
-                        for pn, p in parameters["properties"].items()
+                        for pn, p in property_schemas.items()
                     ],
                     "client": {},
                 }

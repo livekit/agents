@@ -26,15 +26,15 @@ As of 2025-05-28, the following events are supported:
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 
 class UltravoxEvent(BaseModel):
     """Base class for all Ultravox WebSocket events."""
 
-    type: str = Field(..., description="Event type identifier")
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # Client-to-Server Events
@@ -53,12 +53,13 @@ class UserTextMessageEvent(UltravoxEvent):
     type: Literal["user_text_message"] = "user_text_message"
     text: str = Field(..., description="The content of the user message")
     urgency: Literal["immediate", "soon", "later"] | None = Field(
-        None,
+        default=None,
         description="Message urgency level - immediate for barge-in, later for context updates",
     )
     defer_response: bool | None = Field(
-        None,
-        alias="deferResponse",
+        default=None,
+        validation_alias="deferResponse",
+        serialization_alias="deferResponse",
         description="If true, allows adding text without inducing immediate response",
     )
 
@@ -69,10 +70,17 @@ class ForcedAgentMessageEvent(UltravoxEvent):
     type: Literal["forced_agent_message"] = "forced_agent_message"
     content: str = Field("", description="Text the agent should speak")
     uninterruptible: bool | None = Field(
-        None, description="Prevents user interruption while the agent speaks this message"
+        default=None, description="Prevents user interruption while the agent speaks this message"
     )
-    urgency: Literal["immediate", "soon"] | None = Field(None, description="Message urgency level")
-    thread_id: str | None = Field(None, alias="threadId", description="Target thread identifier")
+    urgency: Literal["immediate", "soon"] | None = Field(
+        default=None, description="Message urgency level"
+    )
+    thread_id: str | None = Field(
+        default=None,
+        validation_alias="threadId",
+        serialization_alias="threadId",
+        description="Target thread identifier",
+    )
 
 
 class SetOutputMediumEvent(UltravoxEvent):
@@ -87,20 +95,35 @@ class ClientToolResultEvent(UltravoxEvent):
 
     type: Literal["client_tool_result"] = "client_tool_result"
     invocation_id: str = Field(
-        ..., alias="invocationId", description="Matches corresponding invocation"
+        ...,
+        validation_alias="invocationId",
+        serialization_alias="invocationId",
+        description="Matches corresponding invocation",
     )
-    result: str | None = Field(None, description="Tool execution result, often JSON string")
+    result: str | None = Field(default=None, description="Tool execution result, often JSON string")
     agent_reaction: Literal["speaks", "listens", "speaks-once"] | None = Field(
-        "speaks", alias="agentReaction", description="How the agent should react to the tool result"
+        default="speaks",
+        validation_alias="agentReaction",
+        serialization_alias="agentReaction",
+        description="How the agent should react to the tool result",
     )
     response_type: str = Field(
-        "tool-response", alias="responseType", description="Type of response"
+        default="tool-response",
+        validation_alias="responseType",
+        serialization_alias="responseType",
+        description="Type of response",
     )
     error_type: Literal["undefined", "implementation-error"] | None = Field(
-        None, alias="errorType", description="Error type if tool execution failed"
+        default=None,
+        validation_alias="errorType",
+        serialization_alias="errorType",
+        description="Error type if tool execution failed",
     )
     error_message: str | None = Field(
-        None, alias="errorMessage", description="Error details if failed"
+        default=None,
+        validation_alias="errorMessage",
+        serialization_alias="errorMessage",
+        description="Error details if failed",
     )
 
 
@@ -111,7 +134,9 @@ class CallStartedEvent(UltravoxEvent):
     """Server message indicating that a call has started."""
 
     type: Literal["call_started"] = "call_started"
-    call_id: str = Field(..., alias="callId", description="Unique call ID")
+    call_id: str = Field(
+        ..., validation_alias="callId", serialization_alias="callId", description="Unique call ID"
+    )
 
 
 class PongEvent(UltravoxEvent):
@@ -136,9 +161,11 @@ class TranscriptEvent(UltravoxEvent):
     medium: Literal["text", "voice"] = Field(
         ..., description="Medium through which utterance was emitted"
     )
-    text: str | None = Field(None, description="Full transcript text (exclusive with delta)")
+    text: str | None = Field(
+        default=None, description="Full transcript text (exclusive with delta)"
+    )
     delta: str | None = Field(
-        None, description="Incremental transcript update (exclusive with text)"
+        default=None, description="Incremental transcript update (exclusive with text)"
     )
     final: bool = Field(..., description="Whether more updates are expected for this utterance")
     ordinal: int = Field(..., description="Used for ordering transcripts within a call")
@@ -148,9 +175,19 @@ class ClientToolInvocationEvent(UltravoxEvent):
     """Server request for client to invoke a client-implemented tool."""
 
     type: Literal["client_tool_invocation"] = "client_tool_invocation"
-    tool_name: str = Field(..., alias="toolName", description="Tool to invoke")
-    invocation_id: str = Field(..., alias="invocationId", description="Unique invocation ID")
-    parameters: dict[str, Any] = Field(..., description="Tool parameters")
+    tool_name: str = Field(
+        ...,
+        validation_alias="toolName",
+        serialization_alias="toolName",
+        description="Tool to invoke",
+    )
+    invocation_id: str = Field(
+        ...,
+        validation_alias="invocationId",
+        serialization_alias="invocationId",
+        description="Unique invocation ID",
+    )
+    parameters: dict[str, JsonValue] = Field(..., description="Tool parameters")
 
 
 class DebugEvent(UltravoxEvent):
@@ -184,12 +221,12 @@ UltravoxEventType = (
 UltravoxEventAdapter: TypeAdapter[UltravoxEventType] = TypeAdapter(UltravoxEventType)
 
 
-def parse_ultravox_event(data: dict[str, Any]) -> UltravoxEventType:
+def parse_ultravox_event(data: object) -> UltravoxEventType:
     """Parse a raw WebSocket message into an Ultravox event object.
 
     Parameters
     ----------
-    data : Dict[str, Any]
+    data : object
         Raw JSON data from WebSocket message
 
     Returns
