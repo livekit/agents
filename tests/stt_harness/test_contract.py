@@ -12,7 +12,7 @@ from livekit.agents import APIError, stt, utils
 
 from .discovery import websocket_providers
 from .drivers import make_audio_segments, open_stream, push_audio, wait_for_final
-from .server import STTServer
+from .server import Segment, STTServer
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.usefixtures("job_process")]
 PROVIDERS = websocket_providers()
@@ -191,10 +191,125 @@ async def test_idle_retirement_preserves_the_next_utterance(provider, monkeypatc
         assert not errors
 
 
+@pytest.mark.parametrize(
+    "provider", [p for p in PROVIDERS if p.reconnect_on_idle_close], ids=lambda p: p.name
+)
+@pytest.mark.parametrize("end_after_close", [False, True])
+async def test_idle_retirement_preserves_a_partial_audio_chunk(
+    provider, monkeypatch, end_after_close
+):
+    first, tail = make_audio_segments(provider)
+    partial = tail.audio[: provider.sample_rate // 50 * 2]
+    if end_after_close:
+        tail = replace(tail, audio=partial)
+    server = STTServer(provider, segments=(first, tail))
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        stream.flush()
+        peer = await asyncio.wait_for(server.connections_opened.get(), 1)
+        await asyncio.wait_for(wait_for_final(collector, events, first.text), 1)
+
+        push_audio(stream, provider, Segment(partial, tail.text))
+        # A round trip lets the ready sender consume the frame into its chunk buffer.
+        await peer.ws.ping(b"partial-audio-buffered")
+        await asyncio.wait_for(peer.pong_received.wait(), 1)
+        assert bytes(server.received_audio) == first.audio
+        peer.close()
+        await asyncio.wait_for(peer.disconnected.wait(), 1)
+        await asyncio.sleep(0.01)
+
+        if not end_after_close:
+            push_audio(stream, provider, replace(tail, audio=tail.audio[len(partial) :]))
+        stream.end_input()
+        await asyncio.wait_for(collector, provider.final_response_timeout + 1)
+        assert bytes(server.received_audio) == first.audio + tail.audio
+        assert len(server.connections) == 2
+        assert bytes(server.connections[1].audio) == tail.audio
+        assert not errors
+
+
+@pytest.mark.parametrize(
+    "provider", [p for p in PROVIDERS if p.name == "reson8"], ids=lambda p: p.name
+)
+@pytest.mark.parametrize("final_response_timeout", [0.2, 1.3])
+@pytest.mark.parametrize("progress", ["start", "candidate", "next_turn"])
+async def test_started_turn_requires_turn_end(
+    provider, monkeypatch, final_response_timeout, progress
+):
+    provider = replace(provider, final_response_timeout=final_response_timeout)
+    first = make_audio_segments(provider)[0]
+    server = STTServer(provider, segments=(first,))
+    server.processing_stalled = True
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        stream.flush()
+        await asyncio.wait_for(server.wait_for_audio(len(first.audio)), 1)
+        peer = server.connections[0]
+        peer.send({"type": "turn_start"})
+        if progress != "start":
+            peer.send({"type": "turn_end_candidate", "text": first.text})
+        if progress == "next_turn":
+            peer.send({"type": "turn_end"})
+            peer.send({"type": "turn_start"})
+
+        async def wait_for_turns():
+            count = 2 if progress == "next_turn" else 1
+            while sum(e.type == stt.SpeechEventType.START_OF_SPEECH for e in events) < count:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_turns(), 1)
+        stream.end_input()
+        with pytest.raises(APIError, match="final response timed out"):
+            await asyncio.wait_for(collector, final_response_timeout + 1)
+        assert errors and not errors[-1].recoverable
+
+
+@pytest.mark.parametrize(
+    "provider", [p for p in PROVIDERS if p.name == "reson8"], ids=lambda p: p.name
+)
+async def test_active_turn_uses_the_configured_final_response_budget(provider, monkeypatch):
+    provider = replace(provider, final_response_timeout=1.5)
+    first = make_audio_segments(provider)[0]
+    server = STTServer(provider, segments=(first,))
+    server.processing_stalled = True
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        peer = server.connections[0]
+        peer.send({"type": "turn_start"})
+        peer.send({"type": "turn_end_candidate", "text": first.text})
+        await asyncio.sleep(1.05)
+        assert not collector.done(), "the quiet window ended an active turn"
+        peer.send({"type": "turn_end"})
+        await asyncio.wait_for(collector, 1)
+        await wait_for_final(collector, events, first.text)
+        assert not errors
+
+
 async def test_pongs_do_not_confirm_final_completion(provider, monkeypatch):
     if provider.completion_unknown_reason:
         pytest.skip(provider.completion_unknown_reason)
     server = STTServer(provider, segments=make_audio_segments(provider))
+    server.processing_stalled = True
     server.release_results.clear()
     async with open_stream(provider, monkeypatch, server=server) as (
         stream,

@@ -646,6 +646,8 @@ class SpeechStream(stt.RecognizeStream):
         self._audio_sent = False
 
         self._speaking = False
+        # A known turn requires turn_end even though an idle flush has no ACK.
+        self._final_response_required = asyncio.Event()
         # the most recent turn-end candidate, promoted to a final transcript
         # once the server confirms the turn ended
         self._candidate: SpeechData | None = None
@@ -687,44 +689,31 @@ class SpeechStream(stt.RecognizeStream):
         super().push_frame(frame)
 
     async def _await_final_turn(self) -> None:
+        """Allow an idle flush to drain quietly, but wait for each known turn.
+
+        A turn_end does not identify how much audio it covers. Keep a short
+        grace period for another turn. The coordinator bounds the whole drain
+        with final_response_timeout and fails if a turn remains active.
         """
-        Wait for Reson8 to answer the flush that ``end_input`` queued.
-
-        ``end_input`` queues a flush sentinel and then closes the input
-        channel, so the last thing the send task does is ask Reson8 to finalise
-        the audio it holds. Hanging up on the socket at that point would throw
-        away the turn_end that answers it, and the caller would see the stream
-        finish with no transcript at all.
-
-        ``aclose`` cancels the run task instead of closing the input channel
-        cleanly, so it never reaches this and stays immediate.
-
-        No ``turn_end`` says how much of the audio sent it covers, and Reson8
-        confirms one turn while later audio is already on its way -- so a
-        confirmation owed from before the flush can satisfy the wait on its own.
-        Rather than hang up on that, the wait settles and then holds briefly for
-        anything further; each new turn restarts the hold.
-        """
-
-        if not self._audio_sent:
+        if not self._audio_sent and not self._speaking:
             return
 
-        deadline = time.monotonic() + _FINAL_TURN_TIMEOUT
-
-        try:
-            while True:
+        while True:
+            try:
                 await asyncio.wait_for(
-                    self._turn_ended.wait(), max(deadline - time.monotonic(), 0.0)
+                    self._turn_ended.wait(), None if self._speaking else _FINAL_TURN_TIMEOUT
                 )
+            except asyncio.TimeoutError:
+                if self._speaking:
+                    continue
+                logger.debug("No further Reson8 turn arrived during final drain")
+                return
 
-                self._turn_ended.clear()
-                await asyncio.sleep(min(_FINAL_TURN_GRACE, max(deadline - time.monotonic(), 0.0)))
+            self._turn_ended.clear()
+            await asyncio.sleep(_FINAL_TURN_GRACE)
 
-                if not self._turn_ended.is_set():
-                    return
-        except asyncio.TimeoutError:
-            # A flush has no acknowledgement when there is no active turn.
-            logger.debug("No further Reson8 turn arrived during final drain")
+            if not self._speaking and not self._turn_ended.is_set():
+                return
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -878,7 +867,7 @@ class SpeechStream(stt.RecognizeStream):
                         asyncio.create_task(receive_until_complete(ws)),
                         reconnect=self._reconnect_event,
                         drain_started=drain_started,
-                        require_completion=False,
+                        require_completion=self._final_response_required,
                     )
                     if not reconnect:
                         break
@@ -971,6 +960,7 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._speaking = True
+        self._final_response_required.set()
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _end_speaking(self) -> None:
@@ -978,4 +968,5 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._speaking = False
+        self._final_response_required.clear()
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))

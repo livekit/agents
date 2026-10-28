@@ -563,6 +563,12 @@ class SpeechStream(stt.SpeechStream):
         max_buffer_bytes = int(max_buffer_seconds * self._opts.sample_rate * 2)
 
         buffered_audio = bytearray()
+        # Unsent partial chunks must survive connection cancellation and reconnect.
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            samples_per_channel=self._samples_per_buffer(),
+        )
         awaiting_final = False
         final_timeout_task: asyncio.Task[None] | None = None
         switch_event = asyncio.Event()
@@ -864,7 +870,10 @@ class SpeechStream(stt.SpeechStream):
         ) -> None:
             nonlocal awaiting_final, input_finished, pending_replay
             nonlocal pending_user_state_finalize, recover_primary_after_final
+            nonlocal audio_bstream
             samples_per_buffer = self._samples_per_buffer()
+            # Rechunk pending audio if update_options changed the buffer size.
+            pending_frames = audio_bstream.flush() + pending_frames
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
@@ -1144,7 +1153,7 @@ class SpeechStream(stt.SpeechStream):
             wait_timeout_permission: asyncio.Task[bool] | None = None
 
             pending_frames: list[Any] = []
-            if pending_replay is None:
+            if pending_replay is None and not audio_bstream.buffered_duration:
                 first = await next_audio_frame()
                 if first is None:
                     return

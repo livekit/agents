@@ -114,6 +114,7 @@ def make_stream() -> MakeStream:
         stream._opts = STTOptions(**overrides)  # type: ignore[arg-type]
         stream._request_id = "req-test"
         stream._speaking = False
+        stream._final_response_required = asyncio.Event()
         stream._candidate = None
         stream._pending_reconnect = False
         stream._turn_settled = asyncio.Event()
