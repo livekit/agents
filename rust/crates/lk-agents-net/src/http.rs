@@ -1,6 +1,6 @@
-//! The gateway's HTTPS exchanges: each attempt sends its request and reports what the transport
-//! observed (connection, request handed over, response bytes, decoded answer, end or failure) and
-//! decides nothing. The request's core owns every deadline and retry.
+//! HTTPS exchanges: each attempt sends its request and reports what the transport observed
+//! (connection, request handed over, response bytes, decoded answer, end or failure) and decides
+//! nothing. The request's core owns every deadline and retry.
 
 pub mod exchange;
 
@@ -11,23 +11,20 @@ use std::task::{Context, Poll};
 use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
 use crate::attempts::AttemptFailure;
-use crate::llm::lifecycle::LlmRequestEvent;
-use crate::llm::parse::WireChunk;
-use lk_agents_net::transport::HttpRequest;
+use crate::transport::HttpRequest;
 use tokio::sync::{Notify, mpsc};
 
-use lk_agents_net::sse::SseDecoder;
 
 /// A transport observation and the instant it was made.
 #[derive(Debug)]
-pub(crate) struct Stamped<E> {
+pub struct Stamped<E> {
     pub at: Ts,
     pub event: E,
 }
 
 /// Where an attempt's observations go: its request's bounded queue, so an attempt reads the
 /// response no faster than the request consumes it.
-pub(crate) struct Reporter<E> {
+pub struct Reporter<E> {
     pub tx: mpsc::Sender<Stamped<E>>,
     pub clock: Arc<dyn Clock>,
 }
@@ -39,7 +36,7 @@ impl<E> Clone for Reporter<E> {
 }
 
 impl<E> Reporter<E> {
-    pub(crate) async fn report(&self, event: E) {
+    pub async fn report(&self, event: E) {
         // A closed queue is a request that stopped listening; nothing is owed to it.
         let _ = self.tx.send(Stamped { at: self.clock.now(), event }).await;
     }
@@ -47,9 +44,36 @@ impl<E> Reporter<E> {
 
 /// How far the transport took the request before its response.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Sent {
+pub enum Sent {
     Connected,
     RequestWritten,
+}
+
+/// Quota telemetry headers the gateway stamps on LLM completions responses (including 429
+/// rejections). Absent means "not enforced / unknown", never zero.
+pub const QUOTA_HEADER_FIELDS: [(&str, &str); 6] = [
+    ("X-LiveKit-Inference-RPM-Limit", "rpm_limit"),
+    ("X-LiveKit-Inference-RPM-Used", "rpm_used"),
+    ("X-LiveKit-Inference-TPM-Limit", "tpm_limit"),
+    ("X-LiveKit-Inference-TPM-Used", "tpm_used"),
+    ("X-LiveKit-Inference-Credits-Limit", "credits_limit"),
+    ("X-LiveKit-Inference-Credits-Used", "credits_used"),
+];
+
+/// `lookup` should be case-insensitive, like the reference's header maps.
+pub fn extract_quota_usage<'a>(
+    lookup: impl Fn(&str) -> Option<&'a str>,
+) -> Vec<(&'static str, String)> {
+    QUOTA_HEADER_FIELDS
+        .iter()
+        .filter_map(|(header, field)| {
+            // An empty header value is dropped, not reported as "".
+            match lookup(header) {
+                Some(v) if !v.is_empty() => Some((*field, v.to_owned())),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// The response's text when the gateway rejects the request is read up to this many bytes.
@@ -70,7 +94,7 @@ impl GatewayHttp {
     }
 
     pub fn new() -> Result<Self, String> {
-        lk_agents_net::transport::install_tls_provider();
+        crate::transport::install_tls_provider();
         let client = reqwest::Client::builder()
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))
@@ -106,7 +130,7 @@ impl GatewayHttp {
 
     /// Sends `request`, reporting through `sent` how far it got; the response once its status is
     /// a success.
-    pub(crate) async fn send<E>(
+    pub async fn send<E>(
         &self,
         request: HttpRequest,
         reporter: &Reporter<E>,
@@ -116,7 +140,7 @@ impl GatewayHttp {
     }
 
     /// GET discovery and POST RPC share connection/write observations and the request clock.
-    pub(crate) async fn send_method<E>(
+    pub async fn send_method<E>(
         &self,
         method: reqwest::Method,
         request: HttpRequest,
@@ -152,30 +176,10 @@ impl GatewayHttp {
             Ok(response) => Ok(response),
         }
     }
-
-    /// One LLM request attempt: the completion's event stream decoded into chunk events.
-    pub(crate) async fn exchange(
-        &self,
-        request: HttpRequest,
-        attempt: u32,
-        reporter: Reporter<LlmRequestEvent>,
-    ) {
-        let sent = |sent| match sent {
-            Sent::Connected => LlmRequestEvent::Connected { attempt },
-            Sent::RequestWritten => LlmRequestEvent::RequestWritten { attempt },
-        };
-        let failure = match self.send(request, &reporter, sent).await {
-            Err(failure) => Some(failure),
-            Ok(response) => read_events(response, attempt, &reporter).await,
-        };
-        if let Some(failure) = failure {
-            reporter.report(LlmRequestEvent::Failed { attempt, failure }).await;
-        }
-    }
 }
 
 /// A JSON answer's body, read to its end; one larger than `limit` bytes is malformed.
-pub(crate) async fn read_body(
+pub async fn read_body(
     response: reqwest::Response,
     limit: usize,
 ) -> Result<Vec<u8>, AttemptFailure> {
@@ -191,57 +195,13 @@ pub(crate) async fn read_body(
     Ok(body)
 }
 
-/// Decodes the event stream into chunk events; `None` once the response ended cleanly.
-async fn read_events(
-    response: reqwest::Response,
-    attempt: u32,
-    reporter: &Reporter<LlmRequestEvent>,
-) -> Option<AttemptFailure> {
-    let mut decoder = SseDecoder::new();
-    let mut bytes = response.bytes_stream();
-    let mut events = Vec::new();
-    loop {
-        let Some(chunk) = bytes.next().await else {
-            return match decoder.finish() {
-                Ok(()) => {
-                    reporter.report(LlmRequestEvent::Ended { attempt }).await;
-                    None
-                }
-                Err(err) => Some(AttemptFailure::Malformed(err.to_string())),
-            };
-        };
-        let chunk = match chunk {
-            Ok(chunk) => chunk,
-            Err(err) => return Some(AttemptFailure::Connection(error_chain(&err))),
-        };
-        if let Err(err) = decoder.feed(&chunk, &mut events) {
-            return Some(AttemptFailure::Malformed(err.to_string()));
-        }
-        if events.is_empty() {
-            reporter.report(LlmRequestEvent::Progress { attempt }).await;
-        }
-        for event in events.drain(..) {
-            if event.data == "[DONE]" {
-                reporter.report(LlmRequestEvent::Ended { attempt }).await;
-                return None;
-            }
-            match serde_json::from_str::<WireChunk>(&event.data) {
-                Ok(chunk) => reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await,
-                Err(err) => {
-                    return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}")));
-                }
-            }
-        }
-    }
-}
-
 async fn rejected(response: reqwest::Response) -> AttemptFailure {
     let status = i64::from(response.status().as_u16());
     let header =
         |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let request_id = header("x-request-id");
     if status == 429 {
-        let quota = crate::extract_quota_usage(|name| {
+        let quota = extract_quota_usage(|name| {
             response.headers().get(name).and_then(|v| v.to_str().ok())
         });
         let quota: Vec<String> = quota.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -274,7 +234,7 @@ fn error_message(body: &str) -> Option<String> {
     message.and_then(|m| m.as_str()).map(str::to_owned).or_else(text)
 }
 
-pub(crate) fn error_chain(err: &dyn std::error::Error) -> String {
+pub fn error_chain(err: &dyn std::error::Error) -> String {
     let mut message = err.to_string();
     let mut source = err.source();
     while let Some(cause) = source {

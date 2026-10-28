@@ -10,7 +10,7 @@ use futures_util::{Stream, StreamExt};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock, Ts};
 use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
-use lk_agents_net::transport::HttpRequest;
+use crate::transport::HttpRequest;
 use tokio::sync::mpsc;
 
 use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};

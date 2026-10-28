@@ -60,32 +60,7 @@ pub const HEADER_WORKER_TOKEN: &str = "X-LiveKit-Worker-Token";
 pub const HEADER_INFERENCE_PROVIDER: &str = "X-LiveKit-Inference-Provider";
 pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
 
-/// Quota telemetry headers the gateway stamps on LLM completions responses (including 429
-/// rejections). Absent means "not enforced / unknown", never zero.
-pub const QUOTA_HEADER_FIELDS: [(&str, &str); 6] = [
-    ("X-LiveKit-Inference-RPM-Limit", "rpm_limit"),
-    ("X-LiveKit-Inference-RPM-Used", "rpm_used"),
-    ("X-LiveKit-Inference-TPM-Limit", "tpm_limit"),
-    ("X-LiveKit-Inference-TPM-Used", "tpm_used"),
-    ("X-LiveKit-Inference-Credits-Limit", "credits_limit"),
-    ("X-LiveKit-Inference-Credits-Used", "credits_used"),
-];
-
-/// `lookup` should be case-insensitive, like the reference's header maps.
-pub fn extract_quota_usage<'a>(
-    lookup: impl Fn(&str) -> Option<&'a str>,
-) -> Vec<(&'static str, String)> {
-    QUOTA_HEADER_FIELDS
-        .iter()
-        .filter_map(|(header, field)| {
-            // An empty header value is dropped, not reported as "".
-            match lookup(header) {
-                Some(v) if !v.is_empty() => Some((*field, v.to_owned())),
-                _ => None,
-            }
-        })
-        .collect()
-}
+pub use lk_agents_net::http::{QUOTA_HEADER_FIELDS, extract_quota_usage};
 
 /// [`extract_quota_usage`] over a response's header pairs, names matched case-insensitively.
 #[lk_agents_abi::host(export(name = "inference_quota_usage", pid = false))]

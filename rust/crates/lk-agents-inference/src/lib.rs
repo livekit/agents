@@ -6,13 +6,9 @@ pub use lk_agents_abi as abi;
 
 // What the hosting process lends every client (decision 88).
 pub mod env;
-// The gateway's HTTPS exchanges.
-pub mod http;
 // Conversation judges: model calls run concurrently on one conversation (decision 79).
 pub mod evals;
 
-// The attempts of one gateway request: phase limits, retries, total deadline, cleanup.
-pub mod attempts;
 pub mod provider;
 pub mod creds;
 pub mod extra;

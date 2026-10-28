@@ -162,12 +162,12 @@ pub struct AgentRunUpdates(::lk_agents_runtime::source::NativeSource<::lk_agents
 impl AgentRunUpdates {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.recv(py, |py, item| Ok(crate::generated::records::agent_run::run_update_to_py(py, item)?.unbind()))
+        crate::host::source::recv(&self.0, py, |py, item| Ok(crate::generated::records::agent_run::run_update_to_py(py, item)?.unbind()))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.aclose(py)
+        crate::host::source::aclose(&self.0, py)
     }
 }
 

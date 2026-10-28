@@ -24,6 +24,7 @@ use tokio::sync::oneshot;
 
 #[cfg(test)]
 mod parentage_tests;
+pub mod source;
 pub mod stream;
 
 /// The dispatch a generated proxy's call takes, in `context`, requiring no scope.

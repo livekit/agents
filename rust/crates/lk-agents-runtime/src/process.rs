@@ -82,12 +82,12 @@ pub fn host_clock() -> Arc<dyn Clock> {
     Arc::new(lk_agents_abi::RealClock::new())
 }
 
-/// This process as the inference clients' [`Env`](lk_agents_inference::env::Env): what a class
-/// the host constructs runs on (decision 88).
+/// This process as the async crates' `Env` (`lk_agents_net::env`, `lk_agents_inference::env`):
+/// what a class the host constructs runs on (decision 88).
 #[derive(Clone)]
 pub struct Process;
 
-impl lk_agents_inference::env::Env for Process {
+impl lk_agents_net::env::Env for Process {
     fn runtime() -> Result<tokio::runtime::Handle, String> {
         handle().map_err(|error| error.to_string())
     }
@@ -100,7 +100,9 @@ impl lk_agents_inference::env::Env for Process {
     fn clock() -> Arc<dyn Clock> {
         host_clock()
     }
+}
 
+impl lk_agents_inference::env::Env for Process {
     fn workers() -> Result<MediaWorkers, String> {
         workers().map_err(|error| error.to_string())
     }

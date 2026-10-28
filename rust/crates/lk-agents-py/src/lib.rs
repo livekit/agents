@@ -76,17 +76,17 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::process::Process,
     >;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
-    type AgentClient = lk_agents_runtime::a2a_client::AgentClient;
-    type Reply = lk_agents_runtime::a2a_client::Reply;
-    type RemoteInteraction = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
-    type RemoteConfiguration = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
+    type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient<lk_agents_runtime::process::Process>;
+    type Reply = lk_agents_runtime::net::a2a_client::Reply;
+    type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
+    type RemoteConfiguration = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type JudgeRunner =
         lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;
     type Evaluations = lk_agents_runtime::inference::evals::Rules;
-    type Credentials = lk_agents_runtime::a2a_auth::Credentials;
-    type AuthPermissions = lk_agents_runtime::a2a_auth::Credentials;
+    type Credentials = lk_agents_runtime::net::a2a_auth::Credentials;
+    type AuthPermissions = lk_agents_runtime::net::a2a_auth::Credentials;
     type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;

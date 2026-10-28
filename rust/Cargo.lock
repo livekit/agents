@@ -1528,16 +1528,22 @@ dependencies = [
 name = "lk-agents-net"
 version = "0.1.0"
 dependencies = [
+ "a2a-lf",
  "async-trait",
+ "bytes",
  "futures-util",
  "livekit-token",
  "lk-agents-abi",
+ "lk-agents-core",
  "log",
+ "reqwest 0.13.4",
  "rustls",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "url",
 ]
 
 [[package]]
@@ -1550,6 +1556,7 @@ dependencies = [
  "lk-agents-rtc",
  "lk-agents-runtime",
  "lk-agents-voice",
+ "log",
  "pyo3",
  "pyo3-log",
  "serde",

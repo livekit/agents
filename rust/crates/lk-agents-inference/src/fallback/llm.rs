@@ -19,7 +19,7 @@ use crate::fallback::chain::{
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
-use crate::env::{Env, Standalone};
+use lk_agents_net::env::{Env, Standalone};
 use crate::fallback::policy::ChainPolicy;
 
 pub struct LlmBackend {

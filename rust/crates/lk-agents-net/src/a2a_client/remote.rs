@@ -44,7 +44,7 @@ impl Port for RemoteInteraction {
             ));
         };
         let id = InteractionId {
-            delegation_id: crate::storage::shortuuid("dlg_"),
+            delegation_id: lk_agents_abi::utils::strings::shortuuid("dlg_"),
             endpoint: endpoint.trim_end_matches('/').into(),
             tool_id,
             parent_call_id: function_call.call_id.clone(),
@@ -88,7 +88,7 @@ impl Port for RemoteInteraction {
             .policy
             .message(
                 text,
-                crate::storage::shortuuid("msg_"),
+                lk_agents_abi::utils::strings::shortuuid("msg_"),
                 None,
                 "",
                 None,

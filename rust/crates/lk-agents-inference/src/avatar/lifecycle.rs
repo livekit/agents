@@ -17,7 +17,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::resources::ResourceId;
 
-use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use lk_agents_net::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
 
 /// How long a create no caller takes keeps asking the gateway for the session it may have made.
 pub const RETIREMENT_TIMEOUT: Duration = Duration::from_secs(30);

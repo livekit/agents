@@ -5,9 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The shared async transport (decision 77): owned tasks, server-sent events, the WebSocket seam and
-# its tungstenite implementation, phase-bounded waits and LiveKit token signing. Used by
-# inference, the A2A client, storage backends and the worker.
+# The shared async transport (decision 77): owned tasks, server-sent events, HTTPS with phase
+# deadlines, the WebSocket seam and its tungstenite implementation, LiveKit token signing and the
+# delegation A2A client (decision 85). Used by inference, storage backends, the worker and runtime.
 [lib]
 doctest = false
 
@@ -23,6 +23,15 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 log.workspace = true
+# HTTPS with phase deadlines (`http`), shared by the gateway clients and the A2A client.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+bytes = "1"
+url = "2"
+serde.workspace = true
+# The delegation A2A client (decision 85): the protocol records and the A2A decisions it executes
+# (`lk_agents_core::a2a`, sans-IO; this edge is pending owner approval).
+a2a.workspace = true
+lk-agents-core = { path = "../lk-agents-core" }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

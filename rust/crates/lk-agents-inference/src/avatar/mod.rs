@@ -10,7 +10,7 @@ use lk_agents_abi::inference::avatar_session::AvatarError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::attempts::AttemptFailure;
+use lk_agents_net::attempts::AttemptFailure;
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
 pub use lifecycle::ProviderSession;
 use lk_agents_net::transport::HttpRequest;

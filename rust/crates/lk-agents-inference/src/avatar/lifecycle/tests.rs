@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use super::*;
-use crate::attempts::ATTEMPT_CLEANUP_TIMEOUT;
+use lk_agents_net::attempts::ATTEMPT_CLEANUP_TIMEOUT;
 use AvatarSessionEffect as Fx;
 use AvatarSessionEvent as Ev;
 

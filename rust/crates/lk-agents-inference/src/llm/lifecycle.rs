@@ -11,8 +11,8 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{LlmChunk, Ts};
 
-pub use crate::attempts::{ATTEMPT_CLEANUP_TIMEOUT, AttemptFailure, RequestPolicy};
-use crate::attempts::{AttemptStep, Attempts};
+pub use lk_agents_net::attempts::{ATTEMPT_CLEANUP_TIMEOUT, AttemptFailure, RequestPolicy};
+use lk_agents_net::attempts::{AttemptStep, Attempts};
 
 use super::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
 

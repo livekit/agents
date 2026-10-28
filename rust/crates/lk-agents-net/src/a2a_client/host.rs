@@ -9,6 +9,7 @@ use lk_agents_abi::a2a::client::{
 use lk_agents_abi::{ApiConnectOptions, ChatItem, HOST_TEARDOWN_TIMEOUT};
 
 use super::{AgentClient, Reply};
+use crate::env::Env;
 use crate::source::{PullError, Pulled};
 
 fn client_error(error: ClientError) -> AgentClientError {
@@ -19,7 +20,7 @@ fn client_error(error: ClientError) -> AgentClientError {
     }
 }
 
-impl port::AgentClient for AgentClient {
+impl<E: Env> port::AgentClient for AgentClient<E> {
     type Reply = Reply;
 
     fn new(
@@ -27,13 +28,12 @@ impl port::AgentClient for AgentClient {
         token: Option<String>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self, AgentClientError> {
-        let runtime = crate::process::handle()
-            .map_err(|error| AgentClientError::Protocol(error.to_string()))?;
+        let runtime = E::runtime().map_err(AgentClientError::Protocol)?;
         Self::new_with_options(
             endpoint_url,
             token,
             runtime,
-            crate::process::host_clock(),
+            E::clock(),
             conn_options.unwrap_or_default(),
         )
         .map_err(client_error)
@@ -145,13 +145,12 @@ impl port::Reply for Reply {
         }
     }
     async fn aclose(&self) {
-        let clock = crate::process::host_clock();
-        Reply::aclose(self, clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+        Reply::aclose(self, self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
     }
 }
 
 pub fn message_to_wire(input: MessageInput) -> Result<a2a::Message, AgentClientError> {
-    lk_agents_core::a2a::client::message_to_wire(input, crate::storage::shortuuid("msg_"))
+    lk_agents_core::a2a::client::message_to_wire(input, lk_agents_abi::utils::strings::shortuuid("msg_"))
 }
 
 pub use lk_agents_core::a2a::client::message_from_wire;
@@ -159,13 +158,13 @@ pub use lk_agents_core::a2a::client::message_from_wire;
 pub fn update_from_wire(update: lk_agents_core::a2a::client::TaskUpdate) -> TaskUpdate {
     TaskUpdate {
         state: match update.state {
-            lk_agents_storage::run::TaskState::Submitted => "submitted",
-            lk_agents_storage::run::TaskState::Working => "working",
-            lk_agents_storage::run::TaskState::InputRequired => "input-required",
-            lk_agents_storage::run::TaskState::Completed => "completed",
-            lk_agents_storage::run::TaskState::Failed => "failed",
-            lk_agents_storage::run::TaskState::Canceled => "canceled",
-            lk_agents_storage::run::TaskState::Rejected => "rejected",
+            lk_agents_abi::storage::TaskState::Submitted => "submitted",
+            lk_agents_abi::storage::TaskState::Working => "working",
+            lk_agents_abi::storage::TaskState::InputRequired => "input-required",
+            lk_agents_abi::storage::TaskState::Completed => "completed",
+            lk_agents_abi::storage::TaskState::Failed => "failed",
+            lk_agents_abi::storage::TaskState::Canceled => "canceled",
+            lk_agents_abi::storage::TaskState::Rejected => "rejected",
         }
         .into(),
         text: update.text,

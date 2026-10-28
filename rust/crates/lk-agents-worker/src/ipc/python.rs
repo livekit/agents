@@ -325,7 +325,7 @@ impl PyIpcClient {
         let initialized = initialize.call1((hello.http_proxy.clone(),)).and_then(|value| {
             // The host callback warms Python SDKs; only runtime can construct this native client.
             // Both complete under this bootstrap barrier before Ready or a job loop.
-            py.detach(crate::inference::http::GatewayHttp::shared).map_err(PyRuntimeError::new_err)?;
+            py.detach(crate::net::http::GatewayHttp::shared).map_err(PyRuntimeError::new_err)?;
             Ok(value)
         });
         let error = initialized.as_ref().err().map(|e| e.value(py).to_string());

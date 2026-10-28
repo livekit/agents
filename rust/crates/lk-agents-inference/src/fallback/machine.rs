@@ -9,7 +9,7 @@ use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase}
 use lk_agents_abi::resources::ResourceId;
 
 use super::policy::ChainPolicy;
-use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 #[derive(Debug, Default)]
 pub struct FallbackHealth {

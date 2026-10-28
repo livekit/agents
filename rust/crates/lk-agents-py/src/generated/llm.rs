@@ -92,12 +92,12 @@ pub struct FallbackLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agen
 impl FallbackLlmChunks {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.recv(py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+        crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.aclose(py)
+        crate::host::source::aclose(&self.0, py)
     }
 }
 
@@ -334,12 +334,12 @@ pub struct InferenceLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_age
 impl InferenceLlmChunks {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.recv(py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+        crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.aclose(py)
+        crate::host::source::aclose(&self.0, py)
     }
 }
 

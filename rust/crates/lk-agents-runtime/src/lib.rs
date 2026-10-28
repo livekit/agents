@@ -2,7 +2,6 @@
 //! the synchronous cores (docs/internals/rust-core.md "Cores and the runtime").
 //!
 //! - [`process`]: the process-wide Tokio runtime and its fork guard.
-//! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
 //! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
 //! - [`storage`]: thread storage I/O over AgentDB and local SQLite.
@@ -27,11 +26,13 @@ extern crate lk_agents_media as _;
 /// The provider clients, judges and detectors, wired to this process by [`process::Process`]
 /// (decision 88); the extension names their declared classes through this path.
 pub use lk_agents_inference as inference;
+/// The shared transport, A2A credentials and the delegation client, wired the same way.
+pub use lk_agents_net as net;
+/// The host stream adapter the generated sources wrap.
+pub use lk_agents_net::source;
 
 pub mod a2a;
-pub mod a2a_auth;
 pub mod a2a_card;
-pub mod a2a_client;
 pub mod agent_run;
 pub mod avatar_output;
 pub mod codecs;
@@ -41,7 +42,6 @@ pub mod images;
 pub mod mcp;
 pub mod process;
 pub mod recording;
-pub mod source;
 pub mod storage;
 pub mod telemetry;
 

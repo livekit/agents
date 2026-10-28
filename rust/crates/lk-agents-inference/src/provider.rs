@@ -1,6 +1,6 @@
 //! Host provider observations projected onto the shared supplied-time attempt machine.
 
-use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::ProviderAttempts as Port;
@@ -163,7 +163,7 @@ impl Port for ProviderAttempts {
     }
 
     fn cleanup_timeout(&self) -> f64 {
-        crate::attempts::ATTEMPT_CLEANUP_TIMEOUT.as_secs_f64()
+        lk_agents_net::attempts::ATTEMPT_CLEANUP_TIMEOUT.as_secs_f64()
     }
 
     fn cancel(&mut self, now_ns: u64) {

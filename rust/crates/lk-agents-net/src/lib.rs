@@ -1,11 +1,23 @@
 //! `lk-agents-net`: the shared async transport of the I/O crates (decision 77).
 //!
+//! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
+//! - [`http`]: HTTPS exchanges reporting transport observations, under [`attempts`].
+//! - [`source`]: a native source as one host consumer pulls and closes it.
+//! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
+//! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
+//! - [`env`]: what the hosting process lends a client (decision 88).
 //! - [`task`]: owned tasks with correlated cancellation and one observed outcome.
 //! - [`sse`]: event-stream framing over response bytes.
 //! - [`token`]: framework credentials signed with LiveKit's token crate.
 //! - [`transport`]: the WebSocket seam, transport errors and waits bounded on a clock.
 //! - [`websocket`]: the real WebSocket transport over `tokio-tungstenite`.
 
+pub mod a2a_auth;
+pub mod a2a_client;
+pub mod attempts;
+pub mod env;
+pub mod http;
+pub mod source;
 pub mod sse;
 pub mod task;
 pub mod token;

@@ -17,6 +17,7 @@ pyo3 = { workspace = true }
 # Forwards every Rust `log` record -- target, level, message and key-values -- to Python's `logging`.
 # Installed once per process by `_core.init`.
 pyo3-log.workspace = true
+log.workspace = true
 # The ABI's declared types (the generated conversions name them) and its Python feature: the
 # registration table and the fork guard until the bridge moves to the runtime.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["python"] }

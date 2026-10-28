@@ -27,8 +27,12 @@ use lk_agents_net::transport::HttpRequest;
 use request::build_request;
 use tokio::sync::mpsc;
 
-use crate::env::{Env, Standalone};
-use crate::http::{GatewayHttp, Reporter, Stamped};
+use lk_agents_net::env::{Env, Standalone};
+use futures_util::StreamExt;
+use lk_agents_net::attempts::AttemptFailure;
+use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
+use lk_agents_net::sse::SseDecoder;
+use crate::llm::parse::WireChunk;
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
@@ -416,7 +420,7 @@ impl LlmChunks {
                     let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
                     let closed = self.reporter.clone();
                     let work = async move {
-                        exchange.http.exchange(exchange.request.clone(), attempt, reporter).await
+                        send_attempt(&exchange.http, exchange.request.clone(), attempt, reporter).await
                     };
                     let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
                         if outcome == TaskOutcome::Panicked {
@@ -483,5 +487,69 @@ impl StreamSource<LlmChunk> for LlmChunks {
 
     fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move { LlmChunks::close(*self, deadline).await })
+    }
+}
+
+/// One LLM request attempt: the completion's event stream decoded into chunk events.
+async fn send_attempt(
+    http: &GatewayHttp,
+    request: HttpRequest,
+    attempt: u32,
+    reporter: Reporter<LlmRequestEvent>,
+) {
+    let sent = |sent| match sent {
+        Sent::Connected => LlmRequestEvent::Connected { attempt },
+        Sent::RequestWritten => LlmRequestEvent::RequestWritten { attempt },
+    };
+    let failure = match http.send(request, &reporter, sent).await {
+        Err(failure) => Some(failure),
+        Ok(response) => read_events(response, attempt, &reporter).await,
+    };
+    if let Some(failure) = failure {
+        reporter.report(LlmRequestEvent::Failed { attempt, failure }).await;
+    }
+}
+
+/// Decodes the event stream into chunk events; `None` once the response ended cleanly.
+async fn read_events(
+    response: reqwest::Response,
+    attempt: u32,
+    reporter: &Reporter<LlmRequestEvent>,
+) -> Option<AttemptFailure> {
+    let mut decoder = SseDecoder::new();
+    let mut bytes = response.bytes_stream();
+    let mut events = Vec::new();
+    loop {
+        let Some(chunk) = bytes.next().await else {
+            return match decoder.finish() {
+                Ok(()) => {
+                    reporter.report(LlmRequestEvent::Ended { attempt }).await;
+                    None
+                }
+                Err(err) => Some(AttemptFailure::Malformed(err.to_string())),
+            };
+        };
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(err) => return Some(AttemptFailure::Connection(error_chain(&err))),
+        };
+        if let Err(err) = decoder.feed(&chunk, &mut events) {
+            return Some(AttemptFailure::Malformed(err.to_string()));
+        }
+        if events.is_empty() {
+            reporter.report(LlmRequestEvent::Progress { attempt }).await;
+        }
+        for event in events.drain(..) {
+            if event.data == "[DONE]" {
+                reporter.report(LlmRequestEvent::Ended { attempt }).await;
+                return None;
+            }
+            match serde_json::from_str::<WireChunk>(&event.data) {
+                Ok(chunk) => reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await,
+                Err(err) => {
+                    return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}")));
+                }
+            }
+        }
     }
 }

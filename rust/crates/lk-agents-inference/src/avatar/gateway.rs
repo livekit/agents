@@ -15,7 +15,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
-use crate::attempts::RequestPolicy;
+use lk_agents_net::attempts::RequestPolicy;
 use crate::avatar::lifecycle::{
     AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
     CreateFailure, ProviderSession,
@@ -27,8 +27,8 @@ use crate::headers::Headers;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::env::{Env, Standalone};
-use crate::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
+use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
 const LOG: &str = "livekit.agents";
@@ -508,7 +508,7 @@ impl Driver {
     }
 
     fn failed_launch(&mut self, request: AvatarRequestId, attempt: u32, error: ApiError) {
-        let failure = crate::attempts::AttemptFailure::Connection(error.message);
+        let failure = lk_agents_net::attempts::AttemptFailure::Connection(error.message);
         self.queued.push(AvatarSessionEvent::Failed { request, attempt, failure });
         self.queued.push(AvatarSessionEvent::AttemptClosed { request, attempt });
     }

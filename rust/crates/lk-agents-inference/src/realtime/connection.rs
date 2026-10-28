@@ -1,6 +1,6 @@
 //! Connection attempts and retry deadlines. The runtime only executes their effects.
 
-use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use lk_agents_net::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::collections::BTreeMap;

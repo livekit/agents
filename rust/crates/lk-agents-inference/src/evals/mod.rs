@@ -28,7 +28,7 @@ use lk_agents_abi::{
 
 use prompts::BuiltIn;
 
-use crate::env::Env;
+use lk_agents_net::env::Env;
 
 /// A judgment is one long completion over a whole transcript.
 const JUDGE_CONN_OPTIONS: ApiConnectOptions =

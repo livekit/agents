@@ -94,6 +94,8 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
             # inference -> core (chat formatting, schemas, JSON repair) is pending owner approval.
             "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"} | {"lk-agents-core"},
+            # net -> core (the A2A client executes core::a2a decisions) is pending owner approval.
+            "lk-agents-net": {"lk-agents-abi"} | {"lk-agents-core"},
             "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
             "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
             # The realtime and duplex fakes still run inference's realtime machine (decision 70);

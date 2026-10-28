@@ -12,9 +12,10 @@ use lk_agents_core::a2a::client::{ClientError, TaskUpdate};
 use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiErrorKind, ProviderError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, RealClock};
-use lk_agents_runtime::a2a_client::{AgentClient, CleanupObservation, Reply};
-use lk_agents_runtime::source::{PullError, Pulled};
-use lk_agents_storage::run::{REASON_KEY, TaskState};
+use lk_agents_net::a2a_client::{AgentClient, CleanupObservation, Reply};
+use lk_agents_net::source::{PullError, Pulled};
+use lk_agents_abi::a2a::metadata::REASON_KEY;
+use lk_agents_abi::storage::TaskState;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -210,7 +211,7 @@ async fn serve(
         let body = serde_json::to_vec(&json!({"name": "expert", "version": "1",
             "supportedInterfaces": [{"url": interface, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
             "capabilities": {"streaming": true, "extensions": if matches!(scenario, Scenario::Question) {
-                vec![json!({"uri": lk_agents_storage::run::EXTENSION_URI})]
+                vec![json!({"uri": lk_agents_abi::a2a::metadata::EXTENSION_URI})]
             } else { vec![] }}})).unwrap();
         return respond(socket.get_mut(), "application/json", &body).await;
     }
@@ -334,7 +335,7 @@ fn message(id: &str, text: &str) -> Message {
 }
 
 fn client(peer: &Peer, clock: &Arc<RealClock>) -> AgentClient {
-    AgentClient::new(
+    <AgentClient>::new(
         peer.url.clone(),
         Some("test-token".into()),
         tokio::runtime::Handle::current(),
@@ -579,7 +580,7 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
 async fn a_request_lost_before_ack_is_reported_as_uncertain_and_is_never_resent() {
     let peer = Peer::start(Scenario::ResetBeforeAck).await;
     let clock = Arc::new(RealClock::new());
-    let client = AgentClient::new_with_options(
+    let client = <AgentClient>::new_with_options(
         peer.url.clone(),
         Some("test-token".into()),
         tokio::runtime::Handle::current(),
@@ -758,7 +759,7 @@ async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
             total_timeout: total.then_some(0.05),
             ..Default::default()
         };
-        let client = AgentClient::new_with_options(
+        let client = <AgentClient>::new_with_options(
             peer.url.clone(),
             Some("test-token".into()),
             tokio::runtime::Handle::current(),
@@ -800,7 +801,7 @@ async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
 async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_source() {
     let peer = Peer::start(Scenario::Waiting).await;
     let clock = Arc::new(RealClock::new());
-    let client = AgentClient::new_with_options(
+    let client = <AgentClient>::new_with_options(
         peer.url.clone(),
         Some("test-token".into()),
         tokio::runtime::Handle::current(),
@@ -885,7 +886,7 @@ async fn remote_redirect_cannot_leave_the_configured_origin() {
         socket.get_mut().write_all(format!("HTTP/1.1 303 See Other\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         socket.get_mut().shutdown().await.unwrap();
     });
-    let client = AgentClient::new_with_options(
+    let client = <AgentClient>::new_with_options(
         endpoint,
         Some("private-token".into()),
         tokio::runtime::Handle::current(),

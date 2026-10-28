@@ -7,6 +7,7 @@ pub mod remote;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
 
 use a2a::{AgentCard, JsonRpcId, Message};
@@ -14,14 +15,15 @@ use lk_agents_core::a2a::client::{Client, ClientError, HttpMethod, ReplyState, R
 use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
-use lk_agents_net::transport::HttpRequest;
+use crate::transport::HttpRequest;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 
-use lk_agents_inference::http::GatewayHttp;
-use lk_agents_inference::http::exchange::{Exchange, HttpEvent};
+use crate::http::GatewayHttp;
+use crate::http::exchange::{Exchange, HttpEvent};
+use crate::env::{Env, Standalone};
 use crate::source::{NativeSource, PullError, Pulled};
-use lk_agents_net::sse::SseDecoder;
-use lk_agents_net::task::{OwnedTask, TaskOutcome};
+use crate::sse::SseDecoder;
+use crate::task::{OwnedTask, TaskOutcome};
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;
@@ -69,12 +71,14 @@ struct Inner {
     options: ApiConnectOptions,
 }
 
-/// A connection owns its outstanding exchanges; it holds no remote-tool conversation state.
-pub struct AgentClient {
+/// A connection owns its outstanding exchanges; it holds no remote-tool conversation state. `E` is
+/// the process a host-constructed client runs in (decision 88).
+pub struct AgentClient<E: Env = Standalone> {
     inner: Arc<Inner>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl AgentClient {
+impl<E: Env> AgentClient<E> {
     pub fn new(
         endpoint: String,
         token: Option<String>,
@@ -109,6 +113,7 @@ impl AgentClient {
                 operations: Mutex::new(BTreeMap::new()),
                 observations: Mutex::new(Vec::new()),
             }),
+            env: PhantomData,
         })
     }
 
@@ -167,7 +172,7 @@ impl AgentClient {
     ) -> Result<Reply, ClientError> {
         self.send(
             Message {
-                message_id: crate::storage::shortuuid("msg_"),
+                message_id: lk_agents_abi::utils::strings::shortuuid("msg_"),
                 role: a2a::Role::User,
                 parts: vec![a2a::Part::text(text)],
                 context_id: None,
@@ -388,7 +393,12 @@ impl AgentClient {
         }));
         let _ = admit.send(());
         let task = acknowledged.await.map_err(|_| ClientError::Incomplete)??;
-        Ok(Reply { task_id: task.id, thread_id: task.context_id, source })
+        Ok(Reply {
+            task_id: task.id,
+            thread_id: task.context_id,
+            source,
+            clock: self.inner.clock.clone(),
+        })
     }
 
     /// Always sends contextId and the full-URI reason, independent of card capability hints.
@@ -450,7 +460,7 @@ impl AgentClient {
     }
 }
 
-impl Drop for AgentClient {
+impl<E: Env> Drop for AgentClient<E> {
     fn drop(&mut self) {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.closing.notify_waiters();
@@ -556,6 +566,7 @@ pub struct Reply {
     pub task_id: String,
     pub thread_id: String,
     source: NativeSource<TaskUpdate>,
+    clock: Arc<dyn Clock>,
 }
 
 impl Reply {
