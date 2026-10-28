@@ -50,7 +50,7 @@ async def open_stream(provider, monkeypatch, *, server=None, max_retry=0, fallba
         instance = primary
         backup = None
         if fallback:
-            backup = FakeSTT(fake_transcript="backup")
+            backup = FakeSTT(fake_transcript="backup", fake_require_audio=True)
             instance = stt.FallbackAdapter([primary, backup], max_retry_per_stt=1, retry_interval=0)
         stream = instance.stream(
             conn_options=APIConnectOptions(

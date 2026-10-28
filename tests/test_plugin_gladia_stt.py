@@ -12,7 +12,7 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
 
 from .stt_harness.discovery import provider_by_name
-from .stt_harness.faults import assert_control_write_failure, create_transport_fixture
+from .stt_harness.fixtures import assert_control_write_failure, create_transport_fixture
 
 pytestmark = pytest.mark.plugin("gladia")
 

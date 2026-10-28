@@ -3,7 +3,7 @@
 import aiohttp
 from aiohttp import web
 
-from tests.stt_harness.faults import TransportFixture, _rtzr_on_send, plugin
+from tests.stt_harness.fixtures import TransportFixture, _rtzr_on_send, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 

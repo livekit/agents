@@ -927,7 +927,7 @@ async def test_end_input_drains_all_items_after_clear_ack(empty_commit: bool) ->
 
 @pytest.mark.parametrize("message", ["input_audio_buffer.commit", "input_audio_buffer.clear"])
 async def test_final_control_write_failure_is_retryable(message, monkeypatch):
-    from .stt_harness.faults import assert_control_write_failure
+    from .stt_harness.fixtures import assert_control_write_failure
 
     await assert_control_write_failure(
         provider_by_name("openai").transport_fixture, monkeypatch, message, "end"
@@ -937,7 +937,7 @@ async def test_final_control_write_failure_is_retryable(message, monkeypatch):
 async def test_remote_close_before_final_ack_is_an_error(monkeypatch):
     from livekit.agents import APIError
 
-    from .stt_harness.faults import create_transport_fixture
+    from .stt_harness.fixtures import create_transport_fixture
 
     _, instance, transport = create_transport_fixture(
         provider_by_name("openai").transport_fixture, monkeypatch

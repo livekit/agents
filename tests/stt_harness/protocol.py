@@ -13,7 +13,7 @@ from aiohttp import WSMessage, web
 if TYPE_CHECKING:
     from livekit.agents import stt
 
-    from .faults import TransportFixture
+    from .fixtures import TransportFixture
     from .server import Connection, STTServer
 
 

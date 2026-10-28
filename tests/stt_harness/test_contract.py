@@ -420,12 +420,13 @@ async def test_connection_failure_reaches_fallback(provider, monkeypatch):
         collector,
         _,
         events,
-        _,
+        errors,
     ):
 
         async def feed():
             while not collector.done():
                 push_audio(stream, provider, make_audio_segments(provider)[0])
+                stream.flush()
                 await asyncio.sleep(0.02)
 
         feeder = asyncio.create_task(feed())
@@ -441,6 +442,7 @@ async def test_connection_failure_reaches_fallback(provider, monkeypatch):
                     await asyncio.sleep(0.01)
 
             await asyncio.wait_for(wait_for_backup(), 3)
+            assert any(not error.recoverable for error in errors)
         finally:
             await utils.aio.gracefully_cancel(feeder)
 

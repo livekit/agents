@@ -1,7 +1,7 @@
 import pytest
 
 from .stt_harness.discovery import provider_by_name
-from .stt_harness.faults import assert_control_write_failure
+from .stt_harness.fixtures import assert_control_write_failure
 
 pytestmark = pytest.mark.plugin("inworld")
 
@@ -27,7 +27,7 @@ async def test_shutdown_sends_close_stream_without_end_turn(monkeypatch):
     from livekit import rtc
     from livekit.agents import APIConnectOptions
 
-    from .stt_harness.faults import create_transport_fixture
+    from .stt_harness.fixtures import create_transport_fixture
 
     _, provider, transport = create_transport_fixture(
         provider_by_name("inworld").transport_fixture, monkeypatch

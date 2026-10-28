@@ -6,7 +6,7 @@ session.finalized can precede trailing transcripts. It is not session completion
 
 import base64
 
-from tests.stt_harness.faults import TransportFixture
+from tests.stt_harness.fixtures import TransportFixture
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 

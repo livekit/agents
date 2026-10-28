@@ -2,7 +2,7 @@
 
 import base64
 
-from tests.stt_harness.faults import TransportFixture, plugin
+from tests.stt_harness.fixtures import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 

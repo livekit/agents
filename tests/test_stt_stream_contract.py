@@ -16,7 +16,7 @@ from livekit.agents import APIConnectOptions, APIError, utils
 
 from .stt_harness.discovery import transport_fixtures
 from .stt_harness.drivers import collect_events
-from .stt_harness.faults import create_transport_fixture
+from .stt_harness.fixtures import create_transport_fixture
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
