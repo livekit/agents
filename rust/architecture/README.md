@@ -15,6 +15,10 @@ the workspace Rust flags.
   directory compiled by another crate would escape that core's dependency and Clippy policy, so
   every core-directory file is either compiled by its own crate (and linted with it) or an
   identity of the shrink-only `paths-baseline.json`.
+- pyo3 is the extension crate's alone (decision 74): a pyo3-family dependency of any other
+  workspace crate, or another crate's tracked Rust file naming pyo3 (generated output included),
+  is an identity of the shrink-only `pyo3-baseline.json`. The generator crates, which write the
+  extension's code as text, are exempt.
 - Git-tracked handwritten Rust files have a 1,250-line limit. Generated markers
   must appear on the first line. Existing oversized files have individual
   shrinking ceilings.

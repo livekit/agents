@@ -99,6 +99,37 @@ def dependency_violations(metadata: dict) -> set[str]:
     return violations
 
 
+# Python-binding code lives in the extension crate alone (decision 74); the generator crates write
+# it there as text and are not bound by it.
+HOST_LANGUAGE = "lk-agents-py"
+GENERATORS = {"lk-agents-codegen", "lk-agents-bindgen", "lk-agents-host-derive"}
+PYO3 = re.compile(r"\bpyo3")
+
+
+def pyo3_violations(metadata: dict, root: Path, paths: list[str]) -> set[str]:
+    """A pyo3-family dependency of any other workspace crate (every feature), and every tracked
+    Rust file of another crate naming pyo3, generated output included."""
+    packages = {p["id"]: p["name"] for p in metadata["packages"]}
+    nodes = {n["id"]: [d["pkg"] for d in n["deps"]] for n in metadata["resolve"]["nodes"]}
+    exempt = GENERATORS | {HOST_LANGUAGE}
+    violations = set()
+    for member in metadata["workspace_members"]:
+        name = packages[member]
+        if name in exempt:
+            continue
+        for dep in nodes.get(member, []):
+            target = packages[dep]
+            if target == "pyo3" or target.startswith("pyo3-"):
+                violations.add(f"pyo3-dependency:{name}:{target}")
+    for path in paths:
+        parts = Path(path).parts
+        if parts[:2] != ("rust", "crates") or len(parts) < 4 or parts[2] in exempt:
+            continue
+        if PYO3.search((root / path).read_text()):
+            violations.add(f"pyo3-file:{path}")
+    return violations
+
+
 def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
     violations = {}
     for path in paths:
@@ -244,6 +275,7 @@ def check_boundaries() -> int:
     for name, actual in (
         ("lengths", length_violations(root, paths)),
         ("paths", path_violations(root, paths)),
+        ("pyo3", pyo3_violations(metadata, root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

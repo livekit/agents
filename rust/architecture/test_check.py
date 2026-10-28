@@ -13,6 +13,7 @@ from check import (
     dependency_violations,
     length_violations,
     path_violations,
+    pyo3_violations,
     ratchet,
     read_baselines,
     tracked_rust_paths,
@@ -284,5 +285,38 @@ class PathContracts(unittest.TestCase):
                 {
                     "rust/crates/lk-agents-runtime/src/lib.rs"
                     " -> rust/crates/lk-agents-worker/src/python.rs"
+                },
+            )
+
+
+class Pyo3Contracts(unittest.TestCase):
+    """Decision 74: pyo3 is the extension crate's alone."""
+
+    def test_pyo3_outside_the_extension_crate_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "rust/crates/lk-agents-runtime/src/host.rs": "use pyo3::prelude::*;\n",
+                "rust/crates/lk-agents-abi/src/python/generated/llm.rs": "//! GENERATED\npyo3::Python::attach(|_| ());\n",
+                "rust/crates/lk-agents-py/src/lib.rs": "use pyo3::prelude::*;\n",
+                "rust/crates/lk-agents-codegen/src/proxy.rs": "\"::pyo3::Python::attach\"\n",
+                "rust/crates/lk-agents-voice/src/lib.rs": "pub fn plain() {}\n",
+            }
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            edges = {
+                "lk-agents-runtime": ["pyo3", "tokio"],
+                "lk-agents-worker": ["pyo3-async-runtimes"],
+                "lk-agents-py": ["pyo3", "pyo3-log"],
+                "lk-agents-codegen": [],
+            }
+            self.assertEqual(
+                pyo3_violations(metadata(edges), root, list(files)),
+                {
+                    "pyo3-dependency:lk-agents-runtime:pyo3",
+                    "pyo3-dependency:lk-agents-worker:pyo3-async-runtimes",
+                    "pyo3-file:rust/crates/lk-agents-runtime/src/host.rs",
+                    "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/llm.rs",
                 },
             )
