@@ -19,6 +19,66 @@ mod tests;
 #[derive(Debug, Clone, Default)]
 pub struct Declarations {
     pub classes: Vec<Class>,
+    pub proxies: Vec<Proxy>,
+}
+
+/// `#[host(proxy(host = ".."))] trait X` whose methods declare their calls: the core calling a
+/// host object. The generated proxy implements the trait over the object; each call runs in the
+/// host context its `#[host(context)]` parameter carries.
+#[derive(Debug, Clone)]
+pub struct Proxy {
+    /// The trait's identifier: the generated proxy is `<rust_name>Proxy`.
+    pub rust_name: String,
+    pub trait_path: String,
+    /// The ABI subject: the generated module it is written into.
+    pub family: String,
+    pub source: String,
+    /// The host class the object is an instance of: its annotation.
+    pub host: String,
+    /// `#[async_trait]` on the trait: the implementation carries it too.
+    pub async_trait: bool,
+    pub methods: Vec<ProxyMethod>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyMethod {
+    pub rust_name: String,
+    /// The host method called; the Rust name unless `name = ".."`.
+    pub name: String,
+    pub kind: ProxyCall,
+    /// Passed to the host in order, the context parameter included.
+    pub params: Vec<Param>,
+    /// The `#[host(context)]` parameter: its type implements `HostContext`.
+    pub context: usize,
+    pub ret: ProxyRet,
+}
+
+/// How the core calls the host: declared, then checked against the signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyCall {
+    /// `async fn`: awaited; dropping the call cancels the host's task, which still settles.
+    Await,
+    /// A sync `fn` returning nothing: scheduled on the host and not awaited; a failure is logged.
+    Notify,
+}
+
+/// What an awaited call returns: `Result<T, E>`, or `Result<Result<T, R>, E>` when the host may
+/// refuse the call with the declared exception `R` is raised as.
+#[derive(Debug, Clone)]
+pub struct ProxyRet {
+    pub ok: Ty,
+    pub refusal: Option<Refusal>,
+    /// `E`: any other host failure, kept as the host raised it (`FromHostErr`).
+    pub err: Option<String>,
+}
+
+/// `#[host(error(raised = "module.Class"))]`: the host raises an instance of that class; the
+/// error is built from its message (`From<String>`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Refusal {
+    pub rust: String,
+    pub module: String,
+    pub class: String,
 }
 
 /// `#[host(class(..))] trait X`: a host class implemented natively; or `#[host(functions)] trait
@@ -156,6 +216,9 @@ pub enum Ty {
         /// A generated provider base (`#[python(provider(..))]`): generic over its event names, so
         /// any instantiation is accepted.
         generic: bool,
+        /// A declaration-model proxy: `(family, trait)`, generated as `<family>::<trait>Proxy`.
+        /// `None`: the trait's in-place `HostProxy`.
+        declared: Option<(String, String)>,
     },
     /// A pull source of `item`, handed to the host as the stream class `class`.
     Source {

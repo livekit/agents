@@ -13,6 +13,10 @@ pub fn raise(_: ApiError) {}
 pub struct Bad;
 #[crate::host(error(kind = "MyError"))]
 pub struct Worse;
+#[crate::host(error(original))]
+pub struct HostError;
+#[crate::host(error(raised = "livekit.agents.Refused"))]
+pub struct Refused;
 "#;
 
 const CHAT: &str = r#"
@@ -298,4 +302,97 @@ fn mutable_classes_and_functions_are_their_own_forms() {
     let err = read("#[crate::host(functions)] pub trait W { #[host(call)] fn f(&self); }")
         .expect_err("a method is refused");
     assert!(err.contains("W: every method of #[host(functions)] is a `function`"), "{err}");
+}
+
+fn proxy(body: &str) -> String {
+    format!(
+        "use super::chat::{{Report, Chunk, Conn}};\nuse crate::errors::{{HostError, Refused}};\n#[crate::host(proxy(host = \"livekit.agents.Callbacks\"))]\n#[async_trait]\npub trait Callbacks: Send + Sync {{ {body} }}"
+    )
+}
+
+fn refuse_proxy(body: &str) -> String {
+    match read(&proxy(body)) {
+        Ok(d) => panic!("expected a refusal of `{body}`, got {:?}", d.proxies),
+        Err(e) => e,
+    }
+}
+
+// Catches: a proxy call made outside the context its invocation captured, a host refusal read as
+// a failure (or the reverse), a notification awaited or its failure dropped silently, an argument
+// converted by anything but its declared kind, or a class parameter of a declared proxy taken
+// through the in-place `HostProxy`.
+#[test]
+fn declared_proxies_call_the_host_in_their_context() {
+    let decls = read(&format!(
+        "{}\n#[crate::host(class)] pub trait Runner: Sized {{ #[host(new)] fn new(host: std::sync::Arc<dyn Callbacks>) -> Self; }}",
+        proxy(
+            r#"
+            #[host(await)] async fn render(&self, #[host(context)] at: &Report) -> Result<String, HostError>;
+            #[host(await)] async fn prepare(&self, #[host(context)] at: &Report, args: serde_json::Map<String, serde_json::Value>) -> Result<Result<Chunk, Refused>, HostError>;
+            #[host(notify, name = "abort")] fn cancel(&self, #[host(context)] at: &Report);
+            "#
+        )
+    ))
+    .expect("resolves");
+    let p = &decls.proxies[0];
+    assert_eq!((p.rust_name.as_str(), p.host.as_str(), p.family.as_str()), ("Callbacks", "livekit.agents.Callbacks", "llm"));
+    assert!(p.async_trait);
+    let kinds: Vec<_> = p.methods.iter().map(|m| (m.kind, m.name.as_str(), m.context)).collect();
+    assert_eq!(kinds, [(ProxyCall::Await, "render", 0), (ProxyCall::Await, "prepare", 0), (ProxyCall::Notify, "abort", 0)]);
+    let refusal = p.methods[1].ret.refusal.as_ref().expect("declared");
+    assert_eq!((refusal.module.as_str(), refusal.class.as_str()), ("livekit.agents", "Refused"));
+    assert_eq!(p.methods[1].ret.err.as_deref(), Some("::lk_agents_abi::errors::HostError"));
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    for want in [
+        "impl ::lk_agents_abi::llm::class::Callbacks for CallbacksProxy {",
+        "#[::async_trait::async_trait]",
+        "let context = ::lk_agents_abi::agent::HostContext::host_context(at);",
+        "Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {",
+        "Ok((host.bind(py).getattr(\"render\")?",
+        "::lk_agents_abi::python::extra_to_py(py, &args_arg)?.into_any()",
+        "if e.is_instance(py, &py.import(\"livekit.agents\").and_then(|m| m.getattr(\"Refused\"))",
+        "return Ok(Err(<::lk_agents_abi::errors::Refused as ::std::convert::From<String>>::from(e.value(py).to_string())));",
+        "<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e)",
+        "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
+        "runtime.spawn(async move {",
+        "Ok((host.bind(py).getattr(\"abort\")?",
+        "::lk_agents_abi::python::log::warn!(\"Callbacks.abort failed: {e}\");",
+        "let host = super::llm::CallbacksProxy::from_host(&host)?;",
+        "native::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)",
+    ] {
+        assert!(llm.contains(want), "{want}\n{llm}");
+    }
+}
+
+// Catches: a proxy call with no context to enter (or two), a failure swallowed into a default, an
+// error or refusal with no declared conversion, a call kind guessed from the signature, or a
+// value handed to the host that it cannot receive.
+#[test]
+fn incomplete_proxy_declarations_fail_generation() {
+    for (body, want) in [
+        ("#[host(await)] async fn f(&self, at: &Report) -> Result<String, HostError>;", "one #[host(context)] parameter"),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report, #[host(context)] b: &Report) -> Result<String, HostError>;",
+            "one parameter is the call's #[host(context)]",
+        ),
+        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> String;", "a host failure is reported"),
+        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, std::fmt::Error>;", "not an ABI declaration"),
+        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Result<String, HostError>, HostError>;", "error(raised"),
+        ("#[host(await)] fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>;", "does not fit `await`"),
+        ("#[host(notify)] fn f(&self, #[host(context)] a: &Report) -> u32;", "does not fit `notify`"),
+        ("#[host(await, notify)] fn f(&self, #[host(context)] a: &Report);", "exactly one of await, notify"),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>; fn g(&self);",
+            "Callbacks::g: a proxy method declares exactly one of",
+        ),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report, c: Conn) -> Result<(), HostError>;",
+            "f(c): record `::lk_agents_abi::llm::chat::Conn` is not declared for output",
+        ),
+        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Report, HostError>;", "not declared for input"),
+    ] {
+        let err = refuse_proxy(body);
+        assert!(err.contains("Callbacks") && err.contains(want), "`{body}`: {err}");
+    }
 }

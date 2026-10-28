@@ -1,5 +1,5 @@
-//! The pyo3 adapters of the declared classes, written into the registration shell
-//! (`lk-agents-py/src/generated/`): one module per ABI subject, plus `mod.rs` with the
+//! The pyo3 adapters of the declared classes, and the declared proxies ([`crate::proxy`]), written
+//! into the registration shell (`lk-agents-py/src/generated/`): one module per ABI subject, plus `mod.rs` with the
 //! `Implementations` trait the shell implements to select each class's implementation. A class
 //! the shell selects nothing for, or an implementation missing a declared method, fails to compile.
 //!
@@ -13,17 +13,17 @@ use crate::python::Out;
 pub const DIR: &str = "rust/crates/lk-agents-py/src/generated";
 
 /// The first line is the marker the placement and file-length checks skip generated files by.
-const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `#[host(class)]` declarations of `lk-agents-abi`.\n";
+const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `#[host(class)]` and declared `#[host(proxy)]` traits of `lk-agents-abi`.\n";
 
 pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
-    let mut families: Vec<&str> = decls.classes.iter().map(|c| c.family.as_str()).collect();
-    families.dedup();
-    let mut sorted = families.clone();
+    let mut sorted: Vec<&str> = decls
+        .classes
+        .iter()
+        .map(|c| c.family.as_str())
+        .chain(decls.proxies.iter().map(|p| p.family.as_str()))
+        .collect();
     sorted.sort();
     sorted.dedup();
-    if sorted.len() != families.len() {
-        return Err("classes of one subject are read together".into());
-    }
     let mut out = Vec::new();
     let mut root = format!(
         "{HEADER}//!\n//! The declared classes' pyo3 adapters, one module per ABI subject.\n\n"
@@ -66,6 +66,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
                 text.push('\n');
                 text.push_str(&source_class(&name, &item));
             }
+        }
+        for p in decls.proxies.iter().filter(|p| p.family == *family) {
+            text.push('\n');
+            text.push_str(&crate::proxy::proxy(p)?);
         }
         out.push(Out { path: format!("{family}.rs"), text });
     }
@@ -304,13 +308,16 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
 }
 
 /// `PyResult<T>` of the object `v`.
-fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<String, String> {
+pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<String, String> {
     Ok(match ty {
         Ty::Json => format!("::lk_agents_abi::python::value_from_py(&{v}, {path})"),
         Ty::JsonObject => format!(
             "match ::lk_agents_abi::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
         ),
-        Ty::Proxy { rust, .. } => {
+        Ty::Proxy { declared: Some((family, name)), .. } => {
+            format!("super::{family}::{name}Proxy::from_host(&{v})")
+        }
+        Ty::Proxy { rust, declared: None, .. } => {
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v}, None)")
         }
         Ty::List(inner) => format!(

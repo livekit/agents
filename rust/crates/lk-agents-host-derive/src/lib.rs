@@ -178,12 +178,12 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// |---|---|---|
 /// | `export` | free fn, const, or an associated const in a plain `impl` | a `#[pyfunction]` (an UPPER_CASE const: a module attribute) |
 /// | `object` | inherent `impl` | `#[pymethods]` on the type's class, or a cell class over it |
-/// | `proxy` | trait | `impl Trait for Py<Trait><B: HostBridge>`: the core calling a host object |
+/// | `proxy` | trait | `impl Trait for Py<Trait><B: HostBridge>`: the core calling a host object; nothing when its methods declare `await`/`notify` (the proxy is generated, `lk-agents-codegen`'s `decl`) |
 /// | `class` / `functions` | trait | nothing: a declaration-model class or module functions (`lk-agents-codegen`'s `decl`), adapters generated |
 /// | `handwritten` | a type | nothing: declares that it crosses by its own pyo3 conversions |
 /// | `stream` | the source type of a stream pair | the Rust->host stream class (`recv`/`aclose`/`push`..) |
 /// | `client` / `kwargs` | a config struct | a keyword constructor / a keyword-spread parameter |
-/// | `error` | an error enum or struct | its `HostException`: every wrapper returning it raises through it |
+/// | `error` | an error enum or struct | its `HostException`: every wrapper returning it raises through it; nothing for `error(raised = "..")`, a refusal a generated proxy reads |
 /// | `wire_enum` | a unit enum | its wire strings (below), and the string both ways |
 /// | `wire_strs` | a unit enum | its wire strings only: it crosses by its own impls, or not at all |
 /// | `string` | a struct or enum with `Display`, `FromStr` and `as_str()` | the string both ways |
@@ -304,9 +304,14 @@ fn expand(
         (I::Const(c), Some("export")) => lk_agents_bindgen::export_const(attr, c),
         (I::Impl(imp), Some("export")) => lk_agents_bindgen::export_impl(attr, imp),
         (I::Enum(e), Some("wire_enum")) => Ok(lk_agents_bindgen::wire_enum(&e.ident)),
+        // A refusal the host raises (`error(raised = "..")`) is read by the generated proxy.
+        (I::Enum(_) | I::Struct(_), Some("error")) if raised(&attr) => Ok(proc_macro2::TokenStream::new()),
         (I::Enum(_) | I::Struct(_), Some("error")) => lk_agents_bindgen::error(attr, parsed),
         (I::Enum(e), Some("string")) => Ok(lk_agents_bindgen::string(&e.ident)),
         (I::Struct(st), Some("string")) => Ok(lk_agents_bindgen::string(&st.ident)),
+        // A proxy whose methods declare their calls is the declaration model's: its proxy is
+        // generated into the registration shell (`lk-agents-codegen`'s `decl`).
+        (I::Trait(t), Some("proxy")) if declared_proxy(t) => Ok(proc_macro2::TokenStream::new()),
         (I::Trait(t), Some("proxy")) => lk_agents_bindgen::proxy(attr, t),
         (I::Trait(t), Some("native")) => lk_agents_bindgen::native(attr, t),
         (I::Type(_) | I::Struct(_), Some("stream")) => lk_agents_bindgen::stream(attr, parsed),
@@ -315,6 +320,33 @@ fn expand(
         // A group's records are the codegen's (the pydantic modules); nothing crosses in Rust.
         _ => Ok(proc_macro2::TokenStream::new()),
     }
+}
+
+/// `error(raised = "..")`.
+fn raised(attr: &proc_macro2::TokenStream) -> bool {
+    lk_agents_bindgen::Metas::parse(attr.clone()).is_ok_and(|m| m.0.iter().any(|x| x.key == "error.raised"))
+}
+
+/// The method keys of a declared proxy (`lk-agents-codegen`'s `decl::vocabulary`).
+const PROXY_CALLS: &[&str] = &["await", "notify"];
+
+/// Some method declares how it is called: the trait is a declaration-model proxy.
+fn declared_proxy(t: &syn::ItemTrait) -> bool {
+    t.items.iter().any(|item| {
+        let syn::TraitItem::Fn(f) = item else { return false };
+        f.attrs.iter().filter(|a| a.path().segments.last().is_some_and(|s| s.ident == "host")).any(|a| {
+            let mut declared = false;
+            // `await` is a keyword: read the keys as `parse_nested_meta` does.
+            let _ = a.parse_nested_meta(|m| {
+                declared |= PROXY_CALLS.iter().any(|k| m.path.is_ident(k));
+                if !m.input.is_empty() && !m.input.peek(syn::Token![,]) {
+                    m.input.parse::<proc_macro2::TokenStream>()?;
+                }
+                Ok(())
+            });
+            declared
+        })
+    })
 }
 
 /// Every marker inside the item that rustc does not know: `#[host(..)]` on a method, parameter,
@@ -519,6 +551,26 @@ mod tests {
     // Catches: a trait method's `#[host(soon = ..)]`, a parameter's `#[host(lenient)]` or a config
     // field's `#[host(kwarg(..))]` reaching rustc (an unknown attribute there is a hard error), or
     // the strip taking an unrelated attribute with it.
+    // Catches: a declared proxy (or a raised refusal) also expanded by the in-place generator,
+    // which reads its keys as the old signature-shaped vocabulary and fails or binds twice.
+    #[test]
+    fn declared_proxies_and_refusals_expand_to_nothing_in_place() {
+        let out = super::expand_host(
+            quote!(proxy(host = "a.B")),
+            quote! { pub trait T { #[host(await)] async fn f(&self, #[host(context)] a: &A) -> Result<(), E>; #[host(notify)] fn g(&self, #[host(context)] a: &A); } },
+            true,
+        )
+        .to_string();
+        assert!(!out.contains("impl") && !out.contains("host") && out.contains("async fn f"), "{out}");
+        let out = super::expand_host(
+            quote!(error(raised = "a.Refused")),
+            quote! { pub struct Refused { pub message: String } },
+            true,
+        )
+        .to_string();
+        assert!(!out.contains("impl"), "{out}");
+    }
+
     #[test]
     fn host_strips_trait_parameter_and_field_markers() {
         let out = super::expand_host(

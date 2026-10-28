@@ -14,6 +14,7 @@ mod forward;
 mod ir;
 mod parse;
 mod placement;
+mod proxy;
 mod python;
 mod stub;
 #[cfg(test)]

@@ -4,6 +4,11 @@
 //! | where | key | meaning |
 //! |---|---|---|
 //! | trait | `class(name = "X", native = Trait)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait |
+//! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify` |
+//! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`: the host call awaited in its context; dropping it cancels the host task |
+//! | proxy method | `notify` | a `fn(&self, ..)` returning nothing: scheduled on the host, not awaited; a failure is logged |
+//! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too) |
+//! | error type | `error(raised = "module.Class")` | the host refuses a proxy call by raising that class: `Result<Result<T, E>, _>`'s `E`, from its message |
 //! | associated type | `source(item = T, class = "X")` | a pull source of `T`, handed out as stream class `X` |
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
 //! | trait method | `call` | a synchronous call on `&self` |

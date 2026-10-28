@@ -159,22 +159,18 @@ pub enum ToolOutcome {
 
 /// How a call of a tool that requires approval went (`approval_scope`): it asked for approval
 /// with its read-back, or ran on the person's answer. Marked on the call for the next to read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
+#[binding(emit, extract)]
 pub enum Approval {
+    #[host(rename = "asked")]
     Asked,
+    #[host(rename = "granted")]
     Granted,
 }
 
-impl Approval {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Approval::Asked => "asked",
-            Approval::Granted => "granted",
-        }
-    }
-}
-
 /// The host's report of one run: its outcome, and how its approval went.
+// Crosses by its own reader until the records family declares it.
+#[crate::host(handwritten(extract, host = "dict[str, object]"))]
 #[derive(Debug, Clone)]
 pub struct ToolReport {
     pub outcome: ToolOutcome,
@@ -254,14 +250,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolReport {
         let transition = |v: &pyo3::Bound<'py, pyo3::PyAny>| {
             if v.is_none() { Ok(None) } else { v.extract::<crate::HostRef>().map(Some) }
         };
-        let approval = |v: &pyo3::Bound<'py, pyo3::PyAny>| match v.extract::<Option<String>>()? {
-            None => Ok(None),
-            Some(s) if s == "asked" => Ok(Some(Approval::Asked)),
-            Some(s) if s == "granted" => Ok(Some(Approval::Granted)),
-            Some(other) => {
-                Err(pyo3::exceptions::PyValueError::new_err(format!("unknown approval {other:?}")))
-            }
-        };
+        let approval = |v: &pyo3::Bound<'py, pyo3::PyAny>| v.extract::<Option<Approval>>();
         Ok(ToolReport {
             outcome: obj.extract()?,
             approval: item_or(obj, OWNER, "approval", approval, || None)?,

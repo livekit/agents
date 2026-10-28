@@ -1,12 +1,13 @@
 //! GENERATED FILE -- DO NOT EDIT.
 //!
 //! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
-//! `#[host(class)]` declarations of `lk-agents-abi`.
+//! `#[host(class)]` and declared `#[host(proxy)]` traits of `lk-agents-abi`.
 //!
 //! The declared classes' pyo3 adapters, one module per ABI subject.
 
 use pyo3::prelude::*;
 
+pub mod agent;
 pub mod llm;
 
 /// The implementation of each declared class. The registration shell implements it.

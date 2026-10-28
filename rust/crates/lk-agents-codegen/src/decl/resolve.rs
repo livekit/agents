@@ -23,6 +23,10 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
             } else if voc::find(&entries, "functions").is_some() {
                 voc::only(&at, &entries, &["functions"])?;
                 out.classes.push(resolver().class(tr, None)?);
+            } else if let Some(proxy) = voc::find(&entries, "proxy")
+                && declares_calls(tr)
+            {
+                out.proxies.push(resolver().proxy_trait(tr, proxy)?);
             }
         }
     }
@@ -253,7 +257,12 @@ impl Resolver<'_> {
         Ok(Ret { ok: self.classify(&shape, at)?, err: None })
     }
 
-    fn error(&self, shape: &Shape, at: &str) -> Result<ErrorDecl, String> {
+    /// A `#[host(error(..))]` type: its module, item, outside path and `#[host]` entries.
+    fn error_item(
+        &self,
+        shape: &Shape,
+        at: &str,
+    ) -> Result<(usize, usize, String, Vec<Entry>), String> {
         let Shape::Named { found: Found::Item { module, item }, args } = shape else {
             return Err(format!("{at}: the error type is not an ABI declaration"));
         };
@@ -264,9 +273,19 @@ impl Resolver<'_> {
         if !args.is_empty() {
             return Err(format!("{at}: a declared error is a concrete type"));
         }
-        let declared = voc::find(&entries, "error").ok_or_else(|| {
-            format!("{at}: `{rust}` declares no conversion: #[host(error(with = path))] or #[host(error(kind = \"ValueError\"))]")
-        })?;
+        if voc::find(&entries, "error").is_none() {
+            return Err(format!(
+                "{at}: `{rust}` is not a declared error: #[host(error(..))]"
+            ));
+        }
+        Ok((*module, *item, rust, entries))
+    }
+
+    fn error(&self, shape: &Shape, at: &str) -> Result<ErrorDecl, String> {
+        let (module, _, rust, entries) = self.error_item(shape, at)?;
+        let module = &module;
+        let k = self.krate;
+        let declared = voc::find(&entries, "error").expect("error_item checked it");
         let with = match (
             voc::rust(at, &declared.nested, "with")?,
             voc::text(at, &declared.nested, "kind")?,
@@ -475,11 +494,173 @@ impl Resolver<'_> {
                 )
                 .is_ok_and(|metas| metas.iter().any(|m| m.path().is_ident("provider")))
         });
+        let declared = declares_calls(tr).then(|| {
+            (k.modules[module].path.first().cloned().unwrap_or_default(), tr.ident.to_string())
+        });
         Ok(Ty::Proxy {
             rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
             host,
             generic,
+            declared,
         })
+    }
+
+    /// A declaration-model proxy: every method declares its call and its context parameter.
+    fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
+        let at = self.at;
+        voc::only(at, &proxy.nested, &["host"])?;
+        let host = voc::text(at, &proxy.nested, "host")?
+            .ok_or_else(|| format!("{at}: proxy(host = \"module.Class\") names the class it calls"))?;
+        if !tr.generics.params.is_empty() {
+            return Err(format!("{at}: a generic trait has no single proxy"));
+        }
+        let k = self.krate;
+        let module = &k.modules[self.module];
+        let item = module
+            .items
+            .iter()
+            .position(|i| matches!(i, syn::Item::Trait(t) if t.ident == tr.ident))
+            .expect("read from here");
+        let mut methods = Vec::new();
+        for inner in &tr.items {
+            match inner {
+                syn::TraitItem::Fn(f) => methods.push(self.proxy_method(f)?),
+                other => {
+                    return Err(format!(
+                        "{at}: a proxy declares methods only, not `{}`",
+                        quote::quote!(#other)
+                    ));
+                }
+            }
+        }
+        Ok(Proxy {
+            rust_name: tr.ident.to_string(),
+            trait_path: k.extern_path(self.module, item).map_err(|e| format!("{at}: {e}"))?,
+            family: module.path.first().cloned().ok_or_else(|| {
+                format!("{at}: a proxy is declared in a subject module, not the crate root")
+            })?,
+            source: module.file.clone(),
+            host,
+            async_trait: tr
+                .attrs
+                .iter()
+                .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait")),
+            methods,
+        })
+    }
+
+    fn proxy_method(&self, f: &syn::TraitItemFn) -> Result<ProxyMethod, String> {
+        let at = format!("{}::{}", self.at, f.sig.ident);
+        let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
+        voc::only(&at, &entries, &["await", "notify", "name"])?;
+        let kind = match (voc::find(&entries, "await"), voc::find(&entries, "notify")) {
+            (Some(_), None) => ProxyCall::Await,
+            (None, Some(_)) => ProxyCall::Notify,
+            _ => return Err(format!("{at}: a proxy method declares exactly one of await, notify")),
+        };
+        let shared_receiver = f.sig.receiver().is_some_and(shared);
+        let fits = match kind {
+            ProxyCall::Await => shared_receiver && f.sig.asyncness.is_some(),
+            ProxyCall::Notify => {
+                shared_receiver
+                    && f.sig.asyncness.is_none()
+                    && matches!(f.sig.output, syn::ReturnType::Default)
+            }
+        };
+        if !fits {
+            return Err(format!(
+                "{at}: the signature does not fit `{}` (await: `async fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing)",
+                format!("{kind:?}").to_lowercase()
+            ));
+        }
+        let mut params = Vec::new();
+        let mut context = None;
+        for input in f.sig.inputs.iter() {
+            let syn::FnArg::Typed(pt) = input else { continue };
+            let syn::Pat::Ident(ident) = &*pt.pat else {
+                return Err(format!("{at}: a parameter is a plain name"));
+            };
+            let pat = format!("{at}({})", ident.ident);
+            let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
+            voc::only(&pat, &entries, &["context"])?;
+            if voc::find(&entries, "context").is_some() {
+                if context.replace(params.len()).is_some() {
+                    return Err(format!("{at}: one parameter is the call's #[host(context)]"));
+                }
+            }
+            let (by_ref, ty) = match &*pt.ty {
+                syn::Type::Reference(r) if r.mutability.is_none() => {
+                    (true, self.borrowed(&r.elem, &pat)?)
+                }
+                syn::Type::Reference(_) => {
+                    return Err(format!("{pat}: a parameter is never `&mut`"));
+                }
+                other => (false, self.ty(other, &pat)?),
+            };
+            // It crosses to the host.
+            check_output(&pat, &ty)?;
+            params.push(Param {
+                name: ident.ident.to_string(),
+                ty,
+                by_ref,
+                kw_only: false,
+                default: None,
+            });
+        }
+        let context = context.ok_or_else(|| {
+            format!("{at}: a proxy call runs in the host context one #[host(context)] parameter carries")
+        })?;
+        let ret = match kind {
+            ProxyCall::Notify => ProxyRet { ok: Ty::Unit, refusal: None, err: None },
+            ProxyCall::Await => self.proxy_ret(&f.sig.output, &at)?,
+        };
+        Ok(ProxyMethod {
+            rust_name: f.sig.ident.to_string(),
+            name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
+            kind,
+            params,
+            context,
+            ret,
+        })
+    }
+
+    /// `Result<T, E>` or `Result<Result<T, R>, E>`: a host failure is always reported.
+    fn proxy_ret(&self, out: &syn::ReturnType, at: &str) -> Result<ProxyRet, String> {
+        let result = |shape: &Shape| match shape {
+            Shape::Named { found: Found::External(path), args }
+                if is(path, &["std", "result", "Result"]) && args.len() == 2 =>
+            {
+                Some((clone_shape(&args[0]), clone_shape(&args[1])))
+            }
+            _ => None,
+        };
+        let refused = || format!("{at}: an awaited proxy call returns `Result<T, E>` (E a declared #[host(error)]): a host failure is reported, never swallowed");
+        let syn::ReturnType::Type(_, t) = out else { return Err(refused()) };
+        let (ok, err) = result(&self.shape(self.module, t, &[], at)?).ok_or_else(refused)?;
+        let (_, _, err, _) = self.error_item(&err, at)?;
+        let (ok, refusal) = match result(&ok) {
+            Some((ok, refusal)) => (ok, Some(self.refusal(&refusal, at)?)),
+            None => (ok, None),
+        };
+        let ok = self.classify(&ok, at)?;
+        if ok != Ty::Unit {
+            // It crosses from the host.
+            check_input(at, &ok)?;
+        }
+        Ok(ProxyRet { ok, refusal, err: Some(err) })
+    }
+
+    /// `#[host(error(raised = "module.Class"))]`.
+    fn refusal(&self, shape: &Shape, at: &str) -> Result<Refusal, String> {
+        let (_, _, rust, entries) = self.error_item(shape, at)?;
+        let declared = voc::find(&entries, "error").expect("error_item checked it");
+        let raised = voc::text(at, &declared.nested, "raised")?.ok_or_else(|| {
+            format!("{at}: `{rust}` is a refusal the host raises: #[host(error(raised = \"module.Class\"))]")
+        })?;
+        let (module, class) = raised
+            .rsplit_once('.')
+            .ok_or_else(|| format!("{at}: raised = \"{raised}\" is a dotted class path"))?;
+        Ok(Refusal { rust, module: module.to_owned(), class: class.to_owned() })
     }
 
     /// A crate type, by its declaration: a `#[derive(Host)]` record with its `#[binding]`
@@ -571,6 +752,16 @@ impl Resolver<'_> {
 
 /// The Python builtins an error may declare as its `kind`.
 const BUILTIN_ERRORS: &[&str] = &["ValueError", "TypeError", "RuntimeError", "KeyError"];
+
+/// Some method declares its call (`await`, `notify`): a declaration-model proxy.
+fn declares_calls(tr: &syn::ItemTrait) -> bool {
+    tr.items.iter().any(|i| {
+        let syn::TraitItem::Fn(f) = i else { return false };
+        voc::read(&f.attrs).is_ok_and(|entries| {
+            voc::find(&entries, "await").is_some() || voc::find(&entries, "notify").is_some()
+        })
+    })
+}
 
 fn shared(r: &syn::Receiver) -> bool {
     r.reference.is_some() && r.mutability.is_none()

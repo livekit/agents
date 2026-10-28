@@ -4,6 +4,7 @@
 //! validates application types and runs the bodies.
 
 use async_trait::async_trait;
+use lk_agents_host_derive::Host;
 use serde_json::{Map, Value};
 
 use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
@@ -13,8 +14,10 @@ use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
 
 /// What one host callback runs within, captured when the owning operation was created (a
-/// `run()` call entry), never from whichever task dispatches it later.
-#[derive(Debug, Clone)]
+/// `run()` call entry), never from whichever task dispatches it later. The host receives it as a
+/// dict of its fields, without the captured context.
+#[derive(Debug, Clone, Host)]
+#[binding(emit, from_items)]
 pub struct Invocation {
     /// This callback, unique within its agent invocation: what [`AgentHost::cancel`] names.
     pub operation: u64,
@@ -27,11 +30,25 @@ pub struct Invocation {
     pub approval: Option<Approval>,
     /// The host execution context captured at the operation's entry (Python: a
     /// `contextvars.Context`); the adapter enters a copy of it for the callback.
+    #[binding(skip)]
     pub host_context: Option<HostRef>,
 }
 
+/// What a `#[host(context)]` parameter carries: the host context a proxy call runs in.
+pub trait HostContext {
+    fn host_context(&self) -> Option<&HostRef>;
+}
+
+impl HostContext for Invocation {
+    fn host_context(&self) -> Option<&HostRef> {
+        self.host_context.as_ref()
+    }
+}
+
 /// The validated arguments a call is identified by: their JSON, or a fingerprint the host
-/// declares for a value JSON cannot represent.
+/// declares for a value JSON cannot represent. From the host: `{"kind": "json", "value": ..}` or
+/// `{"kind": "fingerprint", "value": str}`.
+#[crate::host(handwritten(extract, host = "dict[str, object]"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArgumentIdentity {
     Json(Value),
@@ -39,19 +56,30 @@ pub enum ArgumentIdentity {
 }
 
 /// Arguments the host bound and validated: `prepared` holds them for the body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Host)]
+#[binding(extract, from_items)]
 pub struct PreparedArguments {
     pub prepared: HostRef,
     pub identity: ArgumentIdentity,
 }
 
-/// Binding or validation of a call's arguments failed: feedback for the model.
+/// Binding or validation of a call's arguments failed: feedback for the model. The host raises
+/// it; its message is the feedback.
+#[crate::host(error(raised = "livekit.agents.voice.agent_host.ToolArgumentError"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolArgumentError {
     pub message: String,
 }
 
-/// What a read-back function returned.
+impl From<String> for ToolArgumentError {
+    fn from(message: String) -> Self {
+        ToolArgumentError { message }
+    }
+}
+
+/// What a read-back function returned. From the host: `{"kind": "question", "question": str}`
+/// or `{"kind": "input_required", "question": str, "verbatim": bool}`.
+#[crate::host(handwritten(extract, host = "dict[str, object]"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReadBackAnswer {
     Question(String),
@@ -62,7 +90,9 @@ pub enum ReadBackAnswer {
     },
 }
 
-/// An output candidate for the host to validate.
+/// An output candidate for the host to validate. To the host: `{"kind": "text", "text": str}` or
+/// `{"kind": "value", "value": ..}`.
+#[crate::host(handwritten(emit, host = "dict[str, object]"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputCandidate {
     Text(String),
@@ -70,7 +100,10 @@ pub enum OutputCandidate {
     Value(Value),
 }
 
-/// The host's verdict on an output candidate.
+/// The host's verdict on an output candidate. From the host: `{"kind": "accepted", "text": str |
+/// None, "value": object | None}`, `{"kind": "retry", "reason": str}` or `{"kind": "failed",
+/// "error": str}`.
+#[crate::host(handwritten(extract, host = "dict[str, object]"))]
 #[derive(Debug, Clone)]
 pub enum ValidatedOutput {
     /// Accepted: a `str` output's final text, or the validated value the host keeps.
@@ -81,47 +114,57 @@ pub enum ValidatedOutput {
     Failed(String),
 }
 
-/// The application callbacks of one agent definition. Every call carries its [`Invocation`];
-/// the adapter enters that context, runs the callback, and restores the caller's on every exit.
-// Its host proxy is generated once the proxy family moves to the declaration generator, with the
-// invocation as the call's context argument.
+/// The application callbacks of one agent definition, run by the host object of
+/// `livekit.agents.voice.agent_host.AgentHost` (its methods carry these names). Every call carries
+/// its [`Invocation`] and runs in a copy of the host context it captured; the caller's context is
+/// never entered or changed.
+#[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentHost"))]
 #[async_trait]
 pub trait AgentHost: Send + Sync {
     /// The `@agent.instructions` functions, rendered and joined.
-    async fn render_instructions(&self, invocation: &Invocation) -> Result<String, HostError>;
+    #[host(await)]
+    async fn render_instructions(
+        &self,
+        #[host(context)] invocation: &Invocation,
+    ) -> Result<String, HostError>;
 
     /// Binds the call's arguments to the tool's signature and validates them, in the call's
     /// invocation scope.
+    #[host(await)]
     async fn prepare_tool(
         &self,
-        invocation: &Invocation,
+        #[host(context)] invocation: &Invocation,
         arguments: Map<String, Value>,
     ) -> Result<Result<PreparedArguments, ToolArgumentError>, HostError>;
 
     /// The tool's read-back function on the prepared arguments.
+    #[host(await)]
     async fn read_back(
         &self,
-        invocation: &Invocation,
+        #[host(context)] invocation: &Invocation,
         prepared: &HostRef,
     ) -> Result<ReadBackAnswer, HostError>;
 
     /// Runs the body with the prepared arguments and classifies what it returned or raised.
+    #[host(await)]
     async fn run_tool(
         &self,
-        invocation: &Invocation,
+        #[host(context)] invocation: &Invocation,
         prepared: &HostRef,
     ) -> Result<ToolReport, HostError>;
 
     /// The output type, validators and output function on a candidate.
+    #[host(await)]
     async fn validate_output(
         &self,
-        invocation: &Invocation,
+        #[host(context)] invocation: &Invocation,
         candidate: OutputCandidate,
     ) -> Result<ValidatedOutput, HostError>;
 
     /// Cancels the callback in flight for `invocation` (its tool call, when it has one). Its
     /// awaited call still settles, with the cancellation as its outcome.
-    fn cancel(&self, invocation: &Invocation);
+    #[host(notify)]
+    fn cancel(&self, #[host(context)] invocation: &Invocation);
 }
 
 /// The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads
@@ -181,5 +224,98 @@ pub struct Retries {
 impl Default for Retries {
     fn default() -> Self {
         Retries { tool: 1, output: 1 }
+    }
+}
+
+// The host shapes of the callback records, read and written here until the records family
+// declares them: a dict whose `kind` names the variant.
+#[cfg(feature = "python")]
+mod host_shapes {
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+
+    use super::{ArgumentIdentity, OutputCandidate, ReadBackAnswer, ValidatedOutput};
+    use crate::python::{value_from_py, value_to_py};
+
+    fn kind(obj: &Bound<'_, PyAny>, owner: &str) -> PyResult<String> {
+        obj.get_item("kind")
+            .and_then(|k| k.extract())
+            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(format!("{owner}.kind: {e}")))
+    }
+
+    fn unknown(owner: &str, kind: &str) -> PyErr {
+        pyo3::exceptions::PyValueError::new_err(format!("{owner}: unknown kind {kind:?}"))
+    }
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for ArgumentIdentity {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            const OWNER: &str = "ArgumentIdentity";
+            let obj = &*obj;
+            let value = obj.get_item("value")?;
+            match kind(obj, OWNER)?.as_str() {
+                "json" => Ok(ArgumentIdentity::Json(value_from_py(&value, "ArgumentIdentity.value")?)),
+                "fingerprint" => Ok(ArgumentIdentity::Fingerprint(value.extract()?)),
+                other => Err(unknown(OWNER, other)),
+            }
+        }
+    }
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for ReadBackAnswer {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            const OWNER: &str = "ReadBackAnswer";
+            let obj = &*obj;
+            let question = obj.get_item("question")?.extract()?;
+            match kind(obj, OWNER)?.as_str() {
+                "question" => Ok(ReadBackAnswer::Question(question)),
+                "input_required" => Ok(ReadBackAnswer::InputRequired {
+                    question,
+                    verbatim: obj.get_item("verbatim")?.extract()?,
+                }),
+                other => Err(unknown(OWNER, other)),
+            }
+        }
+    }
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for ValidatedOutput {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            const OWNER: &str = "ValidatedOutput";
+            let obj = &*obj;
+            match kind(obj, OWNER)?.as_str() {
+                "accepted" => Ok(ValidatedOutput::Accepted {
+                    text: obj.get_item("text")?.extract()?,
+                    value: obj.get_item("value")?.extract()?,
+                }),
+                "retry" => Ok(ValidatedOutput::Retry(obj.get_item("reason")?.extract()?)),
+                "failed" => Ok(ValidatedOutput::Failed(obj.get_item("error")?.extract()?)),
+                other => Err(unknown(OWNER, other)),
+            }
+        }
+    }
+
+    impl<'py> IntoPyObject<'py> for OutputCandidate {
+        type Target = PyDict;
+        type Output = Bound<'py, PyDict>;
+        type Error = PyErr;
+
+        fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let out = PyDict::new(py);
+            match &self {
+                OutputCandidate::Text(text) => {
+                    out.set_item("kind", "text")?;
+                    out.set_item("text", text)?;
+                }
+                OutputCandidate::Value(value) => {
+                    out.set_item("kind", "value")?;
+                    out.set_item("value", value_to_py(py, value)?)?;
+                }
+            }
+            Ok(out)
+        }
     }
 }
