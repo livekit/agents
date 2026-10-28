@@ -7,9 +7,7 @@ use super::output::{
 };
 use super::pre_connect_audio::PreConnectAudioHandler;
 use lk_agents_abi::voice::io::IoError;
-use lk_agents_abi::voice::io::{
-    AudioInput as IoRoom_IoAudioInput, AudioOutput as IoRoom_IoAudioOutput, Result, TextOutput,
-};
+use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
     ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
@@ -166,8 +164,8 @@ impl RoomIo {
         self.events_rx.lock().unwrap().take()
     }
 
-    pub fn audio_input(&self) -> Option<Arc<dyn IoRoom_IoAudioInput>> {
-        self.audio_input.clone().map(|a| a as Arc<dyn IoRoom_IoAudioInput>)
+    pub fn audio_input(&self) -> Option<Arc<dyn AudioInput>> {
+        self.audio_input.clone().map(|a| a as Arc<dyn AudioInput>)
     }
 
     /// The microphone leg itself, as the session hands it to the host.
@@ -180,8 +178,8 @@ impl RoomIo {
     }
 
     /// The caller wraps it with a synchroniser if configured.
-    pub fn audio_output(&self) -> Option<Arc<dyn IoRoom_IoAudioOutput>> {
-        self.audio_output.clone().map(|a| a as Arc<dyn IoRoom_IoAudioOutput>)
+    pub fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
+        self.audio_output.clone().map(|a| a as Arc<dyn AudioOutput>)
     }
 
     pub fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
