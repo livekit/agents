@@ -1138,7 +1138,6 @@ impl Writer<'_> {
             ("livekit", "rtc"),
             ("..", "_bindings"),
             ("..", "_core"),
-            (".._exceptions", "APIError"),
             ("..types", "APIConnectOptions"),
             ("..types", "NOT_GIVEN"),
             ("..types", "NotGivenOr"),
@@ -1325,13 +1324,7 @@ const RECOGNIZE: &str = r#"
             now = time.time()
             self._start_time_offset += now - started
             self._start_time = started = now
-            try:
-                await self._run()
-            except APIError:
-                # an attempt that outlived the connect timeout had connected: a fresh budget
-                if time.time() - started > self._conn_options.timeout:
-                    self._core_attempts.count = 0
-                raise
+            await self._run()
 
         await self._core_attempts.run(attempt)
 
