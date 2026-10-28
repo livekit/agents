@@ -1549,6 +1549,7 @@ dependencies = [
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-inference",
+ "lk-agents-media",
  "lk-agents-storage",
  "log",
  "pbjson-types",

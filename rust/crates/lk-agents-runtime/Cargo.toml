@@ -13,6 +13,7 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-inference = { path = "../lk-agents-inference" }
 # The shared agent execution core whose `AgentRun` effects `agent_run` executes.
 lk-agents-core = { path = "../lk-agents-core" }
+lk-agents-media = { path = "../lk-agents-media" }
 # Signs the gateway token (and later every framework credential): no private claims or signer.
 livekit-token.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -48,5 +49,8 @@ rusqlite = { version = "0.32.1", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 
 [features]
+media-ffmpeg = ["lk-agents-media/ffmpeg"]
+media-resample = ["lk-agents-media/resample"]
+media-images = ["lk-agents-media/images"]
 # The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
 python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python", "lk-agents-a2a/python"]

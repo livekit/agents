@@ -20,6 +20,12 @@ pub enum CodecError {
     #[error("truncated WAV fmt chunk: {0} bytes, need at least 16")]
     ShortWavFmt(u32),
 
+    #[error("truncated WAV header or PCM sample")]
+    TruncatedWav,
+
+    #[error("decoder format or frame limit exceeded: {0}")]
+    DecodeLimit(&'static str),
+
     /// Without the `ffmpeg` feature that is everything except WAV.
     #[error(
         "unsupported mime type {mime:?}: {reason}. Enable the `ffmpeg` feature of `lk-agents-media` \

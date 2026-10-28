@@ -92,6 +92,14 @@ impl WavDecoder {
         None
     }
 
+    /// Validate the terminal boundary separately from the nonterminal drift flush.
+    pub fn end_input(&self) -> Result<()> {
+        if self.state != State::Streaming || self.carry.is_some() {
+            return Err(CodecError::TruncatedWav);
+        }
+        Ok(())
+    }
+
     fn reset_state(&mut self) {
         self.state = State::RiffHeader;
         self.hdr.clear();
@@ -138,7 +146,7 @@ impl WavDecoder {
                 if size < 16 {
                     return Err(CodecError::ShortWavFmt(size));
                 }
-                self.need = size as usize;
+                self.need = 16;
                 self.state = State::FmtData;
             }
             b"data" => {
@@ -165,7 +173,7 @@ impl WavDecoder {
         if !done {
             return Ok(pos);
         }
-        let fmt = &self.hdr[..self.chunk_size as usize];
+        let fmt = &self.hdr;
         let audio_format = u16::from_le_bytes([fmt[0], fmt[1]]);
         let channels = u16::from_le_bytes([fmt[2], fmt[3]]);
         let rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
@@ -182,7 +190,11 @@ impl WavDecoder {
         self.format = Some(AudioFormat { sample_rate: rate, num_channels: channels });
         self.hdr.clear();
         self.need = 8;
-        self.state = State::ChunkHeader;
+        // PCM needs only its fixed fields. Retaining an attacker-declared extension would let
+        // a small bounded ingress grow an unbounded header accumulator over many pushes.
+        self.skip_remaining = u64::from(self.chunk_size - 16) + u64::from(self.chunk_size % 2);
+        self.state =
+            if self.skip_remaining == 0 { State::ChunkHeader } else { State::SkipChunkData };
         Ok(pos)
     }
 
@@ -298,6 +310,31 @@ pub(crate) mod tests {
         segs.iter().flat_map(|s| s.samples.iter().copied()).collect()
     }
 
+    #[test]
+    fn invalid_fmt_is_rejected_before_reading_its_declared_extension() {
+        let mut prefix = wav_file(24000, 1, &[1, 2]);
+        prefix[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        prefix[34..36].copy_from_slice(&24u16.to_le_bytes());
+        prefix.truncate(36);
+        assert_eq!(WavDecoder::new().push(&prefix), Err(CodecError::UnsupportedWavBits(24)));
+    }
+
+    #[test]
+    fn odd_fmt_extensions_and_their_pad_are_skipped_before_pcm() {
+        let samples = [5, -5, 8, -8];
+        let mut file = wav_file(24000, 1, &samples);
+        file[16..20].copy_from_slice(&17u32.to_le_bytes());
+        file.splice(36..36, [0xAA, 0]);
+        let mut decoder = WavDecoder::new();
+        let mut pcm = Vec::new();
+        for chunk in file.chunks(7) {
+            for segment in decoder.push(chunk).unwrap() {
+                pcm.extend(segment.samples);
+            }
+        }
+        assert_eq!(pcm, samples);
+    }
+
     // Catches: the generator and the decoder agreeing with each other and disagreeing with every
     // real WAV. Every other test trusts `wav()`, so the canonical 44-byte header is written out by
     // hand once, decoded, and the generator is required to reproduce it byte for byte.
@@ -389,11 +426,15 @@ pub(crate) mod tests {
         data_first.extend_from_slice(&8u32.to_le_bytes());
         data_first.extend_from_slice(&[0u8; 8]);
         let cases: [(Vec<u8>, fn(&CodecError) -> bool); 6] = [
-            (b"ID3\x04\x00\x00\x00\x00\x00\x00mp3 data here".to_vec(), |e| matches!(e, CodecError::MissingRiffWave(_))),
+            (b"ID3\x04\x00\x00\x00\x00\x00\x00mp3 data here".to_vec(), |e| {
+                matches!(e, CodecError::MissingRiffWave(_))
+            }),
             (avi, |e| matches!(e, CodecError::MissingRiffWave(_))),
             (wav(24_000, 1, 24, 1, &[], &[0; 12]), |e| *e == CodecError::UnsupportedWavBits(24)),
             (wav(24_000, 1, 32, 3, &[], &[0; 16]), |e| *e == CodecError::UnsupportedWavBits(32)),
-            (wav(24_000, 1, 16, 0xFFFE, &[], &[0; 8]), |e| *e == CodecError::UnsupportedWavFormat(0xFFFE)),
+            (wav(24_000, 1, 16, 0xFFFE, &[], &[0; 8]), |e| {
+                *e == CodecError::UnsupportedWavFormat(0xFFFE)
+            }),
             (data_first, |e| *e == CodecError::WavDataBeforeFmt),
         ];
         for (i, (bytes, want)) in cases.into_iter().enumerate() {

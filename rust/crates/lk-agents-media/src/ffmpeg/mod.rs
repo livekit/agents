@@ -14,7 +14,7 @@ use crate::stream_buffer::StreamBuffer;
 mod decode;
 mod encode;
 
-pub use decode::FfmpegDecoder;
+pub use decode::{FfmpegDecoder, decode_stream};
 pub use encode::OggOpusEncoder;
 
 #[repr(C)]
@@ -27,7 +27,7 @@ struct LkEncoder {
 }
 
 type ReadFn = extern "C" fn(*mut c_void, *mut u8, c_int) -> c_int;
-type PcmFn = extern "C" fn(*mut c_void, *const i16, c_int);
+type PcmFn = extern "C" fn(*mut c_void, *const i16, c_int) -> c_int;
 type WriteFn = extern "C" fn(*mut c_void, *const u8, c_int);
 
 unsafe extern "C" {
@@ -35,6 +35,12 @@ unsafe extern "C" {
         format_short_name: *const c_char,
         out_rate: c_int,
         out_channels: c_int,
+        min_rate: c_int,
+        max_rate: c_int,
+        max_channels: c_int,
+        max_streams: c_int,
+        max_expansion: c_int,
+        max_samples: c_int,
         read_cb: ReadFn,
         read_opaque: *mut c_void,
         err: *mut c_char,

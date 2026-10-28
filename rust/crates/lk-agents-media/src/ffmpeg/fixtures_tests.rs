@@ -348,3 +348,80 @@ fn no_requested_rate_keeps_the_containers_rate() {
     assert!(tone_strength(&pcm, 24_000, 440.0) > 0.7, "not a 440 Hz tone at the source rate");
     assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
 }
+
+#[test]
+fn synchronous_decode_propagates_a_reader_failure_instead_of_reporting_eof() {
+    struct FailingRead(std::io::Cursor<Vec<u8>>);
+    impl std::io::Read for FailingRead {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            match std::io::Read::read(&mut self.0, bytes)? {
+                0 => Err(std::io::Error::other("source read failed")),
+                n => Ok(n),
+            }
+        }
+    }
+    let mut input = FailingRead(std::io::Cursor::new(wav_file(24000, 1, &[1; 2400])));
+    let error = decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut input, |_, _| Ok(()))
+        .unwrap_err();
+    assert!(
+        matches!(error, CodecError::Ffmpeg { op: "read", ref detail } if detail == "source read failed")
+    );
+}
+
+#[test]
+fn synchronous_decode_stops_after_pcm_delivery_is_refused() {
+    let mut input = std::io::Cursor::new(wav_file(24000, 1, &[1; 24000]));
+    let refused = CodecError::Ffmpeg { op: "PCM delivery", detail: "receiver closed".into() };
+    let mut callbacks = 0;
+    let result = decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut input, |_, _| {
+        callbacks += 1;
+        Err(refused.clone())
+    });
+    assert_eq!(result, Err(refused));
+    assert_eq!(callbacks, 1, "native decode must stop at the first refused output");
+}
+
+fn decode_limits() -> crate::decoder::DecodeLimits {
+    crate::decoder::DecodeLimits {
+        min_sample_rate: 8000,
+        max_sample_rate: 192000,
+        max_channels: 8,
+        max_streams: 8,
+        max_expansion_ratio: 24,
+        max_samples_per_frame: 65536,
+    }
+}
+
+#[test]
+fn a_panicking_pcm_callback_becomes_a_decode_error_without_crossing_the_c_abi() {
+    let mut input = std::io::Cursor::new(wav_file(24000, 1, &[1; 2400]));
+    let error = decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut input, |_, _| {
+        panic!("callback failed");
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, CodecError::Ffmpeg { op: "output", ref detail } if detail == "output callback panicked")
+    );
+}
+
+#[test]
+fn native_pcm_expansion_is_rejected_before_allocating_an_oversized_output() {
+    let mut input = std::io::Cursor::new(wav_file(8000, 1, &[1; 2400]));
+    let limits = crate::decoder::DecodeLimits { max_samples_per_frame: 128, ..decode_limits() };
+    assert!(decode_stream(Some("wav"), 192000, 1, limits, &mut input, |_, _| Ok(())).is_err());
+}
+
+#[test]
+fn a_reader_that_overreports_its_buffer_is_refused_at_the_ffi_boundary() {
+    struct OverreportedRead;
+    impl std::io::Read for OverreportedRead {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            Ok(output.len() + 1)
+        }
+    }
+    let error =
+        decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut OverreportedRead, |_, _| Ok(()))
+            .unwrap_err();
+    assert!(matches!(error, CodecError::Ffmpeg { op: "read", ref detail }
+        if detail == "input callback returned more bytes than its supplied buffer"));
+}

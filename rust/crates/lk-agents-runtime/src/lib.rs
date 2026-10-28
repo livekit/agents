@@ -15,6 +15,11 @@
 //! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
 pub mod agent_run;
+pub mod codecs;
+pub mod media_workers;
+pub mod recording;
+#[cfg(feature = "media-images")]
+pub mod images;
 pub mod avatar;
 pub mod host;
 pub mod a2a;

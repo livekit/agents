@@ -12,8 +12,64 @@
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
 use crate::mime::mime_to_av_format;
-use crate::{Quality, Resampler};
 use crate::wav::WavDecoder;
+use crate::{Quality, Resampler};
+
+/// Native transform bounds, separate from the runtime's retained input/output queues.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeLimits {
+    pub min_sample_rate: u32,
+    pub max_sample_rate: u32,
+    pub max_channels: u16,
+    pub max_streams: usize,
+    pub max_expansion_ratio: u32,
+    pub max_samples_per_frame: usize,
+}
+
+impl DecodeLimits {
+    pub fn validate(
+        &self,
+        source: AudioFormat,
+        target_rate: Option<u32>,
+        samples: usize,
+    ) -> Result<()> {
+        if !self.is_valid() {
+            return Err(CodecError::DecodeLimit("invalid limits"));
+        }
+        let rate = target_rate.unwrap_or(source.sample_rate);
+        if source.sample_rate < self.min_sample_rate
+            || source.sample_rate > self.max_sample_rate
+            || rate < self.min_sample_rate
+            || rate > self.max_sample_rate
+        {
+            return Err(CodecError::DecodeLimit("sample rate"));
+        }
+        if source.num_channels == 0 || source.num_channels > self.max_channels {
+            return Err(CodecError::DecodeLimit("channels"));
+        }
+        if u64::from(rate) > u64::from(source.sample_rate) * u64::from(self.max_expansion_ratio) {
+            return Err(CodecError::DecodeLimit("resampling expansion"));
+        }
+        let output = (samples as u128 * u128::from(rate)).div_ceil(u128::from(source.sample_rate));
+        if samples > self.max_samples_per_frame || output > self.max_samples_per_frame as u128 {
+            return Err(CodecError::DecodeLimit("decoded frame samples"));
+        }
+        Ok(())
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.min_sample_rate > 0
+            && self.max_sample_rate >= self.min_sample_rate
+            && self.max_sample_rate <= i32::MAX as u32
+            && self.max_channels > 0
+            && self.max_streams > 0
+            && self.max_streams <= i32::MAX as usize
+            && self.max_expansion_ratio > 0
+            && self.max_expansion_ratio <= i32::MAX as u32
+            && self.max_samples_per_frame > 0
+            && self.max_samples_per_frame <= i32::MAX as usize
+    }
+}
 
 enum Inner {
     Wav(WavDecoder),
@@ -36,6 +92,9 @@ pub struct Decoder {
     /// Per `(source format -> target rate)`: a provider may concatenate WAV files of different formats.
     resampler: Option<(AudioFormat, Box<dyn Resampler>)>,
     output_format: Option<AudioFormat>,
+    limits: Option<DecodeLimits>,
+    partial: Vec<i16>,
+    partial_format: Option<AudioFormat>,
 }
 
 impl std::fmt::Debug for Decoder {
@@ -75,9 +134,11 @@ impl Decoder {
         let inner = match av_format {
             Some("wav") => Inner::Wav(WavDecoder::new()),
             #[cfg(feature = "ffmpeg")]
-            other => {
-                Inner::Ffmpeg(crate::ffmpeg::FfmpegDecoder::new(other, sample_rate.unwrap_or(0), num_channels)?)
-            }
+            other => Inner::Ffmpeg(crate::ffmpeg::FfmpegDecoder::new(
+                other,
+                sample_rate.unwrap_or(0),
+                num_channels,
+            )?),
             #[cfg(not(feature = "ffmpeg"))]
             Some(other) => {
                 return Err(CodecError::UnsupportedMime {
@@ -106,7 +167,28 @@ impl Decoder {
             target_channels: num_channels,
             resampler: None,
             output_format: None,
+            limits: None,
+            partial: Vec::new(),
+            partial_format: None,
         })
+    }
+
+    /// Construct the supplied-chunk WAV calculator with runtime-selected transform bounds.
+    pub fn new_bounded(
+        mime: &str,
+        sample_rate: Option<u32>,
+        num_channels: u16,
+        limits: DecodeLimits,
+    ) -> Result<Self> {
+        if !limits.is_valid() {
+            return Err(CodecError::DecodeLimit("invalid limits"));
+        }
+        if mime_to_av_format(Some(mime)) != Some("wav") {
+            return Err(CodecError::DecodeLimit("container decoding requires a runtime worker"));
+        }
+        let mut decoder = Self::new(mime, sample_rate, num_channels)?;
+        decoder.limits = Some(limits);
+        Ok(decoder)
     }
 
     /// `None` until the first header is parsed.
@@ -151,13 +233,43 @@ impl Decoder {
                 let segments = w.push(bytes)?;
                 let mut out = Vec::new();
                 for seg in segments {
+                    if let Some(limits) = self.limits {
+                        limits.validate(
+                            seg.format,
+                            self.target_rate,
+                            seg.samples.len().saturating_add(self.partial.len()),
+                        )?;
+                    }
+                    let channels = usize::from(seg.format.num_channels);
+                    if channels == 0 {
+                        return Err(CodecError::DecodeLimit("channels"));
+                    }
+                    if self.partial_format.is_some_and(|format| format != seg.format)
+                        && !self.partial.is_empty()
+                    {
+                        return Err(CodecError::TruncatedWav);
+                    }
+                    self.partial_format = Some(seg.format);
+                    if self.partial.is_empty() && seg.samples.len() % channels == 0 {
+                        out.extend(Self::convert(
+                            &mut self.resampler,
+                            &mut self.output_format,
+                            self.target_rate,
+                            seg.format,
+                            &seg.samples,
+                        )?);
+                        continue;
+                    }
+                    self.partial.extend(seg.samples);
+                    let complete = self.partial.len() / channels * channels;
                     out.extend(Self::convert(
                         &mut self.resampler,
                         &mut self.output_format,
                         self.target_rate,
                         seg.format,
-                        &seg.samples,
+                        &self.partial[..complete],
                     )?);
+                    self.partial.drain(..complete);
                 }
                 Ok(out)
             }
@@ -175,7 +287,9 @@ impl Decoder {
             Inner::Wav(w) => {
                 w.flush();
                 Ok(match self.resampler.as_mut() {
-                    Some((fmt, r)) => flush_tail(*fmt, self.target_rate.unwrap_or(fmt.sample_rate), r.as_mut())?,
+                    Some((fmt, r)) => {
+                        flush_tail(*fmt, self.target_rate.unwrap_or(fmt.sample_rate), r.as_mut())?
+                    }
                     None => Vec::new(),
                 })
             }
@@ -186,6 +300,19 @@ impl Decoder {
                 Ok(pcm)
             }
         }
+    }
+
+    /// Validate terminal input before draining. `flush` remains available for mid-stream drift.
+    pub fn finish(&mut self) -> Result<Vec<i16>> {
+        match &self.inner {
+            Inner::Wav(wav) => wav.end_input()?,
+            #[cfg(feature = "ffmpeg")]
+            Inner::Ffmpeg(_) => {}
+        }
+        if !self.partial.is_empty() {
+            return Err(CodecError::TruncatedWav);
+        }
+        self.flush()
     }
 
     /// A format change drains the previous resampler's tail before tearing it down.
@@ -323,7 +450,8 @@ mod tests {
             (24_000, 48_000, 2, 4800, 1150..=1250),
         ] {
             let mut d = Decoder::new("audio/wav", Some(rate), ch).unwrap();
-            let total = d.push(&wav_file(src, ch, &ramp(n))).unwrap().len() + d.flush().unwrap().len();
+            let total =
+                d.push(&wav_file(src, ch, &ramp(n))).unwrap().len() + d.flush().unwrap().len();
             assert_eq!(total % usize::from(ch), 0, "whole frames");
             let got = total / usize::from(ch);
             assert!(frames.contains(&got), "{src} -> {rate} x{ch}: {got} frames, want {frames:?}");
@@ -344,11 +472,14 @@ mod tests {
     // cuts itself off".
     #[test]
     fn flush_releases_the_resamplers_tail() {
-        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
-        let pushed = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(48_000), 1).unwrap();
+        let pushed = d.push(&wav_file(24_000, 1, &ramp(2400))).unwrap();
         let tail = d.flush().unwrap();
-        assert!(!tail.is_empty(), "soxr holds a filter delay and flush must release it");
-        assert!(pushed.len() < 2400, "the held tail is what is missing from the push");
+        assert!(!tail.is_empty(), "the held interpolation/filter tail must be released");
+        assert!(
+            (4700..=4900).contains(&(pushed.len() + tail.len())),
+            "the complete 100 ms input must survive final draining"
+        );
     }
 
     // Catches: reusing the first file's resampler for a second, differently-rated file, and
@@ -375,9 +506,9 @@ mod tests {
     // early return, and then the join between the two files is a click.
     #[test]
     fn a_change_to_a_matching_rate_still_drains_the_old_resampler_first() {
-        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
-        let first = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap();
-        let second = d.push(&wav_file(24_000, 1, &ramp(240))).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(48_000), 1).unwrap();
+        let first = d.push(&wav_file(24_000, 1, &ramp(2400))).unwrap();
+        let second = d.push(&wav_file(48_000, 1, &ramp(240))).unwrap();
         assert!(
             second.len() > 240,
             "the second push must carry the first run's tail ahead of its own {} samples; got {}",
@@ -389,7 +520,7 @@ mod tests {
             &ramp(240)[..],
             "and the straight-through samples must be untouched behind it"
         );
-        assert!(first.len() + second.len() >= 2600);
+        assert!((5000..=5100).contains(&(first.len() + second.len())));
     }
 
     // Catches: the WAV path quietly downmixing to the requested channel count. The reference's

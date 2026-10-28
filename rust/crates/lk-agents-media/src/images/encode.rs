@@ -186,10 +186,7 @@ pub struct RgbaFrame<'a> {
 
 /// `utils.images.encode(frame, options)` over tight RGBA, the options as the reference's
 /// `Literal` strings. Unknown values raise rather than default.
-#[lk_agents_abi::host(export(
-    kw_only = "format",
-    defaults(format = "JPEG")
-))]
+#[lk_agents_abi::host(export(kw_only = "format", defaults(format = "JPEG")))]
 #[allow(clippy::too_many_arguments)]
 pub fn encode_image(
     data: &[u8],
@@ -208,7 +205,11 @@ pub fn encode_image(
             Some(ResizeOptions { width, height, strategy })
         }
         (None, None, None) => None,
-        _ => return Err("resize needs all three of width, height and strategy, or none of them".to_owned()),
+        _ => {
+            return Err(
+                "resize needs all three of width, height and strategy, or none of them".to_owned()
+            );
+        }
     };
     let options = EncodeOptions { format, resize_options, quality };
     encode(RgbaFrame { width, height, data }, &options).map_err(|e| e.to_string())
@@ -216,9 +217,20 @@ pub fn encode_image(
 
 /// `encode` (`image.py:73`).
 pub fn encode(frame: RgbaFrame<'_>, options: &EncodeOptions) -> Result<Vec<u8>, MediaError> {
+    let mut buffer = Vec::new();
+    encode_into(frame, options, &mut buffer)?;
+    Ok(buffer)
+}
+
+/// Encodes into supplied storage, so the runtime can enforce an encoded-byte limit while writing.
+pub fn encode_into(
+    frame: RgbaFrame<'_>,
+    options: &EncodeOptions,
+    output: impl std::io::Write,
+) -> Result<(), MediaError> {
     let img = rgb_from_frame(frame)?;
     let resized = resize_image(img, options.resize_options)?;
-    encode_buffer(&resized, options)
+    encode_buffer(&resized, options, output)
 }
 
 /// `_image_from_frame` (`image.py:89`). Alpha is dropped, not composited.
@@ -251,12 +263,45 @@ fn resize_image(image: RgbImage, options: Option<ResizeOptions>) -> Result<RgbIm
     let Some(opts) = options else { return Ok(image) };
 
     let (iw, ih) = (image.width(), image.height());
+    let (new_width, new_height) = resized_dimensions(iw, ih, opts)?;
+
+    match opts.strategy {
+        ResizeStrategy::CenterAspectFit | ResizeStrategy::CenterAspectCover => {
+            let mut canvas = RgbImage::new(opts.width, opts.height);
+            if new_width > 0 && new_height > 0 {
+                let resized = imageops::resize(&image, new_width, new_height, FILTER);
+                let x = centered_offset(opts.width, new_width);
+                let y = centered_offset(opts.height, new_height);
+                imageops::replace(&mut canvas, &resized, x, y);
+            }
+            Ok(canvas)
+        }
+        _ => {
+            if new_width == 0 || new_height == 0 {
+                return Err(MediaError::DegenerateResize {
+                    strategy: opts.strategy,
+                    source_width: iw,
+                    source_height: ih,
+                    width: new_width,
+                    height: new_height,
+                });
+            }
+            Ok(imageops::resize(&image, new_width, new_height, FILTER))
+        }
+    }
+}
+
+/// Intermediate resize dimensions, also used to admit the runtime's pixel allocation.
+pub fn resized_dimensions(iw: u32, ih: u32, opts: ResizeOptions) -> Result<(u32, u32), MediaError> {
+    if iw == 0 || ih == 0 {
+        return Err(MediaError::ZeroSizedFrame { width: iw, height: ih });
+    }
     if opts.width == 0 || opts.height == 0 {
         // The reference fails with `ZeroDivisionError` or inside `save` depending on the branch.
         return Err(MediaError::ZeroSizedTarget { width: opts.width, height: opts.height });
     }
 
-    let (new_width, new_height) = match opts.strategy {
+    Ok(match opts.strategy {
         ResizeStrategy::Skew => (opts.width, opts.height),
         ResizeStrategy::CenterAspectFit => {
             // Start with assuming the new image is narrower than the original.
@@ -292,35 +337,7 @@ fn resize_image(image: RgbImage, options: Option<ResizeOptions>) -> Result<RgbIm
                 (opts.width, candidate)
             }
         }
-    };
-
-    match opts.strategy {
-        ResizeStrategy::CenterAspectFit | ResizeStrategy::CenterAspectCover => {
-            // Black fill; a maskless `paste` clips the overhang, which is how "cover" crops.
-            let mut canvas = RgbImage::new(opts.width, opts.height);
-            // Defensive: the image crate does not promise a zero-sized paste is a no-op.
-            if new_width > 0 && new_height > 0 {
-                let resized = imageops::resize(&image, new_width, new_height, FILTER);
-                let x = centered_offset(opts.width, new_width);
-                let y = centered_offset(opts.height, new_height);
-                imageops::replace(&mut canvas, &resized, x, y);
-            }
-            Ok(canvas)
-        }
-        _ => {
-            if new_width == 0 || new_height == 0 {
-                // Extreme aspect ratios (1920x1 fitted to 512 wide -> 512x0); the reference dies in `save`.
-                return Err(MediaError::DegenerateResize {
-                    strategy: opts.strategy,
-                    source_width: iw,
-                    source_height: ih,
-                    width: new_width,
-                    height: new_height,
-                });
-            }
-            Ok(imageops::resize(&image, new_width, new_height, FILTER))
-        }
-    }
+    })
 }
 
 /// `(target - actual) // 2`: Python's floor division, which differs from `/` on odd negative overhangs.
@@ -338,8 +355,11 @@ fn scaled(value: u32, num: u32, den: u32) -> u32 {
     (f64::from(value) * (f64::from(num) / f64::from(den))) as u32
 }
 
-fn encode_buffer(image: &RgbImage, options: &EncodeOptions) -> Result<Vec<u8>, MediaError> {
-    let mut buffer = Vec::new();
+fn encode_buffer(
+    image: &RgbImage,
+    options: &EncodeOptions,
+    mut buffer: impl std::io::Write,
+) -> Result<(), MediaError> {
     let (w, h) = (image.width(), image.height());
     let result = match options.format {
         ImageFormat::Jpeg => {
@@ -357,7 +377,7 @@ fn encode_buffer(image: &RgbImage, options: &EncodeOptions) -> Result<Vec<u8>, M
         }
     };
     result.map_err(|err| MediaError::Encode(err.to_string()))?;
-    Ok(buffer)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -392,7 +412,10 @@ mod tests {
             }
             assert_eq!(f.as_str().parse::<ImageFormat>(), Ok(f));
         }
-        assert!("jpeg".parse::<ImageFormat>().is_err(), "PIL's names are upper case and the case is not folded");
+        assert!(
+            "jpeg".parse::<ImageFormat>().is_err(),
+            "PIL's names are upper case and the case is not folded"
+        );
 
         for s in ResizeStrategy::ALL {
             match s {
@@ -474,7 +497,11 @@ mod tests {
             ((7, 7), (61, 60), ScaleAspectCover, (61, 60)),
             ((7, 7), (61, 60), ScaleAspectFit, (61, 60)),
         ] {
-            assert_eq!(resize(source, target, strategy).dimensions(), want, "{source:?} -> {target:?} {strategy:?}");
+            assert_eq!(
+                resize(source, target, strategy).dimensions(),
+                want,
+                "{source:?} -> {target:?} {strategy:?}"
+            );
         }
     }
 
@@ -500,7 +527,10 @@ mod tests {
             );
             let centered = resize_image(image, opts(ResizeStrategy::CenterAspectFit)).unwrap();
             assert_eq!(centered.dimensions(), (51, 51));
-            assert!(centered.pixels().all(|px| px.0 == [0, 0, 0]), "nothing was pasted, so it is black");
+            assert!(
+                centered.pixels().all(|px| px.0 == [0, 0, 0]),
+                "nothing was pasted, so it is black"
+            );
         }
     }
 
@@ -646,5 +676,4 @@ mod tests {
         };
         assert_eq!(png(Some(1)), png(None));
     }
-
 }
