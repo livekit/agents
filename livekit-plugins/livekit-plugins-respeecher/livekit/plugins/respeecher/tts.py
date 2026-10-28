@@ -172,7 +172,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Respeecher"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         # WebSocket protocol does not support custom headers, using query parameter
         ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
@@ -245,6 +245,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the TTS synthesis"""
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         json_data = {
             "transcript": self._input_text,
             "voice": {
@@ -270,7 +271,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json=json_data,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 
@@ -308,6 +309,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.read_timeout is not None
+            or self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "respeecher streaming does not support read_timeout, write_timeout, total_timeout; "
+                "set them to None",
+                retryable=False,
+            )
         context_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=context_id,
@@ -370,7 +381,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -411,7 +422,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

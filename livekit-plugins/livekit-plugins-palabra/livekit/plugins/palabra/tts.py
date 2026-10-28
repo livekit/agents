@@ -193,7 +193,7 @@ class TTS(tts.TTS):
             sample_rate=self._opts.sample_rate,
         )
 
-    async def _ensure_session(self, timeout: float) -> TtsSession:
+    async def _ensure_session(self, timeout: float | None) -> TtsSession:
         # Caller must hold `self._send_lock`.
         if self._closed:
             raise APIConnectionError("palabra tts is closed", retryable=False)
@@ -346,6 +346,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.pool_timeout is not None
+        ):
+            raise APIError(
+                "palabra streaming does not support write_timeout, total_timeout, "
+                "pool_timeout; set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -413,7 +423,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # Silence longer than the timeout here means the server is stuck.
                     try:
                         event = await asyncio.wait_for(
-                            mailbox.get(), timeout=self._conn_options.timeout
+                            mailbox.get(), timeout=self._conn_options.read_timeout
                         )
                     except asyncio.TimeoutError:
                         # A sent generation never got its last_chunk.
@@ -458,7 +468,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         session_acquired = False
         try:
             async with self._tts._send_lock:
-                session = await self._tts._ensure_session(self._conn_options.timeout)
+                session = await self._tts._ensure_session(self._conn_options.connect_timeout)
                 self._tts._active_streams_cnt += 1
                 session_acquired = True
             tasks = [

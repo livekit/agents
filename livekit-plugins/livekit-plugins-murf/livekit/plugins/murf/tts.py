@@ -27,6 +27,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -169,7 +170,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Murf"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/v1/speech/stream-input?sample_rate={self._opts.sample_rate}&format={self._opts.encoding}&model={self._opts.model}"
@@ -251,6 +252,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         request_id = utils.shortuuid()
 
         try:
@@ -268,7 +270,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "format": self._opts.encoding,
                     "sample_rate": self._opts.sample_rate,
                 },
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 
@@ -300,6 +302,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+        ):
+            raise APIError(
+                "murf streaming does not support write_timeout, total_timeout, "
+                "read_timeout; set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -380,7 +392,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

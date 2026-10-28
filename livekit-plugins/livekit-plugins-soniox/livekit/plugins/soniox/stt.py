@@ -307,7 +307,7 @@ class SpeechStream(stt.SpeechStream):
                 # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
                 heartbeat=30.0,
             ),
-            timeout=self._conn_options.timeout,
+            timeout=self._conn_options.connect_timeout,
         )
         # Set initial configuration message.
         await ws.send_str(json.dumps(config))
@@ -335,6 +335,17 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+            or self._conn_options.pool_timeout is not None
+        ):
+            raise APIError(
+                "soniox streaming does not support write_timeout, total_timeout, "
+                "read_timeout, pool_timeout; set them to None",
+                retryable=False,
+            )
         while True:
             try:
                 ws = await self._connect_ws()

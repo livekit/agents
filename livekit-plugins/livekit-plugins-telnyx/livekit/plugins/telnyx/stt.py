@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -177,6 +178,16 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
 
     async def _run(self) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+        ):
+            raise APIError(
+                "telnyx streaming does not support write_timeout, total_timeout, "
+                "read_timeout; set them to None",
+                retryable=False,
+            )
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
@@ -280,7 +291,7 @@ class SpeechStream(stt.RecognizeStream):
                     # Deepgram and Muse STT plugins.
                     heartbeat=30.0,
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
             logger.debug("Established Telnyx STT WebSocket connection")
             return ws

@@ -143,7 +143,7 @@ class TTS(tts.TTS):
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/speak/{self._opts.lang_code.language}?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&encoding={self._opts.encoding}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
@@ -259,6 +259,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             if self._opts.api_key:
                 headers = {API_AUTH_HEADER: self._opts.api_key}
@@ -276,10 +277,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "sampling_rate": self._opts.sample_rate,
                     "speed": self._opts.speed,
                 },
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:
@@ -348,6 +346,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+        ):
+            raise APIError(
+                "neuphonic streaming does not support write_timeout, total_timeout, "
+                "read_timeout; set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -457,7 +465,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+        async with self._tts._pool.connection(
+            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
+        ) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

@@ -37,6 +37,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -512,7 +513,7 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         headers = {
             "api-subscription-key": self._opts.api_key,
@@ -823,6 +824,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         payload: dict[str, object] = {
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
@@ -847,10 +849,7 @@ class ChunkedStream(tts.ChunkedStream):
                 url=self._opts.base_url,
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=self._conn_options.timeout,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -906,6 +905,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout == 0
+        ):
+            raise APIError(
+                "sarvam streaming requires write_timeout=None, total_timeout=None and "
+                "read_timeout > 0 or None",
+                retryable=False,
+            )
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
@@ -1052,7 +1061,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await input_sent_event.wait()
             try:
                 while True:
-                    msg = await ws.receive(timeout=self._conn_options.timeout)
+                    msg = await ws.receive(timeout=self._conn_options.read_timeout)
 
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSE,
@@ -1136,7 +1145,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 # Nothing suspends between the pool's get() and here, and every change to a
                 # handshake option invalidates the pool, so this socket was opened with the
                 # TTS's current model and completion setting. Adopt every model-coupled

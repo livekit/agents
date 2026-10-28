@@ -52,6 +52,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -304,6 +305,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        http_timeout = utils.http_context.client_timeout(conn_options)
         config = self._sanitize_options(language=language)
         params: dict[str, Any] = {
             "model": config.model,
@@ -326,7 +328,7 @@ class STT(stt.STT):
                 params=params,
                 # to_wav_bytes() produces a valid WAV file; the server auto-detects format.
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
                 data = await resp.json()
@@ -499,6 +501,15 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "smallestai streaming does not support write_timeout, total_timeout; "
+                "set them to None",
+                retryable=False,
+            )
         closing_ws = False
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -711,7 +722,7 @@ class SpeechStream(stt.SpeechStream):
                     # parks on receive() and the exception-driven reconnect never runs.
                     heartbeat=30.0,
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to Smallest AI STT") from None

@@ -30,6 +30,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -145,7 +146,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "AsyncAI"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         query = urlencode({API_AUTH_HEADER: self._opts.api_key, API_VERSION_HEADER: API_VERSION})
         url = self._opts.get_ws_url(f"/text_to_speech/websocket/ws?{query}")
@@ -242,6 +243,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout == 0
+        ):
+            raise APIError(
+                "asyncai streaming requires write_timeout=None, total_timeout=None and "
+                "read_timeout > 0 or None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -290,7 +301,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await input_sent_event.wait()
 
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -331,7 +342,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async_context_id = str(uuid.uuid4())
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, async_context_id)),

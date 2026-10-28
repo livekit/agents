@@ -32,6 +32,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -247,7 +248,7 @@ class TTS(tts.TTS):
 
         pool_ref: utils.ConnectionPool[AsyncStreamingTTSSession] | None = None
 
-        async def _connect(timeout: float) -> AsyncStreamingTTSSession:
+        async def _connect(timeout: float | None) -> AsyncStreamingTTSSession:
             session = AsyncStreamingTTSSession(
                 api_key=opts.api_key,
                 base_url=opts.base_url,
@@ -329,6 +330,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         request_id = utils.shortuuid()
         payload = speech_payload(
             text=self._input_text,
@@ -349,11 +351,7 @@ class ChunkedStream(tts.ChunkedStream):
                 http_stream_url(self._opts.base_url),
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=None,
-                    sock_connect=self._conn_options.timeout,
-                    sock_read=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
@@ -398,6 +396,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "vakyam streaming does not support write_timeout, total_timeout; set them to None",
+                retryable=False,
+            )
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
@@ -454,7 +460,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         deferred_error: APIStatusError | None = None
         cancelled = False
 
-        async with pool.connection(timeout=self._conn_options.timeout) as session:
+        async with pool.connection(
+            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
+        ) as session:
             await self._tts._stop_keepalive(session)
             reusable = False
             try:
@@ -466,7 +474,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                             started = True
 
                         async for chunk in session.synthesize_stream(
-                            text, timeout=self._conn_options.timeout
+                            text,
+                            timeout=self._conn_options.read_timeout,
+                            write_timeout=self._conn_options.write_timeout,
                         ):
                             output_emitter.push(chunk)
 

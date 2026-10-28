@@ -224,6 +224,16 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = opts
 
     async def _run(self) -> None:
+        if (
+            self._conn_options.read_timeout is not None
+            or self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "Palabra STT does not support read_timeout, write_timeout or total_timeout; "
+                "set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         input_closed = asyncio.Event()
         utterances: dict[str, _Utterance] = {}
@@ -345,7 +355,7 @@ class SpeechStream(stt.RecognizeStream):
             # The session object exists before connecting, so the finally below
             # also closes a connection abandoned by the timeout.
             session = _make_session()
-            await asyncio.wait_for(session.__aenter__(), timeout=self._conn_options.timeout)
+            await asyncio.wait_for(session.__aenter__(), timeout=self._conn_options.connect_timeout)
             tasks = [
                 asyncio.create_task(_send_task(session)),
                 asyncio.create_task(_recv_task(session)),

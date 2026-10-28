@@ -27,6 +27,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -132,7 +133,7 @@ class TTS(tts.TTS):
         return "xAI"
 
     async def _connect_ws(
-        self, timeout: float, opts: _TTSOptions
+        self, timeout: float | None, opts: _TTSOptions
     ) -> aiohttp.ClientWebSocketResponse:
         params: dict[str, str | int | float] = {
             "voice": opts.voice,
@@ -171,7 +172,7 @@ class TTS(tts.TTS):
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
-    async def _connect_pooled_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_pooled_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         return await self._connect_ws(timeout, self._opts)
 
     async def _close_pooled_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -267,6 +268,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+        ):
+            raise APIError(
+                "xai streaming does not support write_timeout, total_timeout, "
+                "read_timeout; set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -368,7 +379,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
 
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+        async with self._tts._pool.connection(
+            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
+        ) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

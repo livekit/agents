@@ -27,6 +27,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -190,7 +191,7 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(
                 self._opts.ws_url,
@@ -276,6 +277,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
@@ -290,7 +292,7 @@ class ChunkedStream(tts.ChunkedStream):
                 f"{self._opts.base_url}/tts",
                 headers=headers,
                 json=data,
-                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
@@ -335,6 +337,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if (
+            self._conn_options.read_timeout is not None
+            or self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "smallestai streaming does not support read_timeout, write_timeout, total_timeout; "
+                "set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -355,7 +367,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         ctx_state = {"opened": False, "finalized": False}
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 send_task = asyncio.create_task(self._send_task(ws, context_id, ctx_state))
                 recv_task = asyncio.create_task(self._recv_task(ws, output_emitter, ctx_state))
                 # Whether recv_task ended on a protocol-confirmed signal (legacy's
@@ -480,7 +495,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         """
         if not self._opts.use_continuations:
             while True:
-                msg = await self._recv_one(ws, timeout=self._conn_options.timeout)
+                msg = await self._recv_one(ws, timeout=self._conn_options.read_timeout)
                 status, event = self._parse_status_event(msg, output_emitter)
                 if status == "complete":
                     return True
@@ -497,7 +512,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # underlying connection when this heuristic (rather than an explicit signal) is
         # what ended the loop - see _run.
         #
-        # Before the closing fragment is sent, `conn_options.timeout` bounds inactivity
+        # Before the closing fragment is sent, `conn_options.read_timeout` bounds inactivity
         # (like it does for legacy's single `ws.receive(timeout=...)`), not the whole
         # pre-finalize phase: a long input segment can legitimately take longer than
         # that to finish streaming from the caller, and each received frame proves the
@@ -511,7 +526,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         # by the same rolling `inactivity_deadline`) until either audio shows up or the
         # deadline raises a real timeout, instead of returning a silent empty segment.
         event_loop = asyncio.get_event_loop()
-        inactivity_deadline = event_loop.time() + self._conn_options.timeout
+        inactivity_deadline = (
+            None
+            if self._conn_options.read_timeout is None
+            else event_loop.time() + self._conn_options.read_timeout
+        )
         received_chunk = False
         while True:
             try:
@@ -519,16 +538,20 @@ class SynthesizeStream(tts.SynthesizeStream):
             except asyncio.TimeoutError:
                 if ctx_state["finalized"] and received_chunk:
                     return False
-                if event_loop.time() >= inactivity_deadline:
+                if inactivity_deadline is not None and event_loop.time() >= inactivity_deadline:
                     raise
                 continue
-            inactivity_deadline = event_loop.time() + self._conn_options.timeout
+            inactivity_deadline = (
+                None
+                if self._conn_options.read_timeout is None
+                else event_loop.time() + self._conn_options.read_timeout
+            )
             status, _ = self._parse_status_event(msg, output_emitter)
             if status == "chunk":
                 received_chunk = True
 
     async def _recv_one(
-        self, ws: aiohttp.ClientWebSocketResponse, *, timeout: float
+        self, ws: aiohttp.ClientWebSocketResponse, *, timeout: float | None
     ) -> aiohttp.WSMessage:
         msg = await ws.receive(timeout=timeout)
         if msg.type in (

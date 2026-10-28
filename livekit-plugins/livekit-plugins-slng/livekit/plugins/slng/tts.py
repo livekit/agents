@@ -31,6 +31,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -508,7 +509,7 @@ class TTS(tts.TTS):
     def _is_ws_usable(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         return not bool(getattr(ws, "closed", False))
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
 
         # Connect to WebSocket
@@ -569,7 +570,7 @@ class TTS(tts.TTS):
 
         return ws
 
-    def _start_standby_replenish(self, *, timeout: float) -> bool:
+    def _start_standby_replenish(self, *, timeout: float | None) -> bool:
         if not self.warm_standby_enabled:
             return False
         if self._standby is not None and self._is_ws_usable(self._standby.ws):
@@ -789,6 +790,19 @@ class TTS(tts.TTS):
                 await candidate.aclose()
 
 
+def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
+    if (
+        conn_options.write_timeout is not None
+        or conn_options.total_timeout is not None
+        or conn_options.read_timeout == 0
+    ):
+        raise APIError(
+            "SLNG streaming requires write_timeout=None, total_timeout=None and "
+            "read_timeout > 0 or None",
+            retryable=False,
+        )
+
+
 class ChunkedStream(tts.ChunkedStream):
     """Non-streaming synthesis: send the full text once over the SLNG WebSocket."""
 
@@ -798,6 +812,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        _check_stream_timeouts(self._conn_options)
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -812,13 +827,13 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             # Chunked synthesis always uses a dedicated connection: terminal
             # protocols close the socket after the final audio.
-            ws = await self._tts._connect_ws(timeout=self._conn_options.timeout)
+            ws = await self._tts._connect_ws(timeout=self._conn_options.connect_timeout)
             if self._input_text:
                 await ws.send_str(json.dumps({"type": "text", "text": self._input_text}))
             await ws.send_str(SynthesizeStream._FLUSH_MSG)
 
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -941,6 +956,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
         # fresh channel (matching the Deepgram plugin pattern).
+        _check_stream_timeouts(self._conn_options)
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
         logger.debug(f"[TTS] _run starting: request_id={request_id}")
@@ -1061,7 +1077,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return
             standby_replenish_requested = True
             standby_replenish_started = self._tts._start_standby_replenish(
-                timeout=self._conn_options.timeout
+                timeout=self._conn_options.connect_timeout
             )
 
         def log_segment_timing() -> None:
@@ -1167,7 +1183,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal audio_chunks_seen
             await input_sent_event.wait()
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -1299,7 +1315,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ) = await self._tts._checkout_standby()
                 standby_used = ws is not None
             if ws is None:
-                ws = await self._tts._connect_ws(timeout=self._conn_options.timeout)
+                ws = await self._tts._connect_ws(timeout=self._conn_options.connect_timeout)
             capture_ws_timing(ws)
             tasks = [
                 asyncio.create_task(send_task(ws)),

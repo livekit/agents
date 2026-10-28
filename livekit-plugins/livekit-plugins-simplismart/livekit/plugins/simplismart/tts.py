@@ -164,6 +164,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         if self._opts.qwen_options is not None:
             qwen_opts = self._opts.qwen_options
             payload: dict = {
@@ -201,10 +202,7 @@ class ChunkedStream(tts.ChunkedStream):
                 self._tts._base_url,
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=self._conn_options.timeout,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()

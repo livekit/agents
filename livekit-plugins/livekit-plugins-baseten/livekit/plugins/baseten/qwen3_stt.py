@@ -46,6 +46,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -264,13 +265,23 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
         self._opts = opts
 
     async def _run(self) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+        ):
+            raise APIError(
+                "baseten streaming does not support write_timeout, total_timeout, "
+                "read_timeout; set them to None",
+                retryable=False,
+            )
         try:
             ws = await asyncio.wait_for(
                 self._backend._ensure_session().ws_connect(
                     self._backend._model_endpoint,
                     headers={"Authorization": f"Api-Key {self._backend._api_key}"},
                 ),
-                timeout=self._conn_options.timeout,
+                timeout=self._conn_options.connect_timeout,
             )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None

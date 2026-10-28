@@ -293,6 +293,7 @@ class ChunkedStream(tts.ChunkedStream):
         return ssml
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         headers = {
             "Content-Type": "application/ssml+xml",
             "X-Microsoft-OutputFormat": SUPPORTED_OUTPUT_FORMATS[self._opts.sample_rate],
@@ -316,7 +317,7 @@ class ChunkedStream(tts.ChunkedStream):
                 url=self._opts.get_endpoint_url(),
                 headers=headers,
                 data=self._build_ssml(),
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
                 async for data, _ in resp.content.iter_chunks():

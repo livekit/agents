@@ -179,7 +179,7 @@ class AsyncStreamingTTSSession:
     ) -> None:
         await self.close()
 
-    async def connect(self, *, timeout: float = 10.0) -> None:
+    async def connect(self, *, timeout: float | None = 10.0) -> None:
         if self._connection is not None:
             return
         try:
@@ -222,7 +222,13 @@ class AsyncStreamingTTSSession:
                 exc, message="Vakyam TTS WebSocket connection failed"
             ) from exc
 
-    async def synthesize_stream(self, text: str, *, timeout: float = 10.0) -> AsyncIterator[bytes]:
+    async def synthesize_stream(
+        self,
+        text: str,
+        *,
+        timeout: float | None = 10.0,
+        write_timeout: float | None = None,
+    ) -> AsyncIterator[bytes]:
         """Send one utterance and yield raw audio until EOU or cancellation.
 
         If this coroutine is cancelled mid-stream (LiveKit barge-in), it sends
@@ -237,7 +243,7 @@ class AsyncStreamingTTSSession:
         self._utterance_active = True
 
         try:
-            await asyncio.wait_for(self._connection.send(payload), timeout=timeout)
+            await asyncio.wait_for(self._connection.send(payload), timeout=write_timeout)
             while True:
                 message = await asyncio.wait_for(self._connection.recv(), timeout=timeout)
                 if isinstance(message, bytes):
@@ -270,7 +276,7 @@ class AsyncStreamingTTSSession:
             self._utterance_active = False
 
     async def cancel(
-        self, *, drain: bool = True, timeout: float = 10.0
+        self, *, drain: bool = True, timeout: float | None = 10.0
     ) -> WebSocketSpeechResult | None:
         """Send barge-in ``cancel`` and optionally drain until ``cancellation``."""
         if self._connection is None:
@@ -286,7 +292,7 @@ class AsyncStreamingTTSSession:
             return None
         return await self._drain_until_terminal(timeout=timeout)
 
-    async def ping(self, *, timeout: float = 10.0) -> bool:
+    async def ping(self, *, timeout: float | None = 10.0) -> bool:
         if self._connection is None:
             raise APIConnectionError("WebSocket session is not connected")
         try:
@@ -309,7 +315,7 @@ class AsyncStreamingTTSSession:
             )
         return True
 
-    async def close(self, *, timeout: float = 10.0) -> None:
+    async def close(self, *, timeout: float | None = 10.0) -> None:
         if self._connection is None:
             return
         try:
@@ -323,7 +329,7 @@ class AsyncStreamingTTSSession:
             self._connection = None
             self._utterance_active = False
 
-    async def _abort_and_drain(self, *, timeout: float) -> None:
+    async def _abort_and_drain(self, *, timeout: float | None) -> None:
         """Best-effort cancel + drain after the consumer task was cancelled."""
         if self._connection is None:
             return
@@ -334,7 +340,7 @@ class AsyncStreamingTTSSession:
         with suppress(Exception):
             self.last_result = await self._drain_until_terminal(timeout=timeout)
 
-    async def _drain_until_terminal(self, *, timeout: float) -> WebSocketSpeechResult:
+    async def _drain_until_terminal(self, *, timeout: float | None) -> WebSocketSpeechResult:
         if self._connection is None:
             raise APIConnectionError("WebSocket session is not connected")
 

@@ -29,6 +29,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -144,6 +145,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        http_timeout = utils.http_context.client_timeout(conn_options)
         lang = language if is_given(language) else self._opts.language
         form = aiohttp.FormData()
         form.add_field(
@@ -163,10 +165,7 @@ class STT(stt.STT):
                     "Authorization": f"Bearer {self._api_key}",
                     "Accept": "application/json",
                 },
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 return _prerecorded_transcription_to_speech_event(
                     await res.json(), enable_diarization=self._opts.enable_diarization
@@ -328,6 +327,16 @@ class SpeechStream(stt.RecognizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+        ):
+            raise APIError(
+                "xai streaming does not support write_timeout, total_timeout, "
+                "read_timeout; set them to None",
+                retryable=False,
+            )
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
@@ -457,7 +466,7 @@ class SpeechStream(stt.RecognizeStream):
                     # Deepgram and Muse STT plugins.
                     heartbeat=30.0,
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to xAI") from None

@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     stt,
     utils,
@@ -558,6 +559,15 @@ class SpeechStream(stt.SpeechStream):
         return max(1, round(self._opts.sample_rate * buffer_size_seconds))
 
     async def _run(self) -> None:
+        if (
+            self._conn_options.read_timeout is not None
+            or self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "slng streaming does not support read_timeout, write_timeout, total_timeout; set them to None",
+                retryable=False,
+            )
         max_buffer_seconds = 600
         max_buffer_bytes = int(max_buffer_seconds * self._opts.sample_rate * 2)
 
@@ -1423,7 +1433,7 @@ class SpeechStream(stt.SpeechStream):
                     model_endpoint,
                     headers=headers,
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
         except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientConnectorError) as e:
             raise APIConnectionError("failed to connect to SLNG STT") from e
@@ -1459,7 +1469,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 msg = await asyncio.wait_for(
                     ws.receive(),
-                    timeout=self._conn_options.timeout,
+                    timeout=self._conn_options.read_timeout,
                 )
             except (TimeoutError, asyncio.TimeoutError) as exc:
                 raise APIConnectionError("timed out waiting for SLNG STT ready") from exc

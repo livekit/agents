@@ -190,7 +190,7 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _current_connection(self, *, timeout: float) -> _Connection:
+    async def _current_connection(self, *, timeout: float | None) -> _Connection:
         """Return the live connection, creating one if needed."""
         async with self.__conn_lock:
             conn = self.__current_connection
@@ -357,6 +357,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         mid-synthesis; the next sentence starts a fresh stream. Only complete
         sentences are ever sent, so every rotation lands on a natural boundary.
         """
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout is not None
+            or self._conn_options.pool_timeout is not None
+        ):
+            raise APIError(
+                "soniox streaming does not support write_timeout, total_timeout, "
+                "read_timeout, pool_timeout; set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
 
         output_emitter.initialize(
@@ -450,7 +461,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self, output_emitter: tts.AudioEmitter, request_id: str, *, attempt: int = 0
     ) -> _ActiveStream:
         try:
-            connection = await self._tts._current_connection(timeout=self._conn_options.timeout)
+            connection = await self._tts._current_connection(
+                timeout=self._conn_options.connect_timeout
+            )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:

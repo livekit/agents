@@ -512,6 +512,16 @@ class RealtimeSession(
 
     async def _run_connection(self, *, reconnecting: bool) -> None:
         """Connect, configure the session, and exchange events until the connection ends."""
+        if (
+            self._opts.conn_options.write_timeout is not None
+            or self._opts.conn_options.read_timeout is not None
+            or self._opts.conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "Azure Voice Live does not support write_timeout, read_timeout or total_timeout; "
+                "set them to None",
+                retryable=False,
+            )
         async with contextlib.AsyncExitStack() as stack:
             try:
                 conn = await asyncio.wait_for(
@@ -522,7 +532,7 @@ class RealtimeSession(
                             model=self._opts.model,
                         )
                     ),
-                    self._opts.conn_options.timeout,
+                    self._opts.conn_options.connect_timeout,
                 )
             except asyncio.TimeoutError as e:
                 raise APIConnectionError("Azure Voice Live connection timed out") from e

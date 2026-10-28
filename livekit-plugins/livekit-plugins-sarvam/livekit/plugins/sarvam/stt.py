@@ -26,7 +26,7 @@ import logging
 import os
 import platform
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -38,6 +38,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -550,11 +551,7 @@ class STT(stt.STT):
 
     @staticmethod
     def _single_attempt_conn_options(conn_options: APIConnectOptions) -> APIConnectOptions:
-        return APIConnectOptions(
-            max_retry=0,
-            retry_interval=conn_options.retry_interval,
-            timeout=conn_options.timeout,
-        )
+        return replace(conn_options, max_retry=0)
 
     async def recognize(
         self,
@@ -630,6 +627,7 @@ class STT(stt.STT):
             APIStatusError: On API errors (non-200 status)
             APITimeoutError: On API timeout
         """
+        http_timeout = utils.http_context.client_timeout(conn_options)
         opts_language, opts_model, opts_mode = self._resolve_opts(
             language=language,
             model=model,
@@ -662,10 +660,7 @@ class STT(stt.STT):
                 url=base_url,
                 data=form_data,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=conn_options.timeout,
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -1179,6 +1174,15 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Main streaming loop with WebSocket connection."""
+        if (
+            self._conn_options.read_timeout is not None
+            or self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "sarvam streaming does not support read_timeout, write_timeout, total_timeout; set them to None",
+                retryable=False,
+            )
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
@@ -1234,7 +1238,7 @@ class SpeechStream(stt.SpeechStream):
                 ws_url,
                 headers=headers,
             ),
-            self._conn_options.timeout,
+            self._conn_options.connect_timeout,
         )
 
         # Store WebSocket reference for cleanup - ensure it's always cleaned up
@@ -1281,7 +1285,7 @@ class SpeechStream(stt.SpeechStream):
                 done2, pending2 = await asyncio.wait(
                     [self._message_task, reconnect_task],
                     return_when=asyncio.FIRST_COMPLETED,
-                    timeout=self._conn_options.timeout,
+                    timeout=self._conn_options.read_timeout,
                 )
                 done |= done2
                 pending = pending2

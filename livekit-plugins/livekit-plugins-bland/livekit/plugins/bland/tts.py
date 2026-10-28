@@ -52,7 +52,7 @@ _MAX_SESSION_DURATION = 50
 # How long a barge-in waits for the cancelled turn's terminal before giving up on
 # the socket. Answering `cancel` is a state flip on the server, so this only ever
 # covers a round trip; anything slower is a socket worth replacing. Deliberately
-# not derived from `conn_options.timeout` — that budget is for establishing a
+# not derived from `conn_options.connect_timeout` — that budget is for establishing a
 # connection, and spending it here stalls the next turn behind a dead one.
 _CANCEL_DRAIN_TIMEOUT = 0.5
 
@@ -172,7 +172,7 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         """Open a session and hold it at `ready`, so a turn starts on the first `speak`."""
         try:
             ws = await asyncio.wait_for(
@@ -301,6 +301,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         body: dict[str, Any] = {
             "text": self._input_text,
             "voice": self._opts.voice_id,
@@ -317,7 +318,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=body,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 if resp.status != 200:
                     raise APIStatusError(
@@ -366,6 +367,16 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # One stream is one segment, which is one Bland turn: the socket carries a
         # single turn at a time and the framework opens a stream per segment.
+        if (
+            self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+            or self._conn_options.read_timeout == 0
+        ):
+            raise APIError(
+                "bland streaming requires write_timeout=None, total_timeout=None and "
+                "read_timeout > 0 or None",
+                retryable=False,
+            )
         context_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=context_id,
@@ -405,7 +416,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not text_sent:
                 return
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await ws.receive(timeout=self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -483,7 +494,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         cancelled: asyncio.CancelledError | None = None
         try:
-            async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
