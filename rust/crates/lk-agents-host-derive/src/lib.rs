@@ -9,7 +9,7 @@
 //!   nothing.
 //! * **The generator** (`lk-agents-codegen`) parses the source with `syn` for what a proc macro
 //!   cannot see -- source order, doc comments, `// ---` sections -- and writes the pydantic modules
-//!   (`#[python(..)]`), the TypeScript interfaces (`#[node(..)]`) and the napi records.
+//!   (`#[python(..)]`) and the `.pyi` stub.
 //!
 //! The record's own vocabulary (kinds, tags, field words) is documented where it expands:
 //! `lk_agents_bindgen::record`. A value with a host shape of its own -- a `datetime`, a string
@@ -21,7 +21,6 @@
 //! ```ignore
 //! #[derive(Host)]
 //! #[python(pydantic, module = "events")]
-//! #[node(interface)]
 //! #[binding(emit)]
 //! pub struct AgentStateChanged { .. }
 //! ```
@@ -38,7 +37,7 @@ mod table;
 
 /// See the module docs: the record's host shapes (`lk_agents_bindgen::record`), under the calling
 /// crate's `python` feature.
-#[proc_macro_derive(Host, attributes(host, python, node, binding, table))]
+#[proc_macro_derive(Host, attributes(host, python, binding, table))]
 pub fn host_derive(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     derive_host(&input).unwrap_or_else(|e| e.to_compile_error()).into()
@@ -173,7 +172,7 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// comes back unchanged but for the per-item markers rustc does not know (`#[host(getter)]` on a
 /// method, `#[host(lenient)]` on a parameter, `#[host(kwarg(..))]` on a field, `#[host(kind =
 /// "..")]` on a variant), which are stripped. `lk-agents-codegen` reads the same source for the
-/// `.pyi` stub and the napi binding. Reached as `lk_agents_abi::host`.
+/// `.pyi` stub. Reached as `lk_agents_abi::host`.
 ///
 /// | head | item | what it binds |
 /// |---|---|---|
@@ -317,13 +316,13 @@ fn expand(
 
 /// Every marker inside the item that rustc does not know: `#[host(..)]` on a method, parameter,
 /// field, variant or associated const -- and, inside a `group`, the record helpers (`python`,
-/// `node`, `binding`) on each struct, enum and const directly in it (a nested group strips its
+/// `binding`) on each struct, enum and const directly in it (a nested group strips its
 /// own). A proxy trait's Python face (`#[python(..)]` on the trait, its methods and parameters,
 /// read by `lk-agents-codegen`) goes too. The item's other attributes are left alone: a second
 /// `#[host(stream)]` is its own call.
 fn strip(item: &mut syn::Item, group: bool) {
     let words: &[&str] = match item {
-        _ if group => &["host", "python", "node", "binding"],
+        _ if group => &["host", "python", "binding"],
         syn::Item::Trait(_) => &["host", "python"],
         _ => &["host"],
     };

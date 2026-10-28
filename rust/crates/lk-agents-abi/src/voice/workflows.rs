@@ -17,7 +17,6 @@ use std::collections::HashMap;
     path = "livekit.agents.beta.workflows",
     name = "GetAddressResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 pub struct GetAddressResult {
     pub address: String,
@@ -32,7 +31,6 @@ pub struct GetAddressResult {
     path = "livekit.agents.beta.workflows",
     name = "GetEmailResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 pub struct GetEmailResult {
     pub email_address: String,
@@ -46,7 +44,6 @@ pub struct GetEmailResult {
     path = "livekit.agents.beta.workflows",
     name = "GetPhoneNumberResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
 pub struct GetPhoneNumberResult {
@@ -100,7 +97,6 @@ pub struct DtmfStopped {}
     path = "livekit.agents.beta.workflows",
     name = "GetNameResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 pub struct GetNameResult {
     #[binding(default)]
@@ -121,13 +117,10 @@ pub struct GetNameResult {
     path = "livekit.agents.beta.workflows",
     name = "GetDOBResult"
 )]
-#[node(interface)]
 pub struct GetDOBResult {
     #[python(ty = "date", import = "datetime:date")]
-    #[node(ty = "string")]
     pub date_of_birth: Date,
     #[python(ty = "time | None", import = "datetime:time", default = "None")]
-    #[node(ty = "string | null")]
     pub time_of_birth: Option<Time>,
 }
 
@@ -185,7 +178,6 @@ impl GetDOBResult {
     path = "livekit.agents.beta.workflows",
     name = "GetCardNumberResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
 pub struct GetCardNumberResult {
@@ -201,7 +193,6 @@ pub struct GetCardNumberResult {
     path = "livekit.agents.beta.workflows",
     name = "GetSecurityCodeResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
 pub struct GetSecurityCodeResult {
@@ -217,7 +208,6 @@ pub struct GetSecurityCodeResult {
     path = "livekit.agents.beta.workflows",
     name = "GetExpirationDateResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
 pub struct GetExpirationDateResult {
@@ -232,7 +222,6 @@ pub struct GetExpirationDateResult {
     path = "livekit.agents.beta.workflows",
     name = "GetCreditCardResult"
 )]
-#[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
 pub struct GetCreditCardResult {
@@ -251,7 +240,6 @@ pub struct GetCreditCardResult {
     path = "livekit.agents.beta.workflows",
     name = "WarmTransferResult"
 )]
-#[node(interface)]
 pub struct WarmTransferResult {
     pub human_agent_identity: String,
 }

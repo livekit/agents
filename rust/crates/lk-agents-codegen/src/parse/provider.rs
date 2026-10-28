@@ -3,7 +3,6 @@
 //! the core is a codegen error until the base class answers it.
 
 use super::Res;
-use super::exposed::span_text;
 use super::meta::{Meta, meta_str, metas};
 use crate::ir::*;
 use lk_agents_bindgen::doc;
@@ -83,7 +82,8 @@ pub fn provider(
     }))
 }
 
-const ROLES: &[&str] = &["label", "init", "identity", "hook", "conn", "markup", "chat", "value", "report"];
+const ROLES: &[&str] =
+    &["label", "init", "identity", "hook", "conn", "markup", "chat", "value", "report"];
 
 fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
     let rust = f.sig.ident.to_string();
@@ -204,4 +204,22 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
         when: meta_str(&m, "when"),
         stream,
     })
+}
+
+fn span_text(text: &str, span: proc_macro2::Span) -> String {
+    let (start, end) = (span.start(), span.end());
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::new();
+    for l in start.line..=end.line {
+        let line: Vec<char> = lines.get(l - 1).copied().unwrap_or("").chars().collect();
+        let a = if l == start.line { start.column } else { 0 };
+        let b = if l == end.line { end.column.min(line.len()) } else { line.len() };
+        out.push_str(&line[a.min(b)..b].iter().collect::<String>());
+        out.push(' ');
+    }
+    let mut collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (from, to) in [("( ", "("), (" )", ")"), (", )", ")"), (",)", ")")] {
+        collapsed = collapsed.replace(from, to);
+    }
+    collapsed
 }

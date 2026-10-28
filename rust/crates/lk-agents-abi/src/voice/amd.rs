@@ -191,7 +191,6 @@ pub struct AmdConstants {
     path = "livekit.agents.voice.amd",
     name = "DetectionOptions"
 )]
-#[node(interface)]
 pub struct AmdDetectionOptions {
     pub human_speech_threshold: Option<f64>,
     pub human_silence_threshold: Option<f64>,

@@ -283,10 +283,9 @@ fn constant(decls: &[Decl], c: &Constant) -> Result<String, String> {
     let value = match &c.value {
         ConstValue::Literal(v) => v.clone(),
         ConstValue::Record(rust, fields) => {
-            let d = decls
-                .iter()
-                .find(|d| &d.rust_name == rust)
-                .ok_or_else(|| format!("{}: {}: `{rust}` is not a declared record", c.source, c.name))?;
+            let d = decls.iter().find(|d| &d.rust_name == rust).ok_or_else(|| {
+                format!("{}: {}: `{rust}` is not a declared record", c.source, c.name)
+            })?;
             let t = d.target(Host::Python).ok_or_else(|| {
                 format!("{}: {}: `{rust}` has no Python target", c.source, c.name)
             })?;
@@ -440,12 +439,6 @@ fn imports(
             Kind::Extract | Kind::Emit | Kind::Class => {
                 return Err(format!("{}: `{}` is a binding kind", d.rust_name, kind_word(t.kind)));
             }
-            Kind::Interface => {
-                return Err(format!(
-                    "{}: `interface` is a Node kind, not a Python one",
-                    d.rust_name
-                ));
-            }
         }
         // Only a discriminated union needs pydantic; a plain one is a bare PEP-604 expression.
         if let Body::Union(_) = &d.body
@@ -487,10 +480,8 @@ fn imports(
                 plain.push("time");
             }
         }
-        for (module, name) in t
-            .host_fields
-            .iter()
-            .filter_map(|h| h.type_import.as_deref()?.split_once(':'))
+        for (module, name) in
+            t.host_fields.iter().filter_map(|h| h.type_import.as_deref()?.split_once(':'))
         {
             match deferred.iter_mut().find(|(m, _)| m == module) {
                 Some((_, have)) if have.iter().any(|n| n == name) => {}
@@ -904,7 +895,6 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
                 d.rust_name
             ));
         }
-        Kind::Interface => return Err(format!("{}: `interface` is a Node kind", d.rust_name)),
     };
     if t.kind == Kind::Dataclass {
         b.push_str("@dataclass\n");

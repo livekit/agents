@@ -20,12 +20,10 @@ use lk_agents_host_derive::Host;
     path = "livekit.agents.inference.stt",
     name = "FallbackModel"
 )]
-#[node(interface)]
 #[binding(emit)]
 pub struct SttFallbackModel {
     /// Model name (e.g. "deepgram/nova-3", "assemblyai/universal-streaming", "cartesia/ink-whisper").
     #[python(ty = "Required[str]", import = "typing_extensions:Required")]
-    #[node(ty = "string")]
     pub model: String,
     /// Extra configuration for the model.
     //
@@ -33,7 +31,6 @@ pub struct SttFallbackModel {
     // read side absent and `None` are one request. `serde_json::` paths because the extract type is
     // copied verbatim into the generated module.
     #[python(ty = "dict[str, Any]", import = "typing:Any")]
-    #[node(ty = "Record<string, unknown>")]
     #[binding(skip_if_none)]
     pub extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -54,7 +51,6 @@ pub struct SttFallbackModel {
     path = "livekit.agents.inference.tts",
     name = "FallbackModel"
 )]
-#[node(interface)]
 #[binding(emit)]
 pub struct TtsFallbackModel {
     /// Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda").
@@ -71,7 +67,6 @@ pub struct TtsFallbackModel {
         import = "typing:Any",
         import = "typing_extensions:NotRequired"
     )]
-    #[node(ty = "Record<string, unknown>")]
     #[binding(skip_if_none)]
     pub extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
 }

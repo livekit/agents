@@ -2,7 +2,7 @@
 //! host shape is refused by name.
 
 use super::exposed::Aliases;
-use super::meta::{Meta, host_attr_strict, meta_rust, meta_str};
+use super::meta::{Meta, host_attr_strict, meta_rust};
 use super::{Res, quote};
 use crate::ir::*;
 
@@ -41,8 +41,7 @@ pub(super) fn signature(
                 let syn::Pat::Ident(id) = &*t.pat else {
                     return Err(format!("{at}: a destructuring parameter has no host name"));
                 };
-                // The host-side name: `r#ref` is `ref` to Python and JS. Each emitter re-escapes
-                // it where it writes a Rust identifier (`napi::arg`), never a host one.
+                // The host-side name: `r#ref` is `ref` to Python.
                 let name = syn::ext::IdentExt::unraw(&id.ident).to_string();
                 let pm = host_attr_strict(at, &t.attrs)?.unwrap_or_default();
                 if let Some(bad) =
@@ -57,33 +56,23 @@ pub(super) fn signature(
                 let required = pm.iter().any(|x| x.key == "required");
                 let ambient =
                     pm.iter().any(|x| x.key == "ambient").then(|| quote(&t.ty).replace(' ', ""));
-                let label = meta_str(&pm, "label");
-                let lenient = pm.iter().any(|x| x.key == "lenient");
                 let ty = match rty(&format!("{at}({name})"), &t.ty, al) {
                     Err(_) if ambient.is_some() => {
                         RTy::Declared { name: quote(&t.ty).replace(' ', ""), by_ref: false }
                     }
                     ty => ty?,
                 };
-                params.push((Param { ty, name, lenient, label, ambient }, required));
+                params.push((Param { ty, name, ambient }, required));
             }
         }
     }
     let ret_ty = |label: String, t: &syn::Type| -> Res<RTy> { rty(&label, t, al) };
-    let (ret, is_result, err_ty) = match &s.output {
-        syn::ReturnType::Default => (RTy::Unit, false, None),
+    let ret = match &s.output {
+        syn::ReturnType::Default => RTy::Unit,
         syn::ReturnType::Type(_, t) => match result_ok(t) {
-            Some((ok, e)) => (ret_ty(format!("{at} -> Ok"), ok)?, true, e),
-            None => (ret_ty(format!("{at} ->"), t)?, false, None),
+            Some(ok) => ret_ty(format!("{at} -> Ok"), ok)?,
+            None => ret_ty(format!("{at} ->"), t)?,
         },
-    };
-    let err = match meta_str(m, &format!("{head}.err")) {
-        Some(_) if !is_result => {
-            return Err(format!("{at}: `err` on a fn that does not return a Result"));
-        }
-        Some(e) => Some(ErrMap::Kind(e)),
-        None if is_result => Some(ErrMap::Auto),
-        None => None,
     };
     let prefix = format!("{head}.defaults.");
     let mut defaults = Vec::new();
@@ -123,7 +112,7 @@ pub(super) fn signature(
     };
     let stream = meta_rust(m, &format!("{head}.stream"))
         .map(|p| p.rsplit("::").next().unwrap_or(&p).to_owned());
-    Ok((receiver, Sig { params, ret, err, err_ty, defaults, kw_only, stream }))
+    Ok((receiver, Sig { params, ret, defaults, kw_only, stream }))
 }
 
 /// `Result<T, E>` -> `(Result<(), E>, T)`.
@@ -134,7 +123,7 @@ fn unit_ok(at: &str, s: &syn::Signature) -> Res<(syn::Signature, syn::Type)> {
     let unit: syn::Type = syn::parse_quote!(());
     let mut out = s.clone();
     let value = match result_ok(t) {
-        Some((ok, _)) => {
+        Some(ok) => {
             let value = ok.clone();
             let mut rt = (**t).clone();
             if let syn::Type::Path(rp) = &mut rt
@@ -164,7 +153,7 @@ pub(super) fn reply_split(
 ) -> Res<Option<(syn::Signature, ReplySig)>> {
     let is_reply = |t: &syn::Type| matches!(t, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Reply"));
     let syn::ReturnType::Type(_, t) = &s.output else { return Ok(None) };
-    if !is_reply(t) && !result_ok(t).is_some_and(|(ok, _)| is_reply(ok)) {
+    if !is_reply(t) && !result_ok(t).is_some_and(is_reply) {
         return Ok(None);
     }
     let (out, reply_ty) = unit_ok(at, s)?;
@@ -173,37 +162,23 @@ pub(super) fn reply_split(
     let bad = || format!("{at}: `Reply<T>` takes the awaited type");
     let syn::PathArguments::AngleBracketed(a) = &seg.arguments else { return Err(bad()) };
     let Some(syn::GenericArgument::Type(inner)) = a.args.first() else { return Err(bad()) };
-    let reply = match result_ok(inner) {
-        Some((ok, e)) => ReplySig {
-            ret: rty(&format!("{at} -> Reply"), ok, al)?,
-            err: Some(ErrMap::Auto),
-            err_ty: e,
-        },
-        None => {
-            ReplySig { ret: rty(&format!("{at} -> Reply"), inner, al)?, err: None, err_ty: None }
-        }
-    };
+    let reply =
+        ReplySig { ret: rty(&format!("{at} -> Reply"), result_ok(inner).unwrap_or(inner), al)? };
     Ok(Some((out, reply)))
 }
 
-/// `(T, E's last segment)` of `Result<T, E>`; `E` is `None` for an alias's `Result<T>`.
-fn result_ok(t: &syn::Type) -> Option<(&syn::Type, Option<String>)> {
+/// `T` of `Result<T, E>` (or an alias's `Result<T>`).
+fn result_ok(t: &syn::Type) -> Option<&syn::Type> {
     let syn::Type::Path(p) = t else { return None };
     let seg = p.path.segments.last()?;
     if seg.ident != "Result" {
         return None;
     }
     let syn::PathArguments::AngleBracketed(a) = &seg.arguments else { return None };
-    let mut tys = a.args.iter().filter_map(|g| match g {
+    a.args.iter().find_map(|g| match g {
         syn::GenericArgument::Type(t) => Some(t),
         _ => None,
-    });
-    let ok = tys.next()?;
-    let err = tys.next().and_then(|e| match e {
-        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
-        _ => None,
-    });
-    Some((ok, err))
+    })
 }
 
 const PRIMS: [&str; 15] = [
@@ -352,14 +327,4 @@ pub(super) fn rty(at: &str, t: &syn::Type, al: &Aliases) -> Res<RTy> {
         }
         _ => refuse("has no host shape"),
     }
-}
-
-pub(super) fn python_gated(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg")
-            && quote::ToTokens::to_token_stream(&a.meta)
-                .to_string()
-                .replace(' ', "")
-                .contains("feature=\"python\"")
-    })
 }

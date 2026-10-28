@@ -22,17 +22,13 @@ use meta::{
 pub type Res<T> = Result<T, String>;
 
 /// `label` (the repo-relative path) goes into the generated header and every error.
-pub fn file(label: &str, module: &str, text: &str) -> Res<Vec<Decl>> {
+pub fn file(label: &str, text: &str) -> Res<Vec<Decl>> {
     let parsed = syn::parse_file(text).map_err(|e| format!("{label}: {e}"))?;
     let marks = sections(text);
     let consts = consts(&parsed);
     let mut out = Vec::new();
     let file = file_defaults(label, &parsed.items)?;
     items(label, &marks, &consts, &parsed.items, None, file.as_ref(), &mut out)?;
-    for d in &mut out {
-        let inner: String = d.rust_module.iter().map(|m| format!("{m}::")).collect();
-        d.core_path = format!("{module}::{inner}{}", d.rust_name);
-    }
     link(&mut out)?;
     Ok(out)
 }
@@ -54,9 +50,9 @@ pub fn constants(label: &str, text: &str) -> Res<Vec<Constant>> {
         {
             return Err(format!("{at}: #[host(constant(..))] takes name, not `{}`", k.key));
         }
-        let module = file_defaults(label, &parsed.items)?
-            .map(|g| g.module)
-            .ok_or_else(|| format!("{at}: #[host(constant)] needs the file's #[host(file(module = ..))]"))?;
+        let module = file_defaults(label, &parsed.items)?.map(|g| g.module).ok_or_else(|| {
+            format!("{at}: #[host(constant)] needs the file's #[host(file(module = ..))]")
+        })?;
         let value = match &*c.expr {
             syn::Expr::Struct(s) => {
                 let record = s.path.segments.last().expect("a path").ident.to_string();
@@ -149,9 +145,7 @@ fn items(
                 }
             }
             syn::Item::Mod(m) => {
-                let Some(mut g) = group_of(label, &m.attrs, group)? else { continue };
-                g.rust_module = group.map(|p| p.rust_module.clone()).unwrap_or_default();
-                g.rust_module.push(m.ident.to_string());
+                let Some(g) = group_of(label, &m.attrs, group)? else { continue };
                 let Some((_, inner)) = &m.content else {
                     return Err(format!("{label}: a host group must be an inline `mod {{ .. }}`"));
                 };
@@ -163,9 +157,9 @@ fn items(
     Ok(())
 }
 
-/// `#[crate::host(group(path, kind, typed_dict_from, total, node))]` on an inline `mod`: shared
+/// `#[crate::host(group(path, kind, typed_dict_from, total))]` on an inline `mod`: shared
 /// defaults. `path` is the public module; the generated one is it under `livekit.agents.` with
-/// `.` -> `_`. `node` gives every Python target a same-named Node twin.
+/// `.` -> `_`.
 #[derive(Debug, Clone, Default)]
 pub struct Group {
     pub module: String,
@@ -173,9 +167,6 @@ pub struct Group {
     pub kind: Option<Kind>,
     pub typed_dict_from: Option<String>,
     pub total: Option<bool>,
-    pub node: bool,
-    /// Outermost first.
-    pub rust_module: Vec<String>,
 }
 
 /// A nested group inherits every default it does not set; a `path` of its own also names its module.
@@ -229,9 +220,6 @@ fn group_of(label: &str, attrs: &[syn::Attribute], parent: Option<&Group>) -> Re
             typed_dict_from: get("typed_dict_from")
                 .or_else(|| parent.and_then(|p| p.typed_dict_from.clone())),
             total,
-            node: out.iter().any(|m| m.key == "group.node" && m.value.is_none())
-                || parent.is_some_and(|p| p.node),
-            rust_module: Vec::new(),
         }));
     }
     Ok(None)
@@ -285,7 +273,6 @@ fn bare_target(host: Host, kind: Kind, module: &str, name: &str, path: Option<St
         discriminator: None,
         members: Vec::new(),
         inline: false,
-        into_type: None,
         constructor: false,
         order: Vec::new(),
         typed_dict_from: None,
@@ -335,23 +322,18 @@ fn literal(
         values.push(v.value());
     }
     let key = |n: &str| format!("py:{}:{n}", g.module);
-    let (body, kind, node_kind) = match meta
-        .iter()
-        .find(|m| m.key == "union")
-        .and_then(|m| m.value.clone())
-    {
+    let (body, kind) = match meta.iter().find(|m| m.key == "union").and_then(|m| m.value.clone()) {
         None => (
             Body::Unit(
                 values.into_iter().map(|value| UnitVariant { value, doc: Vec::new() }).collect(),
             ),
             Kind::Literal,
-            Kind::Enum,
         ),
         Some(members) => {
             let mut out = Vec::new();
             for m in members.split(',').map(str::trim).filter(|m| !m.is_empty()) {
                 let ty = match m {
-                    "str" | "int" | "float" | "bool" => foreign(m, ts_builtin(m)),
+                    "str" | "int" | "float" | "bool" => foreign(m),
                     _ => Ty::Declared(key(m)),
                 };
                 out.push(Variant {
@@ -364,7 +346,7 @@ fn literal(
                 });
             }
             for v in values {
-                let ty = foreign(&format!("Literal[\"{v}\"]"), &format!("'{v}'"));
+                let ty = foreign(&format!("Literal[\"{v}\"]"));
                 out.push(Variant {
                     rust_name: v,
                     ty,
@@ -374,43 +356,27 @@ fn literal(
                     kind: None,
                 });
             }
-            (Body::Union(out), Kind::Union, Kind::Union)
+            (Body::Union(out), Kind::Union)
         }
     };
-    let mut targets = vec![bare_target(Host::Python, kind, &g.module, &name, None)];
-    if g.node {
-        targets.push(bare_target(Host::Node, node_kind, &g.module, &name, None));
-    }
+    let targets = vec![bare_target(Host::Python, kind, &g.module, &name, None)];
     Ok(Some(Decl {
         rust_name: key(&name),
         source: label.to_owned(),
         doc: doc(&c.attrs),
         section,
-        rust_module: g.rust_module.clone(),
         body,
         targets,
         dispatch: None,
         dispatch_also: Vec::new(),
-        core_path: String::new(),
     }))
 }
 
-fn ts_builtin(py: &str) -> &'static str {
-    match py {
-        "str" => "string",
-        "bool" => "boolean",
-        _ => "number",
-    }
-}
-
-fn foreign(python: &str, node: &str) -> Ty {
+fn foreign(python: &str) -> Ty {
     Ty::Foreign(Foreign {
         python: python.to_owned(),
-        rust: None,
         python_from: Vec::new(),
         python_type_from: Vec::new(),
-        node: Some(node.to_owned()),
-        node_from: None,
     })
 }
 
@@ -504,11 +470,9 @@ fn strukt(
         source: label.to_owned(),
         doc: doc(&s.attrs),
         section,
-        rust_module: group.map(|g| g.rust_module.clone()).unwrap_or_default(),
         body: Body::Struct(fields),
         dispatch: None,
         dispatch_also: Vec::new(),
-        core_path: String::new(),
     })
 }
 
@@ -601,11 +565,9 @@ fn enom(
         source: label.to_owned(),
         doc: doc(&e.attrs),
         section,
-        rust_module: group.map(|g| g.rust_module.clone()).unwrap_or_default(),
         body,
         dispatch,
         dispatch_also,
-        core_path: String::new(),
     })
 }
 
@@ -639,11 +601,9 @@ fn field(
              #[binding(py)] -- a field that carries nothing must at least say what it is for"
         ));
     }
-    let rust_ty = quote(&f.ty).replace(' ', "");
     let default = str_arg(&f.attrs, "python", "default")?
         .or_else(|| zero_default(inherit, &ty, &f.attrs, literal.is_some()));
     Ok(Field {
-        rust_ty,
         rust_name,
         name,
         doc: doc(&f.attrs),
@@ -690,15 +650,10 @@ fn zero_default(
 fn ty(label: &str, owner: &str, t: &syn::Type, attrs: &[syn::Attribute]) -> Res<Ty> {
     // The escape hatch wins for the Python annotation.
     if let Some(python) = str_arg(attrs, "python", "ty")? {
-        // The Rust type is kept too: the binding needs it (`Foreign::rust`).
-        let rust = rust_ty(label, owner, t).ok().map(Box::new);
         return Ok(Ty::Foreign(Foreign {
             python,
-            rust,
             python_from: str_args(attrs, "python", "import")?,
             python_type_from: str_args(attrs, "python", "type_import")?,
-            node: str_arg(attrs, "node", "ty")?,
-            node_from: str_arg(attrs, "node", "from")?,
         }));
     }
     rust_ty(label, owner, t)
@@ -794,9 +749,7 @@ fn targets(
     group: Option<&Group>,
 ) -> Res<Vec<Target>> {
     let mut out = Vec::new();
-    for (host, outer) in
-        [(Host::Python, "python"), (Host::Node, "node"), (Host::Binding, "binding")]
-    {
+    for (host, outer) in [(Host::Python, "python"), (Host::Binding, "binding")] {
         let mut kinds = kinds_of(attrs, outer);
         if let (Host::Python, true, Some(k)) = (host, kinds.is_empty(), group.and_then(|g| g.kind))
         {
@@ -805,26 +758,17 @@ fn targets(
         if kinds.is_empty() {
             continue;
         }
-        // Group defaults apply to the Python target; Node inherits Python's module and name.
+        // Group defaults apply to the Python target.
         let grouped = group.filter(|_| host == Host::Python);
-        let python = out.iter().find(|t: &&Target| t.host == Host::Python).cloned();
         let module = match (str_arg(attrs, outer, "module")?, grouped) {
             (Some(m), _) => m,
             (None, Some(g)) if !g.module.is_empty() => g.module.clone(),
             (None, _) if host == Host::Binding => String::new(),
-            (None, _) if host == Host::Node && python.is_some() => {
-                python.as_ref().expect("checked").module.clone()
-            }
             (None, _) => {
                 return Err(format!("{label}: {rust_name}'s {outer} target needs module = \"..\""));
             }
         };
-        // Binding targets use the Rust identifier; Node uses the Python name unless it says its own.
-        let name = match (str_arg(attrs, outer, "name")?, &python) {
-            (Some(n), _) => n,
-            (None, Some(py)) if host == Host::Node => py.name.clone(),
-            (None, _) => rust_name.to_owned(),
-        };
+        let name = str_arg(attrs, outer, "name")?.unwrap_or_else(|| rust_name.to_owned());
         for kind in kinds {
             out.push(Target {
                 host,
@@ -849,9 +793,6 @@ fn targets(
                 config: str_arg(attrs, outer, "config")?,
                 validator: str_arg(attrs, outer, "validator")?,
                 inline: flag(attrs, outer, "inline"),
-                // `into` (extract) or `from` (emit): the same field, the core type on the other
-                // side; `from` because `#[binding(emit, into = "..")]` reads backwards.
-                into_type: rust_arg(attrs, outer, "from"),
                 members: members(attrs, outer, rust_name),
                 // Read for every kind; `binding.rs` rejects it where it means nothing.
                 order: str_arg(attrs, outer, "order")?
@@ -869,21 +810,6 @@ fn targets(
                 with_bases: flag(attrs, outer, "with_bases"),
             });
         }
-    }
-    if group.is_some_and(|g| g.node) && kinds_of(attrs, "node").is_empty() {
-        let twins: Vec<Target> = out
-            .iter()
-            .filter(|t| t.host == Host::Python)
-            .map(|t| {
-                let kind = match t.kind {
-                    Kind::Literal | Kind::Enum => Kind::Enum,
-                    Kind::Union => Kind::Union,
-                    _ => Kind::Interface,
-                };
-                bare_target(Host::Node, kind, &t.module, &t.name, None)
-            })
-            .collect();
-        out.extend(twins);
     }
     // No target: read for its fields alone (flattened into another, or crossed by hand).
     Ok(out)
@@ -1008,13 +934,12 @@ fn kinds_of(attrs: &[syn::Attribute], outer: &str) -> Vec<Kind> {
 }
 
 /// Scan order: `extract` before `emit`, and `class` last so its getters can name the dict twin.
-const KIND_WORDS: [(&str, Kind); 11] = [
+const KIND_WORDS: [(&str, Kind); 10] = [
     ("pydantic", Kind::Pydantic),
     ("dataclass", Kind::Dataclass),
     ("typed_dict", Kind::TypedDict),
     ("enum", Kind::Enum),
     ("plain", Kind::Plain),
-    ("interface", Kind::Interface),
     ("literal", Kind::Literal),
     ("union", Kind::Union),
     ("extract", Kind::Extract),

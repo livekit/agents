@@ -1,4 +1,4 @@
-//! The attribute grammar both walks read: every `host`/`python`/`node`/`binding` attribute,
+//! The attribute grammar both walks read: every `host`/`python`/`binding` attribute,
 //! flattened to [`Meta`] entries, and the lookups over them.
 
 use super::Res;
@@ -32,7 +32,7 @@ impl Meta {
     }
 }
 
-/// Every `host`/`python`/`node`/`binding` attribute, flattened: `host` keys unprefixed, others
+/// Every `host`/`python`/`binding` attribute, flattened: `host` keys unprefixed, others
 /// under their name. A malformed attribute already failed the expansion; here it reads as empty.
 pub(super) fn metas(attrs: &[syn::Attribute]) -> Vec<Meta> {
     let mut out: Vec<Meta> = lk_agents_bindgen::Metas::of(attrs)
@@ -41,7 +41,7 @@ pub(super) fn metas(attrs: &[syn::Attribute]) -> Vec<Meta> {
         .into_iter()
         .map(|m| Meta::from_bindgen(m, ""))
         .collect();
-    for outer in ["python", "node", "binding"] {
+    for outer in ["python", "binding"] {
         let flat = lk_agents_bindgen::Metas::named(attrs, outer).unwrap_or_default();
         out.extend(flat.0.into_iter().map(|m| Meta::from_bindgen(m, &format!("{outer}."))));
     }

@@ -1013,14 +1013,14 @@ impl Writer<'_> {
             .x
             .proxies
             .iter()
-            .find(|x| x.trait_path.rsplit("::").next() == Some(trait_name))
+            .find(|x| x.trait_name == *trait_name)
             .ok_or_else(|| format!("{}: no #[host(proxy)] trait `{trait_name}`", m.rust))?;
         for method in &proxy.methods {
-            let core = format!("def _core_{}(", method.name);
+            let core = format!("def _core_{method}(");
             if !b.contains(&core) {
                 return Err(format!(
-                    "{}: `{}` answers no `{trait_name}::{}` (`_core_{}`)",
-                    m.rust, s.name, method.name, method.name
+                    "{}: `{}` answers no `{trait_name}::{method}` (`_core_{method}`)",
+                    m.rust, s.name
                 ));
             }
         }

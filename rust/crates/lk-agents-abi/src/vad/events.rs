@@ -8,7 +8,6 @@ use lk_agents_host_derive::Host;
 // `vad.py:19`, a `(str, Enum)`: the wire strings are public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
 #[python(enum, module = "vad", path = "livekit.agents", name = "VADEventType")]
-#[node(enum)]
 #[host(wire(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "VADEventType", value: s.to_owned() },
@@ -29,7 +28,6 @@ pub enum VadEventType {
 // stream, so the audio is one [`MediaRef`] rather than a `Vec` of frames; `None` is an empty list.
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(dataclass, module = "vad", path = "livekit.agents", name = "VADEvent")]
-#[node(interface)]
 // Read by hand (`FromPyObject` below): `frames` is interned only when it holds audio.
 #[binding(emit)]
 pub struct VadEvent {
@@ -55,7 +53,6 @@ pub struct VadEvent {
     // Not emitted: `VadOutput.frames` owns the `frames` key. Read without interning an empty list
     // (`inference_done` fires ~30/s; a handle each would leak).
     #[python(ty = "list[rtc.AudioFrame]", import = "livekit:rtc", default_factory = "list")]
-    #[node(ty = "unknown[]")]
     #[binding(skip)]
     pub frames: Option<MediaRef>,
     /// Probability that speech is present (only for `INFERENCE_DONE` events).

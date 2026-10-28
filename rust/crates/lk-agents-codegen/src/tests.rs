@@ -18,7 +18,7 @@ use crate::{ir, parse, python, stub};
 /// already exists and cannot catch anything about a shape nothing declares yet -- which is exactly
 /// the state `Kind::TypedDict` was in.
 fn generate_python(src: &str) -> String {
-    let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
+    let decls = parse::file("test.rs", src).expect("the declaration parses");
     python::emit_with(&decls, &[], &[])
         .expect("the declaration generates")
         .into_iter()
@@ -29,7 +29,7 @@ fn generate_python(src: &str) -> String {
 
 /// The error a bad Python declaration produces.
 fn refuse_python(src: &str) -> String {
-    let decls = match parse::file("test.rs", "lk_agents_abi", src) {
+    let decls = match parse::file("test.rs", src) {
         Ok(d) => d,
         Err(e) => return e,
     };
@@ -40,7 +40,7 @@ fn refuse_python(src: &str) -> String {
 
 /// The `_core` classes' stub, for the `class` kind.
 fn generate_stub(src: &str) -> String {
-    let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
+    let decls = parse::file("test.rs", src).expect("the declaration parses");
     stub::emit(&decls, &ir::Exposed::default())
         .expect("the stub generates")
         .expect("there is a class")
@@ -305,8 +305,8 @@ fn the_stub_types_a_converted_field_from_its_python_annotation() {
 // declarations a signature names.
 
 fn exports_stub(src: &str) -> String {
-    let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declarations parse");
-    let x = parse::exposed("test.rs", "core", src).expect("the items parse");
+    let decls = parse::file("test.rs", src).expect("the declarations parse");
+    let x = parse::exposed("test.rs", src).expect("the items parse");
     stub::emit(&decls, &x).expect("the stub generates").expect("there are items").text
 }
 
@@ -334,17 +334,6 @@ fn an_object_stub_is_one_class_with_its_extra_lines_and_their_imports() {
 }
 
 // --- the Python shapes the option records need (2026-09-23) --------------------------------------
-
-/// Every generated **Node** module's text, concatenated.
-fn generate_node(src: &str) -> String {
-    let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
-    crate::node::emit(&decls)
-        .expect("the declaration generates")
-        .into_iter()
-        .map(|o| o.text)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 // Catches: a factory spelled for the wrong kind. On a dataclass pydantic's `Field` is not a
 // factory at all -- the `FieldInfo` becomes the shared default, so `SpeechEvent(type=..)
@@ -518,7 +507,7 @@ fn a_docstring_ending_in_a_quote_still_closes() {
 // --- host groups and literal consts ---------------------------------------------------------------
 
 const GROUP: &str = r#"
-    #[crate::host(group(kind = "typed_dict", typed_dict_from = "typing", total = "False", node))]
+    #[crate::host(group(kind = "typed_dict", typed_dict_from = "typing", total = "False"))]
     pub mod gateway {
         #[crate::host(group(path = "livekit.agents.inference.stt"))]
         pub mod stt {
@@ -563,7 +552,7 @@ fn a_string_slice_const_in_a_group_is_a_literal_and_a_union() {
 // an outer `Option` read as absence (`Option<Option<f64>>` is `float | None`).
 #[test]
 fn a_group_gives_its_structs_kind_module_path_and_total() {
-    let decls = parse::file("test.rs", "lk_agents_abi", GROUP).expect("parses");
+    let decls = parse::file("test.rs", GROUP).expect("parses");
     let py = python::emit_with(&decls, &[], &[]).expect("generates");
     assert_eq!(py.len(), 1);
     assert_eq!(py[0].path, "inference_stt.py");
@@ -575,41 +564,6 @@ fn a_group_gives_its_structs_kind_module_path_and_total() {
     );
     assert!(!out.contains("a comment"), "{out}");
     assert!(out.contains("Opts.__module__ = \"livekit.agents.inference.stt\""), "{out}");
-}
-
-// Catches: `node` in a group not giving each declaration its TypeScript twin, and a builtin-only
-// Python annotation still demanding a hand-written `#[node(ty = ..)]`.
-#[test]
-fn a_group_with_node_emits_the_typescript_twins() {
-    let out = generate_node(GROUP);
-    assert!(
-        out.contains(
-            "export type DeepgramModels =\n  | 'deepgram/nova-3'\n  | 'deepgram/nova-2';\n"
-        ),
-        "{out}"
-    );
-    assert!(
-        out.contains("export type STTModels =\n  | DeepgramModels\n  | STTEncoding\n  | 'auto';\n"),
-        "{out}"
-    );
-    assert!(out.contains("export type OptsOrName =\n  | Opts\n  | string;\n"), "{out}");
-    assert!(
-        out.contains(
-            "  interim?: boolean;\n  timeout?: number | null;\n  keyterm?: string | string[];\n"
-        ),
-        "{out}"
-    );
-}
-
-// Catches: the Python-to-TypeScript rule guessing at a name it cannot see.
-#[test]
-fn ts_of_spells_builtins_and_refuses_other_names() {
-    use crate::node::ts_of;
-    assert_eq!(ts_of("Literal[\"a\", 1, False] | None").as_deref(), Some("'a' | 1 | false | null"));
-    assert_eq!(ts_of("list[tuple[str, float]]").as_deref(), Some("[string, number][]"));
-    assert_eq!(ts_of("dict[str, Any]").as_deref(), Some("Record<string, unknown>"));
-    assert_eq!(ts_of("str | list[str]").as_deref(), Some("string | string[]"));
-    assert_eq!(ts_of("ReasoningEffort | None"), None);
 }
 
 // --- host-stream dispatch -------------------------------------------------------------------------
@@ -647,25 +601,6 @@ fn a_routed_union_generates_its_dispatch_table_keyed_by_the_wire_kind() {
     let e =
         refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(ignored, mirror = \"_x\")]"));
     assert!(e.contains("mirrors a state but is not an event"), "{e}");
-}
-
-// --- node targets --------------------------------------------------------------------------------
-
-// Catches: a Node target that writes neither `name` nor `module` not taking the Python target's
-// (the 85 records that repeated both), or one that writes its own being overridden.
-#[test]
-fn a_node_target_is_named_and_placed_as_the_python_one() {
-    let decls = parse::file(
-        "test.rs",
-        "lk_agents_abi",
-        "#[derive(Host)]\n#[python(pydantic, module = \"events\", name = \"ThingEvent\")]\n#[node(interface)]\npub struct Thing { pub a: u8 }\n\
-         #[derive(Host)]\n#[python(pydantic, module = \"events\", name = \"Other\")]\n#[node(interface, module = \"voice\", name = \"OtherJs\")]\npub struct Other { pub a: u8 }",
-    )
-    .expect("the declarations parse");
-    let node = decls[0].target(crate::ir::Host::Node).expect("a node target");
-    assert_eq!((node.name.as_str(), node.module.as_str()), ("ThingEvent", "events"));
-    let node = decls[1].target(crate::ir::Host::Node).expect("a node target");
-    assert_eq!((node.name.as_str(), node.module.as_str()), ("OtherJs", "voice"));
 }
 
 // Catches: a stream's stub missing a method its class has, or the push argument typed `Any` where
@@ -771,7 +706,7 @@ fn a_file_default_fills_module_and_path_where_the_record_says_nothing() {
         #[binding(emit)]
         pub struct C { pub x: u32 }
     "#;
-    let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
+    let decls = parse::file("test.rs", src).expect("the declaration parses");
     let py = |name: &str| {
         let d = decls.iter().find(|d| d.rust_name == name).expect("declared");
         d.targets
@@ -783,9 +718,9 @@ fn a_file_default_fills_module_and_path_where_the_record_says_nothing() {
     assert_eq!(py("B"), Some(("other".into(), Some("livekit.agents.other".into()))));
     assert_eq!(py("C"), None);
     let twice = format!("{src}\n#[crate::host(file(module = \"x\"))]\nconst _: () = ();");
-    assert!(parse::file("test.rs", "m", &twice).unwrap_err().contains("two #[host(file(..))]"));
+    assert!(parse::file("test.rs", &twice).unwrap_err().contains("two #[host(file(..))]"));
     let bad = "#[crate::host(file(module = \"x\", kind = \"typed_dict\"))]\nconst _: () = ();";
-    assert!(parse::file("test.rs", "m", bad).unwrap_err().contains("not `file.kind`"));
+    assert!(parse::file("test.rs", bad).unwrap_err().contains("not `file.kind`"));
 }
 
 // --- the session schema ------------------------------------------------------------------------
@@ -796,8 +731,7 @@ fn a_file_default_fills_module_and_path_where_the_record_says_nothing() {
 #[test]
 fn the_session_schema_renders_its_five_pydantic_row_models() {
     let src = include_str!("../../lk-agents-storage/src/schema.rs");
-    let decls =
-        parse::file("schema.rs", "lk_agents_storage::schema", src).expect("the schema parses");
+    let decls = parse::file("schema.rs", src).expect("the schema parses");
     let outs = python::emit_with(&decls, &[], &[]).expect("the schema generates");
     let module = |name: &str| {
         let file = format!("{name}.py");
@@ -873,8 +807,8 @@ const PROVIDER: &str = r#"
 "#;
 
 fn generate_provider(src: &str) -> Result<String, String> {
-    let decls = parse::file("test.rs", "lk_agents_abi", src)?;
-    let exposed = parse::exposed("test.rs", "lk_agents_abi", src)?;
+    let decls = parse::file("test.rs", src)?;
+    let exposed = parse::exposed("test.rs", src)?;
     let bases = crate::bases::emit(&decls, &exposed)?;
     Ok(python::emit_with(&decls, &bases, &[])?.into_iter().map(|o| o.text).collect())
 }
@@ -930,7 +864,7 @@ pub fn name_of(code: &str) -> Option<&str> { None }
 #[crate::host(export(pid = false))]
 pub fn normalize(code: &str) -> String { code.to_owned() }
 "#;
-    let x = parse::exposed("a.rs", "m", src).expect("parses");
+    let x = parse::exposed("a.rs", src).expect("parses");
     let out = crate::forward::emit(&[], &x).expect("generates");
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].path, "code.py");
@@ -965,7 +899,7 @@ impl Tok {
 #[python(forward(module = "tok"))]
 pub fn split(text: &str) -> Vec<String> { Vec::new() }
 "#;
-    let x = parse::exposed("a.rs", "m", src).expect("parses");
+    let x = parse::exposed("a.rs", src).expect("parses");
     let out = crate::forward::emit(&[], &x).expect("generates");
     assert_eq!(out.len(), 1);
     let text = &out[0].text;

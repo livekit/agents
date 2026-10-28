@@ -19,7 +19,6 @@ const _: () = ();
 /// Whether the user is speaking, listening, or has gone away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
 #[python(literal, name = "UserState")]
-#[node(enum)]
 #[host(wire(msg = format!("unknown user state {s:?}")))]
 pub enum UserState {
     #[host(rename = "speaking")]
@@ -33,7 +32,6 @@ pub enum UserState {
 /// The agent's lifecycle label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
 #[python(literal, name = "AgentState")]
-#[node(enum)]
 #[host(wire(msg = format!("unknown agent state {s:?}")))]
 pub enum AgentState {
     #[host(rename = "initializing")]
@@ -52,7 +50,6 @@ pub enum AgentState {
 
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(pydantic, name = "UserStateChangedEvent", tag = "type", tag_value = "user_state_changed")]
-#[node(interface)]
 // Also read back from the remote session's `kind`-keyed dict (`remote_session.py:_send_wire`).
 #[binding(emit, extract, from_items, read_tag = "kind")]
 pub struct UserStateChanged {
@@ -72,7 +69,6 @@ pub struct UserStateChanged {
     tag = "type",
     tag_value = "agent_state_changed"
 )]
-#[node(interface)]
 #[binding(emit, extract, from_items, read_tag = "kind")]
 pub struct AgentStateChanged {
     pub old_state: AgentState,
@@ -90,7 +86,6 @@ pub struct AgentStateChanged {
     tag = "type",
     tag_value = "user_input_transcribed"
 )]
-#[node(interface)]
 // The remote session reads it back (`language` too, which its host never sends).
 #[binding(emit, extract, from_items, read_tag = "kind")]
 pub struct UserInputTranscribed {
@@ -105,7 +100,6 @@ pub struct UserInputTranscribed {
     pub speaker_id: Option<String>,
     #[binding(default)]
     #[python(ty = "LanguageCode | None", import = ".language:LanguageCode", default = "None")]
-    #[node(ty = "string | null")]
     pub language: Option<String>,
     #[binding(skip, extract_skip)]
     #[python(default_factory = "time.time")]
@@ -119,7 +113,6 @@ pub struct UserInputTranscribed {
     tag = "type",
     tag_value = "user_transcription_timeout"
 )]
-#[node(interface)]
 // The public discriminant is `user_transcription_timeout`; the wire kind the binding sends is
 // `transcription_timeout`. They differ on purpose.
 #[binding(emit, tag = "type", tag_value = "transcription_timeout")]
@@ -136,7 +129,6 @@ pub struct UserTranscriptionTimeout {
 
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(pydantic, name = "EotPredictionEvent", tag = "type", tag_value = "eot_prediction")]
-#[node(interface)]
 // Read back by the remote session, whose proto narrows the two probabilities to `f32`.
 #[binding(emit, extract, from_items, read_tag = "kind")]
 pub struct EotPrediction {
@@ -496,7 +488,6 @@ pub struct Error {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Host)]
 #[python(enum, name = "CloseReason")]
-#[node(enum)]
 #[host(wire(msg = format!("unknown close reason {s:?}")))]
 pub enum CloseReason {
     #[host(rename = "error")]

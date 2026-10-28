@@ -234,14 +234,14 @@ fn a_wire_enum_crosses_as_its_string_both_ways() {
 }
 
 // Catches: the switch matching a crate by a prefix of its name (`lk-agents-mediax` turning in
-// place with `lk-agents-media`), a non-core crate (Node's) expanding, or missing rustc's
+// place with `lk-agents-media`), a non-core crate (the binding's) expanding, or missing rustc's
 // workspace-relative and absolute spellings of a file.
 #[test]
 fn a_file_is_in_place_by_its_crate_whatever_spelling_rustc_uses() {
     use std::path::Path;
     assert!(crate::in_place(Some(Path::new("crates/lk-agents-media/src/decoder.rs"))));
     assert!(crate::in_place(Some(Path::new("/Users/x/repo/rust/crates/lk-agents-media/src/images/encode.rs"))));
-    assert!(!crate::in_place(Some(Path::new("crates/lk-agents-node/src/decoder.rs"))));
+    assert!(!crate::in_place(Some(Path::new("crates/lk-agents-py/src/decoder.rs"))));
     assert!(!crate::in_place(Some(Path::new("crates/lk-agents-mediax/src/decoder.rs"))));
     assert!(!crate::in_place(None));
 }

@@ -208,10 +208,7 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
                     def(cx, "    ", "", &m.name, &m.sig, true)?
                 ),
                 MethodKind::Static => {
-                    let own = RTy::Declared {
-                        name: o.core_path.rsplit("::").next().unwrap_or_default().to_owned(),
-                        by_ref: false,
-                    };
+                    let own = RTy::Declared { name: o.core.clone(), by_ref: false };
                     let sig = if m.sig.ret == RTy::SelfTy {
                         Sig { ret: own, ..m.sig.clone() }
                     } else {
@@ -338,13 +335,7 @@ fn args(cx: Cx, sig: &Sig) -> Result<Vec<(String, bool)>, String> {
             && let Some(k) = cx.x.kwargs.iter().find(|k| &k.name == name)
         {
             for (j, f) in k.fields.iter().enumerate() {
-                let fp = Param {
-                    name: f.name.clone(),
-                    ty: f.ty.clone(),
-                    lenient: f.lenient,
-                    label: None,
-                    ambient: None,
-                };
+                let fp = Param { name: f.name.clone(), ty: f.ty.clone(), ambient: None };
                 out.push((one(cx, &fp, f.default.clone())?, star && j == 0));
             }
             continue;
@@ -381,7 +372,7 @@ fn py_default(v: &str) -> String {
 }
 
 fn exposed_object<'a>(cx: Cx<'a>, name: &str) -> Option<&'a Object> {
-    cx.x.objects.iter().find(|o| o.core_path.rsplit("::").next() == Some(name))
+    cx.x.objects.iter().find(|o| o.core == name)
 }
 
 enum DeclKind<'a> {

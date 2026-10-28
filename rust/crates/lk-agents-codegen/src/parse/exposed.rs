@@ -5,11 +5,10 @@ use super::meta::{
     Meta, has_host_derive, head_of, host_attr_strict, host_attrs_strict, meta_rust, meta_str,
     want_head,
 };
-use super::signature::{python_gated, reply_split, rty, signature};
+use super::signature::{reply_split, rty, signature};
 use super::{Res, quote};
 use crate::ir::*;
 use lk_agents_bindgen::doc;
-use syn::spanned::Spanned as _;
 
 /// `type X = ..;` aliases, read through by [`rty`]. A file's own win; a name two files alias
 /// differently is no alias.
@@ -52,18 +51,12 @@ pub fn global_aliases(all: &[(String, String)]) -> Vec<(String, String)> {
 
 /// Every `#[host(..)]` item in one `EXPORT_SOURCES` file, with only the file's own aliases.
 #[cfg(test)]
-pub fn exposed(label: &str, module: &str, text: &str) -> Res<Exposed> {
-    exposed_with(label, module, text, &[])
+pub fn exposed(label: &str, text: &str) -> Res<Exposed> {
+    exposed_with(label, text, &[])
 }
 
-/// Every exposed `#[host(..)]` item in one `EXPORT_SOURCES` file. `module` is written in the
-/// list: a private module re-exported at the crate root has no path of its own.
-pub fn exposed_with(
-    label: &str,
-    module: &str,
-    text: &str,
-    global: &[(String, String)],
-) -> Res<Exposed> {
+/// Every exposed `#[host(..)]` item in one `EXPORT_SOURCES` file.
+pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res<Exposed> {
     let parsed = syn::parse_file(text).map_err(|e| format!("{label}: {e}"))?;
     let mut al = Aliases::default();
     for (n, t) in aliases(text).into_iter().chain(global.iter().cloned()) {
@@ -81,15 +74,7 @@ pub fn exposed_with(
                 let rust = f.sig.ident.to_string();
                 let at = format!("{label}: {rust}");
                 want_head(&at, &m, "export")?;
-                let f = export_fn(
-                    &at,
-                    &m,
-                    &f.sig,
-                    &f.attrs,
-                    format!("{module}::{rust}"),
-                    rust,
-                    &al,
-                )?;
+                let f = export_fn(&at, &m, &f.sig, &f.attrs, rust, &al)?;
                 if let Some(target) = python_key(&at, &item_attrs(item), "forward", &["module"])?
                     .and_then(|m| meta_str(&m, "python.forward.module"))
                 {
@@ -105,22 +90,14 @@ pub fn exposed_with(
                 let rust = c.ident.to_string();
                 let at = format!("{label}: {rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_const(
-                    &at,
-                    &m,
-                    &c.ty,
-                    &c.attrs,
-                    format!("{module}::{rust}"),
-                    &rust,
-                    &al,
-                )?);
+                out.fns.push(export_const(&at, &m, &c.ty, &c.attrs, &rust, &al)?);
             }
             syn::Item::Impl(imp) => {
                 let Some(m) = host_attr_strict(label, &imp.attrs)? else { continue };
                 if head_of(&m) == "export" {
-                    exported_impl(label, module, imp, &mut out, &al)?;
+                    exported_impl(label, imp, &mut out, &al)?;
                 } else {
-                    let o = object(label, module, imp, &m, &al)?;
+                    let o = object(label, imp, &m, &al)?;
                     let at = format!("{label}: {}", o.name);
                     if let Some(w) =
                         python_key(&at, &imp.attrs, "wrapper", &["module", "path", "name", "base"])?
@@ -148,38 +125,13 @@ pub fn exposed_with(
             syn::Item::Enum(e) => {
                 for m in host_attrs_strict(label, &e.attrs)? {
                     match head_of(&m).as_str() {
-                        "wire_enum" => out.wire_enums.push(WireEnum {
-                            name: e.ident.to_string(),
-                            values: e
-                                .variants
-                                .iter()
-                                .map(|v| {
-                                    Ok(host_attr_strict(label, &v.attrs)?
-                                        .and_then(|m| meta_str(&m, "rename"))
-                                        .unwrap_or_else(|| {
-                                            lk_agents_bindgen::to_snake(&v.ident.to_string())
-                                        }))
-                                })
-                                .collect::<Res<_>>()?,
-                            open: false,
-                        }),
-                        "string" => out.wire_enums.push(WireEnum {
-                            name: e.ident.to_string(),
-                            values: Vec::new(),
-                            open: true,
-                        }),
-                        "error" => out.errors.push(error_type(
-                            label,
-                            module,
-                            &e.ident,
-                            &m,
-                            Some(&e.variants),
-                        )?),
-                        "stream" => out
-                            .streams
-                            .push(stream(label, module, &e.ident, &e.attrs, &m, &al, None)?),
-                        // The wire strings, Rust side only: the enum crosses by its own impls, if at all.
-                        "wire_strs" => {}
+                        "wire_enum" | "string" => {
+                            out.wire_enums.push(WireEnum { name: e.ident.to_string() })
+                        }
+                        "stream" => out.streams.push(stream(label, &e.ident, &m)?),
+                        // The binding maps the error itself; the wire strings are Rust side
+                        // only: the enum crosses by its own impls, if at all.
+                        "error" | "wire_strs" => {}
                         other => {
                             return Err(format!(
                                 "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream",
@@ -192,20 +144,13 @@ pub fn exposed_with(
             syn::Item::Struct(st) => {
                 for m in host_attrs_strict(label, &st.attrs)? {
                     match head_of(&m).as_str() {
-                        "client" | "kwargs" => {
-                            out.kwargs.push(kw_record(label, module, st, &m, &al)?)
-                        }
-                        "error" => out.errors.push(error_type(label, module, &st.ident, &m, None)?),
-                        "stream" => out
-                            .streams
-                            .push(stream(label, module, &st.ident, &st.attrs, &m, &al, None)?),
+                        "client" | "kwargs" => out.kwargs.push(kw_record(label, st, &al)?),
+                        // The binding maps the error itself.
+                        "error" => {}
+                        "stream" => out.streams.push(stream(label, &st.ident, &m)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
                         "string" => {
-                            out.wire_enums.push(WireEnum {
-                                name: st.ident.to_string(),
-                                values: Vec::new(),
-                                open: true,
-                            });
+                            out.wire_enums.push(WireEnum { name: st.ident.to_string() });
                             if let Some(c) = str_class(label, st)? {
                                 out.str_classes.push(c);
                             }
@@ -222,15 +167,7 @@ pub fn exposed_with(
             syn::Item::Type(t) => {
                 for m in host_attrs_strict(label, &t.attrs)? {
                     want_head(&format!("{label}: type {}", t.ident), &m, "stream")?;
-                    out.streams.push(stream(
-                        label,
-                        module,
-                        &t.ident,
-                        &t.attrs,
-                        &m,
-                        &al,
-                        Some(&t.ty),
-                    )?);
+                    out.streams.push(stream(label, &t.ident, &m)?);
                 }
             }
             syn::Item::Trait(tr) => {
@@ -242,7 +179,7 @@ pub fn exposed_with(
                 want_head(&format!("{label}: trait {}", tr.ident), &m, "proxy")?;
                 let host = meta_str(&m, "proxy.host");
                 out.providers.extend(super::provider::provider(label, tr, host.as_deref(), text)?);
-                out.proxies.push(proxy(label, module, text, &parsed, tr, &m, &al)?);
+                out.proxies.push(proxy(label, tr)?);
             }
             _ => {}
         }
@@ -258,11 +195,14 @@ fn item_attrs(item: &syn::Item) -> Vec<syn::Attribute> {
 }
 
 /// The item's `#[python(<head>(..))]` entries, if any; any other key is refused.
-fn python_key(at: &str, attrs: &[syn::Attribute], head: &str, keys: &[&str]) -> Res<Option<Vec<Meta>>> {
-    let m: Vec<Meta> = super::meta::metas(attrs)
-        .into_iter()
-        .filter(|m| m.key.starts_with("python."))
-        .collect();
+fn python_key(
+    at: &str,
+    attrs: &[syn::Attribute],
+    head: &str,
+    keys: &[&str],
+) -> Res<Option<Vec<Meta>>> {
+    let m: Vec<Meta> =
+        super::meta::metas(attrs).into_iter().filter(|m| m.key.starts_with("python.")).collect();
     if m.is_empty() {
         return Ok(None);
     }
@@ -331,7 +271,6 @@ fn export_fn(
     m: &[Meta],
     sig: &syn::Signature,
     attrs: &[syn::Attribute],
-    rust_path: String,
     rust: String,
     al: &Aliases,
 ) -> Res<ExportFn> {
@@ -341,12 +280,9 @@ fn export_fn(
         return Err(format!("{at}: a free fn has no receiver"));
     }
     Ok(ExportFn {
-        python_only: python_gated(attrs),
-        rust_path,
         name: meta_str(m, "export.name").unwrap_or(rust),
         doc: doc(attrs),
         sig,
-        is_const: false,
         is_attr: false,
         is_async,
     })
@@ -357,7 +293,6 @@ fn export_const(
     m: &[Meta],
     ty: &syn::Type,
     attrs: &[syn::Attribute],
-    rust_path: String,
     rust: &str,
     al: &Aliases,
 ) -> Res<ExportFn> {
@@ -371,8 +306,6 @@ fn export_const(
     let ret = rty(at, ty, al)?;
     let name = meta_str(m, "export.name").unwrap_or_else(|| rust.to_lowercase());
     Ok(ExportFn {
-        python_only: python_gated(attrs),
-        rust_path,
         // An UPPER_CASE name is a module attribute, as the in-place expansion reads it.
         is_attr: name.chars().any(|c| c.is_ascii_uppercase())
             && !name.chars().any(|c| c.is_ascii_lowercase()),
@@ -381,25 +314,16 @@ fn export_const(
         sig: Sig {
             params: Vec::new(),
             ret,
-            err: None,
-            err_ty: None,
             defaults: Vec::new(),
             kw_only: KwOnly::None,
             stream: None,
         },
-        is_const: true,
         is_async: false,
     })
 }
 
 /// `#[host(export)] impl T { .. }`: associated items as module functions, called through `T::`.
-fn exported_impl(
-    label: &str,
-    module: &str,
-    imp: &syn::ItemImpl,
-    out: &mut Exposed,
-    al: &Aliases,
-) -> Res<()> {
+fn exported_impl(label: &str, imp: &syn::ItemImpl, out: &mut Exposed, al: &Aliases) -> Res<()> {
     let syn::Type::Path(p) = &*imp.self_ty else {
         return Err(format!("{label}: #[host(export)] on an impl is for `impl Type`"));
     };
@@ -417,15 +341,7 @@ fn exported_impl(
                 let rust = c.ident.to_string();
                 let at = format!("{label}: {core}::{rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_const(
-                    &at,
-                    &m,
-                    &c.ty,
-                    &c.attrs,
-                    format!("{module}::{core}::{rust}"),
-                    &rust,
-                    al,
-                )?);
+                out.fns.push(export_const(&at, &m, &c.ty, &c.attrs, &rust, al)?);
                 any = true;
             }
             syn::ImplItem::Fn(f) => {
@@ -433,15 +349,7 @@ fn exported_impl(
                 let rust = f.sig.ident.to_string();
                 let at = format!("{label}: {core}::{rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_fn(
-                    &at,
-                    &m,
-                    &f.sig,
-                    &f.attrs,
-                    format!("{module}::{core}::{rust}"),
-                    rust,
-                    al,
-                )?);
+                out.fns.push(export_fn(&at, &m, &f.sig, &f.attrs, rust, al)?);
                 any = true;
             }
             _ => {}
@@ -455,7 +363,7 @@ fn exported_impl(
     Ok(())
 }
 
-fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Aliases) -> Res<Object> {
+fn object(label: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Aliases) -> Res<Object> {
     // A body-less `send` method is an ordinary one once its body is written, as the expansion sees it.
     let mut imp = imp.clone();
     lk_agents_bindgen::fill_sends(&mut imp).map_err(|e| format!("{label}: {e}"))?;
@@ -470,18 +378,6 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
         return Err(format!("{at}: #[host(object)] is for an inherent, non-generic impl"));
     }
     let name = meta_str(m, "object.name").unwrap_or_else(|| core.clone());
-    let cell = match meta_str(m, "object.cell").as_deref() {
-        None | Some("plain") => Cell::Plain,
-        Some("mutex") => Cell::Mutex,
-        Some("arc") => Cell::Arc,
-        // A wrapper over a value the binding cannot make a class itself: a plain class to the stub.
-        Some("value" | "input") => Cell::Plain,
-        Some(other) => {
-            return Err(format!(
-                "{at}: cell = \"{other}\" -- write plain, mutex, arc, value or input"
-            ));
-        }
-    };
     let mut methods = Vec::new();
     let mut consts = Vec::new();
     for inner in &imp.items {
@@ -536,9 +432,7 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
         };
         methods.push(Method {
             name: meta_str(&fm, &format!("{head}.name")).unwrap_or(default_name),
-            rust_name: rust,
             kind,
-            receiver,
             sig,
             reply,
             doc: doc(&f.attrs),
@@ -548,9 +442,8 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
         return Err(format!("{at}: more than one #[host(new)]"));
     }
     Ok(Object {
-        core_path: format!("{module}::{core}"),
+        core,
         name,
-        cell,
         doc: doc(&imp.attrs),
         methods,
         stub_extra: m
@@ -567,83 +460,7 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
     })
 }
 
-fn error_type(
-    label: &str,
-    module: &str,
-    ident: &syn::Ident,
-    m: &[Meta],
-    variants: Option<&syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>>,
-) -> Res<ErrorType> {
-    let at = format!("{label}: {ident}");
-    let with = meta_rust(m, "error.with").or_else(|| {
-        m.iter()
-            .any(|x| x.key == "error.original")
-            .then(|| "crate::runtime::raise_host_error".to_owned())
-    });
-    let kind = meta_str(m, "error.kind");
-    if with.is_some() && kind.is_some() {
-        return Err(format!("{at}: `kind` and `with` are two answers to one question"));
-    }
-    let mut out = Vec::new();
-    for v in variants.into_iter().flatten() {
-        let Some(vm) = host_attr_strict(label, &v.attrs)? else { continue };
-        // `#[host(delegate)]` on a one-field tuple variant: the wrapped error's own map answers.
-        if vm.iter().any(|x| x.key == "delegate") {
-            let syn::Fields::Unnamed(u) = &v.fields else {
-                return Err(format!(
-                    "{at}::{}: `delegate` wraps one error, in a one-field tuple variant",
-                    v.ident
-                ));
-            };
-            let inner = match u.unnamed.iter().map(|f| &f.ty).collect::<Vec<_>>().as_slice() {
-                [syn::Type::Path(p)] => p.path.segments.last().map(|s| s.ident.to_string()),
-                _ => None,
-            }
-            .ok_or_else(|| {
-                format!(
-                    "{at}::{}: `delegate` wraps one error, in a one-field tuple variant",
-                    v.ident
-                )
-            })?;
-            out.push((v.ident.to_string(), "(inner)", format!("={inner}")));
-            continue;
-        }
-        let Some(k) = meta_str(&vm, "kind") else {
-            return Err(format!(
-                "{at}::{}: a variant of an error type takes #[host(kind = \"..\")] or #[host(delegate)]",
-                v.ident
-            ));
-        };
-        if with.is_some() {
-            return Err(format!(
-                "{at}::{}: a variant `kind` beside `with` -- the converter is the whole answer",
-                v.ident
-            ));
-        }
-        let pat = match v.fields {
-            syn::Fields::Unit => "",
-            syn::Fields::Unnamed(_) => "(..)",
-            syn::Fields::Named(_) => " { .. }",
-        };
-        out.push((v.ident.to_string(), pat, k));
-    }
-    Ok(ErrorType {
-        name: ident.to_string(),
-        path: format!("{module}::{ident}"),
-        source: label.to_owned(),
-        kind: kind.unwrap_or_else(|| "ValueError".to_owned()),
-        with,
-        variants: out,
-    })
-}
-
-fn kw_record(
-    label: &str,
-    module: &str,
-    st: &syn::ItemStruct,
-    m: &[Meta],
-    al: &Aliases,
-) -> Res<KwRecord> {
+fn kw_record(label: &str, st: &syn::ItemStruct, al: &Aliases) -> Res<KwRecord> {
     let at = format!("{label}: {}", st.ident);
     let syn::Fields::Named(named) = &st.fields else {
         return Err(format!("{at}: a keyword record has named fields -- they are the keywords"));
@@ -664,29 +481,13 @@ fn kw_record(
         fields.push(KwField {
             ty: rty(&format!("{at}.{name}"), &f.ty, al)?,
             default: meta_rust(&fm, "kwarg.default"),
-            lenient: fm.iter().any(|x| x.key == "kwarg.lenient"),
             name,
         });
     }
-    // `client(..)`: a class's keyword constructor; no Node support.
-    let client = head_of(m) == "client";
-    Ok(KwRecord {
-        name: st.ident.to_string(),
-        path: format!("{module}::{}", st.ident),
-        fields,
-        client,
-    })
+    Ok(KwRecord { name: st.ident.to_string(), fields })
 }
 
-fn stream(
-    label: &str,
-    module: &str,
-    ident: &syn::Ident,
-    _attrs: &[syn::Attribute],
-    m: &[Meta],
-    al: &Aliases,
-    alias_of: Option<&syn::Type>,
-) -> Res<Stream> {
+fn stream(label: &str, ident: &syn::Ident, m: &[Meta]) -> Res<Stream> {
     let at = format!("{label}: {ident}");
     let known = [
         "name",
@@ -712,232 +513,36 @@ fn stream(
             return Err(format!("{at}: stream({key}) -- a stream takes {}", known.join(", ")));
         }
     }
-    let name = meta_str(m, "stream.name")
-        .ok_or_else(|| format!("{at}: stream(name = \"..\") is the class name"))?;
-    let ty = |key: &str| -> Res<Option<RTy>> {
-        match meta_rust(m, &format!("stream.{key}")) {
-            None => Ok(None),
-            Some(t) => {
-                let parsed = syn::parse_str::<syn::Type>(&t)
-                    .map_err(|e| format!("{at}: {key} = \"{t}\": {e}"))?;
-                Ok(Some(rty(&format!("{at}.{key}"), &parsed, al)?))
-            }
-        }
+    let values = |key: &str| -> Vec<String> {
+        let key = format!("stream.{key}");
+        m.iter().filter(|x| x.key == key).filter_map(|x| x.value.clone()).collect()
     };
-    let sink_ty = meta_rust(m, "stream.sink");
-    let input = ty("input")?;
-    if sink_ty.is_some() != input.is_some() {
-        return Err(format!(
-            "{at}: `sink` and `input` come together -- a stream pushes something or nothing"
-        ));
-    }
-    let output = ty("output")?
-        .ok_or_else(|| format!("{at}: stream(output = \"T\") is what recv() yields"))?;
-    let flag = |k: &str| m.iter().any(|x| x.key == format!("stream.{k}"));
-    if sink_ty.is_none() && (flag("end_input") || flag("close_ends_input") || flag("optional_sink"))
-    {
-        return Err(format!(
-            "{at}: end_input/close_ends_input/optional_sink on a stream with no sink"
-        ));
-    }
-    let is_box = |t: &syn::Type| matches!(t, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Box"));
-    let boxed = match meta_rust(m, "stream.source") {
-        Some(src) => al.get(src.rsplit("::").next().unwrap_or(&src)).is_some_and(is_box),
-        None => alias_of.is_some_and(is_box),
-    };
-    let input = input.unwrap_or(RTy::Unit);
     Ok(Stream {
-        name,
-        source_ty: meta_rust(m, "stream.source").unwrap_or_else(|| format!("{module}::{ident}")),
-        sink_ty,
+        name: meta_str(m, "stream.name")
+            .ok_or_else(|| format!("{at}: stream(name = \"..\") is the class name"))?,
+        sink_ty: meta_rust(m, "stream.sink"),
         push: meta_str(m, "stream.push").unwrap_or_else(|| "push".to_owned()),
         arg: meta_str(m, "stream.arg").unwrap_or_else(|| "text".to_owned()),
         input_py: meta_str(m, "stream.input_py").unwrap_or_else(|| "str".to_owned()),
-        boxed,
-        input,
-        output,
-        end_input: flag("end_input"),
-        close_ends_input: flag("close_ends_input"),
-        optional_sink: meta_str(m, "stream.optional_sink"),
-        err_with: meta_rust(m, "stream.error").unwrap_or_else(|| "ProviderError".to_owned()),
-        deadline: meta_rust(m, "stream.deadline")
-            .unwrap_or_else(|| "crate::inference::NATIVE_CLOSE_DEADLINE".to_owned()),
+        end_input: m.iter().any(|x| x.key == "stream.end_input"),
         // The class's own `__doc__`: one source type backs several classes.
         doc: meta_str(m, "stream.doc").map(|d| vec![d]).unwrap_or_default(),
-        stub_extra: m
-            .iter()
-            .filter(|x| x.key == "stream.stub")
-            .filter_map(|x| x.value.clone())
-            .collect(),
-        stub_imports: m
-            .iter()
-            .filter(|x| x.key == "stream.stub_import")
-            .filter_map(|x| x.value.clone())
-            .collect(),
+        stub_extra: values("stub"),
+        stub_imports: values("stub_import"),
     })
 }
 
-pub(super) fn span_text(text: &str, span: proc_macro2::Span) -> String {
-    let (start, end) = (span.start(), span.end());
-    let lines: Vec<&str> = text.lines().collect();
-    let mut out = String::new();
-    for l in start.line..=end.line {
-        let line: Vec<char> = lines.get(l - 1).copied().unwrap_or("").chars().collect();
-        let a = if l == start.line { start.column } else { 0 };
-        let b = if l == end.line { end.column.min(line.len()) } else { line.len() };
-        out.push_str(&line[a.min(b)..b].iter().collect::<String>());
-        out.push(' ');
-    }
-    let mut collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    for (from, to) in [("( ", "("), (" )", ")"), (", )", ")"), (",)", ")")] {
-        collapsed = collapsed.replace(from, to);
-    }
-    collapsed
-}
-
-/// A file's `use` paths, flattened and absolute, as `(path, bound name)`; a glob binds `*`.
-fn flat_uses(module: &str, file: &syn::File) -> Vec<(String, String)> {
-    fn walk(prefix: &str, t: &syn::UseTree, out: &mut Vec<(String, String)>) {
-        let join = |a: &str, b: &str| if a.is_empty() { b.to_owned() } else { format!("{a}::{b}") };
-        match t {
-            syn::UseTree::Path(p) => walk(&join(prefix, &p.ident.to_string()), &p.tree, out),
-            syn::UseTree::Name(n) => {
-                let name = n.ident.to_string();
-                if name == "self" {
-                    let bound = prefix.rsplit("::").next().unwrap_or(prefix).to_owned();
-                    out.push((prefix.to_owned(), bound));
-                } else {
-                    out.push((join(prefix, &name), name));
-                }
-            }
-            syn::UseTree::Rename(r) => out.push((
-                format!("{} as {}", join(prefix, &r.ident.to_string()), r.rename),
-                r.rename.to_string(),
-            )),
-            syn::UseTree::Glob(_) => out.push((join(prefix, "*"), "*".to_owned())),
-            syn::UseTree::Group(g) => g.items.iter().for_each(|i| walk(prefix, i, out)),
-        }
-    }
-    let krate = module.split("::").next().unwrap_or(module);
-    let parent = module.rsplit_once("::").map(|(p, _)| p).unwrap_or(krate);
-    let mut out = Vec::new();
-    for item in &file.items {
-        let syn::Item::Use(u) = item else { continue };
-        if u.attrs.iter().any(|a| a.path().is_ident("cfg")) {
-            continue;
-        }
-        let mut here = Vec::new();
-        walk("", &u.tree, &mut here);
-        for (path, bound) in here {
-            let path = if let Some(r) = path.strip_prefix("crate::") {
-                format!("{krate}::{r}")
-            } else if let Some(r) = path.strip_prefix("self::") {
-                format!("{module}::{r}")
-            } else if let Some(r) = path.strip_prefix("super::") {
-                format!("{parent}::{r}")
-            } else {
-                path
-            };
-            out.push((path, bound));
-        }
-    }
-    out
-}
-
-/// `crate::`/`self::`/`super::` in a copied signature mean the core crate, not the binding.
-fn absolute(module: &str, s: &str) -> String {
-    let krate = module.split("::").next().unwrap_or(module);
-    let parent = module.rsplit_once("::").map(|(p, _)| p).unwrap_or(krate);
-    s.replace("crate::", &format!("{krate}::"))
-        .replace("super::", &format!("{parent}::"))
-        .replace("self::", &format!("{module}::"))
-}
-
-fn proxy(
-    label: &str,
-    module: &str,
-    text: &str,
-    file: &syn::File,
-    tr: &syn::ItemTrait,
-    m: &[Meta],
-    _al: &Aliases,
-) -> Res<Proxy> {
-    let at = format!("{label}: trait {}", tr.ident);
+fn proxy(label: &str, tr: &syn::ItemTrait) -> Res<Proxy> {
     if !tr.generics.params.is_empty() {
-        return Err(format!("{at}: a generic trait has no single proxy"));
+        return Err(format!("{label}: trait {}: a generic trait has no single proxy", tr.ident));
     }
-    // Every unmarked method, defaulted or not, calls `_core_<method>` on the host object.
-    let name = meta_rust(m, "proxy.name").unwrap_or_else(|| format!("Py{}", tr.ident));
-    let state: Vec<(String, String)> = m
+    let methods = tr
+        .items
         .iter()
-        .any(|x| x.key == "proxy.clock")
-        .then(|| ("clock".to_owned(), "std::sync::Arc<dyn lk_agents_abi::Clock>".to_owned()))
-        .into_iter()
+        .filter_map(|inner| match inner {
+            syn::TraitItem::Fn(f) => Some(f.sig.ident.to_string()),
+            _ => None,
+        })
         .collect();
-    let async_trait =
-        tr.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
-    let mut methods = Vec::new();
-    for inner in &tr.items {
-        let syn::TraitItem::Fn(f) = inner else { continue };
-        let rust = f.sig.ident.to_string();
-        let mat = format!("{at}::{rust}");
-        let fm = host_attr_strict(label, &f.attrs)?.unwrap_or_default();
-        let (ret, ret_result, ret_ref) = match &f.sig.output {
-            syn::ReturnType::Default => (String::new(), false, false),
-            syn::ReturnType::Type(_, t) => (
-                span_text(text, t.span()),
-                matches!(&**t, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Result")),
-                matches!(&**t, syn::Type::Reference(_)),
-            ),
-        };
-        let has_params = f.sig.inputs.iter().any(|i| matches!(i, syn::FnArg::Typed(_)));
-        let action = match meta_str(&fm, "soon") {
-            Some(method) => ProxyAction::Soon { method },
-            // `live`: a getter read on every call instead of once; the same host call.
-            None if fm.is_empty() || head_of(&fm) == "live" => ProxyAction::Core,
-            None => {
-                return Err(format!(
-                    "{mat}: #[host({})] -- a proxy method takes soon = \"..\" or nothing",
-                    head_of(&fm)
-                ));
-            }
-        };
-        match &action {
-            // A bare getter lending a borrow is read once and stored; any other host call cannot lend.
-            ProxyAction::Core if ret_ref && f.sig.asyncness.is_none() && !has_params => {}
-            _ if ret_ref => return Err(format!("{mat}: a host call cannot lend a reference")),
-            ProxyAction::Soon { .. } if !ret.is_empty() && !ret_result => {
-                return Err(format!(
-                    "{mat}: `soon` is fire-and-forget: it returns () or Result<(), E>"
-                ));
-            }
-            _ => {}
-        }
-        let sig = absolute(module, &span_text(text, f.sig.span()));
-        methods.push(ProxyMethod { name: rust, sig, action });
-    }
-    // Only names the copied signatures use: no crate-private paths, no unused-import warnings.
-    let words: Vec<String> = methods
-        .iter()
-        .map(|x| x.sig.as_str())
-        .chain(state.iter().map(|(_, t)| t.as_str()))
-        .flat_map(|s| s.split(|c: char| !(c.is_alphanumeric() || c == '_')))
-        .filter(|w| !w.is_empty())
-        .map(str::to_owned)
-        .collect();
-    let mut uses: Vec<String> = flat_uses(module, file)
-        .into_iter()
-        .filter(|(_, bound)| bound != "*" && words.contains(bound))
-        .map(|(path, _)| path)
-        .collect();
-    uses.push(format!("{module}::*"));
-    Ok(Proxy {
-        trait_path: format!("{module}::{}", tr.ident),
-        name,
-        source: label.to_owned(),
-        async_trait,
-        uses,
-        state,
-        methods,
-    })
+    Ok(Proxy { trait_name: tr.ident.to_string(), methods })
 }

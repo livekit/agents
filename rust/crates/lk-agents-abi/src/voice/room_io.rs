@@ -24,7 +24,6 @@ const _: () = ();
     dataclass,
     name = "AudioInputOptions"
 )]
-#[node(interface)]
 #[binding(extract, from_items)]
 pub struct AudioInputConfig {
     // 24 kHz, as in the reference; the host's stream converts once.
@@ -42,7 +41,6 @@ pub struct AudioInputConfig {
         type_import = "..voice.room_io:NoiseCancellationSelector",
         default = "None"
     )]
-    #[node(ty = "unknown")]
     pub noise_cancellation: Option<lk_agents_abi::HostRef>,
     /// Enable automatic gain control (AGC) on the input audio. If not given, disabled when noise
     /// cancellation is configured directly.
@@ -58,7 +56,6 @@ pub struct AudioInputConfig {
     //
     // Seconds on the wire, clamped at zero by the converter.
     #[python(ty = "float", default = "3.0")]
-    #[node(ty = "number")]
     pub pre_connect_audio_timeout: std::time::Duration,
 }
 
@@ -126,7 +123,6 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioOutputConfig {
     ),
     order = "sync_transcription, transcription_speed_factor, next_in_chain, json_format"
 )]
-#[node(interface)]
 #[binding(extract, from_items)]
 pub struct TextOutputConfig {
     /// False to disable transcription synchronization with audio output.
@@ -139,7 +135,6 @@ pub struct TextOutputConfig {
         type_import = "..types:NotGivenOr",
         default = "NOT_GIVEN"
     )]
-    #[node(ty = "boolean")]
     pub sync_transcription: Option<bool>,
     /// Speed factor of transcription synchronization with audio output.
     /// Only effective if `sync_transcription` is True.
@@ -166,13 +161,10 @@ impl Default for TextOutputConfig {
     dataclass,
     name = "NoiseCancellationParams"
 )]
-#[node(interface)]
 pub struct NoiseCancellationParams {
     #[python(ty = "rtc.Participant", import = "livekit:rtc")]
-    #[node(ty = "unknown")]
     pub participant: crate::HostRef,
     #[python(ty = "rtc.Track", import = "livekit:rtc")]
-    #[node(ty = "unknown")]
     pub track: crate::HostRef,
 }
 
@@ -182,7 +174,6 @@ pub struct NoiseCancellationParams {
     dataclass,
     name = "TextInputOptions"
 )]
-#[node(interface)]
 pub struct TextInputOptions {
     #[python(
         ty = "TextInputCallback",
@@ -190,7 +181,6 @@ pub struct TextInputOptions {
         type_import = "..voice.room_io:TextInputCallback",
         default = "_default_text_input_cb"
     )]
-    #[node(ty = "unknown")]
     pub text_input_cb: Option<crate::HostRef>,
 }
 
@@ -199,7 +189,6 @@ pub struct TextInputOptions {
     dataclass,
     name = "VideoInputOptions"
 )]
-#[node(interface)]
 pub struct VideoInputOptions {}
 
 // `AudioOutputOptions` as written, before the host flattens it. Only `source` of
@@ -209,7 +198,6 @@ pub struct VideoInputOptions {}
     dataclass,
     name = "AudioOutputOptions"
 )]
-#[node(interface)]
 pub struct AudioOutputOptions {
     #[python(default = "24000")]
     pub sample_rate: u32,
@@ -220,7 +208,6 @@ pub struct AudioOutputOptions {
         import = "livekit:rtc",
         default_factory = "lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)"
     )]
-    #[node(ty = "unknown")]
     pub track_publish_options: Option<crate::HostRef>,
     /// The name of the audio track to publish. If not provided, default to "roomio_audio".
     #[python(
@@ -229,7 +216,6 @@ pub struct AudioOutputOptions {
         type_import = "..types:NotGivenOr",
         default = "NOT_GIVEN"
     )]
-    #[node(ty = "string")]
     pub track_name: Option<String>,
 }
 
@@ -324,15 +310,12 @@ pub struct ParticipantUnlinked {
     name = "TextInputEvent",
     order = "text, info, participant"
 )]
-#[node(interface)]
 #[binding(emit, tag = "type", tag_value = "text_input")]
 pub struct TextInput {
     pub text: String,
     #[python(ty = "rtc.RemoteParticipant | None", import = "livekit:rtc", default = "None")]
-    #[node(ty = "string | null")]
     pub participant: ParticipantIdentity,
     #[python(ty = "rtc.TextStreamInfo | None", import = "livekit:rtc", default = "None")]
-    #[node(ty = "unknown")]
     pub info: Box<StreamInfo>,
 }
 

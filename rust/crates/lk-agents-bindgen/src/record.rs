@@ -126,7 +126,6 @@ struct Record {
     targets: Vec<Target>,
     binding_tag: Option<Tag>,
     python_tag: Option<Tag>,
-    node_tag: Option<Tag>,
     /// `#[binding(read_tag = "kind")]`: the key an extract target reads its tag under, when the
     /// dict it reads keys the kind differently from the one it emits.
     read_key: Option<String>,
@@ -141,9 +140,9 @@ impl Record {
         self.targets.iter().find(|t| t.kind == kind)
     }
 
-    /// The binding's own, else python's, then node's (the codegen's `decl_tag`).
+    /// The binding's own, else python's (the codegen's `decl_tag`).
     fn dict_tag(&self) -> Option<&Tag> {
-        self.binding_tag.as_ref().or(self.python_tag.as_ref()).or(self.node_tag.as_ref())
+        self.binding_tag.as_ref().or(self.python_tag.as_ref())
     }
 
     /// The host class's literal first.
@@ -199,7 +198,6 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
     }
     let b = Metas::named(&input.attrs, "binding")?;
     let py = Metas::named(&input.attrs, "python")?;
-    let node = Metas::named(&input.attrs, "node")?;
     b.only(
         &format!("#[binding] on {ident}"),
         &["emit", "extract", "class", "new", "from_items", "fields_only", "from", "tag", "tag_value", "tag_const", "default", "skip_if_none", "read_tag", "model_dump", "untagged"],
@@ -262,7 +260,6 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
     Ok(Record {
         binding_tag: tag_of(&b, &ident)?,
         python_tag: tag_of(&py, &ident)?,
-        node_tag: tag_of(&node, &ident)?,
         read_key: b.text("read_tag")?.map(str::to_owned),
         fields_only: b.flag("fields_only"),
         model_dump: b.flag("model_dump"),

@@ -11,7 +11,6 @@ use lk_agents_host_derive::Host;
 // are public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
 #[python(enum, module = "stt", path = "livekit.agents.stt", name = "SpeechEventType")]
-#[node(enum)]
 #[host(wire(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "SpeechEventType", value: s.to_owned() },
@@ -53,12 +52,10 @@ pub enum SpeechEventType {
     name = "SpeechData",
     post_init = "speech_data_post_init"
 )]
-#[node(interface)]
 #[binding(emit, extract)]
 pub struct SpeechData {
     // The target when translating; normalised through `LanguageCode::new` in both directions.
     #[python(ty = "LanguageCode", import = ".language:LanguageCode")]
-    #[node(ty = "string")]
     pub language: LanguageCode,
     pub text: String,
     pub start_time: f64,
@@ -67,7 +64,6 @@ pub struct SpeechData {
     pub speaker_id: Option<String>,
     // `None` vs `[]` matters to `TranscriptSynchronizer`.
     #[python(ty = "list[TimedString] | None", import = "..types:TimedString", default = "None")]
-    #[node(ty = "string[] | null")]
     pub words: Option<Vec<TimedString>>,
     /// the source languages spoken by the user. populated by STT services that support translation,
     /// where `language` holds the target language and `source_languages` holds the original spoken language(s),
@@ -75,7 +71,6 @@ pub struct SpeechData {
     /// `source_languages` holds all detected languages sorted by prevalence.
     /// may contain multiple entries when a single utterance spans multiple source languages.
     #[python(ty = "list[LanguageCode] | None", import = ".language:LanguageCode", default = "None")]
-    #[node(ty = "string[] | null")]
     pub source_languages: Option<Vec<LanguageCode>>,
     /// the original transcription segments in the source language(s), when translation is active.
     /// each entry corresponds to the same-indexed entry in `source_languages`.
@@ -86,7 +81,6 @@ pub struct SpeechData {
     /// and `target_languages` carries the fine-grained per-run breakdown.
     /// populated when translation is active; None otherwise.
     #[python(ty = "list[LanguageCode] | None", import = ".language:LanguageCode", default = "None")]
-    #[node(ty = "string[] | null")]
     pub target_languages: Option<Vec<LanguageCode>>,
     /// the translated transcription segments in the target language(s).
     /// each entry corresponds to the same-indexed entry in `target_languages`.
@@ -95,7 +89,6 @@ pub struct SpeechData {
     /// plugins may populate this with provider-specific data that doesn't map to standard fields.
     // JSON, so the telemetry path can read it.
     #[python(ty = "dict[str, Any] | None", import = "typing:Any", default = "None")]
-    #[node(ty = "Record<string, unknown> | null")]
     pub metadata: Option<Extra>,
 }
 
@@ -121,7 +114,6 @@ impl SpeechData {
 // `stt/stt.py:106`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
 #[python(dataclass, module = "stt", path = "livekit.agents.stt", name = "RecognitionUsage")]
-#[node(interface)]
 #[binding(emit, extract)]
 pub struct RecognitionUsage {
     /// Incremental audio duration/usage in seconds
@@ -141,7 +133,6 @@ pub struct RecognitionUsage {
     path = "livekit.agents.stt",
     name = "SpeechEvent"
 )]
-#[node(interface)]
 #[binding(emit, extract)]
 pub struct SpeechEvent {
     #[host(rename = "type")]

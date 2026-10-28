@@ -1,24 +1,16 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-# The two host bindings are members (so `-p lk-agents-py` / `-p lk-agents-node` work from here and
-# share this lockfile and target dir) but NOT default members. Cargo unifies features across every
-# package one invocation builds: `lk-agents-py` turns on the `python` feature of abi/voice/rtc/media/
-# inference/worker, which pulls pyo3 into those crates, and pyo3 links libpython into every final
-# artifact that contains them -- including the node addon. A plain `cargo build` / `cargo test` /
-# `cargo nextest run` from `rust/` therefore builds the host-neutral crates only, and each host is
-# built in its own invocation:
+# The Python binding is a member (so `-p lk-agents-py` works from here and shares this lockfile and
+# target dir) but NOT a default member. Cargo unifies features across every package one invocation
+# builds: `lk-agents-py` turns on the `python` feature of the core crates, which pulls pyo3 (and
+# libpython) into them. A plain `cargo build` / `cargo test` / `cargo nextest run` from `rust/`
+# therefore builds the host-neutral crates only, and the binding is built in its own invocation:
 #
 #   cargo build                                   # core crates, no host feature
-#   cargo build -p lk-agents-node                 # node addon: no pyo3, no libpython
-#   cargo nextest run -p lk-agents-py             # python binding tests (links libpython; set
+#   cargo nextest run -p lk-agents-py             # binding tests (links libpython; set
 #                                                 # PYO3_PYTHON / PYTHONHOME to the dev venv)
-#   (cd ../python/livekit-agents && VIRTUAL_ENV=../../.venv-dev maturin develop)
-#   maturin build -i <python> --release           # wheel, from python/livekit-agents
-#
-# `--workspace` (and `-p lk-agents-py -p lk-agents-node` together) selects every member explicitly
-# and so still unifies: the node addon it produces links libpython. Build the node addon on its own
-# (`cargo build -p lk-agents-node`, or `napi build` from node/) whenever the artifact matters.
+#   (cd ../livekit-agents-next && maturin develop)
 default-members = [
     "crates/lk-agents-a2a",
     "crates/lk-agents-abi",

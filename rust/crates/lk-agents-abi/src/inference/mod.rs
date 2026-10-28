@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 pub use gateway::*;
 
-#[crate::host(group(kind = "typed_dict", typed_dict_from = "typing", total = "False", node))]
+#[crate::host(group(kind = "typed_dict", typed_dict_from = "typing", total = "False"))]
 pub mod gateway {
     use super::*;
 
@@ -371,7 +371,6 @@ pub mod gateway {
                 ty = "Metadata | None",
                 type_import = "openai.types.shared_params:Metadata"
             )]
-            #[node(ty = "Record<string, string> | null")]
             pub metadata: Option<Value>,
             #[python(ty = "list[Literal[\"text\", \"audio\"]] | None")]
             pub modalities: Option<Value>,
@@ -381,7 +380,6 @@ pub mod gateway {
                 ty = "ChatCompletionPredictionContentParam | None",
                 type_import = "openai.types.chat:ChatCompletionPredictionContentParam"
             )]
-            #[node(ty = "unknown")]
             pub prediction: Option<Value>,
             pub presence_penalty: Option<Option<f64>>,
             pub prompt_cache_key: Option<String>,
@@ -391,7 +389,6 @@ pub mod gateway {
                 ty = "ReasoningEffort | None",
                 type_import = "openai.types.shared.reasoning_effort:ReasoningEffort"
             )]
-            #[node(ty = "unknown")]
             pub reasoning_effort: Option<Value>,
             pub safety_identifier: Option<String>,
             pub seed: Option<Option<i64>>,
@@ -412,11 +409,9 @@ pub mod gateway {
                 ty = "completion_create_params.WebSearchOptions",
                 type_import = "openai.types.chat:completion_create_params"
             )]
-            #[node(ty = "unknown")]
             pub web_search_options: Option<Value>,
             // livekit-typed arguments
             #[python(ty = "ToolChoice", type_import = "..llm:ToolChoice")]
-            #[node(ty = "unknown")]
             pub tool_choice: Option<Value>,
             // TODO(theomonnomn): support repsonse format
             // response_format: completion_create_params.ResponseFormat
