@@ -45,7 +45,7 @@ from dataclasses import dataclass, replace
 from urllib.parse import urlencode
 
 import aiohttp
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -64,6 +64,8 @@ from livekit.agents.utils import AudioBuffer, is_given
 from .log import logger
 from .models import STTEncoding, STTModels
 from .version import __version__
+
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 NUM_CHANNELS = 1
 # Base URL for the Smallest AI API.
@@ -121,6 +123,10 @@ class _Utterance(BaseModel):
 
 
 class _Transcript(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    error: JsonValue = None
+    status: str | None = None
     session_id: str = ""
     type: str = ""
     transcript: str = ""
@@ -359,7 +365,7 @@ class STT(stt.STT):
                 conn_options=conn_options,
             ) as resp:
                 resp.raise_for_status()
-                data = TypeAdapter(dict[str, JsonValue]).validate_python(await resp.json())
+                data = _Transcript.model_validate(await resp.json())
                 return _batch_transcription_to_speech_event(config.language, data)
 
         except asyncio.TimeoutError as e:
@@ -658,8 +664,8 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    data = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
-                except json.JSONDecodeError:
+                    data = _Transcript.model_validate_json(msg.data)
+                except ValidationError:
                     logger.warning(
                         "failed to parse Smallest AI STT message", extra={"lk.pii.data": msg.data}
                     )
@@ -667,26 +673,31 @@ class SpeechStream(stt.SpeechStream):
 
                 # Errors: {"type": "error", "status", "message"} from the public API,
                 # {"error": "..."} from a server reached directly.
-                if data.get("type") == "error" or (
-                    "error" in data and "transcript" not in data and "transcription" not in data
+                if data.type == "error" or (
+                    "error" in data.model_fields_set
+                    and "transcript" not in data.model_fields_set
+                    and "transcription" not in data.model_fields_set
                 ):
                     # The payload may echo user content; it goes only in the PII-marked
                     # log field and the exception body, not in the message the retry
                     # logger prints.
-                    logger.error("Smallest AI STT error", extra={"lk.pii.data": data})
+                    logger.error(
+                        "Smallest AI STT error",
+                        extra={"lk.pii.data": data.model_dump(mode="json", exclude_unset=True)},
+                    )
                     raise APIStatusError(
-                        message=f"Smallest AI STT error ({data.get('status') or 'error'})",
+                        message=f"Smallest AI STT error ({data.status or 'error'})",
                         status_code=-1,
                         request_id=self._session_id or None,
-                        body=data,
+                        body=data.model_dump(mode="json", exclude_unset=True),
                     )
-                if data.get("type") == "pong":
+                if data.type == "pong":
                     continue
 
                 self._process_stream_event(data)
 
                 # The session is fully flushed; nothing else will arrive.
-                if data.get("is_last"):
+                if data.is_last:
                     return
 
         ws: aiohttp.ClientWebSocketResponse | None = None
@@ -814,8 +825,7 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = False
             self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
-    def _process_stream_event(self, data: dict[str, JsonValue] | _Transcript) -> None:
-        data = _Transcript.model_validate(data)
+    def _process_stream_event(self, data: _Transcript) -> None:
         session_id = data.session_id
         if session_id:
             self._session_id = session_id
@@ -878,13 +888,12 @@ def _aggregate_confidence(raw_words: list[_Word]) -> float:
 
 def _transcript_to_speech_data(
     language: str,
-    data: dict[str, JsonValue] | _Transcript,
+    data: _Transcript,
     *,
     transcript: str,
     start_time_offset: float,
     diarize: bool,
 ) -> list[stt.SpeechData]:
-    data = _Transcript.model_validate(data)
     raw_words = data.words or []
 
     words: list[TimedString] | None = (
@@ -919,9 +928,7 @@ def _transcript_to_speech_data(
     if raw_utterances:
         metadata["utterances"] = [
             {
-                **TypeAdapter(dict[str, JsonValue]).validate_python(
-                    u.model_dump(mode="json", exclude_unset=True)
-                ),
+                **_JSON_OBJECT.validate_python(u.model_dump(mode="json", exclude_unset=True)),
                 "start": u.start + start_time_offset,
                 "end": u.end + start_time_offset,
             }
@@ -945,12 +952,9 @@ def _transcript_to_speech_data(
     ]
 
 
-def _batch_transcription_to_speech_event(
-    language: str, data: dict[str, JsonValue] | _Transcript
-) -> stt.SpeechEvent:
+def _batch_transcription_to_speech_event(language: str, data: _Transcript) -> stt.SpeechEvent:
     # Batch HTTP response: {"status", "transcription", "audio_length", "words": [...],
     # "utterances": [...] (when word_timestamps=True), "language", "metadata"}.
-    data = _Transcript.model_validate(data)
     transcript = data.transcription
     raw_words = data.words or []
     raw_utterances = data.utterances or []

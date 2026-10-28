@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, Field, JsonValue
 
 from livekit.agents import (
     APIConnectionError,
@@ -517,7 +517,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         if not self._opts.use_continuations:
             while True:
                 msg = await self._recv_one(ws, timeout=self._conn_options.read_timeout)
-                status, _ = self._parse_status_event(msg, output_emitter)
+                status = self._parse_status_event(msg, output_emitter)
                 if status == "complete":
                     return True
 
@@ -567,7 +567,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if self._conn_options.read_timeout is None
                 else event_loop.time() + self._conn_options.read_timeout
             )
-            status, _ = self._parse_status_event(msg, output_emitter)
+            status = self._parse_status_event(msg, output_emitter)
             if status == "chunk":
                 received_chunk = True
 
@@ -589,12 +589,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def _parse_status_event(
         self, msg: aiohttp.WSMessage, output_emitter: tts.AudioEmitter
-    ) -> tuple[str | None, dict[str, JsonValue]]:
+    ) -> str | None:
         if msg.type != aiohttp.WSMsgType.TEXT:
-            return None, {}
+            return None
 
-        event = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
-        parsed = _TtsEvent.model_validate(event)
+        parsed = _TtsEvent.model_validate_json(msg.data)
         status = parsed.status
 
         if status == "chunk":
@@ -619,7 +618,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "SmallestAI TTS error", extra={"lk.pii.provider_message": provider_message}
             )
             raise APIConnectionError("SmallestAI TTS error")
-        return status, event
+        return status
 
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, JsonValue]:

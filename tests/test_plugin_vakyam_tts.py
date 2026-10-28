@@ -733,11 +733,15 @@ def test_raise_http_error_does_not_retain_raw_response() -> None:
 
 
 def test_raise_ws_error_does_not_retain_raw_event() -> None:
-    from livekit.plugins.vakyam._utils import raise_ws_error
+    from livekit.plugins.vakyam._utils import _ErrorResponse, raise_ws_error
 
     secret = "customer text and bearer secret"
     with pytest.raises(APIStatusError) as exc_info:
-        raise_ws_error({"type": "error", "error": {"code": "internal_error", "message": secret}})
+        raise_ws_error(
+            _ErrorResponse.model_validate(
+                {"type": "error", "error": {"code": "internal_error", "message": secret}}
+            )
+        )
 
     assert exc_info.value.body == {"type": "error", "code": "internal_error"}
     assert secret not in str(exc_info.value)
@@ -777,3 +781,49 @@ def test_websocket_internal_close_is_retryable() -> None:
     assert error.retryable is True
     assert error.body is None
     assert "session lost" not in str(error)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "{",
+        "[]",
+        '{"type":"end_of_utterance"}',
+        '{"type":"cancellation","characters_used":"invalid"}',
+    ],
+)
+async def test_cancel_reports_invalid_terminal_response_as_typed_error(response: str) -> None:
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+    from pydantic import ValidationError
+
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
+
+    async def peer(request: web.Request) -> web.WebSocketResponse:
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        await socket.send_json({"type": "connected"})
+        async for message in socket:
+            if message.type != WSMsgType.TEXT:
+                continue
+            kind = json.loads(message.data)["type"]
+            if kind == "config":
+                await socket.send_json({"type": "configured"})
+            elif kind == "cancel":
+                await socket.send_bytes(b"trailing audio")
+                await socket.send_str(response)
+            elif kind == "disconnect":
+                break
+        return socket
+
+    app = web.Application()
+    app.router.add_get("/v1/tts/websocket", peer)
+    async with TestServer(app) as server:
+        async with AsyncStreamingTTSSession(
+            api_key="test-key", config=TTSSessionConfig(), base_url=str(server.make_url(""))
+        ) as session:
+            with pytest.raises(APIConnectionError) as error:
+                await session.cancel(timeout=0.5)
+            assert error.value.retryable is False
+            assert isinstance(error.value.__cause__, ValidationError)
+            assert session.last_result is None

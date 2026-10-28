@@ -40,14 +40,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal, Self
 
 import aiohttp
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, Field, JsonValue, StrictBool, StrictStr, model_validator
 
 from livekit import rtc
 from livekit.agents import (
@@ -102,40 +101,41 @@ def _append_text(existing: str, new: str) -> str:
     return _normalize_whitespace(existing + separator + new)
 
 
-def _word_text(w: dict[str, JsonValue]) -> str:
-    value = w.get("word", "")
-    if not isinstance(value, str):
-        raise ValueError("nabrah word text must be a string")
-    return value.replace(EOT_TOKEN, "").strip()
+_NonnegativeNumber = Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)]
 
 
-def _finite_number(value: object, *, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"nabrah {field} must be a number")
-    number = float(value)
-    if not math.isfinite(number) or number < 0:
-        raise ValueError(f"nabrah {field} must be finite and non-negative")
-    return number
+class _Word(BaseModel):
+    word: StrictStr = ""
+    start_time: _NonnegativeNumber = 0.0
+    end_time: _NonnegativeNumber = 0.0
+    confidence: _NonnegativeNumber | None = None
+
+    @model_validator(mode="after")
+    def _check_timestamps(self) -> Self:
+        if self.end_time < self.start_time:
+            raise ValueError("nabrah word end_time must not precede start_time")
+        return self
 
 
-def _timed_word(w: dict[str, JsonValue], offset: float) -> TimedString:
+class _Message(BaseModel):
+    type: str | None = None
+    text: StrictStr = ""
+    is_final: StrictBool = False
+    audio_processed: _NonnegativeNumber | None = None
+    words: list[_Word] | None = None
+
+
+def _word_text(word: _Word) -> str:
+    return word.word.replace(EOT_TOKEN, "").strip()
+
+
+def _timed_word(word: _Word, offset: float) -> TimedString:
     """One backend word entry as a TimedString. Timestamps arrive in ms."""
-    start_time = _finite_number(w.get("start_time", 0), field="word start_time")
-    end_time = _finite_number(w.get("end_time", 0), field="word end_time")
-    if end_time < start_time:
-        raise ValueError("nabrah word end_time must not precede start_time")
-
-    confidence_value = w.get("confidence", NOT_GIVEN)
-    confidence = (
-        NOT_GIVEN
-        if confidence_value is None or not is_given(confidence_value)
-        else _finite_number(confidence_value, field="word confidence")
-    )
     return TimedString(
-        _word_text(w),
-        start_time=start_time / 1000.0 + offset,
-        end_time=end_time / 1000.0 + offset,
-        confidence=confidence,
+        _word_text(word),
+        start_time=word.start_time / 1000.0 + offset,
+        end_time=word.end_time / 1000.0 + offset,
+        confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
     )
 
 
@@ -341,18 +341,18 @@ class SpeechStream(stt.SpeechStream):
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         raise APIConnectionError("nabrah STT closed before ready")
                     try:
-                        payload = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
+                        payload = _Message.model_validate_json(msg.data)
                     except (ValueError, TypeError):
                         raise APIConnectionError(
                             "nabrah STT sent an invalid ready response"
                         ) from None
-                    if payload.get("type") == "error":
+                    if payload.type == "error":
                         raise APIStatusError(
                             "nabrah STT rejected the configuration",
                             status_code=-1,
                             retryable=False,
                         )
-                    if payload.get("type") == "ready":
+                    if payload.type == "ready":
                         return
 
             try:
@@ -431,7 +431,7 @@ class SpeechStream(stt.SpeechStream):
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:
-                self._process_message(TypeAdapter(dict[str, JsonValue]).validate_json(msg.data))
+                self._process_message(_Message.model_validate_json(msg.data))
             except APIError:
                 raise
             except Exception:
@@ -547,8 +547,8 @@ class SpeechStream(stt.SpeechStream):
             )
         )
 
-    def _process_message(self, data: dict[str, JsonValue]) -> None:
-        msg_type = data.get("type")
+    def _process_message(self, data: _Message) -> None:
+        msg_type = data.type
 
         if msg_type == "error":
             raise APIStatusError(
@@ -562,16 +562,13 @@ class SpeechStream(stt.SpeechStream):
         if msg_type != "transcript":
             return
 
-        text = TypeAdapter(str).validate_python(data.get("text", ""))
-        is_final = data.get("is_final", False)
-        if not isinstance(is_final, bool):
-            raise ValueError("nabrah is_final must be a boolean")
-        utt_final = is_final
+        text = data.text
+        utt_final = data.is_final
 
         previous_audio_position = self._last_message_position
-        reported = data.get("audio_processed")
+        reported = data.audio_processed
         if reported is not None:
-            reported_seconds = _finite_number(reported, field="audio_processed")
+            reported_seconds = reported
             if (
                 self._latest_audio_processed is None
                 or reported_seconds > self._latest_audio_processed
@@ -596,7 +593,7 @@ class SpeechStream(stt.SpeechStream):
             self._utt_raw_seen = 0
         self._utt_closed = False
 
-        raw_words = TypeAdapter(list[dict[str, JsonValue]]).validate_python(data.get("words") or [])
+        raw_words = data.words or []
         if raw_words:
             self._utt_words = tuple(
                 _timed_word(w, self.start_time_offset)

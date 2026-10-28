@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, stt
-from livekit.plugins.nabrah.stt import STT, SpeechStream
+from livekit.plugins.nabrah.stt import STT, SpeechStream, _Message
 
 pytestmark = pytest.mark.unit
 
@@ -30,23 +30,31 @@ def test_closed_utterance_with_repeated_prefix_starts_a_new_utterance(
     stream: SpeechStream,
 ) -> None:
     stream._process_message(
-        {"type": "transcript", "text": "مرحبا", "is_final": True, "audio_processed": 1.0}
+        _Message.model_validate(
+            {"type": "transcript", "text": "مرحبا", "is_final": True, "audio_processed": 1.0}
+        )
     )
     stream._process_message(
-        {
-            "type": "transcript",
-            "text": "مرحبا بكم",
-            "is_final": False,
-            "audio_processed": 2.0,
-        }
+        _Message.model_validate(
+            {
+                "type": "transcript",
+                "text": "مرحبا بكم",
+                "is_final": False,
+                "audio_processed": 2.0,
+            }
+        )
     )
 
     assert stream._current_text() == "مرحبا مرحبا بكم"
 
 
 def test_open_utterance_correction_replaces_previous_hypothesis(stream: SpeechStream) -> None:
-    stream._process_message({"type": "transcript", "text": "مرحبا بكم", "is_final": False})
-    stream._process_message({"type": "transcript", "text": "مرحبا بكن", "is_final": False})
+    stream._process_message(
+        _Message.model_validate({"type": "transcript", "text": "مرحبا بكم", "is_final": False})
+    )
+    stream._process_message(
+        _Message.model_validate({"type": "transcript", "text": "مرحبا بكن", "is_final": False})
+    )
 
     assert stream._current_text() == "مرحبا بكن"
 
@@ -55,31 +63,37 @@ def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> 
     stream._opts.end_of_turn_confirm_delay_seconds = None
 
     stream._process_message(
-        {
-            "type": "transcript",
-            "text": "مرحبا <eot>",
-            "is_final": False,
-            "audio_processed": 1.0,
-        }
+        _Message.model_validate(
+            {
+                "type": "transcript",
+                "text": "مرحبا <eot>",
+                "is_final": False,
+                "audio_processed": 1.0,
+            }
+        )
     )
     stream._process_message(
-        {
-            "type": "transcript",
-            "text": "مرحبا. كيف <eot>",
-            "is_final": False,
-            "audio_processed": 2.0,
-        }
+        _Message.model_validate(
+            {
+                "type": "transcript",
+                "text": "مرحبا. كيف <eot>",
+                "is_final": False,
+                "audio_processed": 2.0,
+            }
+        )
     )
 
     assert stream._utt_flushed_clean == "مرحبا. كيف"
 
     stream._process_message(
-        {
-            "type": "transcript",
-            "text": "مرحبا. كيف حالك",
-            "is_final": False,
-            "audio_processed": 3.0,
-        }
+        _Message.model_validate(
+            {
+                "type": "transcript",
+                "text": "مرحبا. كيف حالك",
+                "is_final": False,
+                "audio_processed": 3.0,
+            }
+        )
     )
 
     assert stream._current_text() == "حالك"
@@ -88,21 +102,25 @@ def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> 
 def test_filtered_word_does_not_move_raw_word_cursor_backwards(stream: SpeechStream) -> None:
     stream._opts.end_of_turn_confirm_delay_seconds = None
     stream._process_message(
-        {
-            "type": "transcript",
-            "text": "مرحبا <eot>",
-            "words": [{"word": "مرحبا"}, {"word": "<eot>"}],
-        }
+        _Message.model_validate(
+            {
+                "type": "transcript",
+                "text": "مرحبا <eot>",
+                "words": [{"word": "مرحبا"}, {"word": "<eot>"}],
+            }
+        )
     )
 
     assert stream._utt_flushed_words == 2
 
     stream._process_message(
-        {
-            "type": "transcript",
-            "text": "مرحبا <eot> كيف",
-            "words": [{"word": "مرحبا"}, {"word": "<eot>"}, {"word": "كيف"}],
-        }
+        _Message.model_validate(
+            {
+                "type": "transcript",
+                "text": "مرحبا <eot> كيف",
+                "words": [{"word": "مرحبا"}, {"word": "<eot>"}, {"word": "كيف"}],
+            }
+        )
     )
 
     assert list(stream._utt_words) == ["كيف"]
@@ -112,7 +130,7 @@ def test_provider_error_does_not_expose_provider_message(stream: SpeechStream) -
     transcript = "private customer transcript"
 
     with pytest.raises(APIStatusError) as exc_info:
-        stream._process_message({"type": "error", "message": transcript})
+        stream._process_message(_Message.model_validate({"type": "error", "message": transcript}))
 
     assert transcript not in str(exc_info.value)
 
@@ -158,7 +176,7 @@ def test_invalid_transcript_fields_are_rejected(
     message: dict[str, object] = {"type": "transcript", "text": "مرحبا", field: value}
 
     with pytest.raises(ValueError):
-        stream._process_message(message)
+        stream._process_message(_Message.model_validate(message))
 
 
 def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:

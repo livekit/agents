@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import APIStatusError
 
@@ -40,6 +40,14 @@ _RETRYABLE_WS_CODES = {
     "tts_workers_unavailable",
     "internal_error",
 }
+
+
+class _ErrorDetail(BaseModel):
+    code: str | int | None = None
+
+
+class _ErrorResponse(BaseModel):
+    error: _ErrorDetail | None = None
 
 
 def normalize_voice(voice: object) -> str:
@@ -173,18 +181,13 @@ def speech_payload(
 
 def raise_http_error(status: int, body: str) -> None:
     """Raise ``APIStatusError`` from a Vakyam HTTP error envelope."""
-    parsed: JsonValue = None
     try:
-        parsed = TypeAdapter[JsonValue](JsonValue).validate_json(body) if body else None
-    except ValueError:
+        parsed = _ErrorResponse.model_validate_json(body)
+    except ValidationError:
         parsed = None
 
-    error_code: str | None = None
-    error = parsed.get("error") if isinstance(parsed, dict) else None
-    if isinstance(error, dict):
-        code = error.get("code")
-        if isinstance(code, (str, int)):
-            error_code = str(code)
+    code = parsed.error.code if parsed is not None and parsed.error is not None else None
+    error_code = str(code) if code is not None else None
 
     message = f"Vakyam TTS request failed with status {status}"
     safe_body: dict[str, object] = {"status_code": status}
@@ -195,11 +198,10 @@ def raise_http_error(status: int, body: str) -> None:
     raise APIStatusError(message, status_code=status, body=safe_body)
 
 
-def raise_ws_error(data: dict[str, JsonValue]) -> None:
+def raise_ws_error(data: _ErrorResponse) -> None:
     """Raise ``APIStatusError`` from a Vakyam WebSocket ``error`` frame."""
-    error = data.get("error")
-    code = error.get("code") if isinstance(error, dict) else None
-    error_code = str(code) if isinstance(code, (str, int)) else None
+    code = data.error.code if data.error is not None else None
+    error_code = str(code) if code is not None else None
     retryable = error_code in _RETRYABLE_WS_CODES
     message = "Vakyam TTS WebSocket request failed"
     safe_body: dict[str, str] = {"type": "error"}

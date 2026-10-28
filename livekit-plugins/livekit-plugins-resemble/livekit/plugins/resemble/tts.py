@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit.agents import (
     APIConnectionError,
@@ -46,6 +46,8 @@ DEFAULT_VOICE_UUID = "55592656"
 
 
 class _SynthesisResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     success: bool = False
     issues: list[str] = Field(default_factory=lambda: ["Unknown error"])
     audio_content: str | None = None
@@ -240,14 +242,13 @@ class ChunkedStream(tts.ChunkedStream):
                 conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
-                response_json = TypeAdapter(dict[str, JsonValue]).validate_python(await resp.json())
-                response = _SynthesisResponse.model_validate(response_json)
+                response = _SynthesisResponse.model_validate(await resp.json())
 
                 if not response.success:
                     error_msg = "; ".join(response.issues)
                     raise APIError(
                         message=f"Resemble API returned failure: {error_msg}",
-                        body=json.dumps(response_json),
+                        body=response.model_dump_json(exclude_unset=True),
                     )
 
                 output_emitter.initialize(
