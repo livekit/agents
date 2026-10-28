@@ -361,6 +361,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::JsonObject => format!(
             "match ::lk_agents_abi::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
         ),
+        Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
+            format!("super::{family}::{name}Proxy::owned(&{v})")
+        }
         Ty::Proxy { declared: Some((family, name)), .. } => {
             format!("super::{family}::{name}Proxy::from_host(&{v})")
         }

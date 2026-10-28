@@ -35,6 +35,15 @@ impl TtsProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
             return Ok(native);
         }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::Tts>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let label = {
             let v = obj.call_method0("_core_label")?;
             v.extract::<::std::string::String>()?
@@ -63,7 +72,7 @@ impl TtsProxy {
             let v = obj.call_method0("_core_lowers_markup")?;
             v.extract::<bool>()?
         };
-        Ok(::std::sync::Arc::new(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None }))
+        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
     }
 }
 

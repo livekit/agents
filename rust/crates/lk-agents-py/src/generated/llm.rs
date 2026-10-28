@@ -335,6 +335,15 @@ impl LlmProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Llm>(obj) {
             return Ok(native);
         }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::Llm>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let label = {
             let v = obj.call_method0("_core_label")?;
             v.extract::<::std::string::String>()?
@@ -347,7 +356,7 @@ impl LlmProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(::std::sync::Arc::new(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, label, model, id, conn: None }))
+        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, label, model, id, conn: None })
     }
 }
 
@@ -459,7 +468,16 @@ impl McpTransportProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(McpTransportProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) }))
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(McpTransportProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 
@@ -581,7 +599,16 @@ impl McpProgressProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(McpProgressProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) }))
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(McpProgressProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 

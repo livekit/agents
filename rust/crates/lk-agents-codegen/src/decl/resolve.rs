@@ -427,7 +427,12 @@ impl Resolver<'_> {
                     (["serde_json", "Value"], []) => Ty::Json,
                     (["serde_json", "Map"], [k, v]) if self.classify(k, at)? == Ty::Str && self.classify(v, at)? == Ty::Json => Ty::JsonObject,
                     (["std", "sync", "Arc"], [Shape::Dyn { found: Found::Item { module, item }, args }]) if args.is_empty() => {
-                        self.proxy(*module, *item, at)?
+                        self.proxy(*module, *item, false, at)?
+                    }
+                    (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
+                        if args.is_empty() && !self.is_stream_source(*module, *item) =>
+                    {
+                        self.proxy(*module, *item, true, at)?
                     }
                     (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
                         if self.is_stream_source(*module, *item) =>
@@ -471,7 +476,13 @@ impl Resolver<'_> {
         }
     }
 
-    fn proxy(&self, module: usize, item: usize, at: &str) -> Result<Ty, String> {
+    pub(super) fn proxy(
+        &self,
+        module: usize,
+        item: usize,
+        boxed: bool,
+        at: &str,
+    ) -> Result<Ty, String> {
         let k = self.krate;
         let syn::Item::Trait(tr) = &k.modules[module].items[item] else {
             return Err(format!("{at}: `Arc<dyn ..>` names a trait"));
@@ -491,11 +502,18 @@ impl Resolver<'_> {
         let declared = declares_calls(tr).then(|| {
             (k.modules[module].path.first().cloned().unwrap_or_default(), tr.ident.to_string())
         });
+        if boxed && declared.is_none() {
+            return Err(format!(
+                "{at}: `Box<dyn {}>` is owned behind a declared proxy: declare its methods' calls",
+                tr.ident
+            ));
+        }
         Ok(Ty::Proxy {
             rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
             host,
             generic,
             declared,
+            boxed,
         })
     }
 

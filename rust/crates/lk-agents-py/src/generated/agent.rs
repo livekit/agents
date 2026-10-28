@@ -154,7 +154,16 @@ impl AgentHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) }))
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::AgentHost>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 

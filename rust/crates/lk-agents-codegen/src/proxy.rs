@@ -47,7 +47,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         inits.push(format!("{}: None", bound.name));
     }
     s.push_str(&format!(
-        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n{reads}        Ok(::std::sync::Arc::new({name} {{ {} }}))\n    }}\n}}\n\n",
+        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj)?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
         fields.concat(),
         inits.join(", "),
         host = p.host,

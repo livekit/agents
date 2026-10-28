@@ -340,6 +340,9 @@ pub enum Ty {
         /// A declaration-model proxy: `(family, trait)`, generated as `<family>::<trait>Proxy`.
         /// `None`: the trait's in-place `HostProxy`.
         declared: Option<(String, String)>,
+        /// `Box<dyn Trait>`: an object the host hands over for the core to own (and consume, as a
+        /// writer's `self: Box<Self>` close does); always behind the declared proxy.
+        boxed: bool,
     },
     /// A pull source of `item`, handed to the host as the stream class `class`.
     Source {
@@ -436,6 +439,7 @@ impl Ty {
             }
             Ty::Record(r) => r.rust.clone(),
             Ty::This => "Self".into(),
+            Ty::Proxy { rust, boxed: true, .. } => format!("::std::boxed::Box<dyn {rust}>"),
             Ty::Proxy { rust, .. } => format!("::std::sync::Arc<dyn {rust}>"),
             Ty::Handle { assoc, .. } | Ty::Instance { assoc, .. } => format!("Self::{assoc}"),
             Ty::Source { item, .. } | Ty::HostSource(item) => {

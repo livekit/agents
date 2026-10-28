@@ -723,7 +723,8 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
 
 // Catches: a live room read answered from a stale snapshot (or awaited off its caller), a host
 // failure of a synchronous call turned into a default, a writer close that cannot consume its
-// proxy, or a borrowed participant read on every call instead of once when the room is taken.
+// proxy, a host object the core must own (`Box<dyn ..>`) refused, or a borrowed participant read
+// on every call instead of once when the room is taken.
 #[test]
 fn proxy_calls_consumes_and_lends_by_declaration() {
     let decls = read(&proxy(
@@ -731,6 +732,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         #[host(call)] fn state(&self, id: &str) -> Result<Chunk, HostError>;
         #[host(await)] async fn close(self: Box<Self>) -> Result<(), HostError>;
         #[host(read_once)] fn conn(&self) -> &Conn;
+        #[host(await)] async fn open_writer(&self) -> Result<Box<dyn Callbacks>, HostError>;
         "#,
     ))
     .expect("resolves");
@@ -743,6 +745,13 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         "{llm}"
     );
     assert!(llm.contains("async fn close(self: ::std::boxed::Box<Self>)"), "{llm}");
+    // A host object handed over to be owned (a writer the core later closes by value).
+    assert!(
+        llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")
+            && llm.contains("super::llm::CallbacksProxy::owned(&")
+            && llm.contains("pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>>"),
+        "{llm}"
+    );
     assert!(
         llm.contains(
             "fn conn(&self) -> &::lk_agents_abi::llm::chat::Conn {\n        &self.conn\n    }"

@@ -28,7 +28,7 @@ impl Resolver<'_> {
                                 .map_err(|e| format!("{at}: {e}"))?,
                         ]
                     } else {
-                        match self.proxy(module, item, at)? {
+                        match self.proxy(module, item, false, at)? {
                             Ty::Proxy { rust, .. } => vec![rust],
                             _ => unreachable!("proxy() returns a proxy"),
                         }

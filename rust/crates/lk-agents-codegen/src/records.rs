@@ -262,6 +262,11 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::Record(r) => {
             format!("{v}.extract::<{}>().map_err(::std::convert::Into::<PyErr>::into)", r.rust)
         }
+        Ty::Proxy { boxed: true, .. } => {
+            return Err(format!(
+                "{path}: a record holds a shared `Arc<dyn ..>` proxy, not an owned one"
+            ));
+        }
         Ty::Proxy { rust, .. } => {
             format!("<dyn {rust} as crate::python::HostProxy>::from_host({v}, None)")
         }
