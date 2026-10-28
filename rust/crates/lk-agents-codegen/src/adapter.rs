@@ -35,7 +35,18 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     }
     root.push_str("\n/// The implementation of each declared class. The registration shell implements it.\npub trait Implementations: 'static {\n");
     for c in &decls.classes {
-        root.push_str(&format!("    type {}: {};\n", c.rust_name, c.trait_path));
+        // An instance of another class is that class's implementation.
+        let mut bounds = Vec::new();
+        for (assoc, class) in &c.instances {
+            let target =
+                decls.classes.iter().find(|t| t.name == *class).ok_or_else(|| {
+                    format!("{}: `{class}` is not a declared class", c.trait_path)
+                })?;
+            bounds.push(format!("{assoc} = Self::{}", target.rust_name));
+        }
+        let bounds =
+            if bounds.is_empty() { String::new() } else { format!("<{}>", bounds.join(", ")) };
+        root.push_str(&format!("    type {}: {}{bounds};\n", c.rust_name, c.trait_path));
     }
     root.push_str("}\n\n/// Adds every declared class to `_core`.\npub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {\n");
     for c in &decls.classes {
@@ -71,7 +82,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         );
         for c in classes {
             text.push('\n');
-            text.push_str(&class(c)?);
+            text.push_str(&class(decls, c)?);
             for (name, item) in sources(c) {
                 text.push('\n');
                 text.push_str(&source_class(&name, &item));
@@ -90,7 +101,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     Ok(out)
 }
 
-fn class(c: &Class) -> Result<String, String> {
+fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     let name = &c.name;
     let mut s = format!("// Declared in {}.\n", c.source);
     s.push_str(&format!(
@@ -100,7 +111,7 @@ fn class(c: &Class) -> Result<String, String> {
     if c.form == Form::Functions {
         for m in &c.methods {
             s.push('\n');
-            s.push_str(&method(c, m)?);
+            s.push_str(&method(decls, c, m)?);
         }
         return Ok(s);
     }
@@ -113,7 +124,7 @@ fn class(c: &Class) -> Result<String, String> {
     s.push_str(&format!(
         "#[pyclass({frozen}name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}({held});\n\n#[pymethods]\nimpl {name} {{\n"
     ));
-    let methods = c.methods.iter().map(|m| method(c, m)).collect::<Result<Vec<_>, _>>()?;
+    let methods = c.methods.iter().map(|m| method(decls, c, m)).collect::<Result<Vec<_>, _>>()?;
     s.push_str(&methods.join("\n"));
     s.push_str("}\n");
     for tr in &c.native {
@@ -124,7 +135,7 @@ fn class(c: &Class) -> Result<String, String> {
     Ok(s)
 }
 
-fn method(c: &Class, m: &Method) -> Result<String, String> {
+fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String> {
     let at = format!("{}::{}", c.trait_path, m.rust_name);
     let call = format!("<{}Impl as {}>::{}", c.name, c.trait_path, m.rust_name);
     // Functions are module items, methods are indented in their `impl`.
@@ -134,9 +145,9 @@ fn method(c: &Class, m: &Method) -> Result<String, String> {
         MethodKind::New => s.push_str(&format!("{ind}#[new]\n")),
         MethodKind::Getter => s.push_str(&format!("{ind}#[getter]\n")),
         MethodKind::Function => s.push_str("#[pyfunction]\n"),
-        MethodKind::Call | MethodKind::Await => {}
+        MethodKind::Call | MethodKind::Await | MethodKind::Next => {}
     }
-    if m.name != m.rust_name && m.kind != MethodKind::Function {
+    if m.name != m.rust_name && !matches!(m.kind, MethodKind::Function | MethodKind::Next) {
         s.push_str(&format!("{ind}#[pyo3(name = \"{}\")]\n", m.name));
     }
     if !m.params.is_empty() {
@@ -162,13 +173,25 @@ fn method(c: &Class, m: &Method) -> Result<String, String> {
         .map(|p| if p.by_ref { format!("&{}", p.name) } else { p.name.clone() })
         .collect();
     let err = m.ret.err.as_ref().map(|e| format!(".map_err({})?", e.with)).unwrap_or_default();
-    let (ret_ty, wrap) = output(&at, c, &m.ret.ok)?;
+    let (ret_ty, wrap) = output(&at, decls, c, &m.ret.ok)?;
     let fn_name = match m.kind {
         MethodKind::New => "new".to_owned(),
         MethodKind::Function => m.name.clone(),
         _ => m.rust_name.clone(),
     };
     match m.kind {
+        MethodKind::Next => {
+            let item = match &m.ret.ok {
+                Ty::Optional(item) => output(&at, decls, c, item)?.1,
+                other => {
+                    return Err(format!("{at}: next returns an option, not `{}`", other.rust()));
+                }
+            };
+            s.push_str(&format!(
+                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
+                item.replace("{}", "out").replace("{py}", "py")
+            ));
+        }
         MethodKind::Await => {
             s.push_str(&format!(
                 "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            let out = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
@@ -354,7 +377,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
 }
 
 /// The adapter's return type and the expression of `{}` (the trait's value) it returns.
-fn output(at: &str, c: &Class, ty: &Ty) -> Result<(String, String), String> {
+fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String, String), String> {
     if native(ty) {
         return Ok((ty.rust(), "{}".into()));
     }
@@ -369,6 +392,20 @@ fn output(at: &str, c: &Class, ty: &Ty) -> Result<(String, String), String> {
             "Bound<'py, PyAny>".into(),
             "::lk_agents_abi::python::extra_to_py({py}, &{})?.into_any()".into(),
         ),
+        Ty::Instance { class, .. } => {
+            let target = decls
+                .classes
+                .iter()
+                .find(|t| t.name == *class && t.form != Form::Functions)
+                .ok_or_else(|| format!("{at}: `{class}` is not a declared class"))?;
+            let path = format!("super::{}::{class}", target.family);
+            let held = if target.form == Form::MutableClass {
+                "{}".to_owned()
+            } else {
+                "::std::sync::Arc::new({})".to_owned()
+            };
+            (path.clone(), format!("{path}({held})"))
+        }
         Ty::Handle { class, .. } => {
             (format!("crate::handles::{class}"), format!("crate::handles::{class}::from({{}})"))
         }

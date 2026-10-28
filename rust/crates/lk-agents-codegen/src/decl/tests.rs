@@ -211,7 +211,7 @@ fn ambiguous_or_unsupported_declarations_fail_generation() {
         ("#[host(call, getter)] fn f(&self) -> u32;", "exactly one of"),
         ("fn f(&self);", "exactly one of"),
         ("#[host(call, soon)] fn f(&self);", "`soon` is not a key here"),
-        ("type T;", "declares its kind"),
+        ("type T;", "declares one kind"),
         ("#[host(call)] fn f(&self, #[host(default = \"x\")] n: u32);", "is not a value of `u32`"),
         (
             "#[host(call)] fn f(&self, #[host(default = 1)] n: u32, m: u32);",
@@ -624,4 +624,51 @@ fn a_persisted_record_saves_and_restores_through_its_rust_codec() {
     )
     .expect_err("an emit-only persisted record is refused");
     assert!(err.contains("Out: a persisted record is a struct crossing both ways"), "{err}");
+}
+
+// Catches: a class handing out another declared class's instance without tying the two
+// implementations together, or an async-iterable class whose end is not StopAsyncIteration
+// (the A2A client's acknowledged `Reply`).
+#[test]
+fn a_class_hands_out_an_async_iterable_instance_of_another_class() {
+    let decls = read(
+        r#"
+        use super::chat::{Chunk, Res};
+        #[crate::host(class(name = "Reply"))]
+        pub trait Reply: Sized {
+            #[host(getter)] fn task_id(&self) -> String;
+            #[host(next)] async fn next(&self) -> Res<Option<Chunk>>;
+        }
+        #[crate::host(class(name = "Client"))]
+        pub trait Client: Sized {
+            #[host(class(name = "Reply"))]
+            type Reply;
+            #[host(await)] async fn send(&self, text: String) -> Res<Self::Reply>;
+        }
+        "#,
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    for (text, want) in [
+        (root, "type Client: ::lk_agents_abi::llm::class::Client<Reply = Self::Reply>;"),
+        (llm, "super::llm::Reply(::std::sync::Arc::new(out))"),
+        (llm, "fn __aiter__(slf: Py<Self>) -> Py<Self> {"),
+        (llm, "None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),"),
+    ] {
+        assert!(text.contains(want), "{want}\n{text}");
+    }
+    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].text;
+    assert!(stub.contains("async def __anext__(self) -> dict[str, object]"), "{stub}");
+    let err = read(
+        r#"use super::chat::{Chunk, Res};
+        #[crate::host(class(name = "R"))]
+        pub trait R: Sized { #[host(next)] async fn next(&self) -> Res<Chunk>; }"#,
+    )
+    .expect_err("an iteration with no end is refused");
+    assert!(
+        err.contains("R::next: next is `async fn next(&self) -> Result<Option<T>, E>`"),
+        "{err}"
+    );
 }

@@ -220,7 +220,8 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Source { .. }
         | Ty::HostSource(_)
         | Ty::HostDuplex { .. }
-        | Ty::Handle { .. } => {
+        | Ty::Handle { .. }
+        | Ty::Instance { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));
         }
         Ty::Optional(t) | Ty::List(t)

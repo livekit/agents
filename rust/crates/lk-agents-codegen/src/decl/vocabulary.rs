@@ -12,11 +12,13 @@
 //! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too); a call without one runs in the context the proxy captured when it was taken (the host's running loop and a copy of its context) |
 //! | error type | `error(raised = "module.Class")` | the host refuses a proxy call by raising that class: `Result<Result<T, E>, _>`'s `E`, from its message |
 //! | associated type | `source(item = T, class = "X")` | a pull source of `T`, handed out as stream class `X` |
+//! | associated type | `class(name = "X")` | an instance of the declared class `X`: the generated `Implementations` binds this type to `X`'s implementation |
 //! | associated type | `handle(class = "X")` | an implementation's own object, handed out (never taken in) as the registration shell's class `crate::handles::X`, built `From` it |
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
 //! | trait method | `call` | a synchronous call on `&self` |
 //! | trait method | `await` | an `async fn` on `&self`, awaited by the host |
 //! | trait method | `getter` | a read-only property on `&self` |
+//! | trait method | `next` | `async fn next(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T` (`__aiter__`/`__anext__`); `None` ends it |
 //! | trait method | `name = "x"` | the host name, when the Rust one cannot be it |
 //! | parameter | `kw` | keyword-only from this parameter on |
 //! | parameter | `default = <literal>` | omittable: `None`, `true`/`false`, a number or a string |

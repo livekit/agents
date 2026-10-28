@@ -151,6 +151,15 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
             s.push_str("    @property\n");
             ("def", m.name.as_str(), ret)
         }
+        MethodKind::Next => {
+            imports.add("typing", "Self");
+            let item = match &m.ret.ok {
+                Ty::Optional(item) => annotation(c, item, Dir::Out, imports),
+                other => unreachable!("next returns an option, not {other:?}"),
+            };
+            s.push_str("    def __aiter__(self) -> Self: ...\n");
+            ("async def", "__anext__", item)
+        }
     };
     // One line when it fits the line length, else one parameter per line (ruff's layout).
     let line = format!("{ind}{head} {name}({}) -> {ret}:", params.join(", "));
@@ -239,7 +248,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             imports.add("collections.abc", "AsyncIterable");
             format!("AsyncIterable[{}]", annotation(c, output, dir, imports))
         }
-        Ty::Handle { class, .. } => {
+        Ty::Handle { class, .. } | Ty::Instance { class, .. } => {
             imports.add(".._core", class);
             class.clone()
         }

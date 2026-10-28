@@ -201,6 +201,8 @@ pub struct Class {
     /// `native = Trait`: the `#[host(proxy)]` traits it implements; wherever the host passes
     /// one of those, an instance of this class is taken as itself rather than proxied.
     pub native: Vec<String>,
+    /// `(assoc, class)`: the associated types that are instances of another declared class.
+    pub instances: Vec<(String, String)>,
     pub methods: Vec<Method>,
 }
 
@@ -247,6 +249,9 @@ pub enum MethodKind {
     Await,
     /// A read-only property on `&self`.
     Getter,
+    /// `async fn(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T`
+    /// (`__aiter__`/`__anext__`); `None` ends it.
+    Next,
 }
 
 #[derive(Debug, Clone)]
@@ -342,6 +347,12 @@ pub enum Ty {
     /// A declared error (`#[host(error(with = ..))]`) passed to the host as the exception it
     /// raises as. Output only.
     Error(ErrorDecl),
+    /// `Self::<assoc>` declared `class(name = "X")`: an instance of the declared class `X` (its
+    /// implementation is the `Implementations` type the generated bound ties `assoc` to). Output.
+    Instance {
+        assoc: String,
+        class: String,
+    },
     /// `Self::<assoc>` declared `handle(class = "X")`: an implementation's own object handed to
     /// the host as the registration shell's class `crate::handles::X` (`From` the implementation's
     /// type). Output only.
@@ -414,7 +425,7 @@ impl Ty {
             Ty::Record(r) => r.rust.clone(),
             Ty::This => "Self".into(),
             Ty::Proxy { rust, .. } => format!("::std::sync::Arc<dyn {rust}>"),
-            Ty::Handle { assoc, .. } => format!("Self::{assoc}"),
+            Ty::Handle { assoc, .. } | Ty::Instance { assoc, .. } => format!("Self::{assoc}"),
             Ty::Source { item, .. } | Ty::HostSource(item) => {
                 format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>", item.rust())
             }

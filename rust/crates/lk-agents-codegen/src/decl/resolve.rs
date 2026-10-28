@@ -151,6 +151,14 @@ impl Resolver<'_> {
             source: module.file.clone(),
             doc: doc(&tr.attrs),
             native,
+            instances: self
+                .assoc
+                .iter()
+                .filter_map(|a| match &a.ty {
+                    Ty::Instance { assoc, class } => Some((assoc.clone(), class.clone())),
+                    _ => None,
+                })
+                .collect(),
             methods,
         })
     }
@@ -158,9 +166,23 @@ impl Resolver<'_> {
     fn assoc_type(&self, t: &syn::TraitItemType) -> Result<Assoc, String> {
         let at = format!("{}::{}", self.at, t.ident);
         let entries = voc::read(&t.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["source", "handle"])?;
-        let ty = match (voc::find(&entries, "source"), voc::find(&entries, "handle")) {
-            (Some(source), None) => {
+        voc::only(&at, &entries, &["source", "handle", "class"])?;
+        let kinds = (
+            voc::find(&entries, "source"),
+            voc::find(&entries, "handle"),
+            voc::find(&entries, "class"),
+        );
+        let ty = match kinds {
+            (None, None, Some(class)) => {
+                voc::only(&at, &class.nested, &["name"])?;
+                let class = voc::text(&at, &class.nested, "name")?.ok_or_else(|| {
+                    format!(
+                        "{at}: class(name = \"X\") names the declared class it is an instance of"
+                    )
+                })?;
+                Ty::Instance { assoc: t.ident.to_string(), class }
+            }
+            (Some(source), None, None) => {
                 voc::only(&at, &source.nested, &["item", "class"])?;
                 let item = voc::rust(&at, &source.nested, "item")?
                     .ok_or_else(|| format!("{at}: source(item = T) is what it yields"))?;
@@ -168,7 +190,7 @@ impl Resolver<'_> {
                     .ok_or_else(|| format!("{at}: source(class = \"X\") is its stream class"))?;
                 Ty::Source { item: Box::new(self.ty(&item, &at)?), class }
             }
-            (None, Some(handle)) => {
+            (None, Some(handle), None) => {
                 voc::only(&at, &handle.nested, &["class"])?;
                 let class = voc::text(&at, &handle.nested, "class")?.ok_or_else(|| {
                     format!("{at}: handle(class = \"X\") is the shell's class `crate::handles::X`")
@@ -177,7 +199,7 @@ impl Resolver<'_> {
             }
             _ => {
                 return Err(format!(
-                    "{at}: an associated type declares its kind: #[host(source(item = T, class = \"X\"))] or #[host(handle(class = \"X\"))]"
+                    "{at}: an associated type declares one kind: #[host(source(item = T, class = \"X\"))], #[host(handle(class = \"X\"))] or #[host(class(name = \"X\"))]"
                 ));
             }
         };
@@ -187,27 +209,32 @@ impl Resolver<'_> {
     fn method(&self, f: &syn::TraitItemFn) -> Result<Method, String> {
         let at = format!("{}::{}", self.at, f.sig.ident);
         let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["new", "call", "await", "getter", "function", "name"])?;
+        voc::only(&at, &entries, &["new", "call", "await", "getter", "function", "next", "name"])?;
         let kinds: Vec<MethodKind> = [
             ("new", MethodKind::New),
             ("call", MethodKind::Call),
             ("await", MethodKind::Await),
             ("getter", MethodKind::Getter),
             ("function", MethodKind::Function),
+            ("next", MethodKind::Next),
         ]
         .into_iter()
         .filter(|(k, _)| voc::find(&entries, k).is_some())
         .map(|(_, kind)| kind)
         .collect();
         let [kind] = kinds[..] else {
-            return Err(format!("{at}: declare exactly one of new, call, await, getter, function"));
+            return Err(format!(
+                "{at}: declare exactly one of new, call, await, getter, function, next"
+            ));
         };
         let receiver = f.sig.receiver();
         let shape_ok = match kind {
             MethodKind::New | MethodKind::Function => {
                 receiver.is_none() && f.sig.asyncness.is_none()
             }
-            MethodKind::Await => receiver.is_some_and(shared) && f.sig.asyncness.is_some(),
+            MethodKind::Await | MethodKind::Next => {
+                receiver.is_some_and(shared) && f.sig.asyncness.is_some()
+            }
             MethodKind::Getter => receiver.is_some_and(shared) && f.sig.asyncness.is_none(),
             MethodKind::Call => {
                 receiver.is_some_and(|r| r.reference.is_some()) && f.sig.asyncness.is_none()
@@ -261,6 +288,15 @@ impl Resolver<'_> {
             return Err(format!("{at}: a getter takes no parameters"));
         }
         let ret = self.ret(&f.sig.output, &at)?;
+        if kind == MethodKind::Next
+            && (!f.sig.inputs.iter().all(|i| matches!(i, syn::FnArg::Receiver(_)))
+                || ret.err.is_none()
+                || !matches!(ret.ok, Ty::Optional(_)))
+        {
+            return Err(format!(
+                "{at}: next is `async fn next(&self) -> Result<Option<T>, E>`: `None` ends the iteration"
+            ));
+        }
         if kind == MethodKind::New && ret.ok != Ty::This {
             return Err(format!("{at}: a constructor returns `Self` or `Result<Self, E>`"));
         }
@@ -1063,6 +1099,7 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
         Ty::This
         | Ty::Source { .. }
         | Ty::Handle { .. }
+        | Ty::Instance { .. }
         | Ty::HostSource(_)
         | Ty::HostDuplex { .. }
         | Ty::Error(_)
@@ -1157,9 +1194,12 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
             check_input(at, v)
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_input(at, t)),
-        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit | Ty::Error(_) => {
-            Err(format!("{at}: `{}` is not an input", ty.rust()))
-        }
+        Ty::This
+        | Ty::Source { .. }
+        | Ty::Handle { .. }
+        | Ty::Instance { .. }
+        | Ty::Unit
+        | Ty::Error(_) => Err(format!("{at}: `{}` is not an input", ty.rust())),
         Ty::HostSource(item) => check_input(at, item),
         Ty::HostDuplex { input, output } => {
             check_output(at, input)?;
