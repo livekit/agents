@@ -1,19 +1,11 @@
 //! Image conversion and encoding run only on admitted native image workers.
 
-use std::io::Write;
-
+use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput, PreparedImage};
 use lk_agents_abi::utils::video::VideoFrame;
-use lk_agents_media::images::{
-    EncodeOptions, ImageFormat, ResizeOptions, ResizeStrategy, RgbaFrame,
-};
-
-use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
 use lk_agents_abi::{ImageContent, ImageSource};
+use lk_agents_media::images::MAX_IMAGE_BYTES;
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
-
-const MAX_PIXELS: u64 = 4096 * 4096;
-const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub async fn prepare(
     workers: &MediaWorkers,
@@ -21,85 +13,12 @@ pub async fn prepare(
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, String> {
     workers
-        .try_spawn(MediaWorkerClass::Image, move || prepare_on_worker(input, options))
+        .try_spawn(MediaWorkerClass::Image, move || {
+            lk_agents_media::images::prepare(input, options, host_frame)
+        })
         .map_err(|e| e.to_string())?
         .await
         .map_err(|e| e.to_string())?
-}
-
-/// The caller retains Image worker admission until this synchronous preparation settles.
-pub(crate) fn prepare_on_worker(
-    input: ImageInput,
-    options: ImageEncodeOptions,
-) -> Result<PreparedImage, String> {
-    let frame = match input {
-        ImageInput::Url { url, mime_type } => {
-            if url.len() > MAX_IMAGE_BYTES {
-                return Err("image URL exceeds 16 MiB".into());
-            }
-            return lk_agents_media::images::serialize_image_url(&url, mime_type.as_deref())
-                .map_err(|e| e.to_string());
-        }
-        ImageInput::Frame(frame) => frame,
-        ImageInput::HostFrame(frame) => host_frame(frame)?,
-    };
-    validate_dimensions(frame.width, frame.height)?;
-    if frame.buffer_type != 0 {
-        return Err("image encoder requires an RGBA frame".into());
-    }
-    let format = options.format.parse::<ImageFormat>().map_err(|e| e.to_string())?;
-    let resize_options =
-        match (options.resize_width, options.resize_height, options.resize_strategy) {
-            (Some(width), Some(height), Some(strategy)) => {
-                validate_dimensions(width, height)?;
-                let strategy = strategy.parse::<ResizeStrategy>().map_err(|e| e.to_string())?;
-                Some(ResizeOptions { width, height, strategy })
-            }
-            (None, None, None) => None,
-            _ => {
-                return Err(
-                    "resize needs all three of width, height and strategy, or none of them".into(),
-                );
-            }
-        };
-    let frame = RgbaFrame { width: frame.width, height: frame.height, data: &frame.data };
-    if let Some(resize) = resize_options {
-        let (width, height) =
-            lk_agents_media::images::resized_dimensions(frame.width, frame.height, resize)
-                .map_err(|e| e.to_string())?;
-        validate_dimensions(width, height)?;
-    }
-    let options = EncodeOptions { format, quality: options.quality, resize_options };
-    let mut output = ImageBytes(Vec::new());
-    lk_agents_media::images::encode_into(frame, &options, &mut output)
-        .map_err(|e| e.to_string())?;
-    let mime = match format {
-        ImageFormat::Jpeg => "image/jpeg",
-        ImageFormat::Png => "image/png",
-    };
-    Ok((Some(output.0), Some(mime.into()), None, None))
-}
-
-fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
-    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return Err("image dimensions must contain between 1 and 16777216 pixels".into());
-    }
-    Ok(())
-}
-
-struct ImageBytes(Vec<u8>);
-
-impl Write for ImageBytes {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.0.len().saturating_add(bytes.len()) > MAX_IMAGE_BYTES {
-            return Err(std::io::Error::other("encoded image exceeds 16 MiB"));
-        }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 fn host_frame(frame: lk_agents_abi::MediaRef) -> Result<VideoFrame, String> {
@@ -111,7 +30,8 @@ fn host_frame(frame: lk_agents_abi::MediaRef) -> Result<VideoFrame, String> {
             let object = frame.into_bound_py_any(py)?;
             let width: u32 = object.getattr("width")?.extract()?;
             let height: u32 = object.getattr("height")?.extract()?;
-            validate_dimensions(width, height).map_err(pyo3::exceptions::PyValueError::new_err)?;
+            lk_agents_media::images::validate_dimensions(width, height)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
             let frame = if object.getattr("type")?.extract::<i32>()? == 0 {
                 object
             } else {
@@ -128,8 +48,6 @@ fn host_frame(frame: lk_agents_abi::MediaRef) -> Result<VideoFrame, String> {
     }
 }
 
-pub const MAX_IMAGE_URL_BYTES: usize = MAX_IMAGE_BYTES;
-
 /// How a realtime model prepares its images: on the image worker it already runs on.
 pub struct NativeImages;
 
@@ -137,7 +55,7 @@ impl ImageResolver for NativeImages {
     fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
         let input = match &image.image {
             ImageSource::Url(url) => {
-                if url.len() > MAX_IMAGE_URL_BYTES {
+                if url.len() > MAX_IMAGE_BYTES {
                     return Err("realtime image URL exceeds 16 MiB".into());
                 }
                 ImageInput::Url { url: url.clone(), mime_type: image.mime_type.clone() }
@@ -148,17 +66,19 @@ impl ImageResolver for NativeImages {
             .inference_width
             .zip(image.inference_height)
             .filter(|(width, height)| *width > 0 && *height > 0);
-        let (data_bytes, mime_type, external_url, overridden_mime) = prepare_on_worker(
-            input,
-            ImageEncodeOptions {
-                format: "JPEG".into(),
-                resize_width: resize.map(|(width, _)| width),
-                resize_height: resize.map(|(_, height)| height),
-                resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
-                ..Default::default()
-            },
-        )
-        .map_err(|cause| format!("image {}: {cause}", image.id))?;
+        let (data_bytes, mime_type, external_url, overridden_mime) =
+            lk_agents_media::images::prepare(
+                input,
+                ImageEncodeOptions {
+                    format: "JPEG".into(),
+                    resize_width: resize.map(|(width, _)| width),
+                    resize_height: resize.map(|(_, height)| height),
+                    resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
+                    ..Default::default()
+                },
+                host_frame,
+            )
+            .map_err(|cause| format!("image {}: {cause}", image.id))?;
         if let Some(header) = overridden_mime {
             log::warn!(target: "livekit.agents", declared_mime = image.mime_type.as_deref().unwrap_or_default(), header_mime = header.as_str(); "image MIME declaration overrides data URL header");
         }

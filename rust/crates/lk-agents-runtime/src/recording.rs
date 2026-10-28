@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::AudioRecorder;
-use lk_agents_media::recorder::{OggOpusEncoder, PcmFrame, Recorder, SegmentPlacer};
+use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingCommand, RecordingFile};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
@@ -32,13 +32,8 @@ pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSu
 type Outcome = Result<RecordingSummary, RecordingFailure>;
 
 enum Command {
-    Input(f64, AudioFrame),
-    Capture(f64, AudioFrame),
-    Started(f64),
-    Progress(f64, f64, f64),
-    Finished(f64, f64),
+    Record(RecordingCommand),
     Flush(f64, Option<oneshot::Sender<Outcome>>),
-    Finish(Option<f64>),
     Abandon,
 }
 
@@ -312,18 +307,18 @@ impl SessionRecorder {
     fn try_on_input_frame(&self, now: f64, frame: AudioFrame) -> Result<(), RecordingFailure> {
         validate_frame(now, &frame).map_err(|error| self.fail(error))?;
         let bytes = frame.data.len();
-        self.submit(Command::Input(now, frame), bytes)
+        self.submit(Command::Record(RecordingCommand::Input(now, frame)), bytes)
     }
 
     fn try_capture_frame(&self, now: f64, frame: AudioFrame) -> Result<(), RecordingFailure> {
         validate_frame(now, &frame).map_err(|error| self.fail(error))?;
         let bytes = frame.data.len();
-        self.submit(Command::Capture(now, frame), bytes)
+        self.submit(Command::Record(RecordingCommand::Capture(now, frame)), bytes)
     }
 
     fn try_playback_started(&self, created_at: f64) -> Result<(), RecordingFailure> {
         validate_times(&[created_at]).map_err(|error| self.fail(error))?;
-        self.submit(Command::Started(created_at), 0)
+        self.submit(Command::Record(RecordingCommand::Started(created_at)), 0)
     }
 
     fn try_playback_progressed(
@@ -336,7 +331,7 @@ impl SessionRecorder {
         if offset < 0.0 || duration < 0.0 {
             return Err(self.fail(RecordingFailure::Invalid("negative playback position")));
         }
-        self.submit(Command::Progress(started_at, offset, duration), 0)
+        self.submit(Command::Record(RecordingCommand::Progress(started_at, offset, duration)), 0)
     }
 
     fn try_playback_finished(
@@ -348,7 +343,7 @@ impl SessionRecorder {
         if playback_position < 0.0 {
             return Err(self.fail(RecordingFailure::Invalid("negative playback position")));
         }
-        self.submit(Command::Finished(now, playback_position), 0)
+        self.submit(Command::Record(RecordingCommand::Finished(now, playback_position)), 0)
     }
 
     pub async fn flush(&self, now: f64) -> Outcome {
@@ -387,7 +382,11 @@ impl SessionRecorder {
                     }
                 });
                 if tx
-                    .try_send(Queued { command: Command::Finish(now), bytes: 0, data: false })
+                    .try_send(Queued {
+                        command: Command::Record(RecordingCommand::Finish(now)),
+                        bytes: 0,
+                        data: false,
+                    })
                     .is_err()
                 {
                     let _ = shared.failure.set(RecordingFailure::Worker(
@@ -485,224 +484,68 @@ fn io_failure(error: std::io::Error) -> RecordingFailure {
 
 fn run<E: OggOpusEncoder, W: Write>(
     encoder: E,
-    mut writer: W,
+    writer: W,
     sample_rate: u32,
     t0: Option<f64>,
     rx: mpsc::Receiver<Queued>,
     shared: Arc<Shared>,
 ) -> Outcome {
-    let outcome = process(encoder, &mut writer, sample_rate, t0, rx, shared.clone());
+    let limits = FileLimits {
+        retained_bytes: shared.limits.retained_bytes,
+        segment_bytes: shared.limits.segment_bytes,
+        block_seconds: shared.limits.block_duration.as_secs_f64(),
+    };
+    let mut file = RecordingFile::new(encoder, writer, sample_rate, t0, limits);
+    let outcome = process(&mut file, rx, &shared);
     if let Err(error) = &outcome {
         shared.fail(error.clone());
     }
     // A filesystem close may block too. Publish Failing before dropping the file and only
     // publish Failed from the supervisor after this function actually exits.
-    drop(writer);
+    drop(file);
     outcome
 }
 
 fn process<E: OggOpusEncoder, W: Write>(
-    encoder: E,
-    writer: &mut W,
-    sample_rate: u32,
-    t0: Option<f64>,
+    file: &mut RecordingFile<E, W>,
     mut rx: mpsc::Receiver<Queued>,
-    shared: Arc<Shared>,
+    shared: &Shared,
 ) -> Outcome {
-    let mut summary = RecordingSummary { started_at: t0, ..Default::default() };
-    let mut encoder = Some(encoder);
-    let mut recording: Option<Recorder<E>> = None;
-    let mut placer = SegmentPlacer::new();
-    let mut requested_flush: Option<f64> = None;
+    // Between blocks: stop on a failure reported elsewhere, and let other workers run.
+    let mut between = || {
+        shared.check_failure()?;
+        std::thread::yield_now();
+        Ok(())
+    };
     while let Some(item) = rx.blocking_recv() {
         if item.data {
             shared.commands.fetch_sub(1, Ordering::AcqRel);
             shared.queued_bytes.fetch_sub(item.bytes, Ordering::AcqRel);
         }
-        if let Some(error) = shared.failure.get() {
-            return Err(error.clone());
-        }
-        let now = match &item.command {
-            Command::Input(now, _)
-            | Command::Capture(now, _)
-            | Command::Started(now)
-            | Command::Progress(now, _, _)
-            | Command::Finished(now, _)
-            | Command::Flush(now, _) => *now,
-            Command::Finish(now) => now
-                .or(requested_flush)
-                .or(summary.last_flushed)
-                .or(summary.started_at)
-                .unwrap_or(0.0),
-            Command::Abandon => return Err(RecordingFailure::Closed),
-        };
-        let first_sample = match &item.command {
-            Command::Input(now, frame) => now - frame.duration(),
-            _ => now,
-        };
-        let origin = *summary.started_at.get_or_insert(first_sample);
-        let recorder = recording.get_or_insert_with(|| {
-            Recorder::new(encoder.take().expect("one encoder"), sample_rate, origin)
-        });
+        shared.check_failure()?;
         match item.command {
-            Command::Input(now, frame) => {
-                let output_samples = (frame.samples_per_channel as u64 * sample_rate as u64)
-                    .div_ceil(frame.sample_rate as u64);
-                if output_samples.saturating_mul(4) > shared.limits.retained_bytes as u64 {
-                    return Err(RecordingFailure::Overflow("resampled frame PCM"));
-                }
-                let mut end = now - frame.duration();
-                for chunk in frame_chunks(&frame, &shared) {
-                    let chunk = chunk?;
-                    end += chunk.duration();
-                    recorder.on_input_frame(end, &chunk);
-                    std::thread::yield_now();
+            Command::Record(command) => {
+                if file.apply(command, &mut between)? {
+                    return Ok(file.summary().clone());
                 }
             }
-            Command::Capture(now, frame) => {
-                if frame.data.len()
-                    > shared.limits.segment_bytes.saturating_sub(placer.pending_bytes())
-                {
-                    return Err(RecordingFailure::Overflow("segment PCM"));
-                }
-                let mut start = now;
-                for chunk in frame_chunks(&frame, &shared) {
-                    let chunk = chunk?;
-                    placer.capture_frame(start, &chunk);
-                    start += chunk.duration();
-                    std::thread::yield_now();
-                }
-            }
-            Command::Started(created_at) => placer.on_playback_started(created_at),
-            Command::Progress(started_at, offset, duration) => {
-                let (mut start, mut offset, mut remaining) = (started_at, offset, duration);
-                loop {
-                    shared.check_failure()?;
-                    let Some(placed) = placer.on_playback_progressed_chunk(
-                        start,
-                        offset,
-                        remaining,
-                        shared.limits.block_duration.as_secs_f64(),
-                    ) else {
-                        break;
-                    };
-                    let advanced = placed.started_at - start + placed.frame.duration();
-                    recorder.on_output_placed(&placed);
-                    start += advanced;
-                    offset += advanced;
-                    remaining -= advanced;
-                    std::thread::yield_now();
-                }
-            }
-            Command::Finished(now, position) => loop {
-                shared.check_failure()?;
-                let Some(placed) = placer.on_playback_finished_chunk(
-                    now,
-                    position,
-                    shared.limits.block_duration.as_secs_f64(),
-                ) else {
-                    break;
-                };
-                recorder.on_output_placed(&placed);
-                std::thread::yield_now();
-            },
             Command::Flush(now, reply) => {
-                requested_flush = Some(requested_flush.map_or(now, |previous| previous.max(now)));
-                let until = recorder.settle_until(now, placer.pending_since());
-                let outcome = flush(recorder, writer, until, &mut summary, &shared);
+                let outcome = file.apply(RecordingCommand::Flush(now), &mut between).map(drop);
                 if let Some(reply) = reply {
-                    let _ = reply.send(outcome.clone().map(|()| summary.clone()));
+                    let _ = reply.send(outcome.clone().map(|()| file.summary().clone()));
                 }
                 outcome?;
             }
-            Command::Finish(_) => {
-                recorder
-                    .flush_resamplers()
-                    .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
-                flush(recorder, writer, now, &mut summary, &shared)?;
-                let tail = recording
-                    .take()
-                    .expect("recording initialized")
-                    .finish()
-                    .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
-                write(writer, &tail, &mut summary)?;
-                return Ok(summary);
-            }
             Command::Abandon => return Err(RecordingFailure::Closed),
         }
-        let retained = recorder.retained_bytes() + placer.retained_bytes();
-        shared.summary.send_replace(summary.clone());
+        let retained = file.retained_bytes();
+        shared.summary.send_replace(file.summary().clone());
         shared.retained_bytes.store(retained, Ordering::Release);
         if retained > shared.limits.retained_bytes {
             return Err(RecordingFailure::Overflow("retained PCM"));
         }
     }
     Err(RecordingFailure::Closed)
-}
-
-fn frame_chunks<'a>(
-    frame: &'a AudioFrame,
-    shared: &'a Shared,
-) -> impl Iterator<Item = Result<PcmFrame, RecordingFailure>> + 'a {
-    let samples = (f64::from(frame.sample_rate) * shared.limits.block_duration.as_secs_f64())
-        .round()
-        .max(1.) as usize;
-    let bytes = samples.saturating_mul(usize::from(frame.num_channels)).saturating_mul(2);
-    frame.data.chunks(bytes).map(move |chunk| {
-        shared.check_failure()?;
-        Ok(PcmFrame::new(
-            chunk
-                .chunks_exact(2)
-                .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
-                .collect(),
-            frame.sample_rate,
-            frame.num_channels,
-        ))
-    })
-}
-
-fn flush<E: OggOpusEncoder, W: Write>(
-    recorder: &mut Recorder<E>,
-    writer: &mut W,
-    until: f64,
-    summary: &mut RecordingSummary,
-    shared: &Shared,
-) -> Result<(), RecordingFailure> {
-    let mut cursor = summary.last_flushed.unwrap_or_else(|| summary.started_at.unwrap_or(until));
-    while cursor < until {
-        if let Some(error) = shared.failure.get() {
-            return Err(error.clone());
-        }
-        let next = (cursor + shared.limits.block_duration.as_secs_f64()).min(until);
-        if next <= cursor {
-            return Err(RecordingFailure::Invalid(
-                "timestamp precision exceeds recording block size",
-            ));
-        }
-        cursor = next;
-        let encoded = recorder
-            .flush_until(cursor)
-            .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
-        write(writer, &encoded, summary)?;
-        std::thread::yield_now();
-        summary.last_flushed = Some(cursor);
-    }
-    [summary.dropped_input_samples, summary.dropped_output_samples] = recorder.dropped_samples();
-    Ok(())
-}
-
-fn write<W: Write>(
-    writer: &mut W,
-    bytes: &[u8],
-    summary: &mut RecordingSummary,
-) -> Result<(), RecordingFailure> {
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    writer.write_all(bytes).map_err(io_failure)?;
-    writer.flush().map_err(io_failure)?;
-    summary.bytes_written += bytes.len() as u64;
-    Ok(())
 }
 
 #[cfg(test)]

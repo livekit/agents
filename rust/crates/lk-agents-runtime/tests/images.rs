@@ -79,8 +79,7 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
         "this realtime protocol requires inline images"
     );
     let mut oversized = image;
-    oversized.image = lk_agents_abi::ImageSource::Url(
-        "x".repeat(lk_agents_runtime::images::MAX_IMAGE_URL_BYTES + 1),
-    );
+    oversized.image =
+        lk_agents_abi::ImageSource::Url("x".repeat(lk_agents_media::images::MAX_IMAGE_BYTES + 1));
     assert!(lk_agents_runtime::images::NativeImages.resolve(&oversized).is_err());
 }

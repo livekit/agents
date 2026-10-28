@@ -5,7 +5,6 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
-use lk_agents_abi::tts::text::TtsTextProcessorFactory as _;
 use lk_agents_media::workers::{MediaWorkerError, MediaWorkerLimits, MediaWorkers};
 use lk_agents_voice::tts::processing::SpeechText;
 

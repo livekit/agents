@@ -7,6 +7,9 @@ use lk_agents_abi::AudioFrame;
 
 use crate::{FrameResampler, OnChange, Quality, ResampleError};
 
+mod file;
+pub use file::{BetweenBlocks, FileLimits, RecordingCommand, RecordingFile};
+
 /// Python's `round()` is half-to-even; a one-sample disagreement at `.5` is an overlap or gap.
 #[inline]
 fn round_ties_even_like_python(v: f64) -> f64 {
