@@ -574,7 +574,7 @@ async fn serve_dev_channel(
     // Asked before the CLI restarts this process: what runs now, to resume after the reload.
     while let Ok(message) = recv(&mut stream).await {
         if let Some(Message::GetRunningJobsRequest(_)) = message {
-            let jobs = server.running_jobs().into_iter().map(to_proto).collect();
+            let jobs = server.running_jobs()?.into_iter().map(to_proto).collect();
             let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
             if send(&mut stream, reply).await.is_err() {
                 break;

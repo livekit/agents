@@ -1,4 +1,4 @@
-//! The process launcher's typed command line.
+//! The process launcher's typed command line, and the agent server the dev channel reports on.
 
 /// The command accepted by the process launcher.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,4 +70,21 @@ pub trait CliSignals: Send + Sync + Sized + 'static {
     /// Disarm the deadline only after the host event loop has actually closed.
     #[host(call)]
     fn closed(&self);
+}
+
+/// A job running under the dev server, kept across reloads: the `Job` protobuf as bytes, the
+/// accept arguments (name, identity, metadata), the server URL, the token, the worker id, and
+/// whether it is a fake job.
+pub type DevJob = (Vec<u8>, String, String, String, String, String, String, bool);
+
+/// The agent server the dev channel reports on (`cli.py`'s `_DevServer`).
+#[crate::host(proxy(host = "livekit.agents.cli._DevServer"))]
+#[async_trait::async_trait]
+pub trait DevServer: Send + Sync {
+    /// The jobs running now, read when the CLI asks.
+    #[host(call, name = "_core_running_jobs")]
+    fn running_jobs(&self) -> Result<Vec<DevJob>, crate::errors::HostError>;
+    /// Resume the jobs the CLI kept from before the reload, on this server's URL and a fresh token.
+    #[host(await, name = "_core_reload_jobs")]
+    async fn reload_jobs(&self, jobs: Vec<DevJob>) -> Result<(), crate::errors::HostError>;
 }

@@ -488,7 +488,6 @@
   "host|rust/crates/lk-agents-worker/src/auth.rs|fn token_identity|lk_agents_abi :: host (export)",
   "host|rust/crates/lk-agents-worker/src/cli.rs|fn dev_channel|lk_agents_abi :: host (export)",
   "host|rust/crates/lk-agents-worker/src/cli.rs|fn format_log_record|lk_agents_abi :: host (export (pid = false))",
-  "host|rust/crates/lk-agents-worker/src/cli.rs|trait DevServer|lk_agents_abi :: host (proxy (live))",
   "host|rust/crates/lk-agents-worker/src/config.rs|const UPDATE_LOAD_INTERVAL|lk_agents_abi :: host (export (pid = false))",
   "host|rust/crates/lk-agents-worker/src/hw/cgroup.rs|enum CpuMonitorKind|lk_agents_abi :: host (wire_enum)",
   "host|rust/crates/lk-agents-worker/src/hw/cpu.rs|impl  for CpuMonitor::cpu_count|host (method)",
