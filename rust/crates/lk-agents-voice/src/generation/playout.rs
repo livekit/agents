@@ -398,9 +398,10 @@ impl Playing<'_> {
     fn played_out<S: Segment>(&mut self, segment: &mut S, ev: &PlaybackFinished) {
         self.drain(segment);
         self.sink_call(SinkCall::End);
-        // Cut before its first frame left: never started, so no finish.
+        // Cut before its first frame left: never started, so no finish. Journalled as the sink
+        // reported it: a segment cut below earlier makes the speech incomplete, not this finish.
         if self.started || !(ev.interrupted && ev.playback_position.is_zero()) {
-            self.finished(ev.playback_position, ev.interrupted || self.cut_below);
+            self.finished(ev.playback_position, ev.interrupted);
         }
     }
 

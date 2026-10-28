@@ -1,4 +1,4 @@
-use lk_agents_voice::transcription::synchronizer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
+use lk_agents_voice::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
 use std::time::Duration;
 
 #[test]

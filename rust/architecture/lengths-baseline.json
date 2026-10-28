@@ -3,6 +3,5 @@
   "rust/crates/lk-agents-fuzz/src/drive/apply.rs": 1408,
   "rust/crates/lk-agents-fuzz/src/search/conversation.rs": 1901,
   "rust/crates/lk-agents-voice/src/agent_session/api.rs": 1380,
-  "rust/crates/lk-agents-voice/src/agent_session/api/host.rs": 1377,
-  "rust/crates/lk-agents-voice/src/transcription/synchronizer.rs": 1285
+  "rust/crates/lk-agents-voice/src/agent_session/api/host.rs": 1377
 }
