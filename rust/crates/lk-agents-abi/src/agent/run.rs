@@ -21,6 +21,8 @@ pub struct ValidationId(pub u64);
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunResult {
     pub outcome: RunOutcome,
+    /// The managed turn yielded at a safe boundary; history and usage still describe its work.
+    pub interrupted: bool,
     /// The incoming message and everything this invocation recorded, in order.
     pub new_messages: Vec<ChatItem>,
     /// The supplied history plus this invocation, without instructions.
@@ -226,5 +228,10 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
     /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
     /// end is dropped. Refused for an invocation this runner is not running.
     #[host(call)]
-    fn progress(&self, invocation_id: &str, operation: u64, message: String) -> Result<(), InvalidRun>;
+    fn progress(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> Result<(), InvalidRun>;
 }

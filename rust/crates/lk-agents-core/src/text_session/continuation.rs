@@ -122,7 +122,10 @@ impl TextSession {
             RunOutcome::InputRequired { answer_tool, .. } => answer_tool.clone(),
             _ => None,
         };
-        if matches!(result.outcome, RunOutcome::InputRequired { .. }) || frame.parent.is_none() {
+        if result.interrupted
+            || matches!(result.outcome, RunOutcome::InputRequired { .. })
+            || frame.parent.is_none()
+        {
             self.finish(Ok(TextSessionTurn { result, state: self.state.clone() }), effects);
             return;
         }

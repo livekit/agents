@@ -102,6 +102,16 @@ class AgentHost:
             ctx = RunContext[Any](function_call=None, run=_current_run())
             return await self._agent._render_dynamic_instructions(ctx)
 
+    async def checkpoint(self, invocation: Invocation) -> bool:
+        """Forward the framework's verdict under this callback's captured invocation."""
+        with self._operation(invocation):
+            hooks = _current_run().hooks
+            return (
+                await hooks.checkpoint()
+                if hooks is not None and hooks.checkpoint is not None
+                else False
+            )
+
     async def prepare_tool(
         self, invocation: Invocation, arguments: dict[str, Any]
     ) -> PreparedArguments:

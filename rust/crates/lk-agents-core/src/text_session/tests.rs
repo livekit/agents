@@ -9,6 +9,8 @@ use serde_json::json;
 
 use super::*;
 
+mod checkpoints;
+
 fn message(id: &str, role: Role, text: &str) -> ChatMessage {
     ChatMessage::text(id, role, text, std::time::UNIX_EPOCH)
 }
@@ -566,6 +568,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
     let frame_id = turn.state.active_frame_id.clone();
     let mut session = TextSession::new(first.config.clone(), input(Some(turn.state))).unwrap();
     let result = RunResult {
+        interrupted: false,
         outcome: RunOutcome::Completed { output: Output::Validated(ValidationId(99)) },
         all_messages: turn.result.all_messages,
         new_messages: Vec::new(),
@@ -588,6 +591,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
                 Event::Reconcile {
                     frame_id,
                     result: RunResult {
+                        interrupted: false,
                         outcome: RunOutcome::Completed { output: Output::Nothing },
                         all_messages: Vec::new(),
                         new_messages: Vec::new(),

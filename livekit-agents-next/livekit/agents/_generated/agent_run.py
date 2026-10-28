@@ -234,6 +234,8 @@ class RunResult:
     """
 
     outcome: RunOutcome
+    interrupted: bool
+    """The managed turn yielded at a safe boundary; history and usage still describe its work."""
     new_messages: list[ChatItem]
     """The incoming message and everything this invocation recorded, in order."""
     all_messages: list[ChatItem]

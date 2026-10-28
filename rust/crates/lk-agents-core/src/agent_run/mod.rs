@@ -9,6 +9,7 @@
 //! - [`model_step`]: one model request.
 //! - [`tool_calls`]: one step's calls, from arguments to recorded outcomes.
 
+mod checkpoint;
 mod model_step;
 pub mod result;
 mod text_session;
@@ -39,7 +40,7 @@ use lk_agents_abi::agent::run::{
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use model_step::{ModelStep, Purpose};
-pub use result::{CallId, RenderId, RequestId};
+pub use result::{CallId, CheckpointId, RenderId, RequestId};
 use tool_calls::{FinalCandidate, Recorded, ToolCalls};
 
 /// The feedback a rejected text output gives the model.
@@ -85,6 +86,10 @@ pub enum OutputVerdict {
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
+    HostCheckpointDone {
+        checkpoint: CheckpointId,
+        result: Result<bool, String>,
+    },
     InstructionsRendered {
         render: RenderId,
         result: Result<String, String>,
@@ -144,6 +149,12 @@ pub enum Event {
 /// Work for the runtime. Every outcome-bearing effect is answered by a correlated event.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
+    HostCheckpoint {
+        checkpoint: CheckpointId,
+    },
+    HostCheckpointCancel {
+        checkpoint: CheckpointId,
+    },
     /// Render the `@agent.instructions` functions.
     InstructionsRender {
         render: RenderId,
@@ -231,11 +242,13 @@ pub struct AgentRun {
     output_retries: u32,
     /// The dynamic instructions last rendered, for a phrasing request.
     dynamic: Option<String>,
+    checkpoints: bool,
     phase: Phase,
 }
 
 enum Phase {
     Idle,
+    Checkpoint(checkpoint::Pending),
     Rendering(RenderId),
     Requesting(ModelStep),
     Acting(Acting),
@@ -263,6 +276,7 @@ struct Acting {
 /// Cancelled work whose settlement is still owed.
 #[derive(Default)]
 struct Owed {
+    checkpoint: Option<CheckpointId>,
     request: Option<RequestId>,
     render: Option<RenderId>,
     calls: BTreeSet<CallId>,
@@ -271,7 +285,8 @@ struct Owed {
 
 impl Owed {
     fn is_empty(&self) -> bool {
-        self.request.is_none()
+        self.checkpoint.is_none()
+            && self.request.is_none()
             && self.render.is_none()
             && self.calls.is_empty()
             && self.validations.is_empty()
@@ -279,6 +294,7 @@ impl Owed {
 
     fn describe(&self) -> Vec<String> {
         let mut out = Vec::new();
+        out.extend(self.checkpoint.map(|c| format!("managed checkpoint {}", c.0)));
         out.extend(self.request.map(|r| format!("llm request {}", r.0)));
         out.extend(self.render.map(|r| format!("instructions render {}", r.0)));
         out.extend(self.calls.iter().map(|c| format!("tool call {}", c.0)));
@@ -301,6 +317,7 @@ impl AgentRun {
             tool_retries: BTreeMap::new(),
             output_retries: 0,
             dynamic: None,
+            checkpoints: false,
             phase: Phase::Idle,
         })
     }
@@ -320,6 +337,9 @@ impl AgentRun {
             Event::Wake => self.wake(now, &mut fx),
             event if matches!(self.phase, Phase::Aborting { .. } | Phase::Done) => {
                 self.settle_owed(event, &mut fx)
+            }
+            Event::HostCheckpointDone { checkpoint, result } => {
+                self.checkpoint_done(checkpoint, result, now, &mut fx)
             }
             Event::InstructionsRendered { render, result } => match self.phase {
                 Phase::Rendering(r) if r == render => match result {
@@ -487,6 +507,20 @@ impl AgentRun {
     }
 
     fn request(
+        &mut self,
+        purpose: Purpose,
+        dynamic: Option<String>,
+        now: Ts,
+        fx: &mut Vec<Effect>,
+    ) {
+        if self.checkpoints {
+            self.checkpoint_request(purpose, dynamic, fx);
+        } else {
+            self.start_request(purpose, dynamic, now, fx);
+        }
+    }
+
+    fn start_request(
         &mut self,
         purpose: Purpose,
         dynamic: Option<String>,
@@ -856,6 +890,7 @@ impl AgentRun {
             .copy(&CopyOptions { exclude_instructions: true, ..Default::default() });
         RunResult {
             outcome,
+            interrupted: false,
             new_messages: self.history[self.first_new..].to_vec(),
             all_messages: all.items,
             usage: self.usage,
@@ -868,6 +903,16 @@ impl AgentRun {
     }
 
     fn finish(&mut self, result: Result<RunResult, RunError>, fx: &mut Vec<Effect>) {
+        if self.checkpoints
+            && let Ok(result) = result
+        {
+            self.checkpoint_finish(result, fx);
+        } else {
+            self.finish_now(result, fx);
+        }
+    }
+
+    fn finish_now(&mut self, result: Result<RunResult, RunError>, fx: &mut Vec<Effect>) {
         fx.push(Effect::Finished(result));
         self.phase = Phase::Done;
     }
@@ -877,6 +922,10 @@ impl AgentRun {
         let mut owed = Owed::default();
         match std::mem::replace(&mut self.phase, Phase::Idle) {
             Phase::Idle => {}
+            Phase::Checkpoint(pending) => {
+                fx.push(Effect::HostCheckpointCancel { checkpoint: pending.id });
+                owed.checkpoint = Some(pending.id);
+            }
             Phase::Done => {
                 self.phase = Phase::Done;
                 return;
@@ -921,6 +970,9 @@ impl AgentRun {
         }
         let Phase::Aborting { owed, .. } = &mut self.phase else { return };
         match event {
+            Event::HostCheckpointDone { checkpoint, .. } if owed.checkpoint == Some(checkpoint) => {
+                owed.checkpoint = None;
+            }
             Event::InstructionsRendered { render, .. } if owed.render == Some(render) => {
                 owed.render = None
             }

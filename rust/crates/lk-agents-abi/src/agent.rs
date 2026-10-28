@@ -121,6 +121,15 @@ pub enum ValidatedOutput {
 #[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentHost"))]
 #[async_trait]
 pub trait AgentHost: Send + Sync {
+    /// The surrounding managed turn's verdict; true yields before a model call or delivery.
+    #[host(await)]
+    async fn checkpoint(
+        &self,
+        #[host(context)] _invocation: &Invocation,
+    ) -> Result<bool, HostError> {
+        Ok(false)
+    }
+
     /// The `@agent.instructions` functions, rendered and joined.
     #[host(await)]
     async fn render_instructions(

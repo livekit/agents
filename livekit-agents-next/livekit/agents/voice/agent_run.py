@@ -54,8 +54,8 @@ if TYPE_CHECKING:
 class RunHooks:
     """What a door installs around the ``agent.run()`` calls made inside its turn.
 
-    ``checkpoint`` is awaited before a run starts; ``True`` makes it yield with no reply (a newer
-    message waits for the lane, or a client canceled the task), and ``interrupted`` is set.
+    The native loop awaits ``checkpoint`` before model requests and result delivery. ``True``
+    yields at that boundary; the settled result carries its history and marks ``interrupted``.
     ``on_result`` receives every result, so the door can commit what the run added.
     ``on_update`` receives a tool's ``ctx.update(text)``; ``on_token`` the model's text as it
     arrives, from ``run()`` (``run_stream()`` hands delivery to its consumer). ``thread`` and
@@ -176,8 +176,8 @@ async def start_run(
     context: Context_T | None,
     usage: RunUsage | None,
     conn_options: APIConnectOptions,
-) -> tuple[_TextRun[Context_T], _core.AgentRunUpdates | None]:
-    """Starts one invocation; ``None`` updates when the door's checkpoint yields first."""
+) -> tuple[_TextRun[Context_T], _core.AgentRunUpdates]:
+    """Start one native invocation; its core owns managed checkpoints and settlement."""
     from .._core_view import to_core_item, to_core_items
 
     hooks = door_hooks()
@@ -194,10 +194,6 @@ async def start_run(
         hooks=hooks,
         conn_options=conn_options,
     )
-    if hooks is not None and hooks.checkpoint is not None and await hooks.checkpoint():
-        hooks.interrupted = True
-        return run, None
-
     await run.acquire_toolsets()
     try:
         run.tools = ToolContext(agent.tools)
@@ -228,6 +224,8 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
     from .._core_view import from_core_item
 
     result = settled.result
+    if result.interrupted and run.hooks is not None:
+        run.hooks.interrupted = True
     usage = RunUsage(
         requests=result.usage.requests,
         input_tokens=result.usage.input_tokens,
@@ -250,18 +248,6 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
             return RunCompleted(output=settled.output, **common)
         case RunOutcomeCompleted(output=OutputNothing()):
             return RunCompleted(output=None, **common)
-
-
-def interrupted_result(run: _TextRun[Any]) -> RunResult[Any]:
-    """A run the door's checkpoint yielded before it started: it ran nothing."""
-    message = run.chat_ctx.items[-1]
-    return RunCompleted(
-        output=None,
-        new_messages=[message],
-        all_messages=list(run.chat_ctx.items),
-        usage=RunUsage(),
-        verbatim=None,
-    )
 
 
 def run_error(error: RunError) -> BaseException:

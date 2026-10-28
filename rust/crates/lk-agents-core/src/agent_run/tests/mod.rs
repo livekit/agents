@@ -7,6 +7,7 @@
 //! - `lifecycle.rs`: sibling calls, duplicates, cancellation, deadlines and arrival orders.
 
 mod approval;
+mod checkpoints;
 mod flow;
 mod lifecycle;
 

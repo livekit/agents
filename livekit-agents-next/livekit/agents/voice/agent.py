@@ -338,7 +338,7 @@ class Agent(Generic[Context_T, Output_T]):
                     print(delta, end="")
                 result = await stream.result()
         """
-        from .agent_run import interrupted_result, run_error, settled_result, start_run
+        from .agent_run import run_error, settled_result, start_run
         from .run_stream import RunStream, _Started
 
         async def start() -> _Started[RunResult[Output_T]]:
@@ -352,9 +352,8 @@ class Agent(Generic[Context_T, Output_T]):
             )
 
             def settle(finished: RunSettled | None) -> RunResult[Output_T]:
-                result = (
-                    interrupted_result(run) if finished is None else settled_result(run, finished)
-                )
+                assert finished is not None
+                result = settled_result(run, finished)
                 if run.hooks is not None and run.hooks.on_result is not None:
                     run.hooks.on_result(result)
                 return result

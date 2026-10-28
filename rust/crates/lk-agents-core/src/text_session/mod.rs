@@ -168,6 +168,7 @@ pub struct TextSession {
     wall: WallAnchor,
     cleanup_timeout: Duration,
     delegated: bool,
+    checkpoints: bool,
     invocation: Option<Invocation>,
     started: bool,
     done: bool,
@@ -222,11 +223,18 @@ impl TextSession {
             wall: input.wall,
             cleanup_timeout: input.cleanup_timeout,
             delegated: input.delegated,
+            checkpoints: false,
             invocation: None,
             started: false,
             done: false,
             sequence: 0,
         })
+    }
+
+    /// Install the managed-turn admission and delivery capability for every frame.
+    pub fn with_checkpoints(mut self) -> Self {
+        self.checkpoints = true;
+        self
     }
 
     pub fn wake_at(&self) -> Option<Ts> {
@@ -337,7 +345,13 @@ impl TextSession {
             cleanup_timeout: self.cleanup_timeout,
         };
         let mut run = match AgentRun::new(agent.definition.clone(), input) {
-            Ok(run) => run,
+            Ok(run) => {
+                if self.checkpoints {
+                    run.with_checkpoints()
+                } else {
+                    run
+                }
+            }
             Err(error) => {
                 self.finish(
                     Err(TextSessionError::Routing(RoutingError::InvalidState(format!(

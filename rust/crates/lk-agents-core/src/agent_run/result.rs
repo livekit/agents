@@ -16,4 +16,6 @@ ids! {
     CallId,
     /// One rendering of the dynamic instructions.
     RenderId,
+    /// One managed-turn admission or delivery checkpoint.
+    CheckpointId,
 }

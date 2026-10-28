@@ -16,7 +16,9 @@ use lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
-use lk_agents_core::agent_run::{CallId, Effect, Event, OutputVerdict, RenderId, RequestId};
+use lk_agents_core::agent_run::{
+    CallId, CheckpointId, Effect, Event, OutputVerdict, RenderId, RequestId,
+};
 use lk_agents_core::{AgentError, AgentRun, RunInput, approval};
 use tokio::sync::{mpsc, oneshot};
 
@@ -107,7 +109,7 @@ pub fn start(
     ports: Ports,
     updates: usize,
 ) -> Result<(AgentRunHandle, mpsc::Receiver<RunUpdate>), AgentError> {
-    let run = AgentRun::new(agent, input)?;
+    let run = AgentRun::new(agent, input)?.with_checkpoints();
     let (cancel, cancelled) = oneshot::channel();
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
@@ -149,6 +151,7 @@ enum Report {
 /// The host callback in flight for a core correlation id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Work {
+    Checkpoint(CheckpointId),
     Call(CallId),
     Render(RenderId),
     Validation(ValidationId),
@@ -230,6 +233,23 @@ impl Driver {
 
     async fn execute(&mut self, effect: Effect) {
         match effect {
+            Effect::HostCheckpoint { checkpoint } => {
+                let host = self.ports.host.clone();
+                self.invoke(
+                    Work::Checkpoint(checkpoint),
+                    None,
+                    None,
+                    move |inv, events| async move {
+                        let result = host.checkpoint(&inv).await.map_err(|error| error.to_string());
+                        let _ = events
+                            .send(Report::Core(Event::HostCheckpointDone { checkpoint, result }))
+                            .await;
+                    },
+                );
+            }
+            Effect::HostCheckpointCancel { checkpoint } => {
+                self.cancel(Work::Checkpoint(checkpoint))
+            }
             Effect::LlmRequestStart { request, chat_ctx, tools, .. } => {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
@@ -504,6 +524,6 @@ mod runner;
 #[cfg(test)]
 mod tests;
 
-pub use runner::{Runner, Updates};
 /// `result.expect`'s events: the assertions are the core's own, nothing runs.
 pub use lk_agents_core::assertions::RunEvents;
+pub use runner::{Runner, Updates};

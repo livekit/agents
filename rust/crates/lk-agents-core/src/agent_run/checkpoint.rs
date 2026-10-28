@@ -1,0 +1,75 @@
+//! Managed-turn checkpoints gate model requests and accepted result delivery.
+
+use super::{
+    AgentRun, CheckpointId, Effect, Output, Phase, Purpose, RunError, RunOutcome, RunResult,
+};
+use lk_agents_abi::Ts;
+
+pub(super) struct Pending {
+    pub(super) id: CheckpointId,
+    next: Next,
+}
+
+enum Next {
+    Request { purpose: Purpose, dynamic: Option<String> },
+    Finish(RunResult),
+}
+
+impl AgentRun {
+    /// The runtime supplies a managed host checkpoint capability; pure callers can omit it.
+    pub fn with_checkpoints(mut self) -> Self {
+        self.checkpoints = true;
+        self
+    }
+
+    pub(super) fn checkpoint_request(
+        &mut self,
+        purpose: Purpose,
+        dynamic: Option<String>,
+        effects: &mut Vec<Effect>,
+    ) {
+        self.checkpoint(Next::Request { purpose, dynamic }, effects);
+    }
+
+    pub(super) fn checkpoint_finish(&mut self, result: RunResult, effects: &mut Vec<Effect>) {
+        self.checkpoint(Next::Finish(result), effects);
+    }
+
+    fn checkpoint(&mut self, next: Next, effects: &mut Vec<Effect>) {
+        let id = CheckpointId(self.mint());
+        self.phase = Phase::Checkpoint(Pending { id, next });
+        effects.push(Effect::HostCheckpoint { checkpoint: id });
+    }
+
+    pub(super) fn checkpoint_done(
+        &mut self,
+        checkpoint: CheckpointId,
+        result: Result<bool, String>,
+        now: Ts,
+        effects: &mut Vec<Effect>,
+    ) {
+        if !matches!(&self.phase, Phase::Checkpoint(pending) if pending.id == checkpoint) {
+            return;
+        }
+        let Phase::Checkpoint(pending) = std::mem::replace(&mut self.phase, Phase::Idle) else {
+            unreachable!()
+        };
+        match result {
+            Ok(false) => match pending.next {
+                Next::Request { purpose, dynamic } => {
+                    self.start_request(purpose, dynamic, now, effects)
+                }
+                Next::Finish(result) => self.finish_now(Ok(result), effects),
+            },
+            Ok(true) => {
+                let mut result = self.result(
+                    RunOutcome::Completed { output: Output::Nothing },
+                    self.verbatim_text(),
+                );
+                result.interrupted = true;
+                self.finish_now(Ok(result), effects);
+            }
+            Err(error) => self.finish_now(Err(RunError::Host(error)), effects),
+        }
+    }
+}

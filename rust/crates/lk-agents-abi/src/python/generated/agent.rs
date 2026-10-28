@@ -313,9 +313,10 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::agent::run::RunResult {
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Self { outcome, new_messages, all_messages, usage, verbatim } = self;
+        let Self { outcome, interrupted, new_messages, all_messages, usage, verbatim } = self;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+        kwargs.set_item("interrupted", ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted, py)?)?;
         kwargs.set_item("new_messages", ::pyo3::types::PyList::new(py, new_messages.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
         kwargs.set_item("all_messages", ::pyo3::types::PyList::new(py, all_messages.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
         kwargs.set_item("usage", ::pyo3::IntoPyObjectExt::into_bound_py_any(usage, py)?)?;

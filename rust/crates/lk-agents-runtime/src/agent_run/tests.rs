@@ -27,6 +27,8 @@ use tokio::sync::Notify;
 
 use super::*;
 
+mod checkpoints;
+
 /// Counts host values released, so a test sees nothing the host handed over is kept.
 #[derive(Default)]
 struct Registry {
@@ -115,6 +117,7 @@ impl Llm for ScriptedLlm {
 #[derive(Clone, Copy, PartialEq)]
 enum Body {
     Returns,
+    YieldAfterTool,
     /// Runs until cancelled, then reports the cancellation.
     UntilCancelled,
     /// Ignores cancellation: never settles.
@@ -159,6 +162,11 @@ impl FakeHost {
 
 #[async_trait]
 impl AgentHost for FakeHost {
+    async fn checkpoint(&self, _invocation: &Invocation) -> Result<bool, HostError> {
+        Ok(self.body == Body::YieldAfterTool
+            && self.seen.lock().unwrap().iter().any(|(callback, _)| *callback == "run"))
+    }
+
     async fn render_instructions(&self, invocation: &Invocation) -> Result<String, HostError> {
         self.saw("instructions", invocation);
         Ok(String::new())
@@ -192,7 +200,7 @@ impl AgentHost for FakeHost {
     ) -> Result<(ToolReport, serde_json::Map<String, Value>), HostError> {
         self.saw("run", invocation);
         match self.body {
-            Body::Returns => {}
+            Body::Returns | Body::YieldAfterTool => {}
             Body::UntilCancelled => {
                 self.cancel.notified().await;
                 return Ok((ToolOutcome::Cancelled.into(), Default::default()));
