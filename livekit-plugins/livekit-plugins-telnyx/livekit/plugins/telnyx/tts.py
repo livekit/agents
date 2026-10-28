@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiohttp
+from pydantic import BaseModel, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -33,6 +34,10 @@ class _TTSOptions:
     api_key: str
     voice: str
     base_url: str
+
+
+class _AudioMessage(BaseModel):
+    audio: str | None = None
 
 
 class TTS(tts.TTS):
@@ -176,14 +181,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        data = json.loads(msg.data)
-                        audio_data = data.get("audio")
+                        data = _AudioMessage.model_validate_json(msg.data)
+                        audio_data = data.audio
                         if audio_data:
                             audio_bytes = base64.b64decode(audio_data)
                             if audio_bytes:
                                 decoder.push(audio_bytes)
-                    except json.JSONDecodeError:
-                        logger.warning("Telnyx TTS: Received invalid JSON")
+                    except ValidationError as exc:
+                        raise APIConnectionError(
+                            "Invalid Telnyx audio message", retryable=False
+                        ) from exc
 
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSE,

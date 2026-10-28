@@ -13,8 +13,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import aiohttp
-from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from pydantic import BaseModel
 
 from livekit import rtc
 from livekit.agents import (
@@ -44,13 +43,10 @@ class _STTOptions:
     sample_rate: int
 
 
-class _Transcript(TypedDict, total=False):
-    transcript: str
-    is_final: bool
-    confidence: float
-
-
-_TRANSCRIPT = TypeAdapter(_Transcript)
+class _Transcript(BaseModel):
+    transcript: str = ""
+    is_final: bool = False
+    confidence: float = 0.0
 
 
 class STT(stt.STT):
@@ -240,11 +236,11 @@ class SpeechStream(stt.RecognizeStream):
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        data = _TRANSCRIPT.validate_json(msg.data)
+                        data = _Transcript.model_validate_json(msg.data)
                         logger.debug(
                             "Telnyx STT received: is_final=%s, has_transcript=%s",
-                            data.get("is_final"),
-                            bool(data.get("transcript")),
+                            data.is_final,
+                            bool(data.transcript),
                         )
                         self._process_stream_event(data)
                     except Exception:
@@ -303,8 +299,8 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError("Failed to connect to Telnyx STT") from e
 
     def _process_stream_event(self, data: _Transcript) -> None:
-        transcript = data.get("transcript", "")
-        is_final = data.get("is_final", False)
+        transcript = data.transcript
+        is_final = data.is_final
 
         if not transcript:
             return
@@ -317,7 +313,7 @@ class SpeechStream(stt.RecognizeStream):
             stt.SpeechData(
                 language=self._language,
                 text=transcript,
-                confidence=data.get("confidence", 0.0),
+                confidence=data.confidence,
             )
         ]
 
