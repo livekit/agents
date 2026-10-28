@@ -175,6 +175,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         logger.debug(
             f"Camb.ai TTS request: voice_id={self._opts.voice_id}, "
             f"model={self._opts.speech_model}, text_length={len(self._input_text)}"
@@ -213,10 +214,7 @@ class ChunkedStream(tts.ChunkedStream):
                 f"{self._tts._base_url}/tts-stream",
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(
-                    total=60,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as resp:
                 if resp.status != 200:
                     content = await resp.text()

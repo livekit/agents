@@ -109,6 +109,7 @@ class STT(stt.STT):
         language: NotGivenOr[ClovaSttLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        http_timeout = utils.http_context.client_timeout(conn_options)
         try:
             url = self.url_builder()
             lang = self._language
@@ -139,10 +140,7 @@ class STT(stt.STT):
                 url,
                 data=form_data,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as response:
                 response_data = await response.json()
                 end = time.time()

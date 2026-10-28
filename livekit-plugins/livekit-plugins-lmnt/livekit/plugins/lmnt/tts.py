@@ -217,6 +217,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         data = {
             "text": self._input_text,
             "voice": self._opts.voice,
@@ -236,10 +237,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "X-API-Key": self._opts.api_key,
                 },
                 json=data,
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
                 output_emitter.initialize(
