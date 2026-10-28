@@ -2598,3 +2598,110 @@ class TestToolCallEvents:
         assert len(scheduled) == 1
         assert scheduled[0].status == "scheduled"
         assert set(scheduled[0].update_ids) == {"a_final", "b_final"}
+
+
+class TestReplyToolChoice:
+    """The reply to a report calls no tools; the reply to a result may; ``silent`` asks none."""
+
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    @pytest.mark.parametrize(
+        "requests, choice",
+        [
+            (["none", "none"], "none"),
+            ([None], None),
+            (["none", None], None),  # one result among reports is enough
+            (["none", "auto"], None),  # requests that disagree constrain nothing
+            (
+                [{"type": "function", "function": {"name": "f"}}] * 2,
+                {"type": "function", "function": {"name": "f"}},
+            ),
+        ],
+    )
+    def test_one_reply_honours_a_single_shared_request(self, requests: list[Any], choice: Any):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(requests) == choice
+
+    @staticmethod
+    async def _replied(tool: Any) -> Any:
+        """The session after ``tool`` ran to its end with the reply held until then."""
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        session = _make_reply_session(_make_fake_speech())
+        idle = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle() -> Any:
+            await idle.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c", name="progress_tool")
+        await executor.execute(tool=tool, run_ctx=run_ctx, raw_arguments={})
+        await _drain_executor(executor)
+        idle.set()
+        if executor._sink._reply_task is not None:
+            await executor._sink._reply_task
+        session.run_ctx = run_ctx
+        return session
+
+    @pytest.mark.asyncio
+    async def test_a_reply_to_reports_only_calls_no_tools(self):
+        from livekit.agents.voice.events import RunContext
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> None:
+            """p"""
+            await ctx.update("on it")
+            await ctx.update("still on it")
+
+        session = await self._replied(progress_tool)
+        assert session.run_ctx._reply_tool_choice == "none"
+        assert session.generate_reply.call_args.kwargs["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_a_reply_to_a_result_uses_the_default_tool_choice(self):
+        from livekit.agents.types import NOT_GIVEN
+        from livekit.agents.voice.events import RunContext
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("on it")
+            return "three matches"
+
+        session = await self._replied(progress_tool)
+        assert session.generate_reply.call_args.kwargs["tool_choice"] is NOT_GIVEN
+
+    @pytest.mark.asyncio
+    async def test_a_silent_update_is_recorded_but_never_replied_to(self):
+        from livekit.agents.voice.events import RunContext, ToolCallUpdated, ToolReplyUpdated
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("on it", silent=True)
+            await ctx.update("half way", silent=True)
+            return "all done"
+
+        session = await self._replied(progress_tool)
+        # the release keeps its output from being voiced
+        assert session.run_ctx._suppress_reply is True
+        items = _emitted_items(session)
+        assert items[1] == ToolCallUpdated(id="c", call_id="c", message="on it", silent=True)
+        # the history the activity holds after the tool's end
+        recorded = [
+            item
+            for item in session._current_activity_or_raise()._chat_ctx.items
+            if item.type == "function_call_output"
+        ]
+        assert [(o.call_id, o.reply_required) for o in recorded] == [
+            ("c_update_1", False),
+            ("c_final", True),
+        ]
+        (reply,) = [i for i in items if isinstance(i, ToolReplyUpdated)]
+        assert reply.update_ids == ["c_final"]

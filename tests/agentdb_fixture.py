@@ -89,9 +89,10 @@ async def agentdb_worker() -> AsyncIterator[Callable[[str], AgentDBStorage]]:
 
     # an A2A response ends before its turn has closed the durable stream (a2a/pump.py); that
     # close is a request to agent-db now, so it is given its time before the leak check
-    turns = [task for task in pump.running if not task.done()]
-    if turns:
-        await asyncio.wait(turns, timeout=5)
+    # a turn may start the close of a stream as it ends
+    for _ in range(3):
+        if turns := [task for task in pump.running if not task.done()]:
+            await asyncio.wait(turns, timeout=5)
 
 
 @pytest.fixture

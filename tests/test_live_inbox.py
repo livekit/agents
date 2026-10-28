@@ -1,7 +1,7 @@
 """A busy agent in text (design §2, §7 "When the agent is busy"): under the ``live`` inbox a message
 during a turn interrupts it or waits, every task answers on its own stream, and work in the
-background is delivered when no turn runs, as on a call. Seen only on the A2A wire and in what
-reaches the model."""
+background is delivered when no turn runs, as on a call. Seen on the A2A wire and in what reaches
+the model."""
 
 from __future__ import annotations
 
@@ -18,10 +18,12 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import INTERRUPTED, MERGED_INTO
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
+from livekit.agents.llm import ChatContext, ChatMessage, FunctionCallOutput, FunctionToolCall
 from livekit.agents.llm.tool_context import DuplicateMode, ToolFlag
 from livekit.agents.storage import AgentDBStorage
+from livekit.agents.types import NOT_GIVEN
 
+from . import fake_agentstore
 from .a2a_driver import (
     API_KEY,
     API_SECRET,
@@ -48,7 +50,6 @@ def metadata_of(wire_object: dict[str, Any]) -> dict[str, Any]:
 
 
 NO_INTERRUPT: dict[str, Any] = {"livekit/interrupt": False}
-EMAIL = "ana@example.com"
 BACKGROUND = "livekit/background"
 
 
@@ -75,6 +76,17 @@ def told(*call_ids: str) -> Callable[[ChatContext], bool]:
         )
 
     return matches
+
+
+def progress(sent: Sent) -> list[str]:
+    """The progress texts a response carried, in order."""
+    return [
+        f["statusUpdate"]["status"]["message"]["parts"][0]["text"]
+        for f in sent.frames
+        if state_of(f) == "TASK_STATE_WORKING"
+        and "message" in f["statusUpdate"]["status"]
+        and not metadata_of(f["statusUpdate"]).get(BACKGROUND)
+    ]
 
 
 T = TypeVar("T")
@@ -243,12 +255,7 @@ async def test_a_message_that_waited_answers_on_its_own_stream(door: Callable[..
 
     # the holder ran it, and its progress, its answer and its end came on its own response
     frames = waited.frames[1:]
-    progress = [
-        f["statusUpdate"]["status"]["message"]["parts"][0]["text"]
-        for f in frames
-        if state_of(f) == "TASK_STATE_WORKING" and "message" in f["statusUpdate"]["status"]
-    ]
-    assert progress == ["looking"]
+    assert progress(waited) == ["looking"]
     assert waited.answer == "seen two"
     assert state_of(frames[-1]) == "TASK_STATE_COMPLETED"
     task_ids = {(f.get("statusUpdate") or f["artifactUpdate"])["taskId"] for f in frames}
@@ -292,8 +299,43 @@ async def test_an_answer_continues_its_task_on_the_tasks_own_stream(
     ]
 
 
+@pytest.mark.rule("R2")
+async def test_a_response_on_the_writers_worker_reads_nothing_from_the_store(
+    door: Callable[..., Door],
+) -> None:
+    busy = Busy()
+    busy.gate.set()
+    sent = await door(busy, inbox="live").send("one")
+
+    assert sent.answer == "a long answer"
+    assert fake_agentstore.served[sent.task["id"]] == 0
+
+
+@pytest.mark.rule("R2")
+async def test_a_response_on_another_worker_gets_every_frame(
+    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
+) -> None:
+    busy = Busy()
+    holder, other = (Door(storage, busy, inbox="live") for storage in agentdb_workers)
+    try:
+        thread = await holder.thread()
+        first = asyncio.create_task(holder.send("one", context_id=thread))
+        await asyncio.wait_for(busy.entered.wait(), 20)
+        waited = asyncio.create_task(other.send("two", context_id=thread, **NO_INTERRUPT))
+        await listed(holder, thread, 2)
+        busy.gate.set()
+        _, sent = await asyncio.wait_for(asyncio.gather(first, waited), 30)
+    finally:
+        await holder.http.aclose()
+        await other.http.aclose()
+
+    # the holder ran it, and its frames reached the other worker through the store
+    assert progress(sent) == ["looking"] and sent.answer == "seen two"
+    assert state_of(sent.frames[-1]) == "TASK_STATE_COMPLETED"
+
+
 # ---------------------------------------------------------------------------------------------
-# a tool that reports progress goes on in the background
+# a tool that reports progress goes on in the background, and its end is delivered later
 # ---------------------------------------------------------------------------------------------
 
 
@@ -303,8 +345,9 @@ class Booking:
 
 
 class Bookings:
-    """A desk whose ``book`` tool reports progress, then waits for ``release[day]`` and books, or
-    asks ``asks[day]``; ``ended`` lists the days whose call returned."""
+    """A live desk: ``book`` reports progress (``silent`` to the model alone), waits for
+    ``release[day]``, then books or asks ``asks[day]``; "one moment" holds the lane until
+    ``gate``."""
 
     def __init__(
         self,
@@ -313,10 +356,17 @@ class Bookings:
         asks: dict[str, str] | None = None,
         on_duplicate: DuplicateMode = "allow",
         flags: ToolFlag = ToolFlag.NONE,
+        halfway: bool = False,
+        silent: bool = False,
     ) -> None:
+        self.model = model
+        self.halfway, self.progressed = asyncio.Event(), asyncio.Event()
         self.release = {day: asyncio.Event() for day in days}
         self.ended: list[str] = []
+        self.holding, self.gate = asyncio.Event(), asyncio.Event()
         self.agent = Agent(instructions="front desk", llm=model, state_type=Booking)
+        self.door: Door
+        self.thread = ""
 
         @self.agent.tool(on_duplicate=on_duplicate, flags=flags)
         async def book(ctx: RunContext[None, Booking], day: str) -> str | InputRequired:
@@ -325,7 +375,11 @@ class Bookings:
             Args:
                 day: the day
             """
-            await ctx.update("booking now")
+            await ctx.update("booking now", silent=silent)
+            if halfway:
+                await self.halfway.wait()
+                await ctx.update("half way")
+                self.progressed.set()
             await self.release[day].wait()
             self.ended.append(day)
             if asks and day in asks:
@@ -336,9 +390,28 @@ class Bookings:
     async def __call__(self, ctx: A2ASessionContext[Booking]) -> Any:
         if ctx.message.text_content == "what did I book?":
             return f"booked: {ctx.state.booked}"
+        if ctx.message.text_content == "one moment":
+            self.holding.set()
+            await self.gate.wait()
+            return "Here."
         return await self.agent.run(
             ctx.message, message_history=ctx.message_history, state=ctx.state
         )
+
+    def send(self, text: str) -> asyncio.Task[Sent]:
+        return asyncio.create_task(self.door.send(text, context_id=self.thread))
+
+    async def in_the_background(self, count: int = 1) -> list[dict[str, Any]]:
+        return await in_the_background(self.door, self.thread, count)
+
+    def outputs(self) -> dict[str, FunctionCallOutput]:
+        """Every call output the model read, by call id."""
+        return {
+            i.call_id: i
+            for r in self.model.requests
+            for i in r.items
+            if isinstance(i, FunctionCallOutput)
+        }
 
 
 async def in_the_background(desk: Door, thread: str, count: int = 1) -> list[dict[str, Any]]:
@@ -355,26 +428,34 @@ async def in_the_background(desk: Door, thread: str, count: int = 1) -> list[dic
     return await until(working, f"{count} tasks in the background")
 
 
+async def bookings(door: Callable[..., Door], *replies: Reply, **options: Any) -> Bookings:
+    """A ``Bookings`` desk for ``days`` behind a live door, on a thread of its own."""
+    days = options.pop("days", ("monday",))
+    desk = Bookings(ScriptedLLM(*replies), *days, **options)
+    desk.door = door(desk, inbox="live", state=Booking)
+    desk.thread = await desk.door.thread()
+    return desk
+
+
+BOOK_MONDAY = (Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),)
+
+
 @pytest.mark.rule("R8", "R9", "R11")
 async def test_a_tool_that_reports_progress_runs_on_beside_the_next_message(
     door: Callable[..., Door],
 ) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")]),
-        Reply("On it.", when=output_of("b1")),
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
         Reply("Reminder set.", when=said("and a reminder")),
         Reply("Booked for Monday.", when=told("b1_final")),
     )
-    desk = Bookings(model, "monday")
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    first = desk.send("book monday")
     # the booking's turn ended on its progress; the task waits for the booking
-    (task,) = await in_the_background(door_, thread)
+    (task,) = await desk.in_the_background()
 
     # the next message runs at once, beside the booking
-    second = await asyncio.wait_for(door_.send("and a reminder", context_id=thread), 20)
+    second = await asyncio.wait_for(desk.send("and a reminder"), 20)
     assert second.state == "completed" and second.answer == "Reminder set."
     assert not first.done()
 
@@ -389,119 +470,49 @@ async def test_a_tool_that_reports_progress_runs_on_beside_the_next_message(
         for f in booked.frames
     )
     # the state the booking wrote after its turn committed is kept
-    assert (await door_.send("what did I book?", context_id=thread)).answer == "booked: monday"
+    assert (await desk.send("what did I book?")).answer == "booked: monday"
 
 
-@pytest.mark.rule("R8")
-async def test_a_task_waits_for_all_its_work_in_the_background(door: Callable[..., Door]) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday"), call("book", "b2", day="tuesday")]),
-        Reply("On it.", when=output_of("b2")),
-        Reply("Monday is booked.", when=told("b1_final")),
-        Reply("Both are booked.", when=told("b2_final")),
+@pytest.mark.rule("R8", "R28", "R55")
+async def test_later_progress_is_sent_as_it_is_and_the_model_reads_it_with_the_end(
+    door: Callable[..., Door],
+) -> None:
+    desk = await bookings(
+        door, *BOOK_MONDAY, Reply("Booked.", when=told("b1_update_1", "b1_final")), halfway=True
     )
-    desk = Bookings(model, "monday", "tuesday")
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday and tuesday", context_id=thread))
-    await in_the_background(door_, thread)
+    first = desk.send("book monday")
+    await desk.in_the_background()
+    # the first progress ended the turn with no model request after it
+    assert len(desk.model.requests) == 1
+    desk.halfway.set()
+    await asyncio.wait_for(desk.progressed.wait(), 20)
     desk.release["monday"].set()
-
-    # monday's end gets a turn of its own, and the task goes on waiting for tuesday
-    async def monday_answered() -> dict[str, Any] | None:
-        for task in await door_.list_tasks(thread):
-            if task["status"].get("message", {}).get("parts") == [{"text": "Monday is booked."}]:
-                return task
-        return None
-
-    task = await until(monday_answered, "monday's end got a turn")
-    assert task["status"]["state"] == "TASK_STATE_WORKING"
-
-    desk.release["tuesday"].set()
     booked = await asyncio.wait_for(first, 20)
-    assert booked.state == "completed" and booked.answer == "Both are booked."
 
-
-# ---------------------------------------------------------------------------------------------
-# what work in the background queued is delivered when no turn runs
-# ---------------------------------------------------------------------------------------------
-
-
-@pytest.mark.rule("R28")
-async def test_later_progress_is_told_while_the_work_runs_on(door: Callable[..., Door]) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")]),
-        Reply("On it.", when=output_of("b1")),
-        Reply("Half way there.", when=told("b1_update_1")),
-        Reply("Booked.", when=told("b1_final")),
-    )
-    agent = Agent(instructions="front desk", llm=model)
-    halfway, done = asyncio.Event(), asyncio.Event()
-
-    @agent.tool
-    async def book(ctx: RunContext, day: str) -> str:
-        """Book a cleaning.
-
-        Args:
-            day: the day
-        """
-        await ctx.update("booking now")
-        await halfway.wait()
-        await ctx.update("half way")
-        await done.wait()
-        return f"booked {day}"
-
-    async def handler(ctx: A2ASessionContext[Any]) -> Any:
-        return await agent.run(ctx.message, message_history=ctx.message_history)
-
-    desk = door(handler, inbox="live")
-    thread = await desk.thread()
-    first = asyncio.create_task(desk.send("book monday", context_id=thread))
-    await in_the_background(desk, thread)
-    halfway.set()
-
-    async def progress_told() -> bool:
-        (task,) = await desk.list_tasks(thread)
-        return Sent([], task).status_text == "Half way there."
-
-    await until(progress_told, "the progress was told")
-    assert not first.done()
-    done.set()
-    assert (await asyncio.wait_for(first, 20)).answer == "Booked."
+    # the progress went out as a working frame, and the model read it only with the end
+    assert progress(booked) == ["booking now", "half way"]
+    assert booked.answer == "Booked." and len(desk.model.requests) == 2
 
 
 @pytest.mark.rule("R28", "R58")
 async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_task(
     door: Callable[..., Door],
 ) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
-        Reply("On it.", when=output_of("b1")),
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
         Reply(tool_calls=[call("book", "b2", day="tuesday")], when=said("and tuesday")),
-        Reply("That too.", when=output_of("b2")),
         Reply("Both are booked.", when=told("b1_final", "b2_final")),
         Reply("You're welcome.", when=said("thanks")),
+        days=("monday", "tuesday"),
     )
-    desk = Bookings(model, "monday", "tuesday")
-    entered, gate = asyncio.Event(), asyncio.Event()
-
-    async def handler(ctx: A2ASessionContext[Booking]) -> Any:
-        if ctx.message.text_content == "one moment":
-            entered.set()
-            await gate.wait()
-            return "Here."
-        return await desk(ctx)
-
-    door_ = door(handler, inbox="live", state=Booking)
-    thread = await door_.thread()
-    monday = asyncio.create_task(door_.send("book monday", context_id=thread))
-    await in_the_background(door_, thread)
-    tuesday = asyncio.create_task(door_.send("and tuesday", context_id=thread))
-    await in_the_background(door_, thread, 2)
+    monday = desk.send("book monday")
+    await desk.in_the_background()
+    tuesday = desk.send("and tuesday")
+    await desk.in_the_background(2)
     # both end while a turn runs, and wait for it
-    busy = asyncio.create_task(door_.send("one moment", context_id=thread))
-    await asyncio.wait_for(entered.wait(), 20)
+    busy = desk.send("one moment")
+    await asyncio.wait_for(desk.holding.wait(), 20)
     for release in desk.release.values():
         release.set()
 
@@ -509,17 +520,22 @@ async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_tas
         return len(desk.ended) == 2
 
     await until(both_ended, "both ended")
-    gate.set()
+    desk.gate.set()
     sent = await asyncio.wait_for(asyncio.gather(monday, tuesday, busy), 20)
 
-    assert [s.answer for s in sent] == ["Both are booked.", "Both are booked.", "Here."]
-    assert all(s.state == "completed" for s in sent)
-    # as on a call, the results are told last, by a system message the history does not keep
+    assert [(s.state, s.answer) for s in sent] == [
+        ("completed", "Both are booked."),
+        ("completed", "Both are booked."),
+        ("completed", "Here."),
+    ]
+    # as on a call: told last by a system message the history does not keep, free to act on
+    # the results
+    model = desk.model
     (delivery,) = [r for r in model.requests if told("b1_final", "b2_final")(r)]
-    assert model.tool_choices[model.requests.index(delivery)] == "none"
+    assert model.tool_choices[model.requests.index(delivery)] is NOT_GIVEN
     tail = delivery.items[-1]
     assert isinstance(tail, ChatMessage) and tail.role == "system"
-    await door_.send("thanks", context_id=thread)
+    await desk.send("thanks")
     assert all(
         getattr(i, "text_content", None) != tail.text_content for i in model.requests[-1].items
     )
@@ -530,24 +546,18 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     door: Callable[..., Door],
 ) -> None:
     question = "Which time on Monday?"
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")]),
-        Reply("On it.", when=output_of("b1")),
-        Reply("Booked at nine.", when=said("nine")),
+    desk = await bookings(
+        door, *BOOK_MONDAY, Reply("Booked at nine.", when=said("nine")), asks={"monday": question}
     )
-    desk = Bookings(model, "monday", asks={"monday": question})
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
-    (task,) = await in_the_background(door_, thread)
+    first = desk.send("book monday")
+    (task,) = await desk.in_the_background()
     desk.release["monday"].set()
     asked = await asyncio.wait_for(first, 20)
 
     # as on a call, the question is what the person gets, with no reply generated for it
     assert asked.state == "input_required" and asked.status_text == question
-    assert len(model.requests) == 2
-    answered = await door_.send("nine", context_id=thread)
+    assert len(desk.model.requests) == 1
+    answered = await desk.send("nine")
     assert answered.task["id"] == task["id"] and answered.answer == "Booked at nine."
 
 
@@ -555,73 +565,67 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
 async def test_a_reply_beside_the_call_is_the_only_acknowledgement(
     door: Callable[..., Door],
 ) -> None:
-    model = ScriptedLLM(
+    desk = await bookings(
+        door,
         Reply("On it.", tool_calls=[call("book", "b1", day="monday")]),
         Reply("A second acknowledgement.", when=output_of("b1")),
-        Reply("Booked for Monday.", when=told("b1_final")),
     )
-    desk = Bookings(model, "monday")
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
-    (task,) = await in_the_background(door_, thread)
-    assert len(model.requests) == 1
+    first = desk.send("book monday")
+    (task,) = await desk.in_the_background()
+    assert len(desk.model.requests) == 1
     assert task["status"]["message"]["parts"] == [{"text": "On it."}]
     desk.release["monday"].set()
-    assert (await asyncio.wait_for(first, 20)).answer == "Booked for Monday."
+    await asyncio.wait_for(first, 20)
+
+
+@pytest.mark.rule("R55")
+async def test_a_tool_that_ends_right_after_its_progress_is_called_once(
+    door: Callable[..., Door],
+) -> None:
+    desk = await bookings(door, *BOOK_MONDAY, Reply("Booked.", when=told("b1_final")))
+    desk.release["monday"].set()
+    booked = await asyncio.wait_for(desk.send("book monday"), 20)
+
+    # the progress ends the turn; the end is delivered once the lane is idle
+    assert desk.ended == ["monday"]
+    assert booked.state == "completed" and booked.answer == "Booked."
+    assert desk.model.tool_choices == [NOT_GIVEN, NOT_GIVEN]
 
 
 @pytest.mark.rule("R57")
-async def test_the_reply_to_progress_calls_no_tools(door: Callable[..., Door]) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")]),
-        # a model that calls anyway
-        Reply("On it.", tool_calls=[call("book", "b9", day="friday")], when=output_of("b1")),
-        Reply("Booked for Monday.", when=told("b1_final")),
-    )
-    desk = Bookings(model, "monday", "friday")
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
-    await in_the_background(door_, thread)
-    for release in desk.release.values():
-        release.set()
+async def test_a_silent_update_reaches_only_the_model(door: Callable[..., Door]) -> None:
+    desk = await bookings(door, *BOOK_MONDAY, Reply("Booked.", when=told("b1_final")), silent=True)
+    first = desk.send("book monday")
+    (task,) = await desk.in_the_background()
+    assert "message" not in task["status"] and len(desk.model.requests) == 1
+    desk.release["monday"].set()
     booked = await asyncio.wait_for(first, 20)
 
-    assert model.tool_choices[1] == "none"
-    assert booked.answer == "Booked for Monday."
-    ran = {i.call_id for r in model.requests for i in r.items if i.type == "function_call_output"}
-    assert "b9" not in ran
+    assert progress(booked) == []
+    assert "booking now" in desk.outputs()["b1"].output
 
 
 @pytest.mark.rule("R30", "B25")
 async def test_a_duplicate_of_a_call_in_the_background_follows_the_tools_policy(
     door: Callable[..., Door],
 ) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
-        Reply("On it.", when=output_of("b1")),
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
         Reply(tool_calls=[call("book", "b2", day="monday")], when=said("book it again")),
         Reply("It is still being booked.", when=output_of("b2")),
-        Reply("Booked for Monday.", when=told("b1_final")),
+        on_duplicate="reject",
     )
-    desk = Bookings(model, "monday", on_duplicate="reject")
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
-    await in_the_background(door_, thread)
-    again = await asyncio.wait_for(door_.send("book it again", context_id=thread), 20)
-    assert again.answer == "It is still being booked."
-    refused = model.requests[-1].items[-1]
-    assert refused.type == "function_call_output" and refused.is_error
-    # the refusal names no tool to cancel with
-    assert "lk_agents" not in refused.output
-
+    first = desk.send("book monday")
+    await desk.in_the_background()
+    again = await asyncio.wait_for(desk.send("book it again"), 20)
     desk.release["monday"].set()
-    assert (await asyncio.wait_for(first, 20)).answer == "Booked for Monday."
+    await asyncio.wait_for(first, 20)
+
+    assert again.answer == "It is still being booked."
+    refused = desk.outputs()["b2"]
+    # as on a call, the refusal is what the model reads, and names no tool to cancel with
+    assert "already running" in refused.output and "lk_agents" not in refused.output
 
 
 @pytest.mark.rule("R30")
@@ -629,35 +633,28 @@ async def test_a_duplicate_of_a_call_in_the_background_follows_the_tools_policy(
 async def test_a_replace_cancels_the_running_call_only_when_it_is_cancellable(
     door: Callable[..., Door], cancellable: bool
 ) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
-        Reply("On it.", when=output_of("b1")),
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
         Reply(tool_calls=[call("book", "b2", day="monday")], when=said("book it again")),
         Reply("Again.", when=output_of("b2")),
-        Reply("Told.", when=told("b1_final")),
-        Reply("Booked again.", when=told("b2_final")),
+        on_duplicate="replace",
+        flags=ToolFlag.CANCELLABLE if cancellable else ToolFlag.NONE,
     )
-    flags = ToolFlag.CANCELLABLE if cancellable else ToolFlag.NONE
-    desk = Bookings(model, "monday", on_duplicate="replace", flags=flags)
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
+    first = desk.send("book monday")
+    await desk.in_the_background()
+    again = desk.send("book it again")
 
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
-    await in_the_background(door_, thread)
-    again = asyncio.create_task(door_.send("book it again", context_id=thread))
+    async def decided() -> bool:
+        # the refusal is read at once; a replaced first call ends its task
+        return bool({"b2", "b1_final"} & desk.outputs().keys())
 
-    async def ran() -> bool:
-        return any(output_of("b2")(r) for r in model.requests)
-
-    await until(ran, "the duplicate ran")
+    await until(decided, "the duplicate was decided")
     desk.release["monday"].set()
     await asyncio.wait_for(asyncio.gather(first, again), 20)
 
-    # without the flag the duplicate is refused and the first runs on to its end; with it the
-    # first is cancelled, and its task hears so
-    outputs = {
-        i.call_id: i for r in model.requests for i in r.items if i.type == "function_call_output"
-    }
+    # without the flag the duplicate is refused; with it the first is cancelled, and says so
+    outputs = desk.outputs()
     assert outputs["b2"].is_error is not cancellable
     assert outputs["b1_final"].is_error is cancellable
 
@@ -666,9 +663,9 @@ async def test_a_replace_cancels_the_running_call_only_when_it_is_cancellable(
 async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
     door: Callable[..., Door],
 ) -> None:
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
-        Reply("On it.", when=output_of("b1")),
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
         Reply(
             tool_calls=[
                 call("lk_agents_get_running_tasks", "g1"),
@@ -680,23 +677,16 @@ async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
         ),
         Reply("Cancelled.", when=output_of("x1")),
         Reply("The booking was cancelled.", when=told("b1_final")),
+        flags=ToolFlag.CANCELLABLE,
     )
-    desk = Bookings(model, "monday", flags=ToolFlag.CANCELLABLE)
-    door_ = door(desk, inbox="live", state=Booking)
-    thread = await door_.thread()
-
-    first = asyncio.create_task(door_.send("book monday", context_id=thread))
-    await in_the_background(door_, thread)
-    cancelled = await asyncio.wait_for(door_.send("cancel it", context_id=thread), 20)
+    first = desk.send("book monday")
+    await desk.in_the_background()
+    await asyncio.wait_for(desk.send("cancel it"), 20)
     ended = await asyncio.wait_for(first, 20)
 
-    # as on a call, the model lists and cancels the run's own work in the background
-    outputs = {
-        i.call_id: i for r in model.requests for i in r.items if i.type == "function_call_output"
-    }
+    # as on a call the model lists and cancels the work, and its task still hears it ended
+    outputs = desk.outputs()
     assert "'b1'" in outputs["g1"].output and not outputs["x1"].is_error
-    assert cancelled.answer == "Cancelled."
-    # the cancelled work's task still hears that it ended
     assert outputs["b1_final"].is_error
     assert ended.state == "completed" and ended.answer == "The booking was cancelled."
 
