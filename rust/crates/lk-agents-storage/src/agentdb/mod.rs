@@ -16,11 +16,11 @@ use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_ur
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
-use lk_agents_storage::StorageError;
-use lk_agents_storage::sql::{BatchResult, Row, Statement};
+use crate::StorageError;
+use crate::sql::{BatchResult, Row, Statement};
 
-use super::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
-use super::{SqliteConnection, Storage};
+use crate::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
+use crate::{SqliteConnection, Storage};
 pub use conn::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
 pub use streams::{StreamReader, Streams};
 
@@ -240,7 +240,7 @@ impl Storage for AgentDbStorage {
         self.open_database(thread_id, &record.database_id, holder).await
     }
 
-    fn response_streams(&self) -> Arc<dyn super::ResponseStreams> {
+    fn response_streams(&self) -> Arc<dyn crate::ResponseStreams> {
         Arc::new(self.streams.clone())
     }
 

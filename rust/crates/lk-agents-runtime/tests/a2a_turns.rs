@@ -23,8 +23,7 @@ use lk_agents_storage::run::{
 };
 use lk_agents_storage::schema::{Ask, TaskData};
 use lk_agents_storage::timestamp;
-mod storage_common;
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 
 use lk_agents_storage::StorageError;
 use serde_json::{Value, json};
@@ -1005,7 +1004,7 @@ async fn a_rejected_message_leaves_no_submitted_row(backend: Backend) {
     fx.cleanup(&[&a, &b]).await;
 }
 
-contract!(
+lk_agents_storage::contract!(
     two_workers_share_one_session,
     a_failed_storage_run_preserves_its_original_task,
     interrupt_yields_and_the_newer_task_answers_both,
@@ -1028,7 +1027,7 @@ contract!(
 async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
     let fx = Backend::Sqlite.fixture(None).await;
     let (s, faults) = fx.faulty_thread("worker-a").await;
-    faults.fail_next_commit(storage_common::CommitFault::Refuse);
+    faults.fail_next_commit(lk_agents_storage::testing::CommitFault::Refuse);
     let host = Fake::new(Behavior::Echo);
     let r = turn(&s, host, Some(Policy::Queue))
         .run(a2a("hello", "m1", None, None), Some("AST_1".into()))
@@ -1051,7 +1050,7 @@ async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
 async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run() {
     let fx = Backend::Sqlite.fixture(None).await;
     let (s, faults) = fx.faulty_thread("worker-a").await;
-    faults.fail_next_commit(storage_common::CommitFault::LoseAckAfter);
+    faults.fail_next_commit(lk_agents_storage::testing::CommitFault::LoseAckAfter);
     faults.unreachable_after_commit_for(Duration::from_secs(12));
     let host = Fake::new(Behavior::Echo);
     let r = turn(&s, host, Some(Policy::Queue))

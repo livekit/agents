@@ -1,12 +1,11 @@
 //! Persisted context scopes through the real shared storage runtime on both backends.
 
-mod storage_common;
 
 use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
 use lk_agents_runtime::storage::context::ContextActivation;
 use lk_agents_storage::StorageError;
 use serde_json::{Value, json};
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 
 fn field(name: &str, value: Value) -> ContextField {
     ContextField { name: name.into(), schema: json!({"type": "string"}), value }
@@ -80,7 +79,7 @@ async fn several_context_declarations_share_one_direct_scope(backend: Backend) {
     fixture.cleanup(&[]).await;
 }
 
-contract!(
+lk_agents_storage::contract!(
     direct_context_saves_survive_reload_and_refuse_stale_activations,
     several_context_declarations_share_one_direct_scope,
 );

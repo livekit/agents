@@ -2,20 +2,19 @@
 
 #![cfg(unix)]
 
-mod storage_common;
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_runtime::storage::engine::LeaseTiming;
-use lk_agents_runtime::storage::sqlite::SqliteStorage;
-use lk_agents_runtime::storage::{CommitOptions, RunOptions, Storage, shortuuid};
+use lk_agents_storage::engine::LeaseTiming;
+use lk_agents_storage::sqlite::SqliteStorage;
+use lk_agents_storage::{CommitOptions, RunOptions, Storage, shortuuid};
 use lk_agents_storage::{StorageError, run::RunOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use storage_common::{Backend, Fixture};
+use lk_agents_storage::testing::{Backend, Fixture};
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -194,4 +193,4 @@ async fn stopped_owner_is_fenced_after_process_takeover_and_restart(backend: Bac
     result.unwrap();
 }
 
-contract!(stopped_owner_is_fenced_after_process_takeover_and_restart);
+lk_agents_storage::contract!(stopped_owner_is_fenced_after_process_takeover_and_restart);

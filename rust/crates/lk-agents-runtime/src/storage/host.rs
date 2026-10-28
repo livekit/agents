@@ -21,7 +21,7 @@ use tokio::sync::OnceCell;
 use super::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, thread_error};
 use super::engine::LeaseTiming;
 use super::sqlite::SqliteStorage;
-use super::streams::QueuedStreams;
+use lk_agents_storage::QueuedStreams;
 use super::{Storage, Thread};
 
 /// What the lazily opened backend is built from.

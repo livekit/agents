@@ -9,24 +9,24 @@ use std::time::Duration;
 
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
-use lk_agents_storage::db::{
+use crate::db::{
     self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced,
     ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery, TaskWrite,
 };
-use lk_agents_storage::lease::{LanePoll, lease_secs};
-use lk_agents_storage::run::{
+use crate::lease::{LanePoll, lease_secs};
+use crate::run::{
     self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunUsage,
     RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
-use lk_agents_storage::schema::{
+use crate::schema::{
     EventRow, InboxRow, ItemRow, LaneRow, RunEnded, RunStarted, THREAD_SCHEMA_VERSION, TaskRow,
 };
-use lk_agents_storage::sql::Statement;
-use lk_agents_storage::{Fence, StorageError};
+use crate::sql::Statement;
+use crate::{Fence, StorageError};
 use serde_json::{Map, Value};
 
-use super::lease::Lease;
-use super::{SqliteConnection, now_ms, shortuuid};
+use crate::lease::Lease;
+use crate::{SqliteConnection, now_ms, shortuuid};
 
 /// How long a lease lasts and how often its holder renews it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,8 +56,8 @@ impl LeaseTiming {
 impl Default for LeaseTiming {
     fn default() -> Self {
         Self {
-            ttl: lk_agents_storage::lease::DEFAULT_LEASE_TTL,
-            renew_interval: lk_agents_storage::lease::DEFAULT_RENEW_INTERVAL,
+            ttl: crate::lease::DEFAULT_LEASE_TTL,
+            renew_interval: crate::lease::DEFAULT_RENEW_INTERVAL,
         }
     }
 }
@@ -437,11 +437,11 @@ impl Thread {
             .db
             .conn
             .batch(vec![
-                Statement::raw(lk_agents_storage::context::db::SCHEMA),
-                lk_agents_storage::context::db::select(lane),
+                Statement::raw(crate::context::db::SCHEMA),
+                crate::context::db::select(lane),
             ])
             .await?;
-        lk_agents_storage::context::db::from_rows(result.at(1)?.rows())
+        crate::context::db::from_rows(result.at(1)?.rows())
     }
 
     pub fn lane(&self, agent: &str) -> Lane {
@@ -560,7 +560,7 @@ impl Lane {
     }
 
     /// Transfer a batch drain's existing lease into its next run deliberately.
-    pub(crate) async fn resume(&self, opts: RunOptions, lease: Lease) -> Result<Run, StorageError> {
+    pub async fn resume(&self, opts: RunOptions, lease: Lease) -> Result<Run, StorageError> {
         let result = self.open_with_holder(opts, lease.holder()).await;
         lease.stop();
         result
@@ -867,7 +867,7 @@ impl Run {
         let fence = self.lease.as_ref().map(Lease::fence);
         let epoch = tokio::time::Instant::now();
         let mut poll = LanePoll::new(epoch.elapsed(), wait);
-        let mut last = String::from("no answer");
+        let mut last: String;
         loop {
             let lookup = db::resolve_commit(
                 self.db.name(),

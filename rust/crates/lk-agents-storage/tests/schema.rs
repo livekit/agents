@@ -1,18 +1,17 @@
 //! Schema initialization reconciles authoritative metadata, independent of server diagnostic text.
 
-mod storage_common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
-use lk_agents_runtime::storage::engine::{LeaseTiming, SchemaCell};
-use lk_agents_runtime::storage::sqlite::FileConnection;
-use lk_agents_runtime::storage::{CommitOptions, RunOptions, SqliteConnection, Thread, ThreadDb};
+use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
+use lk_agents_storage::sqlite::FileConnection;
+use lk_agents_storage::{CommitOptions, RunOptions, SqliteConnection, Thread, ThreadDb};
 use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement};
 use lk_agents_storage::{StorageError, db, run::RunOutcome};
 use serde_json::json;
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 
 struct Diagnostics {
     primary: Arc<FileConnection>,

@@ -5,9 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The thread storage core: the thread tables as `#[derive(Host)]` records, every statement a
-# thread database sees as a plan, task transitions, fencing and lease decisions. Synchronous and
-# host-neutral; `lk-agents-runtime::storage` executes it against AgentDB and local SQLite.
+# All database interaction (decision 82): the AgentDB and local SQLite backends, the thread
+# tables as `#[derive(Host)]` records, statements, fencing, leases and response streams. An
+# ordinary async crate; every failure is a typed `StorageError`.
 
 [lib]
 # The `///` docs on the records are the generated pydantic models' docstrings; no Rust doctests.
@@ -17,20 +17,34 @@ doctest = false
 # `Host` for the row records, so their pydantic twins come from `lk-agents-codegen`, and their
 # `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
-# `StorageError`, declared with the host vocabulary where every exported type lives.
+# `StorageError` and the host-visible rows, declared with the host vocabulary.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
-# The chat items and the thread schema: `livekit.agent` records only.
+# Owned renewal tasks and the SSE decoder of AgentDB's response streams.
+lk-agents-net = { path = "../lk-agents-net" }
+# The chat items and the thread schema: `livekit.agent` records; threads through the Cloud API.
 livekit-protocol.workspace = true
+livekit-api.workspace = true
 pbjson-types.workspace = true
+prost.workspace = true
 a2a.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
-# The `sqlite` feature: statements executed on a caller-owned connection (the local backend's
-# files, the simulation's in-memory database).
-rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
-
-[features]
-sqlite = ["dep:rusqlite"]
+thiserror.workspace = true
+log.workspace = true
+async-trait.workspace = true
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+# AgentDB's data plane (WebSocket) and its streams API (HTTP); one crypto provider (`ring`).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+bytes = "1"
+url = "2"
+base64.workspace = true
+rand = "0.9"
+# Local storage: thread files, the registry and the response streams.
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 
 # `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
 # a feature this crate does not have (it is host-neutral): name the value so check-cfg does not
@@ -38,5 +52,11 @@ sqlite = ["dep:rusqlite"]
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))'] }
 
+[features]
+# `testing`: the contract fixtures over both backends and a fault-injecting connection.
+testing = []
+
 [dev-dependencies]
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+lk-agents-storage = { path = ".", features = ["testing"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
+httparse = "1"

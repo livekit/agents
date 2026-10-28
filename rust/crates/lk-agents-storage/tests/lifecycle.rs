@@ -2,16 +2,15 @@
 //! (`storage_common`): create, read, list, update and delete, expiry, and what a turn commit
 //! does not change.
 
-mod storage_common;
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use livekit_protocol::agent::agent_thread::{CreateRequest, ListRequest, UpdateRequest};
-use lk_agents_runtime::storage::engine::LeaseTiming;
-use lk_agents_runtime::storage::{CommitOptions, RunOptions};
+use lk_agents_storage::engine::LeaseTiming;
+use lk_agents_storage::{CommitOptions, RunOptions};
 use lk_agents_storage::StorageError;
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 
 fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     Some(pbjson_types::Duration { seconds, nanos: 0 })
@@ -28,7 +27,7 @@ fn not_found<T: std::fmt::Debug>(r: Result<T, StorageError>) -> bool {
 async fn a_thread_is_created_read_listed_and_updated(backend: Backend) {
     let store = backend.store(LeaseTiming::default()).await;
     let s = &store.storage;
-    let scope = lk_agents_runtime::storage::shortuuid("user-");
+    let scope = lk_agents_storage::shortuuid("user-");
     let create = |a: &[(&str, &str)]| CreateRequest {
         scope: scope.clone(),
         attributes: attributes(a),
@@ -89,7 +88,7 @@ async fn a_deleted_thread_is_gone_and_deleting_again_is_safe(backend: Backend) {
 async fn an_expired_thread_reads_as_not_found(backend: Backend) {
     let store = backend.store(LeaseTiming::default()).await;
     let s = &store.storage;
-    let scope = lk_agents_runtime::storage::shortuuid("user-");
+    let scope = lk_agents_storage::shortuuid("user-");
     let req = CreateRequest { scope: scope.clone(), idle_ttl: ttl(1), ..Default::default() };
     let t = s.create_thread(req).await.unwrap();
     tokio::time::sleep(Duration::from_millis(2100)).await;
@@ -116,7 +115,7 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     store.close().await;
 }
 
-contract!(
+lk_agents_storage::contract!(
     a_thread_is_created_read_listed_and_updated,
     a_deleted_thread_is_gone_and_deleting_again_is_safe,
     an_expired_thread_reads_as_not_found,

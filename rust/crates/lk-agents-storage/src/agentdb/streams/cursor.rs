@@ -2,7 +2,7 @@
 //! prefixes, but their size can change, so resuming replays and counts records across pages.
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use lk_agents_storage::StorageError;
+use crate::StorageError;
 
 pub(super) const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_RECORDS: usize = 1_000_000;

@@ -1,9 +1,9 @@
 //! In-memory threads use the ordinary SQLite thread engine without file persistence.
 
 use livekit_protocol::agent::agent_thread::CreateRequest;
-use lk_agents_runtime::storage::engine::LeaseTiming;
-use lk_agents_runtime::storage::sqlite::SqliteStorage;
-use lk_agents_runtime::storage::{CommitOptions, RunOptions, Storage};
+use lk_agents_storage::engine::LeaseTiming;
+use lk_agents_storage::sqlite::SqliteStorage;
+use lk_agents_storage::{CommitOptions, RunOptions, Storage};
 use lk_agents_storage::StorageError;
 use serde_json::json;
 
@@ -49,7 +49,7 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn memory_handles_commit_concurrently_while_their_leases_renew() {
-    use lk_agents_runtime::storage::Thread;
+    use lk_agents_storage::Thread;
     use std::time::Duration;
 
     async fn write(thread: &Thread, lane: &str) {

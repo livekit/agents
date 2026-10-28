@@ -28,8 +28,8 @@ use wire as pb;
 mod results;
 use results::Results;
 
-use lk_agents_storage::StorageError;
-use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
+use crate::StorageError;
+use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {

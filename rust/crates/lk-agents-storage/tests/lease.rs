@@ -1,10 +1,9 @@
 //! A cloned thread handle cannot replace an active run's lease.
 
-use lk_agents_runtime::storage::{CommitOptions, RunOptions};
+use lk_agents_storage::{CommitOptions, RunOptions};
 use lk_agents_storage::{StorageError, run::RunOutcome};
 
-mod storage_common;
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 
 async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     let fixture = backend.fixture(None).await;
@@ -30,4 +29,4 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     assert!(original.is_ok(), "the original run lost its lease: {original:?}");
 }
 
-contract!(cloned_handles_do_not_replace_an_active_runs_lease);
+lk_agents_storage::contract!(cloned_handles_do_not_replace_an_active_runs_lease);

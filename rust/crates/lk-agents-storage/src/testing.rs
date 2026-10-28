@@ -1,20 +1,22 @@
-//! The backends every storage and A2A contract case runs against. Each case is written once,
-//! `async fn case(backend: Backend)`, and `contract!` registers it per backend: local SQLite in a
-//! fresh directory always runs; AgentDB needs a LiveKit project (`LIVEKIT_URL`,
-//! `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) and is `#[ignore]`d, so a plain run reports it
-//! skipped. The credentialed job runs `--ignored`, where missing credentials fail.
-
-#![allow(dead_code)]
+//! Test tooling (feature `testing`): the backends every storage and A2A contract case runs
+//! against, and a connection with injected faults. Each case is written once,
+//! `async fn case(backend: Backend)`, and [`contract!`](crate::contract) registers it per
+//! backend: local SQLite in a fresh directory always runs; AgentDB needs a LiveKit project
+//! (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) and is `#[ignore]`d, so a plain run
+//! reports it skipped. The credentialed job runs `--ignored`, where missing credentials fail.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use livekit_protocol::agent::agent_thread::CreateRequest;
-use lk_agents_runtime::storage::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter};
-use lk_agents_runtime::storage::engine::LeaseTiming;
-use lk_agents_runtime::storage::sqlite::SqliteStorage;
-use lk_agents_runtime::storage::{Storage, Thread, shortuuid};
+
+use crate::StorageError;
+use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter};
+use crate::engine::{LeaseTiming, SchemaCell};
+use crate::sql::{BatchResult, Row, Statement};
+use crate::sqlite::{FileConnection, SqliteStorage};
+use crate::{SqliteConnection, Storage, Thread, ThreadDb, shortuuid};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Backend {
@@ -102,18 +104,18 @@ macro_rules! contract {
     ($($case:ident),* $(,)?) => {
         mod sqlite {
             $(
-                #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+                #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
                 async fn $case() {
-                    super::$case($crate::storage_common::Backend::Sqlite).await
+                    super::$case($crate::testing::Backend::Sqlite).await
                 }
             )*
         }
         mod agentdb {
             $(
-                #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+                #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
                 #[ignore = "needs a LiveKit project: run with --ignored and its credentials"]
                 async fn $case() {
-                    super::$case($crate::storage_common::Backend::AgentDb).await
+                    super::$case($crate::testing::Backend::AgentDb).await
                 }
             )*
         }
@@ -132,7 +134,7 @@ pub enum CommitFault {
 /// A thread database connection with faults a real connection shows: a commit's answer lost
 /// (`Uncertain`, applied or not), a refused commit, and an unreachable database for a while.
 pub struct Faulty {
-    inner: Box<dyn lk_agents_runtime::storage::SqliteConnection>,
+    inner: Box<dyn SqliteConnection>,
     commit: std::sync::Mutex<Option<CommitFault>>,
     unreachable_for: std::sync::Mutex<Option<Duration>>,
     unreachable_until: std::sync::Mutex<Option<tokio::time::Instant>>,
@@ -148,10 +150,10 @@ impl Faulty {
         *self.unreachable_for.lock().unwrap() = Some(d);
     }
 
-    fn reachable(&self) -> Result<(), lk_agents_storage::StorageError> {
+    fn reachable(&self) -> Result<(), StorageError> {
         match *self.unreachable_until.lock().unwrap() {
             Some(until) if tokio::time::Instant::now() < until => {
-                Err(lk_agents_storage::StorageError::Unavailable("unreachable".into()))
+                Err(StorageError::Unavailable("unreachable".into()))
             }
             _ => Ok(()),
         }
@@ -159,20 +161,19 @@ impl Faulty {
 }
 
 #[async_trait::async_trait]
-impl lk_agents_runtime::storage::SqliteConnection for Faulty {
+impl SqliteConnection for Faulty {
     async fn query(
         &self,
-        statement: lk_agents_storage::sql::Statement,
-    ) -> Result<Vec<lk_agents_storage::sql::Row>, lk_agents_storage::StorageError> {
+        statement: Statement,
+    ) -> Result<Vec<Row>, StorageError> {
         self.reachable()?;
         self.inner.query(statement).await
     }
 
     async fn batch(
         &self,
-        statements: Vec<lk_agents_storage::sql::Statement>,
-    ) -> Result<lk_agents_storage::sql::BatchResult, lk_agents_storage::StorageError> {
-        use lk_agents_storage::StorageError;
+        statements: Vec<Statement>,
+    ) -> Result<BatchResult, StorageError> {
         self.reachable()?;
         let is_commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
         let fault = if is_commit { self.commit.lock().unwrap().take() } else { None };
@@ -203,9 +204,6 @@ impl lk_agents_runtime::storage::SqliteConnection for Faulty {
 impl Fixture {
     /// A handle over a SQLite thread whose connection takes injected faults.
     pub async fn faulty_thread(&self, holder: &str) -> (Thread, Arc<Faulty>) {
-        use lk_agents_runtime::storage::ThreadDb;
-        use lk_agents_runtime::storage::engine::SchemaCell;
-        use lk_agents_runtime::storage::sqlite::FileConnection;
         let dir = self.dir.as_ref().expect("faults are injected on the SQLite backend");
         let file = dir.join("threads").join(format!("{}.sqlite", self.thread_id));
         let faulty = Arc::new(Faulty {

@@ -1,6 +1,5 @@
 //! The native JSON-RPC door against the shared backend contract.
 
-mod storage_common;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +15,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, StreamSink, StreamSource, Ts};
 use lk_agents_runtime::a2a::door::Door;
 use serde_json::{Value, json};
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 use tokio_util::task::TaskTracker;
 
 struct Host;
@@ -413,7 +412,7 @@ async fn a_slow_observer_can_resume_every_undelivered_event(backend: Backend) {
     store.close().await;
 }
 
-contract!(
+lk_agents_storage::contract!(
     create_requires_write_before_allocating_a_thread,
     subscriptions_use_task_records_and_resume_each_durable_event,
     streaming_acceptance_precedes_the_lane_wait,

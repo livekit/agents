@@ -1,7 +1,7 @@
 //! Validate one query or atomic batch's ordered response before accepting its commit tip.
 
 use super::{WsdbError, decode_batch, pb};
-use lk_agents_storage::sql::{BatchResult, Row, StatementResult};
+use crate::sql::{BatchResult, Row, StatementResult};
 
 enum ResultSet {
     Rows { width: usize, rows: Vec<Row> },

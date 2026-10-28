@@ -33,8 +33,8 @@ base64.workspace = true
 httparse = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 pyo3 = { workspace = true, optional = true }
-# Thread storage and the A2A door: the cores' plans executed against AgentDB and local SQLite.
-lk-agents-storage = { path = "../lk-agents-storage", features = ["sqlite"] }
+# Thread storage (all database interaction) and the A2A door's decisions.
+lk-agents-storage = { path = "../lk-agents-storage" }
 lk-agents-a2a = { path = "../lk-agents-a2a" }
 livekit-protocol.workspace = true
 pbjson-types.workspace = true
@@ -44,7 +44,6 @@ tonic-types = { version = "0.14", default-features = false }
 a2a.workspace = true
 serde.workspace = true
 # Threads and databases through public-api-server, the one way to agentstore.
-livekit-api.workspace = true
 # The AgentDB data plane: the same WebSocket and TLS set as `lk-agents-worker` and
 # `lk-agents-inference`, one crypto provider (`ring`).
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
@@ -53,7 +52,6 @@ url = "2"
 # Lease tokens, task, message and artifact ids: six random bytes as hex.
 rand = "0.9"
 # `SQLiteStorage`: one file per thread, executed on its own connection thread.
-rusqlite = { version = "0.32.1", features = ["bundled"] }
 
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 sysinfo.workspace = true
@@ -65,6 +63,7 @@ libc = "0.2"
 
 [dev-dependencies]
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false, features = ["dst"] }
+lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }

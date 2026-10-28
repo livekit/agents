@@ -1,6 +1,5 @@
 //! Observed voice lease loss stops admission and abandons staged fields/history.
 
-mod storage_common;
 
 use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
 use lk_agents_abi::storage::voice::{VoiceStorage as _, VoiceStore as _};
@@ -12,7 +11,7 @@ use lk_agents_runtime::storage::voice::VoiceStore;
 use lk_agents_storage::{StorageError, sql::Statement};
 use serde_json::json;
 use std::time::Duration;
-use storage_common::Backend;
+use lk_agents_storage::testing::Backend;
 
 #[tokio::test]
 async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() {

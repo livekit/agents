@@ -4,12 +4,11 @@
 
 use std::time::{Duration, Instant};
 
-use lk_agents_runtime::storage::{CommitOptions, RunOptions, Thread};
+use lk_agents_storage::{CommitOptions, RunOptions, Thread};
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
 use lk_agents_storage::schema::TaskData;
-mod storage_common;
-use storage_common::{Backend, Fixture};
+use lk_agents_storage::testing::{Backend, Fixture};
 
 use livekit_protocol::agent::chat_context::chat_item;
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
@@ -573,7 +572,7 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
-contract!(
+lk_agents_storage::contract!(
     tasks_page_by_last_update_with_a_filter_bound_token,
     items_page_by_position_with_a_filter_bound_cursor,
     a_run_loads_its_whole_history_in_its_acquire,
@@ -595,7 +594,7 @@ contract!(
 
 /// A run that writes one item and completes `AST_1`, committed over a faulty connection.
 async fn commit_through(
-    fault: storage_common::CommitFault,
+    fault: lk_agents_storage::testing::CommitFault,
 ) -> (Fixture, Thread, Result<i64, StorageError>) {
     let fx = Backend::Sqlite.fixture(None).await;
     let (s, faults) = fx.faulty_thread("w1").await;
@@ -614,7 +613,7 @@ async fn run_ended_count(s: &Thread) -> usize {
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() {
-    let (fx, s, committed) = commit_through(storage_common::CommitFault::LoseAckAfter).await;
+    let (fx, s, committed) = commit_through(lk_agents_storage::testing::CommitFault::LoseAckAfter).await;
     assert_eq!(committed.unwrap(), 1, "the original run's commit, not a failure");
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(s.lane(LANE).task("AST_1").await.unwrap().unwrap().status, TaskState::Completed);
@@ -624,7 +623,7 @@ async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() 
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_fence() {
-    let (fx, s, committed) = commit_through(storage_common::CommitFault::LoseAckBefore).await;
+    let (fx, s, committed) = commit_through(lk_agents_storage::testing::CommitFault::LoseAckBefore).await;
     assert_eq!(committed.unwrap(), 1);
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(run_ended_count(&s).await, 1);
@@ -642,7 +641,7 @@ async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written(
     fresh.commit(CommitOptions::default()).await.unwrap();
 
     stale.history.push(message("i9", ChatRole::Assistant, "late"));
-    faults.fail_next_commit(storage_common::CommitFault::LoseAckBefore);
+    faults.fail_next_commit(lk_agents_storage::testing::CommitFault::LoseAckBefore);
     let err = stale.commit(CommitOptions::default()).await.err().expect("rejected");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(s1.lane(LANE).history().await.unwrap().is_empty());
