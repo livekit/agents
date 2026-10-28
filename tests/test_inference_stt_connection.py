@@ -772,14 +772,15 @@ async def test_provider_failure_events_do_not_reset_retries(
 @pytest.mark.parametrize(
     ("events", "expected_duration"),
     [
-        ([], 30.0),
-        ([(5.0, "interim_transcript")], 35.0),
-        ([(5.0, "preflight_transcript")], 35.0),
-        ([(5.0, "session.finalized")], 30.0),
+        ([], None),
+        ([(5.0, "interim_transcript")], None),
+        ([(5.0, "preflight_transcript")], None),
+        ([(5.0, "session.finalized")], None),
         ([(5.0, "final_transcript")], 8.0),
         ([(5.0, "final_transcript"), (2.0, "interim_transcript")], 10.0),
         ([(5.0, "final_transcript"), (2.0, "preflight_transcript")], 10.0),
         ([(5.0, "final_transcript"), (2.0, "final_transcript")], 10.0),
+        ([(35.0, "final_transcript")], 38.0),
     ],
     ids=[
         "silent",
@@ -790,16 +791,23 @@ async def test_provider_failure_events_do_not_reset_retries(
         "final-interim",
         "final-preflight",
         "final-final",
+        "late-final",
     ],
 )
+@pytest.mark.parametrize("final_response_timeout", [10.0, 45.0])
 async def test_input_end_waits_for_transcript_inactivity(
-    monkeypatch: pytest.MonkeyPatch, events: list[tuple[float, str]], expected_duration: float
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[tuple[float, str]],
+    expected_duration: float | None,
+    final_response_timeout: float,
 ) -> None:
     socket = _Socket()
     monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
     async with aiohttp.ClientSession() as session:
         stream = _make_stt("http://unused", session).stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=0.01, final_response_timeout=45.0)
+            conn_options=APIConnectOptions(
+                max_retry=0, timeout=0.01, final_response_timeout=final_response_timeout
+            )
         )
 
         async def send_events() -> None:
@@ -812,7 +820,7 @@ async def test_input_end_waits_for_transcript_inactivity(
         start = asyncio.get_running_loop().time()
         try:
             stream.end_input()
-            await asyncio.wait_for(_final_transcripts(stream), timeout=60.0)
+            transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=60.0)
             elapsed = asyncio.get_running_loop().time() - start
         finally:
             sender.cancel()
@@ -820,7 +828,18 @@ async def test_input_end_waits_for_transcript_inactivity(
                 await sender
             await stream.aclose()
 
-    assert elapsed == pytest.approx(expected_duration, abs=0.01)
+    assert elapsed == pytest.approx(
+        min(expected_duration, final_response_timeout)
+        if expected_duration is not None
+        else final_response_timeout,
+        abs=0.01,
+    )
+    arrival = 0.0
+    expected_final = False
+    for delay, message_type in events:
+        arrival += delay
+        expected_final |= message_type == "final_transcript" and arrival < final_response_timeout
+    assert bool(transcripts) is expected_final
     assert socket.sent == ["session.finalize", "session.close"]
     assert socket.closed
 

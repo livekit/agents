@@ -22,37 +22,70 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.usefixtures("job_process")
-async def test_failed_transcription_reports_provider_error_without_waiting_for_drain(monkeypatch):
-    from livekit.agents import APIError
-
-    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+@pytest.mark.parametrize("during_drain", [False, True])
+async def test_failed_item_does_not_drop_other_transcripts(monkeypatch, during_drain, caplog):
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio, wait_for_final
 
     provider = provider_by_name("openai")
 
     class FailedItem(provider.protocol):
         async def send_transcript(self, result):
-            if not result.final:
+            if not result.final or result.index != 0:
                 return await super().send_transcript(result)
             peer = self.connection
-            await peer.acknowledge({"type": "input_audio_buffer.committed", "item_id": "failed"})
+            await peer.acknowledge({"type": "input_audio_buffer.committed", "item_id": "item-0"})
             peer.send(
                 {
                     "type": "conversation.item.input_audio_transcription.failed",
-                    "item_id": "failed",
+                    "item_id": "item-0",
                     "content_index": 0,
                     "error": {"code": "server_error", "message": "test transcription failed"},
-                }
+                },
+                final=True,
             )
 
-    provider = dataclasses.replace(provider, protocol=FailedItem, final_response_timeout=5)
-    async with open_stream(provider, monkeypatch) as (stream, collector, _, _, errors):
-        for segment in make_audio_segments(provider):
-            push_audio(stream, provider, segment)
+    provider = dataclasses.replace(provider, protocol=FailedItem)
+    async with open_stream(provider, monkeypatch, max_retry=2) as (
+        stream,
+        collector,
+        server,
+        events,
+        errors,
+    ):
+        server.automatic_finals = True
+        if during_drain:
+            server.release_results.clear()
+        first, tail = make_audio_segments(provider)
+        push_audio(stream, provider, first)
+        if not during_drain:
+            stream.flush()
+            await asyncio.wait_for(server.wait_for_audio(len(first.audio)), 1)
+            await _wait_for(
+                "the failed item",
+                lambda: any("transcription failed" in record.message for record in caplog.records),
+            )
+            assert not collector.done()
+        push_audio(stream, provider, tail)
         stream.end_input()
-        with pytest.raises(APIError, match="transcription failed") as error:
-            await asyncio.wait_for(collector, 1)
-        assert error.value.body["code"] == "server_error"
-        assert errors and not errors[-1].recoverable
+        if during_drain:
+            await _wait_for(
+                "the end of input",
+                lambda: (
+                    bool(server.connections)
+                    and any(
+                        message.type == aiohttp.WSMsgType.TEXT
+                        and json.loads(message.data).get("type") == "input_audio_buffer.clear"
+                        for message in server.connections[0].messages
+                    )
+                ),
+            )
+            assert not collector.done()
+            server.release_results.set()
+        await asyncio.wait_for(collector, 1)
+        await wait_for_final(collector, events, tail.text)
+        assert not errors
+        assert len(server.connections) == 1
+        assert any("transcription failed" in record.message for record in caplog.records)
 
 
 class _FakeMessage:

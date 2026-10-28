@@ -38,6 +38,10 @@ response budget then bounds a successful quiet drain. Transport failures still
 raise errors. `reconnect_on_idle_close` identifies providers that can safely retire
 a connection after a final and open a new one for the next utterance.
 
+Set `drain_quiet_timeout` for protocols that can finish a silent drain before the
+final-response deadline. A known turn must still receive its final or time out.
+The shared tests hold that final beyond the quiet period to check this rule.
+
 The client factory constructs the real STT client and redirects its endpoints to
 `STTServer`. It can supply test keys and local input fixtures. Do not replace
 `send`, `receive`, or SDK event iterators with mocks in this factory.
@@ -92,10 +96,10 @@ uv run pytest tests/test_stt_sdk_contract.py --unit
 ```
 
 These are SDK-boundary tests, not wire-protocol tests. Both suites observe public
-STT events and terminal errors. Only failed stop writes and blocked transport
-writes remain in `tests/test_stt_stream_contract.py`; its fixtures are optional
-metadata on discovered provider entries. Ordinary lifecycle scenarios belong in
-this harness.
+STT events and terminal errors. Failed stop writes, blocked transport writes, and
+long idle regressions under virtual time remain in `tests/test_stt_stream_contract.py`;
+its fixtures are optional metadata on discovered provider entries. Ordinary lifecycle
+scenarios belong in this harness.
 
 The coordinator and monitor timing rules use virtual time in their own unit
 tests. Long-input and quiet-server scenarios run on a representative shared-monitor

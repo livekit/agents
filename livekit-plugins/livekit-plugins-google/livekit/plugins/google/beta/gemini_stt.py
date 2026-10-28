@@ -19,6 +19,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from websockets.exceptions import ConnectionClosed
+
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit import rtc
@@ -36,6 +38,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 from ..log import logger
 
@@ -267,6 +270,7 @@ class RecognizeStream(stt.RecognizeStream):
         try:
             async with client.aio.live.connect(model=self._opts.model, config=config) as session:
                 drain_started = asyncio.Event()
+                final_required = asyncio.Event()
 
                 async def send() -> None:
                     await self._send_loop(session)
@@ -275,31 +279,36 @@ class RecognizeStream(stt.RecognizeStream):
 
                 async def receive() -> None:
                     while True:
-                        completed = await self._receive_loop(session)
+                        completed = await self._receive_loop(session, final_required=final_required)
                         if not completed:
                             raise APIConnectionError("Gemini STT connection closed unexpectedly")
-                        if drain_started.is_set():
-                            return
 
                 await self._run_connection_tasks(
                     asyncio.create_task(send()),
                     asyncio.create_task(receive()),
                     drain_started=drain_started,
-                    require_completion=False,
+                    require_completion=final_required,
+                    drain_quiet_timeout=2.0,
                 )
 
         # Provider errors can quote the audio payload or transcript, so the text is logged
         # as a redactable attribute and kept out of the raised message, whose body the
         # framework interpolates into its retry log (see REVIEW.md).
-        except (ClientError, ServerError, APIError) as e:
+        except (ClientError, ServerError, APIError, ConnectionClosed) as e:
             log = logger.debug if _is_session_duration_close(e) else logger.warning
             log(
                 "Gemini STT request failed",
                 extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
             )
+            code = (e.rcvd.code if e.rcvd else 1006) if isinstance(e, ConnectionClosed) else e.code
+            if code >= 1000:
+                error = WebSocketCloseError(code, None)
+                if _is_session_duration_close(e):
+                    error.retryable = True
+                raise error from None
             raise APIStatusError(
                 message=f"Gemini STT request failed ({type(e).__name__})",
-                status_code=getattr(e, "code", -1),
+                status_code=code,
                 body=None,
             ) from None
         except asyncio.CancelledError:
@@ -339,7 +348,9 @@ class RecognizeStream(stt.RecognizeStream):
             alternatives=[stt.SpeechData(language=language, text=text, confidence=1.0)],
         )
 
-    async def _receive_loop(self, session: Any) -> bool:
+    async def _receive_loop(
+        self, session: Any, *, final_required: asyncio.Event | None = None
+    ) -> bool:
         default_lang = (
             self._opts.language
             if isinstance(self._opts.language, LanguageCode)
@@ -368,12 +379,16 @@ class RecognizeStream(stt.RecognizeStream):
                     if code := getattr(interim, "language_code", None):
                         lang = LanguageCode(code)
                     if text := (interim.text or "").strip():
+                        if final_required is not None:
+                            final_required.set()
                         pending_interim = text
                         self._event_ch.send_nowait(
                             self._speech_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, lang)
                         )
 
                 if transcription := getattr(sc, "input_transcription", None):
+                    if final_required is not None:
+                        final_required.clear()
                     completed = False
                     self._mark_provider_progress()
                     if code := getattr(transcription, "language_code", None):
@@ -388,6 +403,8 @@ class RecognizeStream(stt.RecognizeStream):
 
                 # a turn that produced only interims would otherwise be dropped
                 if getattr(sc, "generation_complete", False) or getattr(sc, "turn_complete", False):
+                    if final_required is not None:
+                        final_required.clear()
                     completed = True
                     self._mark_provider_progress()
                     if pending_interim:

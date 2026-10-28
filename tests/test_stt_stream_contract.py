@@ -1,7 +1,8 @@
-"""Deterministic write faults and task races that need an injected transport.
+"""Precise write faults, task races, and long idle checks with an injected transport.
 
 Public lifecycle behavior is covered by tests/stt_harness/test_contract.py using
-real WebSockets. Keep only faults that a TCP server cannot place precisely.
+real WebSockets. Use injection for precise I/O failures and virtual-time regressions
+that would require long waits with a real socket.
 """
 
 import asyncio

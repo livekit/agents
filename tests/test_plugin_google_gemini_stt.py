@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,7 +9,41 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, stt
 from livekit.plugins.google.beta.gemini_stt import STT
 
-pytestmark = pytest.mark.plugin("google")
+pytestmark = [pytest.mark.plugin("google"), pytest.mark.virtual_time]
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.real_time
+async def test_earlier_turn_complete_cannot_replace_the_last_transcript(monkeypatch):
+    from dataclasses import replace
+
+    from .stt_harness.discovery import provider_by_name
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+    from .stt_harness.server import json_message
+
+    provider = provider_by_name("gemini")
+
+    class EarlierTurn(provider.protocol):
+        async def receive(self, message):
+            data = json_message(message)
+            realtime = data.get("realtimeInput", data.get("realtime_input", {}))
+            if realtime.get("audioStreamEnd", realtime.get("audio_stream_end")):
+                await self.connection.acknowledge({"serverContent": {"turnComplete": True}})
+            await super().receive(message)
+
+    provider = replace(provider, protocol=EarlierTurn)
+    async with open_stream(provider, monkeypatch) as (stream, collector, server, events, errors):
+        server.release_results.clear()
+        for segment in make_audio_segments(provider):
+            push_audio(stream, provider, segment)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        await asyncio.sleep(0.05)
+        assert not collector.done()
+        server.release_results.set()
+        await asyncio.wait_for(collector, 1)
+        assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["first tail"]
+        assert not errors
 
 
 class _Transcription:
@@ -61,12 +96,20 @@ async def _drain(messages: list[_Message], *, complete: bool = True) -> list[stt
 
         mock_session = AsyncMock()
         mock_client.aio.live.connect.return_value.__aenter__.return_value = mock_session
+        remaining = iter(messages)
+        completion_sent = False
 
         async def receive():  # type: ignore[no-untyped-def]
-            for message in messages:
+            nonlocal completion_sent
+            for message in remaining:
                 yield message
-            if complete:
+                if message.server_content.turn_complete:
+                    return
+            if complete and not completion_sent:
+                completion_sent = True
                 yield _Message(_ServerContent(turn_complete=True))
+            elif complete:
+                await asyncio.Future()
 
         mock_session.receive = MagicMock(side_effect=receive)
 

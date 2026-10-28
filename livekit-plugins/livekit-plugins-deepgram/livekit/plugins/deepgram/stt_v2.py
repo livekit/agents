@@ -543,6 +543,7 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                drain_started.clear()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
                 reconnect = await self._run_connection_tasks(

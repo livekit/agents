@@ -18,6 +18,19 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class RequestError:
+    """A documented provider rejection, independent of the plugin's error handling."""
+
+    name: str
+    body: dict[str, Any] | None = None
+    http_status: int | None = None
+    close_code: int | None = None
+    close_reason: str = ""
+    after_audio: bool = False
+    retryable: bool = False
+
+
+@dataclass(frozen=True)
 class Transcript:
     text: str
     final: bool
@@ -74,6 +87,7 @@ class Provider(ProviderConfig):
     protocol: type[Protocol]
     create_stt: Callable[[STTServer, Any], stt.STT]
     sources: tuple[str, ...]
+    request_errors: tuple[RequestError, ...] = ()
     sample_rate: int = 16000
     # Only a missing protocol guarantee can exclude a completion test.
     completion_unknown_reason: str = ""
@@ -82,6 +96,7 @@ class Provider(ProviderConfig):
     completion_on_close: bool = True
     # SDKs may manage heartbeat themselves rather than use APIConnectOptions.
     uses_websocket_monitor: bool = True
+    drain_quiet_timeout: float | None = None
     final_response_timeout: float = 0.25
     bootstrap: Callable[..., Any] | None = None
     tls: bool = False

@@ -12,7 +12,7 @@ import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from .protocol import Provider, Transcript
+from .protocol import Provider, RequestError, Transcript
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,7 @@ class Connection:
         self.final_offset = 0
         self.final_index = 0
         self.input_ended = False
+        self.request_rejected = False
         self.disconnected = asyncio.Event()
         self.replies: asyncio.Queue[Reply] = asyncio.Queue()
         self.messages: list[aiohttp.WSMessage] = []
@@ -62,6 +63,14 @@ class Connection:
     def abort(self) -> None:
         self.transport.abort()
 
+    async def reject_request(self, error: RequestError) -> None:
+        self.request_rejected = True
+        self.server.rejected_requests += 1
+        if error.body is not None:
+            await self.ws.send_json(error.body)
+        if error.close_code is not None:
+            await self.ws.close(code=error.close_code, message=error.close_reason.encode())
+
     async def accept_audio(self, data: bytes) -> None:
         assert self.protocol.configured, "audio arrived before configuration"
         assert not self.input_ended, "audio arrived after end of input"
@@ -74,6 +83,9 @@ class Connection:
             )
         self.server.audio_received.set()
         self.audio_received.set()
+        if (error := self.server.request_error) is not None and error.after_audio:
+            await self.reject_request(error)
+            return
         if self.server.fault_after_audio:
             if self.server.fault_after_audio == "abort":
                 self.abort()
@@ -173,6 +185,8 @@ class STTServer:
         self.allow_partial_input = False
         self.fault_after_audio: str | None = None
         self.processing_stalled = False
+        self.request_error: RequestError | None = None
+        self.rejected_requests = 0
         self.ignore_client_messages = False
         self.app = web.Application()
         self.app.router.add_route("*", "/{path:.*}", self.handle)
@@ -203,6 +217,12 @@ class STTServer:
         connection = None
         writer = None
         try:
+            error = self.request_error
+            if error is not None and error.http_status is not None:
+                self.rejected_requests += 1
+                return web.json_response(
+                    error.body or {"error": "request rejected"}, status=error.http_status
+                )
             if request.headers.get("Upgrade", "").lower() != "websocket":
                 return await self.bootstrap(request)
             ws = web.WebSocketResponse(autoping=False, autoclose=True, timeout=0.2)
@@ -218,7 +238,10 @@ class STTServer:
                     connection.abort()
 
             writer.add_done_callback(writer_done)
-            await connection.protocol.open(request)
+            if error is not None and not error.after_audio:
+                await connection.reject_request(error)
+            else:
+                await connection.protocol.open(request)
             self.connected.set()
             self.connections_opened.put_nowait(connection)
             async for message in ws:
@@ -231,7 +254,7 @@ class STTServer:
                     connection.pongs += 1
                     connection.pong_received.set()
                 elif message.type in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):
-                    if not self.ignore_client_messages:
+                    if not self.ignore_client_messages and not connection.request_rejected:
                         await connection.protocol.receive(message)
                 elif message.type == aiohttp.WSMsgType.ERROR:
                     raise ws.exception() or ConnectionError("server WebSocket receive failed")

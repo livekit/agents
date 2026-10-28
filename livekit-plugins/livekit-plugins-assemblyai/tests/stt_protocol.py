@@ -6,7 +6,7 @@ from dataclasses import replace
 import aiohttp
 
 from tests.stt_harness.fixtures import TransportFixture, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -71,6 +71,58 @@ PROVIDERS = (
         Universal,
         create_stt,
         ("https://www.assemblyai.com/docs/streaming/message-sequence",),
+        # Error protocol: https://www.assemblyai.com/docs/streaming/common-session-errors-and-closures
+        request_errors=(
+            RequestError(
+                "auth",
+                body={
+                    "type": "Error",
+                    "error_code": 1008,
+                    "error": "Unauthorized Connection: Invalid API key",
+                },
+                close_code=1008,
+            ),
+            RequestError(
+                "invalid_audio_chunk",
+                body={
+                    "type": "Error",
+                    "error_code": 3007,
+                    "error": "Input duration violation: 10 ms. Expected between 50 and 1000 ms",
+                },
+                close_code=3007,
+                after_audio=True,
+            ),
+            RequestError(
+                "invalid_message",
+                body={
+                    "type": "Error",
+                    "error_code": 3006,
+                    "error": "Invalid Message Type: Unsupported",
+                },
+                close_code=3006,
+                after_audio=True,
+            ),
+            RequestError(
+                "rate_limited",
+                body={
+                    "type": "Error",
+                    "error_code": 1008,
+                    "error": "Unauthorized Connection: Too many concurrent sessions",
+                },
+                close_code=1008,
+                retryable=True,
+            ),
+            RequestError(
+                "idle_timeout",
+                body={
+                    "type": "Error",
+                    "error_code": 3006,
+                    "error": "Session terminated due to inactivity: No messages received for 60 seconds",
+                },
+                close_code=3006,
+                retryable=True,
+            ),
+        ),
         transport_fixture=TransportFixture(
             "assemblyai",
             plugin("assemblyai.stt"),

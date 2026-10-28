@@ -711,6 +711,7 @@ class SpeechStream(stt.SpeechStream):
             conn_start_time = 0.0
             try:
                 ws = await self._connect_ws()
+                drain_started.clear()
                 conn_start_time = time.perf_counter()
                 reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),

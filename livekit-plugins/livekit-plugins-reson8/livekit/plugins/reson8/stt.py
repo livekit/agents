@@ -636,12 +636,6 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
 
-        # durable: Reson8 owes nothing for the audio it was sent. Read when
-        # classifying a close, and never touched by the waiter below
-        self._turn_settled = asyncio.Event()
-        self._turn_settled.set()
-        # notification: a turn_end arrived. The waiter clears this to notice the
-        # next one, which is why the two cannot be the same event
         self._turn_ended = asyncio.Event()
         self._audio_sent = False
 
@@ -760,7 +754,6 @@ class SpeechStream(stt.RecognizeStream):
                     for frame in frames:
                         self._speech_duration += frame.duration
                         self._audio_sent = True
-                        self._turn_settled.clear()
                         self._turn_ended.clear()
                         await ws.send_bytes(frame.data.tobytes())
 
@@ -788,7 +781,7 @@ class SpeechStream(stt.RecognizeStream):
                     if code not in (None, 1000, 1001, 1005):
                         raise WebSocketCloseError(code, msg.extra)
                     if drain_started.is_set():
-                        if self._turn_settled.is_set() and not self._speaking:
+                        if not self._final_response_required.is_set():
                             return
 
                         raise APIConnectionError(
@@ -856,12 +849,12 @@ class SpeechStream(stt.RecognizeStream):
 
                 self._end_speaking()
                 self._candidate = None
-                self._turn_settled.set()
                 self._turn_ended.clear()
                 self._audio_sent = False
 
                 try:
                     ws = await self._connect_ws()
+                    drain_started.clear()
                     reconnect = await self._run_connection_tasks(
                         asyncio.create_task(send_task(ws)),
                         asyncio.create_task(receive_until_complete(ws)),
@@ -949,7 +942,6 @@ class SpeechStream(stt.RecognizeStream):
                 )
                 self._speech_duration = 0.0
 
-            self._turn_settled.set()
             self._turn_ended.set()
 
         else:

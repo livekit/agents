@@ -8,7 +8,7 @@ Finalize keeps the session open; CloseStream flushes results and closes it.
 import aiohttp
 
 from tests.stt_harness.fixtures import TransportFixture, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -116,6 +116,13 @@ PROVIDERS = (
         Listen,
         create_stt,
         (__doc__.splitlines()[2],),
+        # Error protocol: https://developers.deepgram.com/docs/stt-troubleshooting-websocket-data-and-net-errors
+        request_errors=(
+            RequestError("auth", http_status=401),
+            RequestError(
+                "invalid_audio", close_code=1008, close_reason="DATA-0000", after_audio=True
+            ),
+        ),
         transport_fixture=TransportFixture(
             "deepgram",
             plugin("deepgram.stt"),

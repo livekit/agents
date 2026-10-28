@@ -749,7 +749,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._vad_stream.end_input()
 
         except asyncio.CancelledError:
-            pass
+            raise
 
     async def _process_vad(self, vad_stream: vad.VADStream) -> None:
         """Call `client.finalize()` whenever the external VAD reports end of speech."""

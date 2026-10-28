@@ -243,90 +243,90 @@ class SpeechStream(stt.SpeechStream):
             await self._http_client.close()
         self._http_client = AWSCRTHTTPClient()
 
-        config_kwargs: dict[str, Any] = {"region": self._opts.region}
-        if self._credentials:
-            # Use a credentials resolver for explicit credentials
-            # for some reason, Config with direct values doesn't work
-            class StaticCredsResolver:
-                def __init__(self, creds: Credentials):
-                    self._identity = AWSCredentialsIdentity(
-                        access_key_id=creds.access_key_id,
-                        secret_access_key=creds.secret_access_key,
-                        session_token=creds.session_token,
-                    )
-
-                async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
-                    return self._identity
-
-            config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
-                self._credentials
-            )
-        else:
-            config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
-                resolvers=(
-                    StaticCredentialsResolver(),
-                    EnvironmentCredentialsResolver(),
-                    ContainerCredentialsResolver(http_client=self._http_client),
-                    IMDSCredentialsResolver(http_client=self._http_client),
-                )
-            )
-
-        client: TranscribeStreamingClient = TranscribeStreamingClient(
-            config=await Config.resolve(transport=self._http_client, **config_kwargs)
-        )
-
-        live_config = {
-            "media_sample_rate_hertz": self._opts.sample_rate,
-            "media_encoding": self._opts.encoding,
-            "vocabulary_name": self._opts.vocabulary_name,
-            "session_id": self._opts.session_id,
-            "vocab_filter_method": self._opts.vocab_filter_method,
-            "vocab_filter_name": self._opts.vocab_filter_name,
-            "show_speaker_label": self._opts.show_speaker_label,
-            "enable_channel_identification": self._opts.enable_channel_identification,
-            "number_of_channels": self._opts.number_of_channels,
-            "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
-            "partial_results_stability": self._opts.partial_results_stability,
-            "language_model_name": self._opts.language_model_name,
-        }
-
-        # Auto language detection is mutually exclusive with language_code
-        if self._opts.identify_language:
-            live_config["identify_language"] = True
-            if is_given(self._opts.language_options):
-                live_config["language_options"] = self._opts.language_options
-            if is_given(self._opts.preferred_language):
-                live_config["preferred_language"] = self._opts.preferred_language
-            if is_given(self._opts.vocabulary_names):
-                live_config["vocabulary_names"] = self._opts.vocabulary_names
-            if is_given(self._opts.vocabulary_filter_names):
-                live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
-        elif self._opts.identify_multiple_languages:
-            live_config["identify_multiple_languages"] = True
-            if is_given(self._opts.language_options):
-                live_config["language_options"] = self._opts.language_options
-            if is_given(self._opts.preferred_language):
-                live_config["preferred_language"] = self._opts.preferred_language
-            if is_given(self._opts.vocabulary_names):
-                live_config["vocabulary_names"] = self._opts.vocabulary_names
-            if is_given(self._opts.vocabulary_filter_names):
-                live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
-        else:
-            if self._opts.language:
-                live_config["language_code"] = self._opts.language
-
-        filtered_config: dict[str, Any] = {}
-        for k, v in live_config.items():
-            if isinstance(v, bool):
-                filtered_config[k] = v
-            elif isinstance(v, (int, float)):
-                filtered_config[k] = v
-            elif v is not None and is_given(v):
-                filtered_config[k] = v
-
-        drain_started = asyncio.Event()
-
         try:
+            config_kwargs: dict[str, Any] = {"region": self._opts.region}
+            if self._credentials:
+                # Use a credentials resolver for explicit credentials
+                # for some reason, Config with direct values doesn't work
+                class StaticCredsResolver:
+                    def __init__(self, creds: Credentials):
+                        self._identity = AWSCredentialsIdentity(
+                            access_key_id=creds.access_key_id,
+                            secret_access_key=creds.secret_access_key,
+                            session_token=creds.session_token,
+                        )
+
+                    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
+                        return self._identity
+
+                config_kwargs["aws_credentials_identity_resolver"] = StaticCredsResolver(
+                    self._credentials
+                )
+            else:
+                config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
+                    resolvers=(
+                        StaticCredentialsResolver(),
+                        EnvironmentCredentialsResolver(),  # type: ignore[no-untyped-call]
+                        ContainerCredentialsResolver(http_client=self._http_client),
+                        IMDSCredentialsResolver(http_client=self._http_client),
+                    )
+                )
+
+            client: TranscribeStreamingClient = TranscribeStreamingClient(
+                config=await Config.resolve(transport=self._http_client, **config_kwargs)
+            )
+
+            live_config = {
+                "media_sample_rate_hertz": self._opts.sample_rate,
+                "media_encoding": self._opts.encoding,
+                "vocabulary_name": self._opts.vocabulary_name,
+                "session_id": self._opts.session_id,
+                "vocab_filter_method": self._opts.vocab_filter_method,
+                "vocab_filter_name": self._opts.vocab_filter_name,
+                "show_speaker_label": self._opts.show_speaker_label,
+                "enable_channel_identification": self._opts.enable_channel_identification,
+                "number_of_channels": self._opts.number_of_channels,
+                "enable_partial_results_stabilization": self._opts.enable_partial_results_stabilization,
+                "partial_results_stability": self._opts.partial_results_stability,
+                "language_model_name": self._opts.language_model_name,
+            }
+
+            # Auto language detection is mutually exclusive with language_code
+            if self._opts.identify_language:
+                live_config["identify_language"] = True
+                if is_given(self._opts.language_options):
+                    live_config["language_options"] = self._opts.language_options
+                if is_given(self._opts.preferred_language):
+                    live_config["preferred_language"] = self._opts.preferred_language
+                if is_given(self._opts.vocabulary_names):
+                    live_config["vocabulary_names"] = self._opts.vocabulary_names
+                if is_given(self._opts.vocabulary_filter_names):
+                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
+            elif self._opts.identify_multiple_languages:
+                live_config["identify_multiple_languages"] = True
+                if is_given(self._opts.language_options):
+                    live_config["language_options"] = self._opts.language_options
+                if is_given(self._opts.preferred_language):
+                    live_config["preferred_language"] = self._opts.preferred_language
+                if is_given(self._opts.vocabulary_names):
+                    live_config["vocabulary_names"] = self._opts.vocabulary_names
+                if is_given(self._opts.vocabulary_filter_names):
+                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
+            else:
+                if self._opts.language:
+                    live_config["language_code"] = self._opts.language
+
+            filtered_config: dict[str, Any] = {}
+            for k, v in live_config.items():
+                if isinstance(v, bool):
+                    filtered_config[k] = v
+                elif isinstance(v, (int, float)):
+                    filtered_config[k] = v
+                elif v is not None and is_given(v):
+                    filtered_config[k] = v
+
+            drain_started = asyncio.Event()
+
             stream = await client.start_stream_transcription(
                 input=StartStreamTranscriptionInput(**filtered_config)
             )

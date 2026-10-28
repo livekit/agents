@@ -6,7 +6,7 @@ import aiohttp
 from aiohttp import web
 
 from tests.stt_harness.fixtures import TransportFixture, _gladia_on_send, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -72,6 +72,10 @@ PROVIDERS = (
         (
             "https://support.gladia.io/article/how-to-handle-the-websocket-connection",
             "https://docs.gladia.io/api-reference/v2/live/callback/end-session",
+        ),
+        request_errors=(
+            RequestError("auth", http_status=401),
+            RequestError("rate_limited", http_status=429, retryable=True),
         ),
         bootstrap=bootstrap,
         transport_fixture=TransportFixture(

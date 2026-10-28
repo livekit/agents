@@ -289,13 +289,15 @@ class FallbackAdapter(
                     )
                     self._active_instance = stt
                     return event
-                except Exception:  # exceptions already logged inside _try_recognize
+                except Exception as e:  # exceptions already logged inside _try_recognize
                     if stt_status.available:
                         stt_status.available = False
                         self.emit(
                             "stt_availability_changed",
                             AvailabilityChangedEvent(stt=stt, available=False),
                         )
+                    if isinstance(e, APIError) and not e.retryable:
+                        continue
 
             self._try_recovery(stt=stt, buffer=buffer, language=language, conn_options=conn_options)
 
@@ -449,13 +451,15 @@ class FallbackRecognizeStream(RecognizeStream):
                         raise
 
                     return
-                except Exception:
+                except Exception as e:
                     if stt_status.available:
                         stt_status.available = False
                         self._stt.emit(
                             "stt_availability_changed",
                             AvailabilityChangedEvent(stt=stt, available=False),
                         )
+                    if isinstance(e, APIError) and not e.retryable:
+                        continue
 
             self._try_recovery(stt)
 

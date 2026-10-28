@@ -8,7 +8,7 @@ An empty binary message is audio; it is not an end-of-input request.
 import aiohttp
 
 from tests.stt_harness.fixtures import TransportFixture, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -65,6 +65,41 @@ PROVIDERS = (
         Soniox,
         create_stt,
         (__doc__.splitlines()[2],),
+        # Error protocol: https://soniox.com/docs/api-reference/errors
+        request_errors=(
+            RequestError(
+                "auth",
+                body={
+                    "tokens": [],
+                    "error_code": 401,
+                    "error_type": "unauthenticated",
+                    "error_message": "Invalid API key",
+                },
+                close_code=1000,
+            ),
+            RequestError(
+                "invalid_input",
+                body={
+                    "tokens": [],
+                    "error_code": 400,
+                    "error_type": "invalid_request",
+                    "error_message": "Invalid audio format",
+                },
+                close_code=1000,
+                after_audio=True,
+            ),
+            RequestError(
+                "rate_limited",
+                body={
+                    "tokens": [],
+                    "error_code": 429,
+                    "error_type": "limit_exceeded",
+                    "error_message": "Rate limit exceeded",
+                },
+                close_code=1000,
+                retryable=True,
+            ),
+        ),
         transport_fixture=TransportFixture(
             "soniox",
             plugin("soniox.stt"),

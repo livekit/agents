@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     LanguageCode,
     stt,
     utils,
@@ -742,6 +743,8 @@ class SpeechStream(stt.SpeechStream):
                         return
                     if data.get("type") in ("SpeechStarted", "Turn"):
                         self._mark_provider_progress()
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -870,6 +873,17 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
+
+        if message_type == "Error":
+            code = data.get("error_code")
+            error_text = data.get("error", "")
+            # 3006 also covers inactivity; only malformed requests are permanent.
+            invalid_message = code == 3006 and error_text.startswith("Invalid ")
+            rate_limited = code == 1008 and "Too many concurrent sessions" in error_text
+            raise APIError(
+                f"AssemblyAI STT error (code={code})",
+                retryable=rate_limited or (code not in (1008, 3007) and not invalid_message),
+            )
 
         if message_type == "Begin":
             self._session_id = data.get("id")

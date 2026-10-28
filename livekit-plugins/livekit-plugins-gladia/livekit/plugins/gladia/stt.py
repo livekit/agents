@@ -924,7 +924,7 @@ class SpeechStream(stt.SpeechStream):
                     await asyncio.sleep(backoff_time)
                     backoff_time = min(backoff_time * 2, max_backoff)
                 else:
-                    raise APIStatusError(f"Error in speech stream: {e}", retryable=True) from e
+                    raise
 
     async def _init_live_session(self) -> dict:
         """Initialize a live session with Gladia."""
@@ -946,6 +946,8 @@ class SpeechStream(stt.SpeechStream):
                 res.raise_for_status()
                 return await res.json()  # type: ignore
 
+        except aiohttp.ClientResponseError:
+            raise
         except Exception as e:
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 

@@ -4,7 +4,7 @@ import asyncio
 import base64
 from types import SimpleNamespace as NS
 
-from tests.stt_harness.protocol import Protocol, Provider, SDKProvider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError, SDKProvider
 from tests.stt_harness.server import json_message
 
 
@@ -54,7 +54,16 @@ PROVIDERS = (
         Gemini,
         create_stt,
         ("https://ai.google.dev/gemini-api/docs/live-api/live-transcribe",),
+        request_errors=(
+            RequestError(
+                "auth",
+                close_code=1007,
+                close_reason="API key not valid. Please pass a valid API key.",
+            ),
+            RequestError("invalid_payload", close_code=1007, after_audio=True),
+        ),
         uses_websocket_monitor=False,
+        drain_quiet_timeout=2.0,
         tls=True,
         require_completion=False,
         completion_on_close=False,

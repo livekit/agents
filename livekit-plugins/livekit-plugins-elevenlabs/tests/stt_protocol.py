@@ -4,7 +4,7 @@ import base64
 from dataclasses import replace
 
 from tests.stt_harness.fixtures import TransportFixture, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -61,6 +61,34 @@ PROVIDERS = (
         Scribe,
         create_stt,
         ("https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime",),
+        # Error protocol: https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/event-reference
+        request_errors=(
+            RequestError(
+                "auth",
+                body={
+                    "message_type": "auth_error",
+                    "error": "You must be authenticated to use this endpoint.",
+                },
+            ),
+            RequestError(
+                "invalid_input",
+                body={"message_type": "input_error", "error": "Invalid audio format"},
+                after_audio=True,
+            ),
+            RequestError(
+                "invalid_request",
+                body={"message_type": "invalid_request", "error": "Invalid connection parameters"},
+            ),
+            RequestError(
+                "chunk_size",
+                body={"message_type": "chunk_size_exceeded", "error": "Audio chunk is too large"},
+                after_audio=True,
+            ),
+            RequestError(
+                "unaccepted_terms",
+                body={"message_type": "unaccepted_terms", "error": "Terms of service not accepted"},
+            ),
+        ),
         transport_fixture=TransportFixture(
             "elevenlabs",
             plugin("elevenlabs.stt"),
@@ -94,6 +122,7 @@ PROVIDERS += (
         create_stt=create_server_vad_stt,
         transport_fixture=None,
         require_completion=False,
+        drain_quiet_timeout=1.0,
         live_options={"use_realtime": True, "server_vad": {}},
     ),
 )

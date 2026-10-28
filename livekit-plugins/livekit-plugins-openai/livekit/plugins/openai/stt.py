@@ -959,10 +959,13 @@ class SpeechStream(stt.SpeechStream):
                             self._reconnect_event.set()
                             return
                     elif msg_type == "conversation.item.input_audio_transcription.failed":
-                        error_body = data.get("error", {})
-                        raise APIError(
+                        item_id = data.get("item_id", "")
+                        pending_items.discard(item_id)
+                        item_audio_timing.pop(item_id, None)
+                        current_text = ""
+                        logger.warning(
                             "OpenAI Realtime STT transcription failed",
-                            body=error_body,
+                            extra={"item_id": item_id, "lk.pii.error": data.get("error", {})},
                         )
                     elif msg_type == "error":
                         error_body = data.get("error", {})

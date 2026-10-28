@@ -4,7 +4,7 @@ import aiohttp
 from aiohttp import web
 
 from tests.stt_harness.fixtures import TransportFixture, _rtzr_on_send, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -61,6 +61,7 @@ PROVIDERS = (
         RTZR,
         create_stt,
         ("https://developers.rtzr.ai/docs/en/stt-streaming/websocket/",),
+        request_errors=(RequestError("auth", http_status=401),),
         bootstrap=bootstrap,
         transport_fixture=TransportFixture(
             "rtzr",

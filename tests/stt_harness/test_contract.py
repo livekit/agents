@@ -9,10 +9,11 @@ from dataclasses import replace
 
 import pytest
 
-from livekit.agents import APIError, stt, utils
+from livekit.agents import APIError, APIStatusError, stt, utils
 
 from .discovery import websocket_providers
 from .drivers import make_audio_segments, open_stream, push_audio, wait_for_final
+from .protocol import Transcript
 from .server import Segment, STTServer
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.usefixtures("job_process")]
@@ -115,6 +116,7 @@ async def test_finalized_turns_do_not_end_the_stream(provider, monkeypatch, quie
 
 @pytest.mark.parametrize("draining", [False, True])
 async def test_cancel_does_not_emit_error_or_retry(provider, monkeypatch, draining):
+    provider = replace(provider, final_response_timeout=5)
     server = STTServer(provider, segments=make_audio_segments(provider))
     server.release_results.clear()
     async with open_stream(provider, monkeypatch, server=server, max_retry=2) as (
@@ -136,6 +138,44 @@ async def test_cancel_does_not_emit_error_or_retry(provider, monkeypatch, draini
         await asyncio.wait_for(collector, 1)
         assert not errors
         assert len(server.connections) == 1
+
+
+@pytest.mark.parametrize(
+    "provider", [p for p in PROVIDERS if p.drain_quiet_timeout is not None], ids=lambda p: p.name
+)
+async def test_finalized_input_finishes_after_a_short_quiet_window(provider, monkeypatch):
+    provider = replace(provider, final_response_timeout=provider.drain_quiet_timeout + 2)
+    first = make_audio_segments(provider)[0]
+    server = STTServer(provider, segments=(first,))
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        await asyncio.wait_for(server.wait_for_audio(len(first.audio)), 1)
+        await server.connections[0].protocol.finish_turn()
+        await asyncio.wait_for(wait_for_final(collector, events, first.text), 1)
+        server.ignore_client_messages = True
+        start = asyncio.get_running_loop().time()
+        stream.end_input()
+        await asyncio.wait_for(collector, provider.drain_quiet_timeout + 0.5)
+        assert asyncio.get_running_loop().time() - start >= provider.drain_quiet_timeout
+        assert not errors
+
+
+async def test_cancel_during_remote_failure_releases_resources(provider, monkeypatch):
+    async with open_stream(provider, monkeypatch, max_retry=2) as (stream, _, server, _, _):
+        push_audio(stream, provider, make_audio_segments(provider)[0])
+        await asyncio.wait_for(server.audio_received.wait(), 1)
+        server.allow_partial_input = True
+        server.connections[0].abort()
+        # Let receive observe the failure before the client cancels the stream.
+        await asyncio.sleep(0)
+        await asyncio.wait_for(stream.aclose(), 1)
+        # open_stream and fail_on_leaked_tasks check connections and child tasks.
 
 
 @pytest.mark.parametrize(
@@ -292,13 +332,17 @@ async def test_started_turn_requires_turn_end(
 
 
 @pytest.mark.parametrize(
-    "provider", [p for p in PROVIDERS if p.name == "reson8"], ids=lambda p: p.name
+    "provider",
+    [p for p in PROVIDERS if p.name == "reson8" or p.drain_quiet_timeout is not None],
+    ids=lambda p: p.name,
 )
 async def test_active_turn_uses_the_configured_final_response_budget(provider, monkeypatch):
-    provider = replace(provider, final_response_timeout=1.5)
+    quiet_timeout = provider.drain_quiet_timeout or 1.0
+    provider = replace(provider, final_response_timeout=quiet_timeout + 1)
     first = make_audio_segments(provider)[0]
     server = STTServer(provider, segments=(first,))
     server.processing_stalled = True
+    server.release_results.clear()
     async with open_stream(provider, monkeypatch, server=server) as (
         stream,
         collector,
@@ -307,15 +351,21 @@ async def test_active_turn_uses_the_configured_final_response_budget(provider, m
         errors,
     ):
         push_audio(stream, provider, first)
+        await asyncio.wait_for(server.wait_for_audio(len(first.audio)), 1)
+        peer = server.connections[0]
+        await peer.protocol.send_transcript(Transcript(first.text, False, 0, 0.4, 0))
+
+        async def wait_for_partial():
+            while not any(event.alternatives for event in events):
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_partial(), 1)
         stream.end_input()
         await asyncio.wait_for(server.final_requested.wait(), 1)
-        peer = server.connections[0]
-        peer.send({"type": "turn_start"})
-        peer.send({"type": "turn_end_candidate", "text": first.text})
-        await asyncio.sleep(1.05)
+        await asyncio.sleep(quiet_timeout + 0.05)
         assert not collector.done(), "the quiet window ended an active turn"
-        peer.send({"type": "turn_end"})
-        await asyncio.wait_for(collector, 1)
+        server.release_results.set()
+        await asyncio.wait_for(collector, quiet_timeout + 0.5)
         await wait_for_final(collector, events, first.text)
         assert not errors
 
@@ -412,9 +462,47 @@ async def test_failure_has_a_bounded_retry_budget(provider, monkeypatch):
         assert errors and not errors[-1].recoverable
 
 
-async def test_connection_failure_reaches_fallback(provider, monkeypatch):
+REQUEST_ERRORS = tuple(
+    (provider, error) for provider in PROVIDERS for error in provider.request_errors
+)
+
+
+@pytest.mark.parametrize("provider,request_error", REQUEST_ERRORS, ids=lambda value: value.name)
+async def test_request_error_obeys_retry_policy(provider, request_error, monkeypatch):
     server = STTServer(provider)
-    server.fault_after_audio = "abort"
+    server.request_error = request_error
+    async with open_stream(provider, monkeypatch, server=server, max_retry=2) as (
+        stream,
+        collector,
+        _,
+        _,
+        errors,
+    ):
+        # Keep input open so end_input() cannot suppress an incorrect retry.
+        push_audio(stream, provider, make_audio_segments(provider)[0])
+        with pytest.raises(APIError):
+            await asyncio.wait_for(collector, 3)
+        attempts = provider.expected_attempts_after_audio if request_error.retryable else 1
+        assert server.rejected_requests == attempts
+        assert [error.recoverable for error in errors] == [True] * (attempts - 1) + [False]
+        assert all(error.error.retryable == request_error.retryable for error in errors)
+        if request_error.http_status is not None:
+            assert all(isinstance(error.error, APIStatusError) for error in errors)
+            assert all(error.error.status_code == request_error.http_status for error in errors)
+
+
+@pytest.mark.parametrize(
+    "provider,request_error",
+    [(provider, None) for provider in PROVIDERS]
+    + [(provider, error) for provider, error in REQUEST_ERRORS if not error.retryable],
+    ids=lambda value: value.name if value is not None else "abort",
+)
+async def test_connection_failure_reaches_fallback(provider, monkeypatch, request_error):
+    server = STTServer(provider)
+    if request_error is None:
+        server.fault_after_audio = "abort"
+    else:
+        server.request_error = request_error
     async with open_stream(provider, monkeypatch, server=server, fallback=True) as (
         stream,
         collector,
@@ -443,6 +531,10 @@ async def test_connection_failure_reaches_fallback(provider, monkeypatch):
 
             await asyncio.wait_for(wait_for_backup(), 3)
             assert any(not error.recoverable for error in errors)
+            if request_error is not None:
+                assert len(errors) == 1
+                assert not errors[0].error.retryable
+                assert server.rejected_requests == 1
         finally:
             await utils.aio.gracefully_cancel(feeder)
 
@@ -665,7 +757,7 @@ async def test_normal_close_cannot_replace_a_required_completion(provider, monke
         stream,
         collector,
         _,
-        _,
+        events,
         errors,
     ):
         for segment in make_audio_segments(provider):
@@ -673,6 +765,16 @@ async def test_normal_close_cannot_replace_a_required_completion(provider, monke
         stream.end_input()
         await asyncio.wait_for(server.wait_for_audio(len(server.expected_audio)), 1)
         await asyncio.wait_for(server.final_requested.wait(), 1)
+
+        async def wait_for_progress():
+            while not any(event.alternatives for event in events):
+                if collector.done():
+                    await collector
+                    pytest.fail("the stream ended before provider progress arrived")
+                await asyncio.sleep(0.01)
+
+        # Audio alone does not establish a turn in protocols with optional idle flushes.
+        await asyncio.wait_for(wait_for_progress(), 1)
         await server.connections[0].ws.close()
         with pytest.raises(APIError):
             await asyncio.wait_for(collector, provider.final_response_timeout + 1)

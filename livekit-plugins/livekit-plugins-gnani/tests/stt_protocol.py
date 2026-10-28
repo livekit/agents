@@ -5,7 +5,7 @@ The public SDK documents disconnect, but no acknowledged final-audio request.
 
 import aiohttp
 
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 
 
 class Vachana(Protocol):
@@ -38,6 +38,7 @@ PROVIDERS = (
         Vachana,
         create_stt,
         ("https://github.com/Gnani-AI-Mintlify/Gnani-Vachana",),
+        request_errors=(RequestError("auth", http_status=401),),
         uses_websocket_monitor=False,
         expected_attempts_after_audio=1,
         completion_unknown_reason="Vachana does not document an acknowledged end-of-input protocol",

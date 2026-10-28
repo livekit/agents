@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, utils
+from livekit.agents import APIConnectionError, APIError, APIStatusError, utils
 from livekit.agents.stt import (
     STT,
     AvailabilityChangedEvent,
@@ -267,6 +267,40 @@ async def test_stt_stream_fallback() -> None:
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
     await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    [
+        APIStatusError("request rejected", status_code=401),
+        APIError("invalid configuration", retryable=False),
+        APIConnectionError("invalid input", retryable=False),
+    ],
+    ids=["http", "provider_message", "close_frame"],
+)
+async def test_permanent_request_error_does_not_start_a_recovery_probe(streamed, error):
+    primary = FakeSTT(fake_exception=error)
+    backup = FakeSTT(fake_transcript="backup")
+    adapter = FallbackAdapter([primary, backup], max_retry_per_stt=3, retry_interval=0)
+    try:
+        if streamed:
+            async with adapter.stream() as stream:
+                stream.end_input()
+                texts = [event.alternatives[0].text async for event in stream if event.alternatives]
+                assert texts == ["backup"]
+            attempts = primary.stream_ch
+        else:
+            event = await adapter.recognize([])
+            assert event.alternatives[0].text == "backup"
+            attempts = primary.recognize_ch
+        # Let a wrongly scheduled recovery request run; this module uses virtual time.
+        await asyncio.sleep(0.01)
+        attempts.recv_nowait()
+        with pytest.raises(ChanEmpty):
+            attempts.recv_nowait()
+    finally:
+        await adapter.aclose()
 
 
 async def test_stt_recover() -> None:

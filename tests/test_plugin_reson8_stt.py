@@ -117,7 +117,6 @@ def make_stream() -> MakeStream:
         stream._final_response_required = asyncio.Event()
         stream._candidate = None
         stream._pending_reconnect = False
-        stream._turn_settled = asyncio.Event()
         stream._turn_ended = asyncio.Event()
         stream._start_time_offset = 0.0
         stream._on_provider_progress = None
@@ -2244,3 +2243,46 @@ async def test_batch_rejects_a_buffer_with_too_many_channels(
         )
 
     assert not server.post_headers, "nothing should have been posted"
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("active_turn", [False, True])
+async def test_peer_close_during_idle_flush_requires_only_known_turns(monkeypatch, active_turn):
+    from dataclasses import replace
+
+    from .stt_harness.discovery import provider_by_name
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+    from .stt_harness.server import STTServer
+
+    provider = replace(provider_by_name("reson8"), final_response_timeout=2)
+    first = make_audio_segments(provider)[0]
+    server = STTServer(provider, segments=(first,))
+    server.processing_stalled = True
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        peer = server.connections[0]
+        if active_turn:
+            peer.send({"type": "turn_start"})
+
+            async def wait_for_start():
+                while not events:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_start(), 1)
+        await peer.ws.close()
+        if active_turn:
+            with pytest.raises(APIConnectionError, match="turn still open") as error:
+                await asyncio.wait_for(collector, 1)
+            assert not error.value.retryable
+            assert errors
+        else:
+            await asyncio.wait_for(collector, 1)
+            assert not errors

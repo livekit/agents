@@ -137,6 +137,16 @@ def create_voxtral_3_diarized_stt(server, monkeypatch):
     return create_voxtral_3_stt(server, monkeypatch, diarize=True)
 
 
+class ServerTurns(Voxtral):
+    async def finish_turn(self):
+        self.connection.send({"type": "turn.end", "time_s": len(self.connection.audio) / 32000})
+        await super().finish_turn()
+
+
+def create_voxtral_3_turn_detection_stt(server, monkeypatch):
+    return create_voxtral_3_stt(server, monkeypatch, turn_detection={})
+
+
 PROVIDERS += (
     replace(
         PROVIDERS[0],
@@ -149,5 +159,13 @@ PROVIDERS += (
         name="mistralai_voxtral3_diarized",
         create_stt=create_voxtral_3_diarized_stt,
         live_options={"model": "voxtral-mini-transcribe-realtime-3", "diarize": True},
+    ),
+    replace(
+        PROVIDERS[0],
+        name="mistralai_voxtral3_turn_detection",
+        protocol=ServerTurns,
+        create_stt=create_voxtral_3_turn_detection_stt,
+        sources=("https://docs.mistral.ai/studio/audio/speech-to-text/turn-detection",),
+        live_options={"model": "voxtral-mini-transcribe-realtime-3", "turn_detection": {}},
     ),
 )

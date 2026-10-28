@@ -42,7 +42,6 @@ from ._utils import (
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
 
-FINALIZATION_TIMEOUT = 30.0
 FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT = 3.0
 
 DeepgramModels = Literal[
@@ -1183,7 +1182,8 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
         drain_started = asyncio.Event()
-        transcript_timeout = utils.aio.sleep(FINALIZATION_TIMEOUT)
+        transcript_timeout = utils.aio.sleep(FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT)
+        final_received = asyncio.Event()
         session_closed = False
         http_session = self._stt._ensure_session()
         # one VAD stream per session: the session's model (and so whether it needs
@@ -1192,6 +1192,7 @@ class SpeechStream(stt.SpeechStream):
 
         async def wait_for_inactivity() -> None:
             await drain_started.wait()
+            await final_received.wait()
             await transcript_timeout
 
         @utils.log_exceptions(logger=logger)
@@ -1276,6 +1277,7 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "preflight_transcript":
                     self._process_preflight_transcript(data)
                 elif msg_type == "final_transcript":
+                    final_received.set()
                     self._process_transcript(data, is_final=True)
                 elif msg_type == "session.finalized":
                     # Acknowledgments are optional and may precede trailing transcripts.

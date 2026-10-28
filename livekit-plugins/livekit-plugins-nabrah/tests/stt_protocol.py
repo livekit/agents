@@ -6,7 +6,7 @@ Public documentation does not establish a terminal response to the client's eof.
 import aiohttp
 
 from tests.stt_harness.fixtures import TransportFixture, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -49,6 +49,9 @@ PROVIDERS = (
         Nabrah,
         create_stt,
         ("https://www.nabrah.ai/en/docs/api-reference/speech-to-text/stream-speech-to-text",),
+        request_errors=(
+            RequestError("auth", body={"type": "error", "message": "Invalid API key"}),
+        ),
         completion_unknown_reason="Nabrah's public specification does not define EOF completion",
         expected_attempts_after_audio=1,
         transport_fixture=TransportFixture(

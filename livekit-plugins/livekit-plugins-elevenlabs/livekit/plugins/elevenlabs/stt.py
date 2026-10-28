@@ -555,6 +555,7 @@ class SpeechStream(stt.SpeechStream):
         pending_commits = 0
         commits_completed = asyncio.Event()
         commits_completed.set()
+        vad_turn_pending = asyncio.Event()
         manual_commits = self._server_vad is None
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -672,15 +673,28 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     parsed = json.loads(msg.data)
+                    previous_partial = self._last_partial_text
                     self._process_stream_event(parsed)
+                    new_partial = (
+                        parsed.get("message_type") == "partial_transcript"
+                        and parsed.get("text")
+                        and parsed["text"] != previous_partial
+                    )
+                    if new_partial:
+                        vad_turn_pending.set()
+                    elif parsed.get("message_type") == self._final_message_type:
+                        vad_turn_pending.clear()
                     if manual_commits and parsed.get("message_type") == self._final_message_type:
                         pending_commits = max(0, pending_commits - 1)
                         if pending_commits == 0:
                             commits_completed.set()
-                    if parsed.get("message_type") in (
-                        "partial_transcript",
-                        "committed_transcript",
-                        "committed_transcript_with_timestamps",
+                    if (
+                        parsed.get("message_type")
+                        in (
+                            "committed_transcript",
+                            "committed_transcript_with_timestamps",
+                        )
+                        or new_partial
                     ):
                         self._mark_provider_progress()
                 except APIError:
@@ -697,6 +711,7 @@ class SpeechStream(stt.SpeechStream):
                 drain_started.clear()
                 pending_commits = 0
                 commits_completed.set()
+                vad_turn_pending.clear()
                 self._last_partial_text = ""
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
@@ -718,8 +733,9 @@ class SpeechStream(stt.SpeechStream):
                     background=[asyncio.create_task(keepalive_task(ws))],
                     drain_started=drain_started,
                     # VAD finals have no ID that ties them to a manual commit.
-                    require_completion=manual_commits,
+                    require_completion=manual_commits or vad_turn_pending,
                     sender_waits_for_completion=manual_commits,
+                    drain_quiet_timeout=None if manual_commits else 1.0,
                 )
                 if not reconnect:
                     break
@@ -895,6 +911,9 @@ class SpeechStream(stt.SpeechStream):
             "quota_exceeded",
             "transcriber_error",
             "input_error",
+            "invalid_request",
+            "chunk_size_exceeded",
+            "unaccepted_terms",
             "error",
         ):
             logger.error(
@@ -904,7 +923,15 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIConnectionError(
                 f"ElevenLabs STT error [{message_type}]",
-                retryable=message_type not in ("auth_error", "quota_exceeded", "input_error"),
+                retryable=message_type
+                not in (
+                    "auth_error",
+                    "quota_exceeded",
+                    "input_error",
+                    "invalid_request",
+                    "chunk_size_exceeded",
+                    "unaccepted_terms",
+                ),
             ) from None
         else:
             logger.warning(

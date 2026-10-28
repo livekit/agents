@@ -5,6 +5,7 @@ import sys
 import time
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -114,6 +115,26 @@ def _capture_metrics(provider: aws_stt.STT) -> tuple[list[STTMetrics], asyncio.E
 
     provider.on("metrics_collected", on_metrics_collected)
     return metrics, metrics_ready
+
+
+async def test_configuration_failure_closes_the_transport(monkeypatch):
+    closed = []
+
+    async def close(transport):
+        closed.append(transport)
+
+    monkeypatch.setattr(aws_stt.AWSCRTHTTPClient, "close", close)
+    monkeypatch.setattr(
+        aws_stt.Config, "resolve", AsyncMock(side_effect=RuntimeError("test config failure"))
+    )
+    provider, stream, _ = _make_stream(monkeypatch)
+    try:
+        with pytest.raises(RuntimeError, match="test config failure"):
+            await asyncio.wait_for(anext(stream), 1)
+        assert len(closed) == 1
+    finally:
+        await stream.aclose()
+        await provider.aclose()
 
 
 async def test_aws_stream_emits_periodic_usage_for_sent_audio(monkeypatch: pytest.MonkeyPatch):

@@ -157,6 +157,86 @@ async def test_sender_can_include_the_protocol_acknowledgement(stream):
     assert receiver.cancelled()
 
 
+async def test_quiet_drain_starts_after_the_last_write(stream):
+    sender, receiver, _ = futures()
+    task = asyncio.create_task(
+        stream._run_connection_tasks(
+            sender, receiver, require_completion=False, drain_quiet_timeout=0.2
+        )
+    )
+    await asyncio.sleep(3)
+    assert not task.done()
+    start = asyncio.get_running_loop().time()
+    sender.set_result(None)
+    assert await task is False
+    assert asyncio.get_running_loop().time() - start == pytest.approx(0.2)
+    assert receiver.cancelled()
+
+
+@pytest.mark.real_time
+async def test_provider_progress_can_run_on_an_sdk_callback_thread(stream):
+    stream._num_retries = 2
+    await asyncio.to_thread(stream._mark_provider_progress)
+    assert stream._num_retries == 0
+
+
+@pytest.mark.parametrize("complete_turn", [False, True])
+async def test_quiet_drain_waits_for_a_known_turn(stream, complete_turn):
+    sender, receiver, _ = futures()
+    sender.set_result(None)
+    required = asyncio.Event()
+    required.set()
+
+    async def report_final():
+        await asyncio.sleep(0.3)
+        if complete_turn:
+            required.clear()
+            stream._mark_provider_progress()
+        await asyncio.Future()
+
+    start = asyncio.get_running_loop().time()
+    operation = stream._run_connection_tasks(
+        sender,
+        receiver,
+        background=[asyncio.create_task(report_final())],
+        require_completion=required,
+        drain_quiet_timeout=0.2,
+    )
+    if complete_turn:
+        assert await operation is False
+    else:
+        with pytest.raises(APITimeoutError):
+            await operation
+    assert asyncio.get_running_loop().time() - start == pytest.approx(0.5 if complete_turn else 1)
+
+
+@pytest.mark.parametrize("keep_reporting", [False, True])
+async def test_progress_extends_quiet_drain_but_not_the_deadline(stream, keep_reporting):
+    sender, receiver, _ = futures()
+    sender.set_result(None)
+
+    async def report_progress():
+        for _ in range(20 if keep_reporting else 3):
+            await asyncio.sleep(0.1)
+            stream._mark_provider_progress()
+
+    progress = asyncio.create_task(report_progress())
+    start = asyncio.get_running_loop().time()
+    assert (
+        await stream._run_connection_tasks(
+            sender,
+            receiver,
+            background=[progress],
+            require_completion=False,
+            drain_quiet_timeout=0.2,
+        )
+        is False
+    )
+    assert asyncio.get_running_loop().time() - start == pytest.approx(
+        1.0 if keep_reporting else 0.5
+    )
+
+
 async def test_provider_progress_does_not_extend_the_final_deadline(stream):
     sender, receiver, _ = futures()
     sender.set_result(None)

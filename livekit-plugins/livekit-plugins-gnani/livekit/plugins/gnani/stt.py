@@ -358,6 +358,10 @@ class SpeechStream(stt.RecognizeStream):
                     # SDK queue can pause reads, so do not wait for a close reply.
                     ws.transport.abort()
 
+        except websockets.exceptions.InvalidStatus as e:
+            raise APIStatusError(
+                "Gnani STT connection rejected", status_code=e.response.status_code
+            ) from None
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e
         except asyncio.TimeoutError as e:

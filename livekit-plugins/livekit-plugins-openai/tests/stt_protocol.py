@@ -7,7 +7,7 @@ The server stays open after commits. Item completions may arrive out of order.
 import base64
 
 from tests.stt_harness.fixtures import TransportFixture, plugin
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -99,12 +99,36 @@ def server_vad(server, monkeypatch):
     return create_stt(server, monkeypatch, model="gpt-4o-transcribe")
 
 
+REQUEST_ERRORS = (
+    RequestError(
+        "auth",
+        body={
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+                "message": "Incorrect API key provided",
+            },
+        },
+    ),
+    RequestError(
+        "invalid_input",
+        body={
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "Invalid input audio format"},
+        },
+        after_audio=True,
+    ),
+)
+
+
 PROVIDERS = (
     Provider(
         "openai",
         Realtime,
         create_stt,
         (__doc__.splitlines()[2],),
+        request_errors=REQUEST_ERRORS,
         sample_rate=24000,
         pools_connections=True,
         transport_fixture=TransportFixture(
@@ -134,6 +158,7 @@ PROVIDERS = (
         Realtime,
         server_vad,
         (__doc__.splitlines()[2],),
+        request_errors=REQUEST_ERRORS,
         sample_rate=24000,
         pools_connections=True,
         completion_on_close=False,

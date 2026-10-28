@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.protocol import Protocol, Provider
+from tests.stt_harness.protocol import Protocol, Provider, RequestError
 from tests.stt_harness.server import json_message
 
 
@@ -64,6 +64,22 @@ PROVIDERS = (
         AgentSTT,
         create_stt,
         ("https://docs.speechmatics.com/api-ref/agent-stt-websocket",),
+        # Error protocol: https://docs.speechmatics.com/api-ref/agent-stt-websocket
+        request_errors=(
+            RequestError(
+                "auth",
+                body={"message": "Error", "type": "not_authorised", "reason": "Not Authorized"},
+            ),
+            RequestError(
+                "invalid_config",
+                body={
+                    "message": "Error",
+                    "type": "invalid_config",
+                    "reason": "Unsupported configuration",
+                },
+                after_audio=True,
+            ),
+        ),
         uses_websocket_monitor=False,
         completion_on_close=False,
     ),
