@@ -1,0 +1,6 @@
+[
+  "rust/crates/lk-agents-runtime/src/duplex/mod.rs -> rust/crates/lk-agents-inference/src/duplex/python.rs",
+  "rust/crates/lk-agents-runtime/src/worker/ipc/mod.rs -> rust/crates/lk-agents-worker/src/ipc/python.rs",
+  "rust/crates/lk-agents-runtime/src/worker/mod.rs -> rust/crates/lk-agents-worker/src/cli.rs",
+  "rust/crates/lk-agents-runtime/src/worker/mod.rs -> rust/crates/lk-agents-worker/src/python.rs"
+]

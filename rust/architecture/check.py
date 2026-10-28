@@ -110,6 +110,28 @@ def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
     return violations
 
 
+# `#[path = ".."]`, bare or inside `cfg_attr`: a module file the attribute names.
+PATH_ATTR = re.compile(r'#\s*\[\s*(?:cfg_attr\s*\([^\]]*?,\s*)?path\s*=\s*"([^"]+)"')
+
+
+def path_violations(root: Path, paths: list[str]) -> set[str]:
+    """A `#[path]` module outside its own crate's tree (`src/`, `tests/`, ..): the file then compiles
+    in another crate, beyond its directory's dependency and Clippy policy."""
+    violations = set()
+    crates = (root / "rust/crates").resolve()
+    for path in paths:
+        parts = Path(path).parts
+        if parts[:2] != ("rust", "crates") or len(parts) < 5:
+            continue
+        own = crates / parts[2] / parts[3]
+        source = root / path
+        for target in PATH_ATTR.findall(source.read_text()):
+            resolved = (source.parent / target).resolve()
+            if not resolved.is_relative_to(own):
+                violations.add(f"{path} -> {os.path.relpath(resolved, root.resolve())}")
+    return violations
+
+
 def tracked_rust_paths(root: Path) -> list[str]:
     paths = git(root, "ls-files", "-z", "--", "*.rs").strip("\0").split("\0")
     deleted = set(git(root, "ls-files", "--deleted", "-z", "--", "*.rs").split("\0"))
@@ -171,6 +193,7 @@ def check_boundaries() -> int:
     for name, actual in (
         ("dependencies", dependency_violations(metadata)),
         ("lengths", length_violations(root, paths)),
+        ("paths", path_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

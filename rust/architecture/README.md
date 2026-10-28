@@ -10,6 +10,10 @@ the workspace Rust flags.
   build and dev edges, and workspace layering for subject cores and ABI.
   Forbidden executor, transport, host and SDK families include Tokio, futures,
   PyO3 and LiveKit SDKs; protocol records are allowed.
+- A `#[path]` module stays inside its own crate's tree (`src/`, `tests/`, ..): a file under a core's
+  directory compiled by another crate would escape that core's dependency and Clippy policy, so
+  every core-directory file is either compiled by its own crate (and linted with it) or an
+  identity of the shrink-only `paths-baseline.json`.
 - Git-tracked handwritten Rust files have a 1,250-line limit. Generated markers
   must appear on the first line. Existing oversized files have individual
   shrinking ceilings.

@@ -12,6 +12,7 @@ from check import (
     check_history,
     dependency_violations,
     length_violations,
+    path_violations,
     ratchet,
     tracked_rust_paths,
 )
@@ -218,3 +219,30 @@ class BaselineContracts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PathContracts(unittest.TestCase):
+    # Catches: a crate compiling another crate's file through `#[path]` (it then escapes that
+    # crate's dependency and Clippy policy), bare or under `cfg_attr`; a module file inside the
+    # crate's own tree stays allowed.
+    def test_a_path_module_outside_its_crate_tree_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "rust/crates/lk-agents-runtime/src"
+            worker = root / "rust/crates/lk-agents-worker/src"
+            runtime.mkdir(parents=True)
+            worker.mkdir(parents=True)
+            (worker / "python.rs").write_text("")
+            (runtime / "inner.rs").write_text("")
+            (runtime / "lib.rs").write_text(
+                '#[path = "inner.rs"]\nmod inner;\n'
+                '#[path = "../../lk-agents-worker/src/python.rs"]\nmod python;\n'
+                '#[cfg_attr(feature = "x", path = "../../lk-agents-worker/src/python.rs")]\nmod other;\n'
+            )
+            self.assertEqual(
+                path_violations(root, ["rust/crates/lk-agents-runtime/src/lib.rs"]),
+                {
+                    "rust/crates/lk-agents-runtime/src/lib.rs"
+                    " -> rust/crates/lk-agents-worker/src/python.rs"
+                },
+            )
