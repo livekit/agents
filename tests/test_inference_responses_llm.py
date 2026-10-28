@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx2 as httpx
 import openai
 import pytest
 
-from livekit.agents import APIConnectOptions, APIStatusError, llm as agents_llm
+from livekit.agents import (
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    llm as agents_llm,
+)
 from livekit.agents.inference import responses as inference_responses
 from livekit.agents.inference.responses import LLM as ResponsesLLM
 
@@ -96,6 +102,12 @@ def _make_llm(
 
     monkeypatch.setattr(ResponsesLLM, "_make_client", _make_client)
     return ResponsesLLM(model, base_url="https://gw.test/v1", api_key="k", api_secret="s", **kwargs)
+
+
+@agents_llm.function_tool
+async def _get_weather(location: str) -> str:
+    """Get the weather for a location."""
+    return "sunny"
 
 
 def _ctx(*texts: str) -> agents_llm.ChatContext:
@@ -204,10 +216,63 @@ async def test_per_call_extra_kwargs_tool_choice_converted(
 
     await _drain(
         model,
+        tools=[_get_weather],
         extra_kwargs={"tool_choice": {"type": "function", "function": {"name": "get_weather"}}},
     )
 
     assert transport.body()["tool_choice"] == {"type": "function", "name": "get_weather"}
+
+
+async def test_tool_choice_dropped_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_llm(monkeypatch, transport, extra_kwargs={"tool_choice": "required"})
+
+    await _drain(model, tools=[])
+
+    assert "tool_choice" not in transport.body()
+
+
+async def test_tool_choice_sent_with_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_llm(monkeypatch, transport, extra_kwargs={"tool_choice": "required"})
+
+    await _drain(model, tools=[_get_weather])
+
+    assert transport.body()["tool_choice"] == "required"
+
+
+class _TimeoutMidStream(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _sse(_FRAMES[:1])
+        raise httpx.ReadTimeout("read timed out")
+
+
+class _StallingTransport(httpx.AsyncBaseTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_TimeoutMidStream(),
+            request=request,
+        )
+
+
+async def test_read_timeout_mid_stream_is_timeout_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _make_client(self: ResponsesLLM) -> openai.AsyncClient:
+        return openai.AsyncClient(
+            api_key="test-key",
+            base_url=self._opts.base_url,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=_StallingTransport()),
+        )
+
+    monkeypatch.setattr(ResponsesLLM, "_make_client", _make_client)
+    model = ResponsesLLM(
+        "openai/gpt-4.1", base_url="https://gw.test/v1", api_key="k", api_secret="s"
+    )
+
+    with pytest.raises(APITimeoutError):
+        await _drain(model, conn_options=APIConnectOptions(max_retry=0))
 
 
 async def test_prompt_cache_ttl_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:

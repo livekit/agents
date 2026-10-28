@@ -13,6 +13,7 @@ from openai.types.responses import (
     ResponseTextConfigParam,
     response_create_params,
 )
+from openai.types.responses.response_create_params import PromptCacheOptions
 from openai.types.shared_params import Metadata
 from typing_extensions import TypedDict
 
@@ -39,7 +40,7 @@ from ._utils import (
     get_inference_headers,
     resolve_credentials,
 )
-from .llm import LLMModels, PromptCacheOptions, supports_prompt_cache_breakpoints
+from .llm import LLMModels, supports_prompt_cache_breakpoints
 
 
 class ResponsesOptions(TypedDict, total=False):
@@ -163,7 +164,8 @@ class LLM(llm.LLM):
         oai_tool_choice = _to_responses_tool_choice(
             tool_choice if is_given(tool_choice) else merged_tool_choice
         )
-        if oai_tool_choice is not None:
+        # the API rejects a tool_choice with no tools
+        if oai_tool_choice is not None and tools:
             extra["tool_choice"] = oai_tool_choice
 
         effective_inference_class = (
