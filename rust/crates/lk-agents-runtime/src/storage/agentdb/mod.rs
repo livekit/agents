@@ -260,12 +260,14 @@ impl SqliteConnection for Pooled {
         Ok(self.conn.query_all(&statement).await?)
     }
 
-    /// A batch whose socket dropped or timed out after it was sent may have committed:
-    /// `Uncertain`, never `Unavailable`.
+    /// A batch whose socket dropped or timed out after it was sent, or whose answer was
+    /// malformed, may have committed: `Uncertain`, never `Unavailable`.
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.live()?;
         self.conn.batch(&statements).await.map_err(|e| match e {
-            WsdbError::Disconnected | WsdbError::Timeout => StorageError::Uncertain(e.to_string()),
+            WsdbError::Disconnected | WsdbError::Timeout | WsdbError::Protocol(_) => {
+                StorageError::Uncertain(e.to_string())
+            }
             e => e.into(),
         })
     }

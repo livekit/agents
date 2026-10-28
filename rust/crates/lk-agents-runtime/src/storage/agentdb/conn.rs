@@ -50,57 +50,51 @@ pub fn statement(s: &Statement) -> wire::Statement {
 }
 
 /// A batch's rows. Values are typed per row: walk `types` and take the next entry from the
-/// matching array; text and blobs are concatenated with one exclusive end offset each. A
-/// truncated column reads as `NULL`, as the Go client does, rather than failing the batch.
-pub fn decode_batch(b: &wire::ColumnBatch) -> Vec<Row> {
+/// matching array; text and blobs are concatenated with one exclusive end offset each. A column
+/// that does not hold what its types announce, or text that is not UTF-8, is a malformed answer:
+/// refused, never read as `NULL`.
+pub fn decode_batch(b: &wire::ColumnBatch) -> Result<Vec<Row>, WsdbError> {
     use wire::ValueType;
+    let malformed = |what: &str| WsdbError::Protocol(format!("a malformed column batch: {what}"));
     let rows = b.rows as usize;
     let mut out: Vec<Row> = (0..rows).map(|_| Vec::with_capacity(b.columns.len())).collect();
     for col in &b.columns {
-        let (mut ints, mut doubles, mut texts, mut blobs) = (0usize, 0usize, 0usize, 0usize);
+        if col.types.len() != rows {
+            return Err(malformed("a column's types do not cover its rows"));
+        }
+        let (mut ints, mut doubles) = (col.ints.iter(), col.doubles.iter());
+        let (mut texts, mut blobs) = (col.text_ends.iter(), col.blob_ends.iter());
         let (mut text_at, mut blob_at) = (0usize, 0usize);
-        for (r, row) in out.iter_mut().enumerate() {
-            let tag =
-                col.types.get(r).copied().map(i32::from).and_then(|t| ValueType::try_from(t).ok());
-            let cell = match tag {
-                Some(ValueType::Int) if ints < col.ints.len() => {
-                    ints += 1;
-                    SqlValue::Int(col.ints[ints - 1])
+        for (row, tag) in out.iter_mut().zip(&col.types) {
+            let span = |ends: &mut std::slice::Iter<'_, u32>, at: &mut usize, len: usize| {
+                let end = *ends.next()? as usize;
+                let start = std::mem::replace(at, end);
+                (start <= end && end <= len).then_some(start..end)
+            };
+            let cell = match ValueType::try_from(i32::from(*tag)) {
+                Ok(ValueType::Null) => SqlValue::Null,
+                Ok(ValueType::Int) => SqlValue::Int(*ints.next().ok_or_else(|| malformed("ints"))?),
+                Ok(ValueType::Double) => {
+                    SqlValue::Double(*doubles.next().ok_or_else(|| malformed("doubles"))?)
                 }
-                Some(ValueType::Double) if doubles < col.doubles.len() => {
-                    doubles += 1;
-                    SqlValue::Double(col.doubles[doubles - 1])
+                Ok(ValueType::Text) => {
+                    let range = span(&mut texts, &mut text_at, col.text_data.len())
+                        .ok_or_else(|| malformed("text offsets"))?;
+                    let text = std::str::from_utf8(&col.text_data[range])
+                        .map_err(|_| malformed("text that is not UTF-8"))?;
+                    SqlValue::Text(text.to_owned())
                 }
-                Some(ValueType::Text) if texts < col.text_ends.len() => {
-                    let end = col.text_ends[texts] as usize;
-                    texts += 1;
-                    let cell = if end >= text_at && end <= col.text_data.len() {
-                        SqlValue::Text(
-                            String::from_utf8_lossy(&col.text_data[text_at..end]).into_owned(),
-                        )
-                    } else {
-                        SqlValue::Null
-                    };
-                    text_at = end;
-                    cell
+                Ok(ValueType::Blob) => {
+                    let range = span(&mut blobs, &mut blob_at, col.blob_data.len())
+                        .ok_or_else(|| malformed("blob offsets"))?;
+                    SqlValue::Blob(col.blob_data[range].to_vec())
                 }
-                Some(ValueType::Blob) if blobs < col.blob_ends.len() => {
-                    let end = col.blob_ends[blobs] as usize;
-                    blobs += 1;
-                    let cell = if end >= blob_at && end <= col.blob_data.len() {
-                        SqlValue::Blob(col.blob_data[blob_at..end].to_vec())
-                    } else {
-                        SqlValue::Null
-                    };
-                    blob_at = end;
-                    cell
-                }
-                _ => SqlValue::Null,
+                Err(_) => return Err(malformed("an unknown value type")),
             };
             row.push(cell);
         }
     }
-    out
+    Ok(out)
 }
 
 /// The inverse of [`decode_batch`], for tests and fakes: rows into one column-oriented batch.
@@ -680,7 +674,7 @@ impl Conn {
             match req.next().await?.message {
                 Some(pb::server_message::Message::Columns(_)) => {}
                 Some(pb::server_message::Message::ColumnBatch(b)) => {
-                    rows.extend(decode_batch(&b));
+                    rows.extend(decode_batch(&b)?);
                     let _ = self
                         .write(id, pb::client_message::Message::Credit(pb::Credit { batches: 1 }));
                 }
@@ -735,7 +729,7 @@ impl Conn {
                     }
                     Some(pb::server_message::Message::ColumnBatch(b)) => {
                         let i = slot(&mut results, b.statement)?;
-                        let rows = decode_batch(&b);
+                        let rows = decode_batch(&b)?;
                         match &mut results[i] {
                             Some(StatementResult::Rows(set)) => set.extend(rows),
                             _ => results[i] = Some(StatementResult::Rows(rows)),
@@ -753,15 +747,12 @@ impl Conn {
                         });
                     }
                     Some(pb::server_message::Message::Done(d)) => {
-                        let results = results
-                            .into_iter()
-                            .map(|r| {
-                                r.unwrap_or(StatementResult::Exec {
-                                    rows_affected: 0,
-                                    last_insert_id: 0,
-                                })
-                            })
-                            .collect();
+                        // a statement the answer left out is a malformed answer, never a
+                        // zero-row success
+                        let results =
+                            results.into_iter().collect::<Option<Vec<_>>>().ok_or_else(|| {
+                                WsdbError::Protocol(format!("a batch of {n} missing a result"))
+                            })?;
                         req.answered = true;
                         self.observe_tip(d.tip);
                         return Ok(BatchResult { results });
@@ -887,14 +878,17 @@ pub(crate) mod tests {
             vec![SqlValue::Double(2.5), SqlValue::Text("bb".into()), SqlValue::Int(-7)],
         ];
         let batch = encode_batch(&rows, 3);
-        assert_eq!(decode_batch(&batch), rows);
+        assert_eq!(decode_batch(&batch).unwrap(), rows);
     }
 
     #[test]
-    fn a_truncated_column_reads_as_null() {
+    fn a_malformed_column_is_refused_not_read_as_null() {
         let mut batch = encode_batch(&[vec![SqlValue::Int(1)], vec![SqlValue::Int(2)]], 1);
         batch.columns[0].ints.pop();
-        assert_eq!(decode_batch(&batch), vec![vec![SqlValue::Int(1)], vec![SqlValue::Null]]);
+        assert!(matches!(decode_batch(&batch), Err(WsdbError::Protocol(_))));
+        let mut batch = encode_batch(&[vec!["ok".into()]], 1);
+        batch.columns[0].text_data = vec![0xff, 0xfe];
+        assert!(matches!(decode_batch(&batch), Err(WsdbError::Protocol(_))));
     }
 
     // A fake `wsdb` server on a loopback listener: enough of the protocol to exercise the
@@ -995,8 +989,9 @@ pub(crate) mod tests {
             }
             Some(C::Batch(b)) => {
                 // Statement 0: an exec. Statement 1: rows. Statement 2: a RETURNING with no rows,
-                // which still sends its Columns. Statement 3: rows again.
-                assert_eq!(b.statements.len(), 4);
+                // which still sends its Columns. Statement 3: rows again. Statements past the
+                // fourth get no result.
+                assert!(b.statements.len() >= 4);
                 let mut rows1 = encode_batch(&[vec![SqlValue::Int(3)]], 1);
                 rows1.statement = 1;
                 let mut rows3 = encode_batch(&[vec!["x".into()], vec!["y".into()]], 1);
@@ -1100,6 +1095,15 @@ pub(crate) mod tests {
         // the acquire that lost: Columns, no ColumnBatch
         assert_eq!(out.results[2], StatementResult::Rows(vec![]));
         assert_eq!(out.results[3].rows().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_batch_answer_missing_a_statement_is_malformed_not_a_zero_row_success() {
+        let (url, _) = serve(script, false).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let stmts: Vec<Statement> = (0..5).map(|_| st("S", vec![])).collect();
+        assert!(matches!(conn.batch(&stmts).await, Err(WsdbError::Protocol(_))));
+        conn.close();
     }
 
     #[tokio::test]
