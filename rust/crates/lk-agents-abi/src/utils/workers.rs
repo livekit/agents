@@ -9,7 +9,9 @@ pub enum WorkerClass {
     Decoder,
     Recording,
     Image,
+    Formatting,
     EotModel,
+    VadModel,
     Upload,
     WorkerIo,
 }
@@ -24,22 +26,34 @@ pub enum WorkerError {
     Unavailable(String),
 }
 
-pub type WorkerJoin = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
-pub type NativeJob = Box<dyn FnOnce() + Send + 'static>;
+pub type WorkerJoin<T = ()> = Pin<Box<dyn Future<Output = Result<T, String>> + Send>>;
+pub type NativeJob<T = ()> = Box<dyn FnOnce() -> T + Send + 'static>;
+pub type WorkerOutput = Box<dyn std::any::Any + Send>;
 
 /// Linked by the runtime; registration starts no threads and allocates no process state.
 pub struct WorkerService {
-    pub try_spawn: fn(WorkerClass, NativeJob) -> Result<WorkerJoin, WorkerError>,
+    pub try_spawn:
+        fn(WorkerClass, NativeJob<WorkerOutput>) -> Result<WorkerJoin<WorkerOutput>, WorkerError>,
 }
 
 inventory::collect!(WorkerService);
 
-pub fn try_spawn(class: WorkerClass, job: NativeJob) -> Result<WorkerJoin, WorkerError> {
+pub fn try_spawn<T: Send + 'static>(
+    class: WorkerClass,
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Result<WorkerJoin<T>, WorkerError> {
     let mut services = inventory::iter::<WorkerService>.into_iter();
     let service =
         services.next().ok_or_else(|| WorkerError::Unavailable("no runtime linked".into()))?;
     if services.next().is_some() {
         return Err(WorkerError::Unavailable("multiple runtimes linked".into()));
     }
-    (service.try_spawn)(class, job)
+    let receipt = (service.try_spawn)(class, Box::new(move || Box::new(job())))?;
+    Ok(Box::pin(async move {
+        receipt
+            .await?
+            .downcast::<T>()
+            .map(|value| *value)
+            .map_err(|_| "native worker returned the wrong result type".into())
+    }))
 }

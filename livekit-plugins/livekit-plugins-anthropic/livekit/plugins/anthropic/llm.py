@@ -232,43 +232,45 @@ class LLM(llm.LLM):
                         anthropic_tool_choice["disable_parallel_tool_use"] = not parallel_tool_calls
                     extra["tool_choice"] = anthropic_tool_choice
 
-        # Claude 4.6+ does not support prefilling (trailing assistant messages).
-        inject_trailing = _model_disables_prefill(self._opts.model)
-        anthropic_ctx, extra_data = chat_ctx.to_provider_format(
-            format="anthropic", inject_trailing_user_message=inject_trailing
-        )
-        messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
-        if extra_data.system_messages:
-            extra["system"] = [
-                anthropic.types.TextBlockParam(text=content, type="text")
-                for content in extra_data.system_messages
-            ]
-
-        # add cache control
-        if self._opts.caching == "ephemeral":
-            if extra.get("system"):
-                extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
-
-            if extra.get("tools"):
-                extra["tools"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
-
-            seen_assistant = False
-            for msg in reversed(messages):
-                if (
-                    msg["role"] == "assistant"
-                    and (content := msg["content"])
-                    and not seen_assistant
-                ):
-                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
-                    seen_assistant = True
-
-                elif msg["role"] == "user" and (content := msg["content"]) and seen_assistant:
-                    content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
-                    break
+        chat_ctx = chat_ctx.copy()
 
         async def create_anthropic_stream() -> anthropic.AsyncStream[
             anthropic.types.RawMessageStreamEvent
         ]:
+            # Claude 4.6+ does not support prefilling (trailing assistant messages).
+            inject_trailing = _model_disables_prefill(self._opts.model)
+            anthropic_ctx, extra_data = await chat_ctx.to_provider_format(
+                format="anthropic", inject_trailing_user_message=inject_trailing
+            )
+            messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
+            if extra_data.system_messages:
+                extra["system"] = [
+                    anthropic.types.TextBlockParam(text=content, type="text")
+                    for content in extra_data.system_messages
+                ]
+
+            # add cache control
+            if self._opts.caching == "ephemeral":
+                if extra.get("system"):
+                    extra["system"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+                if extra.get("tools"):
+                    extra["tools"][-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
+                seen_assistant = False
+                for msg in reversed(messages):
+                    if (
+                        msg["role"] == "assistant"
+                        and (content := msg["content"])
+                        and not seen_assistant
+                    ):
+                        content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
+                        seen_assistant = True
+
+                    elif msg["role"] == "user" and (content := msg["content"]) and seen_assistant:
+                        content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
+                        break
+
             if beta_flag:
                 stream = await client.beta.messages.create(
                     betas=[beta_flag],

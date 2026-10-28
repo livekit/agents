@@ -6,17 +6,17 @@
 
 #[cfg(feature = "python")]
 pub mod audio_emitter;
-pub mod mixer;
 #[cfg(feature = "blingfire")]
 pub mod blingfire;
 pub mod decoder;
 pub mod error;
+#[cfg(feature = "ffmpeg")]
+pub mod ffmpeg;
 pub mod frame_resampler;
 #[cfg(feature = "images")]
 pub mod images;
-#[cfg(feature = "ffmpeg")]
-pub mod ffmpeg;
 pub mod mime;
+pub mod mixer;
 pub mod recorder;
 #[cfg(feature = "resample")]
 pub mod soxr;
@@ -42,12 +42,14 @@ pub fn new_resampler(
 ) -> std::result::Result<Box<dyn Resampler>, ResampleError> {
     #[cfg(feature = "resample")]
     {
-        SoxrResampler::new(input_rate, output_rate, num_channels, quality).map(|r| Box::new(r) as Box<dyn Resampler>)
+        SoxrResampler::new(input_rate, output_rate, num_channels, quality)
+            .map(|r| Box::new(r) as Box<dyn Resampler>)
     }
     #[cfg(not(feature = "resample"))]
     {
         let _ = quality;
-        LinearResampler::new(input_rate, output_rate, num_channels).map(|r| Box::new(r) as Box<dyn Resampler>)
+        LinearResampler::new(input_rate, output_rate, num_channels)
+            .map(|r| Box::new(r) as Box<dyn Resampler>)
     }
 }
 
@@ -61,6 +63,21 @@ pub fn pcm_bytes(pcm: &[i16]) -> Vec<u8> {
         out.extend_from_slice(&s.to_le_bytes());
     }
     out
+}
+
+/// Interleaved PCM averaged to mono, truncating toward zero like the recorder's sample conversion.
+/// A zero channel header is treated as mono; an incomplete channel group is discarded.
+pub fn downmix_mono(samples: &[i16], num_channels: u16) -> Vec<i16> {
+    let channels = usize::from(num_channels.max(1));
+    if channels == 1 {
+        return samples.to_vec();
+    }
+    samples
+        .chunks_exact(channels)
+        .map(|frame| {
+            (frame.iter().map(|&sample| i64::from(sample)).sum::<i64>() / channels as i64) as i16
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -51,6 +51,11 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 
 
+@dataclass
+class _VideoInput:
+    frame: rtc.VideoFrame
+
+
 class _ChatCtxContent(types.LiveClientContent):
     """Client content built from chat ctx items; the ids let the send task mark them sent."""
 
@@ -507,7 +512,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
-        self._msg_ch = utils.aio.Chan[ClientEvents]()
+        self._msg_ch = utils.aio.Chan[ClientEvents | _VideoInput]()
+        self._pending_video: _VideoInput | None = None
+        self._video_encode_warned = False
         self._input_resampler: rtc.AudioResampler | None = None
 
         # 50ms chunks
@@ -575,6 +582,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
+        self._chat_ctx_lock = asyncio.Lock()
         self._num_retries = 0
         # error recorded by the recv/send tasks so _main_task can bound retries
         # and surface it through the "error" event
@@ -603,7 +611,8 @@ class RealtimeSession(llm.RealtimeSession):
                             extra={"lk.pii.content": str(msg)},
                         )
 
-            self._msg_ch = utils.aio.Chan[ClientEvents]()
+            self._msg_ch = utils.aio.Chan[ClientEvents | _VideoInput]()
+            self._pending_video = None
 
     def update_options(
         self,
@@ -704,17 +713,23 @@ class RealtimeSession(llm.RealtimeSession):
             exclude_empty_message=True,
             exclude_config_update=True,
         )
-        async with self._session_lock:
-            if not self._active_session:
-                self._pending_chat_ctx = chat_ctx
-                return
+        async with self._chat_ctx_lock:
+            async with self._session_lock:
+                if self._msg_ch.closed:
+                    return
+                if self._session_should_close.is_set() or not self._active_session:
+                    self._pending_chat_ctx = chat_ctx
+                    return
+            await self._sync_chat_ctx(chat_ctx)
 
-        self._sync_chat_ctx(chat_ctx)
-
-    def _sync_chat_ctx(
+    async def _sync_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, known: llm.ChatContext | None = None
     ) -> None:
-        """Queue the items missing from `known` and adopt `chat_ctx` as the known state."""
+        """Prepare and queue an update while the caller owns `_chat_ctx_lock`."""
+        expected_session = self._active_session
+        chat_ctx = chat_ctx.copy()
+        events: list[types.LiveClientContent | types.LiveClientToolResponse] = []
+        queued_ids: set[str] = set()
         diff_ops = llm.utils.compute_chat_ctx_diff(
             known if known is not None else self._chat_ctx, chat_ctx
         )
@@ -756,28 +771,37 @@ class RealtimeSession(llm.RealtimeSession):
             )
             turns: list[types.Content] = []
             if self._realtime_model.capabilities.mutable_chat_context:
-                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                    format="google", inject_dummy_user_message=False
-                )
+                turns_dict, _ = await append_ctx.copy(
+                    exclude_function_call=True
+                ).to_provider_format(format="google", inject_dummy_user_message=False)
                 turns = [types.Content.model_validate(turn) for turn in turns_dict]
                 if turns:
                     item_ids = {
                         item.id for item in append_ctx.items if item.type != "function_call_output"
                     }
-                    self._unsent_item_ids |= item_ids
-                    self._send_client_event(
+                    queued_ids |= item_ids
+                    events.append(
                         _ChatCtxContent(turns=turns, turn_complete=False, item_ids=item_ids)
                     )
             if tool_results:
                 item_ids = {
                     item.id for item in append_ctx.items if item.type == "function_call_output"
                 }
-                self._unsent_item_ids |= item_ids
-                self._send_client_event(
+                queued_ids |= item_ids
+                events.append(
                     _ChatCtxToolResponse(
                         function_responses=tool_results.function_responses, item_ids=item_ids
                     )
                 )
+
+        if self._msg_ch.closed:
+            return
+        if self._session_should_close.is_set() or self._active_session is not expected_session:
+            self._pending_chat_ctx = chat_ctx
+            return
+        for event in events:
+            self._send_client_event(event)
+        self._unsent_item_ids |= queued_ids
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
@@ -825,15 +849,20 @@ class RealtimeSession(llm.RealtimeSession):
                 self._send_client_event(realtime_input)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        encoded_data = images.encode(
-            frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
-        )
-        realtime_input = types.LiveClientRealtimeInput(
-            video=types.Blob(data=encoded_data, mime_type="image/jpeg")
-        )
-        self._send_client_event(realtime_input)
+        if self._msg_ch.closed:
+            return
+        if self._pending_video is not None:
+            self._pending_video.frame = frame
+            return
+        pending = _VideoInput(frame)
+        self._pending_video = pending
+        try:
+            self._send_client_event(pending)
+        except utils.aio.ChanFull:
+            self._pending_video = None
+            raise
 
-    def _send_client_event(self, event: ClientEvents) -> None:
+    def _send_client_event(self, event: ClientEvents | _VideoInput) -> None:
         with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
 
@@ -980,6 +1009,7 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._session_should_close.clear()
             session = None
+            session_tasks: list[asyncio.Task[None] | asyncio.Task[bool]] = []
             try:
                 config = self._build_connect_config()
                 logger.debug("connecting to Gemini Realtime API...")
@@ -988,17 +1018,16 @@ class RealtimeSession(llm.RealtimeSession):
                     model=self._opts.model, config=config
                 ) as session:
                     self._report_connection_acquired(time.perf_counter() - t0)
-                    async with self._session_lock:
-                        self._active_session = session
-
-                        pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
+                    async with self._chat_ctx_lock:
+                        async with self._session_lock:
+                            pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
                             # the handle restores the conversation; send only what came after it
                             target = pending_ctx if pending_ctx is not None else self._chat_ctx
                             if self._resumption_chat_ctx is None:
                                 self._chat_ctx = target
                             else:
-                                self._sync_chat_ctx(target, known=self._resumption_chat_ctx)
+                                await self._sync_chat_ctx(target, known=self._resumption_chat_ctx)
                         else:
                             if pending_ctx is not None:
                                 self._chat_ctx = pending_ctx
@@ -1017,7 +1046,7 @@ class RealtimeSession(llm.RealtimeSession):
                                     f"update_instructions() to set system-level context instead."
                                 )
 
-                            turns_dict, _ = self._chat_ctx.copy(
+                            turns_dict, _ = await self._chat_ctx.copy(
                                 exclude_function_call=True,
                                 exclude_handoff=True,
                                 exclude_instructions=True,
@@ -1025,12 +1054,23 @@ class RealtimeSession(llm.RealtimeSession):
                                 exclude_config_update=True,
                             ).to_provider_format(format="google", inject_dummy_user_message=False)
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                            if self._msg_ch.closed:
+                                return
+                            if self._session_should_close.is_set():
+                                continue
                             if turns:
                                 await session.send_client_content(
                                     turns=turns,  # type: ignore
                                     turn_complete=False,
                                 )
                             self._unsent_item_ids.clear()
+
+                        async with self._session_lock:
+                            if self._msg_ch.closed:
+                                return
+                            if self._session_should_close.is_set():
+                                continue
+                            self._active_session = session
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1043,8 +1083,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._session_should_close.wait(), name="gemini-restart-wait"
                     )
 
+                    session_tasks = [send_task, recv_task, restart_wait_task]
                     done, pending = await asyncio.wait(
-                        [send_task, recv_task, restart_wait_task],
+                        session_tasks,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -1120,17 +1161,33 @@ class RealtimeSession(llm.RealtimeSession):
                     await asyncio.sleep(retry_interval)
                     self._num_retries += 1
             finally:
+                if session_tasks:
+                    await utils.aio.cancel_and_wait(*session_tasks)
                 await self._close_active_session()
 
     async def _send_task(self, session: AsyncSession) -> None:
         try:
             async for msg in self._msg_ch:
+                if msg is self._pending_video:
+                    self._pending_video = None
                 async with self._session_lock:
                     if self._session_should_close.is_set() or (
                         not self._active_session or self._active_session != session
                     ):
                         break
-                if isinstance(msg, types.LiveClientContent):
+                if isinstance(msg, _VideoInput):
+                    options = self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
+                    try:
+                        encoded = await images.encode(msg.frame, options)
+                    except Exception as error:
+                        if not self._video_encode_warned:
+                            self._video_encode_warned = True
+                            logger.warning("dropping video frame after encoding failure: %s", error)
+                        continue
+                    await session.send_realtime_input(
+                        video=types.Blob(data=encoded, mime_type=f"image/{options.format.lower()}")
+                    )
+                elif isinstance(msg, types.LiveClientContent):
                     await session.send_client_content(
                         turns=msg.turns,  # type: ignore
                         turn_complete=msg.turn_complete if msg.turn_complete is not None else True,

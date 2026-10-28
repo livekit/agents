@@ -169,6 +169,89 @@ fn media_collection_failure_keeps_the_invalid_element_path() {
 }
 
 #[test]
+fn large_video_snapshots_remain_isolated_from_mutable_host_aliases() {
+    attach(|py| {
+        let m = module(
+            py,
+            "owner = bytearray(b'x' * (1920 * 1080 * 4))\nalias = memoryview(owner).toreadonly()\n",
+        );
+        let alias = m.getattr("alias").unwrap();
+        let snapshot = retained_bytes(&alias, "VideoFrame.data", None).unwrap();
+        m.getattr("owner").unwrap().set_item(0, 0).unwrap();
+        assert_eq!(snapshot[0], b'x');
+        assert_eq!(snapshot.len(), 1920 * 1080 * 4);
+        assert_eq!(snapshot[snapshot.len() - 1], b'x');
+    });
+}
+
+#[test]
+fn large_buffer_allocation_lets_other_python_threads_progress_before_the_snapshot() {
+    attach(|py| {
+        let m = module(
+            py,
+            r#"
+import threading, time
+owner = bytearray(b'x' * (32 * 1024 * 1024))
+alias = memoryview(owner).toreadonly()
+started = threading.Event()
+armed = progressed = False
+def run():
+    global progressed
+    started.set()
+    while not armed:
+        time.sleep(0.001)
+    progressed = True
+thread = threading.Thread(target=run)
+thread.start()
+started.wait()
+"#,
+        );
+        let alias = m.getattr("alias").unwrap();
+        m.setattr("armed", true).unwrap();
+        for _ in 0..16 {
+            let snapshot = retained_bytes(&alias, "VideoFrame.data", None).unwrap();
+            assert_eq!(snapshot.len(), 32 * 1024 * 1024);
+            assert_eq!(snapshot[0], b'x');
+            assert_eq!(snapshot[snapshot.len() - 1], b'x');
+        }
+        let progressed = m.getattr("progressed").unwrap().extract::<bool>().unwrap();
+        m.getattr("thread").unwrap().call_method0("join").unwrap();
+        assert!(progressed, "large native allocation must release the GIL before copying");
+    });
+}
+
+#[test]
+fn bounded_video_frames_refuse_oversized_host_buffers_before_copying() {
+    attach(|py| {
+        let m = module(
+            py,
+            r#"
+class Frame:
+    width = height = 1
+    type = 0
+    def __init__(self, data): self.data = data
+immutable = b'x' * (1920 * 1080 * 4)
+mutable = memoryview(bytearray(immutable)).toreadonly()
+"#,
+        );
+        let clock = py.import("time").unwrap().getattr("thread_time").unwrap();
+        for field in ["immutable", "mutable"] {
+            let frame = m.getattr("Frame").unwrap().call1((m.getattr(field).unwrap(),)).unwrap();
+            let started = clock.call0().unwrap().extract::<f64>().unwrap();
+            let result = crate::utils::video::VideoFrame::from_host(&frame, Some(4));
+            let elapsed = clock.call0().unwrap().extract::<f64>().unwrap() - started;
+            let Err(error) = result else {
+                panic!("oversized host buffer was accepted");
+            };
+            let cause = error.cause(py).expect("field extraction preserves the size error");
+            assert!(cause.is_instance_of::<PyValueError>(py));
+            assert!(cause.to_string().contains("limit is 4"));
+            assert!(elapsed <= 0.002, "byte admission used {elapsed:.6}s CPU");
+        }
+    });
+}
+
+#[test]
 fn retained_buffers_keep_immutable_owners_and_snapshot_writable_aliases() {
     attach(|py| {
         let m = module(
@@ -186,29 +269,42 @@ wrong_layout = memoryview(owner)[::2]
 "#,
         );
         let immutable = m.getattr("immutable").unwrap();
-        let retained = retained_bytes(&immutable, "frame.data").unwrap();
+        let retained = retained_bytes(&immutable, "frame.data", None).unwrap();
         assert_eq!(
             retained.as_ptr(),
             immutable.cast::<pyo3::types::PyBytes>().unwrap().as_bytes().as_ptr()
         );
-        let snapshot = retained_bytes(&m.getattr("alias").unwrap(), "frame.data").unwrap();
+        let snapshot = retained_bytes(&m.getattr("alias").unwrap(), "frame.data", None).unwrap();
         m.getattr("owner").unwrap().set_item(0, 9).unwrap();
         m.delattr("immutable").unwrap();
         drop(immutable);
         m.delattr("alias").unwrap();
         m.delattr("owner").unwrap();
-        let pcm =
-            snapshot_buffer(&m.getattr("samples").unwrap(), BufferFormat::I16Le, "frame.data")
-                .unwrap();
+        let pcm = snapshot_buffer(
+            &m.getattr("samples").unwrap(),
+            BufferFormat::I16Le,
+            "frame.data",
+            None,
+        )
+        .unwrap();
         assert_eq!(&*pcm, &[1, 0, 254, 255]);
-        let explicit_le =
-            snapshot_buffer(&m.getattr("samples_le").unwrap(), BufferFormat::I16Le, "frame.data")
-                .unwrap();
+        let explicit_le = snapshot_buffer(
+            &m.getattr("samples_le").unwrap(),
+            BufferFormat::I16Le,
+            "frame.data",
+            None,
+        )
+        .unwrap();
         assert_eq!(&*explicit_le, &[1, 0, 254, 255]);
         for field in ["wrong_format", "wrong_layout"] {
             assert!(
-                snapshot_buffer(&m.getattr(field).unwrap(), BufferFormat::I16Le, "frame.data")
-                    .is_err()
+                snapshot_buffer(
+                    &m.getattr(field).unwrap(),
+                    BufferFormat::I16Le,
+                    "frame.data",
+                    None
+                )
+                .is_err()
             );
         }
         m.delattr("wrong_layout").unwrap();

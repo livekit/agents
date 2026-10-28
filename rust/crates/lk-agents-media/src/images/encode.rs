@@ -184,37 +184,6 @@ pub struct RgbaFrame<'a> {
     pub data: &'a [u8],
 }
 
-/// `utils.images.encode(frame, options)` over tight RGBA, the options as the reference's
-/// `Literal` strings. Unknown values raise rather than default.
-#[lk_agents_abi::host(export(kw_only = "format", defaults(format = "JPEG")))]
-#[allow(clippy::too_many_arguments)]
-pub fn encode_image(
-    data: &[u8],
-    width: u32,
-    height: u32,
-    format: &str,
-    quality: Option<u8>,
-    resize_width: Option<u32>,
-    resize_height: Option<u32>,
-    resize_strategy: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    let format = format.parse::<ImageFormat>().map_err(|e| e.to_string())?;
-    let resize_options = match (resize_width, resize_height, resize_strategy) {
-        (Some(width), Some(height), Some(strategy)) => {
-            let strategy = strategy.parse::<ResizeStrategy>().map_err(|e| e.to_string())?;
-            Some(ResizeOptions { width, height, strategy })
-        }
-        (None, None, None) => None,
-        _ => {
-            return Err(
-                "resize needs all three of width, height and strategy, or none of them".to_owned()
-            );
-        }
-    };
-    let options = EncodeOptions { format, resize_options, quality };
-    encode(RgbaFrame { width, height, data }, &options).map_err(|e| e.to_string())
-}
-
 /// `encode` (`image.py:73`).
 pub fn encode(frame: RgbaFrame<'_>, options: &EncodeOptions) -> Result<Vec<u8>, MediaError> {
     let mut buffer = Vec::new();

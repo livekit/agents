@@ -34,7 +34,8 @@ def _tool_call_input(fmt: str, messages: list[dict[str, Any]]) -> Any:
 
 
 @pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
-def test_to_provider_format_tolerates_unparseable_tool_arguments(fmt: str):
+@pytest.mark.asyncio
+async def test_to_provider_format_tolerates_unparseable_tool_arguments(fmt: str):
     """A stored tool call whose arguments never parsed must not crash a later turn.
 
     `FunctionCall.arguments` is kept verbatim when it can't be parsed (unrecoverable
@@ -47,18 +48,19 @@ def test_to_provider_format_tolerates_unparseable_tool_arguments(fmt: str):
     ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments="not-a-json-object"))
     ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="tool error", is_error=True))
 
-    messages, _ = ctx.to_provider_format(format=fmt)
+    messages, _ = await ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
 
 
 @pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
-def test_to_provider_format_preserves_valid_tool_arguments(fmt: str):
+@pytest.mark.asyncio
+async def test_to_provider_format_preserves_valid_tool_arguments(fmt: str):
     """Valid JSON-object arguments are still passed through unchanged."""
     ctx = ChatContext.empty()
     ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments='{"order": "123"}'))
     ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
 
-    messages, _ = ctx.to_provider_format(format=fmt)
+    messages, _ = await ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {"order": "123"}
 
 
@@ -72,7 +74,8 @@ def test_to_provider_format_preserves_valid_tool_arguments(fmt: str):
     ],
     ids=["trailing-comma", "chat-template-leak", "double-encoded"],
 )
-def test_to_provider_format_recovers_repairable_tool_arguments(
+@pytest.mark.asyncio
+async def test_to_provider_format_recovers_repairable_tool_arguments(
     fmt: str, arguments: str, expected: dict[str, Any]
 ):
     """Recoverable arguments are repaired rather than discarded.
@@ -85,20 +88,21 @@ def test_to_provider_format_recovers_repairable_tool_arguments(
     ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments=arguments))
     ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
 
-    messages, _ = ctx.to_provider_format(format=fmt)
+    messages, _ = await ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == expected
 
 
 @pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
 @pytest.mark.parametrize("arguments", ["", "[1, 2, 3]", "42", "null"])
-def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
+@pytest.mark.asyncio
+async def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
     """Empty or non-object arguments degrade to `{}`; a call's arguments are always a
     named-parameter object, so an array/scalar/null is treated as no arguments."""
     ctx = ChatContext.empty()
     ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments=arguments))
     ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
 
-    messages, _ = ctx.to_provider_format(format=fmt)
+    messages, _ = await ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
 
 

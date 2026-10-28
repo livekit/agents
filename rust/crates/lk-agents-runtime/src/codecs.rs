@@ -161,6 +161,8 @@ impl Shared {
         state.output.extend(prepared);
         drop(state);
         self.ready.notify_one();
+        // Give the host and controls scheduling opportunities between native decode chunks.
+        std::thread::yield_now();
         Ok(())
     }
 }
@@ -267,7 +269,8 @@ impl AudioDecoder {
     }
 
     pub async fn next(&mut self) -> Result<Option<AudioFrame>, DecoderError> {
-        tokio::task::consume_budget().await;
+        // Each ready pull is its own dispatch; a large decoded backlog must not monopolize controls.
+        tokio::task::yield_now().await;
         loop {
             let ready = self.shared.ready.notified();
             match self.shared.poll_output() {
@@ -446,7 +449,9 @@ mod tests {
                 decoders: 1,
                 recordings: 1,
                 images: 1,
+                formatting: 1,
                 eot_models: 1,
+                vad_models: 1,
                 uploads: 1,
                 worker_io: 1,
             },
@@ -593,6 +598,16 @@ mod tests {
         replacement.close(Duration::from_secs(1)).await.unwrap();
     }
 
+    #[cfg(unix)]
+    fn thread_cpu() -> Duration {
+        let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: clock_gettime writes to a valid timespec for this thread's CPU clock.
+        let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+        assert_eq!(status, 0, "thread CPU clock unavailable");
+        Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn ready_file_pcm_yields_to_control_without_dropping_audio() {
         let file = AudioFile::wav("fairness", &[1; 16_000]);
@@ -607,17 +622,22 @@ mod tests {
             ready.await;
         }
         let (ready, mut control) = tokio::sync::oneshot::channel();
+        let started = thread_cpu();
         let control_task = tokio::spawn(async move {
-            let _ = ready.send(());
+            let _ = ready.send(thread_cpu() - started);
         });
         let mut delivered = 0;
-        while decoder.next().await.unwrap().is_some() {
+        let control_cpu = loop {
+            assert!(decoder.next().await.unwrap().is_some(), "control must run before EOF");
             delivered += 1;
-            if control.try_recv().is_ok() {
-                break;
+            if let Ok(elapsed) = control.try_recv() {
+                break elapsed;
             }
-        }
-        assert!(delivered < 16_000, "ready PCM must yield before draining the file");
+        };
+        assert!(
+            control_cpu <= Duration::from_millis(2),
+            "ready control exceeded the 2ms synchronous CPU budget: {control_cpu:?}",
+        );
         while decoder.next().await.unwrap().is_some() {
             delivered += 1;
         }

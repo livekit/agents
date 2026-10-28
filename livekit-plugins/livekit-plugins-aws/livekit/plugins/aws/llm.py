@@ -199,6 +199,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
+        chat_ctx = chat_ctx.copy()
         opts: dict[str, Any] = {}
         extra_kwargs = extra_kwargs if is_given(extra_kwargs) else {}
 
@@ -252,16 +253,6 @@ class LLM(llm.LLM):
             opts["toolConfig"] = tool_config
         else:
             chat_ctx = chat_ctx.copy(exclude_function_call=True)
-        messages, extra_data = chat_ctx.to_provider_format(format="aws")
-        opts["messages"] = messages
-        if extra_data.system_messages:
-            system_messages: list[SystemContentBlockTypeDef] = [
-                {"text": content} for content in extra_data.system_messages
-            ]
-            if self._opts.cache_system:
-                system_messages.append({"cachePoint": {"type": "default"}})
-            opts["system"] = system_messages
-
         inference_config: dict[str, Any] = {}
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
@@ -323,6 +314,16 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
+            messages, extra_data = await self._chat_ctx.to_provider_format(format="aws")
+            self._opts["messages"] = messages
+            if extra_data.system_messages:
+                system_messages: list[SystemContentBlockTypeDef] = [
+                    {"text": content} for content in extra_data.system_messages
+                ]
+                if self._llm._opts.cache_system:
+                    system_messages.append({"cachePoint": {"type": "default"}})
+                self._opts["system"] = system_messages
+
             config = AioConfig(
                 user_agent_extra="x-client-framework:livekit-plugins-aws",
                 connect_timeout=self._conn_options.connect_timeout,

@@ -62,7 +62,12 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
         let samples_per_channel = attr_with(obj, OWNER, "samples_per_channel", |v| number_from_py(v, "AudioFrame.samples_per_channel"))?;
         Ok(AudioFrame {
             data: attr_with(obj, OWNER, "data", |v| {
-                crate::python::snapshot_buffer(v, crate::python::BufferFormat::I16Le, "AudioFrame.data")
+                crate::python::snapshot_buffer(
+                    v,
+                    crate::python::BufferFormat::I16Le,
+                    "AudioFrame.data",
+                    None,
+                )
             })?,
             sample_rate,
             num_channels,

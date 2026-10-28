@@ -138,7 +138,9 @@ pub fn from_py_at(t: &syn::Type, o: &TokenStream, path: &TokenStream) -> TokenSt
         "f32" => quote!(#rt::f32_from_py(#o, #path)),
         "Value" if args.is_empty() => quote!(#rt::value_from_py(#o, #path)),
         "Vec" if args.len() == 1 && matches!(head(&args[0]), Some((h, _)) if h == "u8") => {
-            quote!(#rt::snapshot_buffer(#o, #rt::BufferFormat::Bytes, #path).map(|b| b.to_vec()))
+            quote!(
+                #rt::snapshot_buffer(#o, #rt::BufferFormat::Bytes, #path, None).map(|b| b.to_vec())
+            )
         }
         "Option" if args.len() == 1 => {
             let inner = from_py_at(&args[0], o, path);

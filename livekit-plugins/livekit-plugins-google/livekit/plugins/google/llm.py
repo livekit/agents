@@ -503,7 +503,7 @@ class LLMStream(llm.LLMStream):
             thought_sigs = (
                 self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
             )
-            turns_dict, extra_data = self._chat_ctx.to_provider_format(
+            turns_dict, extra_data = await self._chat_ctx.to_provider_format(
                 format="google", thought_signatures=thought_sigs
             )
 

@@ -72,6 +72,10 @@ pub struct SessionRecorder {
 }
 
 impl Shared {
+    fn check_failure(&self) -> Result<(), RecordingFailure> {
+        self.failure.get().cloned().map_or(Ok(()), Err)
+    }
+
     fn fail(&self, error: RecordingFailure) -> RecordingFailure {
         let _ = self.failure.set(error.clone());
         let error = self.failure.get().cloned().unwrap_or(error);
@@ -546,7 +550,13 @@ fn process<E: OggOpusEncoder, W: Write>(
                 if output_samples.saturating_mul(4) > shared.limits.retained_bytes as u64 {
                     return Err(RecordingFailure::Overflow("resampled frame PCM"));
                 }
-                recorder.on_input_frame(now, &PcmFrame::from_audio_frame(&frame))
+                let mut end = now - frame.duration();
+                for chunk in frame_chunks(&frame, &shared) {
+                    let chunk = chunk?;
+                    end += chunk.duration();
+                    recorder.on_input_frame(end, &chunk);
+                    std::thread::yield_now();
+                }
             }
             Command::Capture(now, frame) => {
                 if frame.data.len()
@@ -554,19 +564,47 @@ fn process<E: OggOpusEncoder, W: Write>(
                 {
                     return Err(RecordingFailure::Overflow("segment PCM"));
                 }
-                placer.capture_frame(now, &PcmFrame::from_audio_frame(&frame));
+                let mut start = now;
+                for chunk in frame_chunks(&frame, &shared) {
+                    let chunk = chunk?;
+                    placer.capture_frame(start, &chunk);
+                    start += chunk.duration();
+                    std::thread::yield_now();
+                }
             }
             Command::Started(created_at) => placer.on_playback_started(created_at),
             Command::Progress(started_at, offset, duration) => {
-                if let Some(placed) = placer.on_playback_progressed(started_at, offset, duration) {
+                let (mut start, mut offset, mut remaining) = (started_at, offset, duration);
+                loop {
+                    shared.check_failure()?;
+                    let Some(placed) = placer.on_playback_progressed_chunk(
+                        start,
+                        offset,
+                        remaining,
+                        shared.limits.block_duration.as_secs_f64(),
+                    ) else {
+                        break;
+                    };
+                    let advanced = placed.started_at - start + placed.frame.duration();
                     recorder.on_output_placed(&placed);
+                    start += advanced;
+                    offset += advanced;
+                    remaining -= advanced;
+                    std::thread::yield_now();
                 }
             }
-            Command::Finished(now, position) => {
-                if let Some(placed) = placer.on_playback_finished(now, position) {
-                    recorder.on_output_placed(&placed);
-                }
-            }
+            Command::Finished(now, position) => loop {
+                shared.check_failure()?;
+                let Some(placed) = placer.on_playback_finished_chunk(
+                    now,
+                    position,
+                    shared.limits.block_duration.as_secs_f64(),
+                ) else {
+                    break;
+                };
+                recorder.on_output_placed(&placed);
+                std::thread::yield_now();
+            },
             Command::Flush(now, reply) => {
                 requested_flush = Some(requested_flush.map_or(now, |previous| previous.max(now)));
                 let until = recorder.settle_until(now, placer.pending_since());
@@ -601,6 +639,27 @@ fn process<E: OggOpusEncoder, W: Write>(
     Err(RecordingFailure::Closed)
 }
 
+fn frame_chunks<'a>(
+    frame: &'a AudioFrame,
+    shared: &'a Shared,
+) -> impl Iterator<Item = Result<PcmFrame, RecordingFailure>> + 'a {
+    let samples = (f64::from(frame.sample_rate) * shared.limits.block_duration.as_secs_f64())
+        .round()
+        .max(1.) as usize;
+    let bytes = samples.saturating_mul(usize::from(frame.num_channels)).saturating_mul(2);
+    frame.data.chunks(bytes).map(move |chunk| {
+        shared.check_failure()?;
+        Ok(PcmFrame::new(
+            chunk
+                .chunks_exact(2)
+                .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+                .collect(),
+            frame.sample_rate,
+            frame.num_channels,
+        ))
+    })
+}
+
 fn flush<E: OggOpusEncoder, W: Write>(
     recorder: &mut Recorder<E>,
     writer: &mut W,
@@ -624,6 +683,7 @@ fn flush<E: OggOpusEncoder, W: Write>(
             .flush_until(cursor)
             .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
         write(writer, &encoded, summary)?;
+        std::thread::yield_now();
         summary.last_flushed = Some(cursor);
     }
     [summary.dropped_input_samples, summary.dropped_output_samples] = recorder.dropped_samples();
@@ -670,7 +730,7 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
                     frame_bytes: 2 * 1024 * 1024,
                     retained_bytes: 16 * 1024 * 1024,
                     segment_bytes: 8 * 1024 * 1024,
-                    block_duration: Duration::from_millis(100),
+                    block_duration: Duration::from_millis(20),
                 },
             )
         }

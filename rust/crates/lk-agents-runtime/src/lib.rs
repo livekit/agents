@@ -17,6 +17,8 @@
 
 pub mod agent_run;
 pub mod codecs;
+#[cfg(feature = "media-images")]
+pub mod images;
 pub mod evals;
 pub mod media_workers;
 pub mod recording;
@@ -44,3 +46,5 @@ pub mod worker_cli;
 pub mod text_session;
 
 pub mod worker;
+
+pub mod vad;

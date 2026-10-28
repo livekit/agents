@@ -74,7 +74,7 @@ _DATA = {
 }
 
 
-def to_chat_ctx(
+async def to_chat_ctx(
     chat_ctx: ChatContext,
     format: str,
     *,
@@ -87,13 +87,13 @@ def to_chat_ctx(
     from .utils import serialize_image
 
     images = {
-        content.id: serialize_image(content)
+        content.id: await serialize_image(content)
         for item in chat_ctx.items
         if item.type == "message"
         for content in item.content
         if isinstance(content, ImageContent)
     }
-    messages, data = _core.to_provider_format(
+    messages, data = await _core.to_provider_format(
         format,
         to_core_items(chat_ctx.items),
         images=images,

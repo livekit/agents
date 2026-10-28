@@ -14,7 +14,9 @@ fn workers(total: usize) -> MediaWorkers {
             decoders: 1,
             recordings: 1,
             images: 1,
+            formatting: 1,
             eot_models: 1,
+            vad_models: 1,
             uploads: 1,
                 worker_io: 1,
         },
@@ -137,7 +139,8 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
 
 #[tokio::test]
 async fn recording_overflow_releases_pcm_and_preserves_other_work() {
-    let workers = workers(2);
+    // Keep two payload slots available alongside the reserved worker-health slot.
+    let workers = workers(3);
     let (sink, started, release) = Sink::new(true, false);
     let encoder = Encoder(sink.trace.clone());
     let mut limits = limits();
@@ -366,4 +369,71 @@ async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
     let mut expected = lk_agents_media::pcm_bytes(&[1234, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expected.extend_from_slice(PCM_ENCODER_TRAILER);
     assert_eq!(*bytes.lock().unwrap(), expected);
+}
+
+#[tokio::test]
+async fn recording_burst_preserves_input_timing_and_discarded_output_offsets() {
+    let workers = workers(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace);
+    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.), limits(), move || {
+        Ok((encoder, sink.writer))
+    })
+    .await
+    .unwrap();
+    recorder.try_on_input_frame(1., frame(&(1..=10).collect::<Vec<_>>())).unwrap();
+    recorder.try_capture_frame(0., frame(&(100..110).collect::<Vec<_>>())).unwrap();
+    recorder.try_playback_progressed(1., 0.2, 0.6).unwrap();
+    recorder.finish(2.).await.unwrap();
+
+    let mut expected = Vec::new();
+    for input in 1..=10 {
+        expected.extend([input, 0]);
+    }
+    for output in 102..108 {
+        expected.extend([0, output]);
+    }
+    expected.extend([0; 8]);
+    let mut encoded = lk_agents_media::pcm_bytes(&expected);
+    encoded.extend_from_slice(PCM_ENCODER_TRAILER);
+    assert_eq!(*bytes.lock().unwrap(), encoded);
+}
+
+#[tokio::test]
+async fn recording_fallback_drains_played_audio_and_retires_each_segment_once() {
+    let workers = workers(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace);
+    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.), limits(), move || {
+        Ok((encoder, sink.writer))
+    })
+    .await
+    .unwrap();
+
+    // Without a start/progress report, the played endpoint determines the anchor and truncation.
+    recorder.try_capture_frame(0., frame(&(100..110).collect::<Vec<_>>())).unwrap();
+    recorder.try_playback_finished(2., 0.6).unwrap();
+    // The next segment has its own offset and honors an explicit start over the fallback anchor.
+    recorder.try_capture_frame(2., frame(&(200..204).collect::<Vec<_>>())).unwrap();
+    recorder.try_playback_started(2.3).unwrap();
+    recorder.try_playback_finished(3., 0.4).unwrap();
+    // A progress report suppresses endpoint fallback for the remaining unplayed samples.
+    recorder.try_capture_frame(3., frame(&(300..304).collect::<Vec<_>>())).unwrap();
+    recorder.try_playback_progressed(3., 0.1, 0.1).unwrap();
+    recorder.try_playback_finished(3.4, 0.4).unwrap();
+    recorder.finish(4.).await.unwrap();
+
+    let mut expected = vec![0; 80];
+    for (index, sample) in (100..106).enumerate() {
+        expected[(14 + index) * 2 + 1] = sample;
+    }
+    for (index, sample) in (200..204).enumerate() {
+        expected[(23 + index) * 2 + 1] = sample;
+    }
+    expected[30 * 2 + 1] = 301;
+    let mut encoded = lk_agents_media::pcm_bytes(&expected);
+    encoded.extend_from_slice(PCM_ENCODER_TRAILER);
+    assert_eq!(*bytes.lock().unwrap(), encoded);
 }

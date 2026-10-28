@@ -7,9 +7,9 @@ mod serialize;
 
 pub use encode::{
     EncodeOptions, ImageFormat, MediaError, ResizeOptions, ResizeStrategy, RgbaFrame, encode,
-    encode_image, encode_into, resized_dimensions,
+    encode_into, resized_dimensions,
 };
 pub use serialize::{
     FRAME_MIME_TYPE, MimeMismatch, SUPPORTED_DATA_URL_MIME_TYPES, serialize_image,
-    serialize_image_frame, serialize_image_url,
+    serialize_image_url,
 };

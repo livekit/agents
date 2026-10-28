@@ -40,15 +40,11 @@ class EncodeOptions:
     """JPEG quality, 0-100."""
 
 
-def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
-    """``frame`` as a JPEG or PNG image."""
-    if frame.type != rtc.VideoBufferType.RGBA:
-        frame = frame.convert(rtc.VideoBufferType.RGBA)
+async def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
+    """Encode a frame on an admitted worker, keeping the caller's event loop serviceable."""
     resize = options.resize_options
-    return _core.encode_image(  # type: ignore[no-any-return]
-        bytes(frame.data),
-        frame.width,
-        frame.height,
+    return await _core.encode_image(
+        frame,
         format=options.format,
         quality=options.quality,
         resize_width=resize.width if resize else None,

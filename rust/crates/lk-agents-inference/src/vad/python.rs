@@ -7,13 +7,13 @@ use lk_agents_abi::python::{HostHandle, HostProxy};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use super::VadModelFactory;
 use super::VadModel;
+use super::VadModelFactory;
 use super::machine::VadOutput;
 use crate::python::clear;
 
-/// One host model, called from the machine's task; `None` when the factory raised, a silent model
-/// rather than a panic on a tokio worker (never selected on a healthy path).
+/// One host model, called from its admitted native worker; `None` when the factory raised, a silent model
+/// rather than a panic on a native worker (never selected on a healthy path).
 struct PyVadModel {
     model: Option<Py<PyAny>>,
 }
@@ -28,7 +28,9 @@ impl VadModel for PyVadModel {
             let started = std::time::Instant::now();
             let out = model.bind(py).call_method1("predict", (window.to_vec(),));
             let elapsed = started.elapsed().as_secs_f64();
-            match out.and_then(|v| v.extract::<f32>().map(|p| (p, elapsed)).or_else(|_| v.extract::<(f32, f64)>())) {
+            match out.and_then(|v| {
+                v.extract::<f32>().map(|p| (p, elapsed)).or_else(|_| v.extract::<(f32, f64)>())
+            }) {
                 Ok(pair) => pair,
                 Err(e) => {
                     clear(py, e);
@@ -60,14 +62,22 @@ impl VadModelFactory for PyVadFactory {
     }
 }
 
-/// Any callable is a factory: called per stream, under the GIL, from the machine's task.
+/// Any callable is a factory: called per stream under the GIL on the admitted native worker.
 impl HostProxy for dyn VadModelFactory {
-    fn from_host(obj: &Bound<'_, PyAny>, _clock: Option<Arc<dyn lk_agents_abi::Clock>>) -> PyResult<Arc<Self>> {
+    fn from_host(
+        obj: &Bound<'_, PyAny>,
+        _clock: Option<Arc<dyn lk_agents_abi::Clock>>,
+    ) -> PyResult<Arc<Self>> {
         Ok(Arc::new(PyVadFactory { factory: obj.clone().unbind() }))
     }
 
-    fn view(handle: HostHandle, _clock: Option<Arc<dyn lk_agents_abi::Clock>>) -> PyResult<Box<Self>> {
-        Python::attach(|py| Ok(Box::new(PyVadFactory { factory: handle.bind(py).clone().unbind() }) as Box<Self>))
+    fn view(
+        handle: HostHandle,
+        _clock: Option<Arc<dyn lk_agents_abi::Clock>>,
+    ) -> PyResult<Box<Self>> {
+        Python::attach(|py| {
+            Ok(Box::new(PyVadFactory { factory: handle.bind(py).clone().unbind() }) as Box<Self>)
+        })
     }
 }
 

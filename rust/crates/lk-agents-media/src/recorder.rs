@@ -133,17 +133,7 @@ impl Track {
     }
 
     fn resample(&mut self, frame: &PcmFrame) -> Vec<i16> {
-        let ch = frame.num_channels.max(1) as usize;
-        let mono: Vec<i16> = if ch > 1 {
-            // `data.mean(axis=1).astype(np.int16)`: narrowed by truncation, not rounding.
-            frame
-                .samples
-                .chunks_exact(ch)
-                .map(|c| (c.iter().map(|&s| f64::from(s)).sum::<f64>() / ch as f64) as i16)
-                .collect()
-        } else {
-            frame.samples.clone()
-        };
+        let mono = crate::downmix_mono(&frame.samples, frame.num_channels);
 
         if frame.sample_rate == self.sample_rate {
             return mono;
@@ -197,7 +187,14 @@ impl Track {
         let start = round_ties_even_like_python((run_start - self.t0) * f64::from(self.sample_rate))
             as i64
             + self.run_samples;
-        self.placed.push((start, samples.iter().map(|&s| f32::from(s) / 32768.0).collect()));
+        let normalized = samples.iter().map(|&s| f32::from(s) / 32768.0);
+        if let Some((position, previous)) = self.placed.last_mut()
+            && *position + previous.len() as i64 == start
+        {
+            previous.extend(normalized);
+        } else {
+            self.placed.push((start, normalized.collect()));
+        }
         self.run_samples += samples.len() as i64;
     }
 
@@ -356,7 +353,7 @@ impl SegmentPlacer {
         if self.format.is_none() {
             self.format = Some((frame.sample_rate, frame.num_channels));
         }
-        self.pcm.reserve_exact(frame.samples.len());
+        self.pcm.reserve(frame.samples.len());
         self.pcm.extend(frame.samples.iter().copied());
     }
 
@@ -374,8 +371,29 @@ impl SegmentPlacer {
         offset: f64,
         duration: f64,
     ) -> Option<Placed> {
+        self.progress(started_at, offset, duration, None)
+    }
+
+    /// Place at most one bounded interval; advance from the returned timestamp and duration.
+    pub fn on_playback_progressed_chunk(
+        &mut self,
+        started_at: f64,
+        offset: f64,
+        duration: f64,
+        max_duration: f64,
+    ) -> Option<Placed> {
+        self.progress(started_at, offset, duration, Some(max_duration))
+    }
+
+    fn progress(
+        &mut self,
+        started_at: f64,
+        offset: f64,
+        duration: f64,
+        max_duration: Option<f64>,
+    ) -> Option<Placed> {
         self.reported = true;
-        let placed = self.place(started_at, offset, duration)?;
+        let placed = self.place(started_at, offset, duration, max_duration)?;
         self.segment_since = if self.pcm.is_empty() {
             None
         } else {
@@ -386,17 +404,44 @@ impl SegmentPlacer {
 
     /// Fallback for a sink that reported nothing: its endpoints place the segment.
     pub fn on_playback_finished(&mut self, now: f64, playback_position: f64) -> Option<Placed> {
+        self.finish(now, playback_position, None)
+    }
+
+    /// Drain fallback placement in bounded intervals, then retire the segment on exhaustion.
+    pub fn on_playback_finished_chunk(
+        &mut self,
+        now: f64,
+        playback_position: f64,
+        max_duration: f64,
+    ) -> Option<Placed> {
+        self.finish(now, playback_position, Some(max_duration))
+    }
+
+    fn finish(
+        &mut self,
+        now: f64,
+        playback_position: f64,
+        max_duration: Option<f64>,
+    ) -> Option<Placed> {
         let placed = if !self.reported && !self.pcm.is_empty() {
             let started_at = self.started_at.unwrap_or(now - playback_position);
-            self.place(started_at, 0.0, playback_position)
+            self.place(started_at, 0.0, playback_position, max_duration)
         } else {
             None
         };
-        *self = SegmentPlacer::new();
+        if placed.is_none() || max_duration.is_none() {
+            *self = SegmentPlacer::new();
+        }
         placed
     }
 
-    fn place(&mut self, started_at: f64, offset: f64, duration: f64) -> Option<Placed> {
+    fn place(
+        &mut self,
+        started_at: f64,
+        offset: f64,
+        duration: f64,
+        max_duration: Option<f64>,
+    ) -> Option<Placed> {
         // A report covering no time places nothing (#5279).
         if self.pcm.is_empty() || duration <= 0.0 {
             return None;
@@ -409,7 +454,13 @@ impl SegmentPlacer {
         let hi = ((round_ties_even_like_python((offset + duration) * f64::from(rate)) as i64)
             .saturating_mul(ch))
         .max(0) as usize;
-        let hi = hi.min(self.offset + self.pcm.len());
+        let limit = max_duration.map_or(usize::MAX, |duration| {
+            let chunk = (round_ties_even_like_python(duration * f64::from(rate)) as usize)
+                .max(1)
+                .saturating_mul(ch as usize);
+            lo.saturating_add(chunk)
+        });
+        let hi = hi.min(self.offset + self.pcm.len()).min(limit);
         if hi <= lo {
             return None;
         }
@@ -499,7 +550,6 @@ impl<E: OggOpusEncoder> Recorder<E> {
         self.encoder.finish()
     }
 }
-
 
 impl PcmFrame {
     pub fn from_audio_frame(frame: &AudioFrame) -> PcmFrame {

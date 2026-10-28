@@ -122,7 +122,7 @@ impl<'py> pyo3::IntoPyObject<'py> for ImageSource {
 /// # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
 /// from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
 ///
-/// image_bytes = encode(
+/// image_bytes = await encode(
 ///     event.frame,
 ///     EncodeOptions(
 ///         format="PNG",

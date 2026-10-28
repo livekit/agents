@@ -144,7 +144,9 @@ impl AudioByteStream {
         py: pyo3::Python<'_>,
         data: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
-        let data = crate::python::snapshot_buffer(data, crate::python::BufferFormat::PcmChunk, "data")?;
+        let data = crate::python::snapshot_buffer(
+            data, crate::python::BufferFormat::PcmChunk, "data", None,
+        )?;
         let frames = self.push(&data);
         self.to_host_frames(py, frames)
     }

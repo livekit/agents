@@ -280,7 +280,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
         parser = _core.LlmChoiceParser(self._model)
         try:
-            messages, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            messages, _ = await self._chat_ctx.to_provider_format(format=self._provider_fmt)
             schemas = self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema)
             extra = dict(self._extra_kwargs)
             if not self._tools:

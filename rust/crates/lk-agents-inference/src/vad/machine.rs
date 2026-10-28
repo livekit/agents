@@ -235,6 +235,18 @@ impl VadMachine {
             });
         }
 
+        let frame = if frame.num_channels > 1 {
+            let pcm = samples(&frame.data).collect::<Vec<_>>();
+            let mono = lk_agents_media::downmix_mono(&pcm, frame.num_channels);
+            AudioFrame::new(
+                lk_agents_media::pcm_bytes(&mono),
+                frame.sample_rate,
+                1,
+                mono.len() as u32,
+            )
+        } else {
+            frame
+        };
         match self.resampler.as_mut() {
             // Empty is normal (soxr buffers), and a failed push is also empty rather than a panic.
             Some(resampler) => {

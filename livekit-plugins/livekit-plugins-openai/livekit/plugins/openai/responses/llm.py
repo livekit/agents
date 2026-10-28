@@ -504,7 +504,7 @@ class LLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
-        chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
+        chat_ctx, _ = await self._chat_ctx.to_provider_format(format="openai.responses")
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],

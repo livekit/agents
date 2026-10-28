@@ -33,8 +33,12 @@ pub fn serialize_image(
             let (data, mime_type, external, mismatch) =
                 serialize_url_parts(url, image.mime_type.as_deref())?;
             let out = match (data, external) {
-                (Some(data), _) => SerializedImage::inline(data, mime_type.unwrap_or_default(), detail),
-                (None, url) => SerializedImage::external(url.unwrap_or_default(), mime_type, detail),
+                (Some(data), _) => {
+                    SerializedImage::inline(data, mime_type.unwrap_or_default(), detail)
+                }
+                (None, url) => {
+                    SerializedImage::external(url.unwrap_or_default(), mime_type, detail)
+                }
             };
             Ok((out, mismatch))
         }
@@ -51,29 +55,13 @@ pub fn serialize_image(
 ///
 /// Exactly one of `data_bytes`/`external_url` is set. The fourth element is the `data:` header's
 /// mime type when a declared `mime_type` overrode it -- the host logs the reference's warning.
-#[lk_agents_abi::host(export(pid = false))]
 #[allow(clippy::type_complexity)]
 pub fn serialize_image_url(
     url: &str,
-    #[host(required)] mime_type: Option<&str>,
+    mime_type: Option<&str>,
 ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), MediaError> {
     let (data, mime, external, mismatch) = serialize_url_parts(url, mime_type)?;
     Ok((data, mime, external, mismatch.map(|m| m.header)))
-}
-
-/// `serialize_image`'s `rtc.VideoFrame` arm over tight RGBA: `(data_bytes, mime_type)`.
-///
-/// The resize decision is here: `scale_aspect_fit` to the inference size when both are truthy.
-#[lk_agents_abi::host(export)]
-pub fn serialize_image_frame(
-    data: &[u8],
-    width: u32,
-    height: u32,
-    inference_width: Option<u32>,
-    inference_height: Option<u32>,
-) -> Result<(Vec<u8>, String), MediaError> {
-    let bytes = encode_frame(RgbaFrame { width, height, data }, inference_width, inference_height)?;
-    Ok((bytes, FRAME_MIME_TYPE.to_owned()))
 }
 
 fn encode_frame(
@@ -229,16 +217,24 @@ mod tests {
     // read as a declaration -- it is falsy in Python, so it defers to the header.
     #[test]
     fn a_declared_mime_type_wins_over_the_data_url_header_and_a_disagreement_is_reported() {
-        let mismatch = |declared: &str| Some(MimeMismatch { declared: declared.into(), header: "image/png".into() });
+        let mismatch = |declared: &str| {
+            Some(MimeMismatch { declared: declared.into(), header: "image/png".into() })
+        };
         for (declared, want, want_mismatch) in [
             (None, "image/png", None),
             (Some("image/jpeg"), "image/jpeg", mismatch("image/jpeg")),
             (Some("image/png"), "image/png", None),
             (Some(""), "image/png", None),
         ] {
-            let (out, got) = serialize_image(&url_image("data:image/png;base64,aGVsbG8=", declared), None).unwrap();
+            let (out, got) =
+                serialize_image(&url_image("data:image/png;base64,aGVsbG8=", declared), None)
+                    .unwrap();
             assert_eq!(out.mime_type.as_deref(), Some(want), "{declared:?}");
-            assert_eq!(out.data_bytes.as_deref(), Some(&b"hello"[..]), "the payload is decoded here");
+            assert_eq!(
+                out.data_bytes.as_deref(),
+                Some(&b"hello"[..]),
+                "the payload is decoded here"
+            );
             assert_eq!(out.external_url, None);
             assert_eq!(out.inference_detail, InferenceDetail::High);
             assert_eq!(got, want_mismatch, "{declared:?}");
@@ -263,8 +259,12 @@ mod tests {
         ] {
             let got = serialize_image(&url_image(url, None), None);
             match want {
-                Ok(bytes) => assert_eq!(got.unwrap().0.data_bytes.as_deref(), Some(bytes), "{url:?}"),
-                Err(kind) => assert!(format!("{:?}", got.unwrap_err()).starts_with(kind), "{url:?}"),
+                Ok(bytes) => {
+                    assert_eq!(got.unwrap().0.data_bytes.as_deref(), Some(bytes), "{url:?}")
+                }
+                Err(kind) => {
+                    assert!(format!("{:?}", got.unwrap_err()).starts_with(kind), "{url:?}")
+                }
             }
         }
     }

@@ -870,6 +870,7 @@ impl Pump {
             audio_rx.close();
         }
         let mut ending = false;
+        let mut vad_push_warned = false;
         let mut audio = String::new();
         loop {
             let item = tokio::select! {
@@ -892,8 +893,15 @@ impl Pump {
 
             let frames = match item {
                 Some(SinkCmd::Frame(frame)) => {
-                    if let Some(sink) = vad_sink.as_mut() {
-                        let _ = sink.push(frame.clone());
+                    if let Some(sink) = vad_sink.as_mut()
+                        && let Err(error) = sink.push(frame.clone())
+                        && !vad_push_warned
+                    {
+                        vad_push_warned = true;
+                        log::warn!(
+                            target: "livekit.agents",
+                            "STT VAD refused audio: {error}; suppressing repeats"
+                        );
                     }
                     let samples = usize::try_from(frame.sample_rate / 20).unwrap_or(0).max(1);
                     let stride = usize::from(frame.num_channels) * 2;

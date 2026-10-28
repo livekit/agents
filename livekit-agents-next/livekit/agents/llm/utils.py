@@ -103,34 +103,31 @@ class SerializedImage:
     external_url: str | None = None
 
 
-def serialize_image(image: ImageContent, *, use_cache: bool = True) -> SerializedImage:
+async def serialize_image(image: ImageContent, *, use_cache: bool = True) -> SerializedImage:
     """The image's bytes (a frame encoded, resized to its inference size) or its URL."""
+    source = image.image
+    width, height = image.inference_width, image.inference_height
+    detail, declared_mime = image.inference_detail, image.mime_type
+    cache_key = (source, width, height, detail, declared_mime)
     if use_cache and (cached := image._cache.get("serialized_image")) is not None:
-        return cast(SerializedImage, cached)
-    if isinstance(image.image, str):
-        data, mime_type, url, _ = _core.serialize_image_url(image.image, image.mime_type)
-    elif isinstance(image.image, rtc.VideoFrame):
-        frame = image.image
-        if frame.type != rtc.VideoBufferType.RGBA:
-            frame = frame.convert(rtc.VideoBufferType.RGBA)
-        data, mime_type = _core.serialize_image_frame(
-            bytes(frame.data),
-            frame.width,
-            frame.height,
-            image.inference_width,
-            image.inference_height,
-        )
+        key, serialized = cast(tuple[tuple[object, ...], SerializedImage], cached)
+        if key == cache_key:
+            return serialized
+    if isinstance(source, str):
+        data, mime_type, url, _ = await _core.serialize_image_url(source, declared_mime)
+    elif isinstance(source, rtc.VideoFrame):
+        data, mime_type = await _core.serialize_image_frame(source, width, height)
         url = None
     else:
         raise ValueError("Unsupported image type")
     serialized = SerializedImage(
-        inference_detail=image.inference_detail,
+        inference_detail=detail,
         mime_type=mime_type,
         data_bytes=data,
         external_url=url,
     )
     if use_cache:
-        image._cache["serialized_image"] = serialized
+        image._cache["serialized_image"] = (cache_key, serialized)
     return serialized
 
 

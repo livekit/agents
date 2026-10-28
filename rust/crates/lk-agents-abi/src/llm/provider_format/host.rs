@@ -15,17 +15,14 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::{
-    DropReason, Formatted, PreResolved, SerializedImage, ToolSchema, anthropic, aws, google, mistralai, openai,
+    DropReason, Formatted, PreResolved, SerializedImage, ToolSchema, anthropic, aws, google,
+    mistralai, openai,
 };
 use crate::{ChatContext, ChatItem};
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `ChatContext.to_provider_format(format, ...)` -> `(messages, data)`. `data` is `None` for OpenAI
 /// and a dict for the dialects that hoist something out of band.
-#[crate::host(export(
-    kw_only = "images",
-    defaults(inject_dummy_user_message = true, inject_trailing_user_message = false)
-))]
 pub fn to_provider_format(
     format: &str,
     items: Vec<ChatItem>,
@@ -40,16 +37,28 @@ pub fn to_provider_format(
     let hoisted = |system_messages: &[String]| json!({ "system_messages": system_messages });
     Ok(match format {
         "openai" => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null),
-        "openai.responses" => finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null),
+        "openai.responses" => {
+            finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null)
+        }
         "anthropic" => {
-            let opts = anthropic::Options { inject_dummy_user_message, inject_trailing_user_message };
-            finish(anthropic::to_chat_ctx(&ctx, &images, opts).map_err(e)?, |d| hoisted(&d.system_messages))
+            let opts =
+                anthropic::Options { inject_dummy_user_message, inject_trailing_user_message };
+            finish(anthropic::to_chat_ctx(&ctx, &images, opts).map_err(e)?, |d| {
+                hoisted(&d.system_messages)
+            })
         }
         "aws" => {
-            finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?, |d| hoisted(&d.system_messages))
+            finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?, |d| {
+                hoisted(&d.system_messages)
+            })
         }
         "google" => {
-            let f = google::to_chat_ctx(&ctx, &images, inject_dummy_user_message, thought_signatures.as_ref());
+            let f = google::to_chat_ctx(
+                &ctx,
+                &images,
+                inject_dummy_user_message,
+                thought_signatures.as_ref(),
+            );
             finish(f.map_err(e)?, |d| hoisted(&d.system_messages))
         }
         "mistralai" => {
@@ -65,6 +74,34 @@ pub fn to_provider_format(
     })
 }
 
+/// Provider formatting and inline-image base64 preparation on an admitted formatting worker.
+#[crate::host(export(
+    name = "to_provider_format",
+    kw_only = "images",
+    defaults(inject_dummy_user_message = true, inject_trailing_user_message = false)
+))]
+pub async fn prepare_provider_format(
+    format: String,
+    items: Vec<ChatItem>,
+    images: Option<std::collections::BTreeMap<String, SerializedImage>>,
+    inject_dummy_user_message: bool,
+    inject_trailing_user_message: bool,
+    thought_signatures: Option<std::collections::BTreeMap<String, Vec<u8>>>,
+) -> Result<(Vec<Value>, Value), String> {
+    crate::utils::workers::try_spawn(crate::utils::workers::WorkerClass::Formatting, move || {
+        to_provider_format(
+            &format,
+            items,
+            images.map(|images| images.into_iter().collect()),
+            inject_dummy_user_message,
+            inject_trailing_user_message,
+            thought_signatures.map(|signatures| signatures.into_iter().collect()),
+        )
+    })
+    .map_err(|error| error.to_string())?
+    .await?
+}
+
 /// `convert_mid_conversation_instructions(chat_ctx, role=, template=)` as `(index, rewritten)`: the
 /// input item each output item comes from, and the message replacing it when it was rewritten, so
 /// the host keeps its own objects for the rest.
@@ -75,7 +112,8 @@ pub fn convert_mid_conversation_instructions(
     template: &str,
 ) -> Vec<(usize, Option<ChatItem>)> {
     let ctx = ChatContext::new(items);
-    let index = |found: &dyn Fn(&ChatItem) -> bool| ctx.items.iter().position(found).unwrap_or_default();
+    let index =
+        |found: &dyn Fn(&ChatItem) -> bool| ctx.items.iter().position(found).unwrap_or_default();
     super::convert_mid_conversation_instructions(&ctx, role, template)
         .into_iter()
         .map(|item| match item {
@@ -88,8 +126,12 @@ pub fn convert_mid_conversation_instructions(
 fn finish<D>(f: Formatted<D>, data: impl FnOnce(&D) -> Value) -> (Vec<Value>, Value) {
     for d in &f.dropped {
         let message = match d.reason {
-            DropReason::OutputWithoutCall => "function output missing the corresponding function call, ignoring",
-            DropReason::CallWithoutOutput => "function call missing the corresponding function output, ignoring",
+            DropReason::OutputWithoutCall => {
+                "function output missing the corresponding function call, ignoring"
+            }
+            DropReason::CallWithoutOutput => {
+                "function call missing the corresponding function output, ignoring"
+            }
         };
         log::warn!(target: "livekit.agents", call_id = d.call_id.as_str(), function_name = d.tool_name.as_str(); "{message}");
     }
@@ -119,18 +161,24 @@ pub fn to_fnc_ctx(
         "google" => {
             // `UNSPECIFIED` is spelled by omitting `tool_behavior`.
             if let Some(b) = tool_behavior.filter(|b| !matches!(*b, "BLOCKING" | "NON_BLOCKING")) {
-                return Err(format!("unknown tool_behavior {b:?}: expected 'BLOCKING' or 'NON_BLOCKING'"));
+                return Err(format!(
+                    "unknown tool_behavior {b:?}: expected 'BLOCKING' or 'NON_BLOCKING'"
+                ));
             }
             google::to_fnc_ctx(&specs, tool_behavior, use_parameters_json_schema).map_err(e)?
         }
         _ => {
-            return Err(format!("{format:?} has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"));
+            return Err(format!(
+                "{format:?} has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"
+            ));
         }
     })
 }
 
 fn tool_schema(tool: Value) -> Result<ToolSchema, String> {
-    let Value::Array(mut parts) = tool else { return Err(format!("a tool schema is [kind, schema, name], got {tool}")) };
+    let Value::Array(mut parts) = tool else {
+        return Err(format!("a tool schema is [kind, schema, name], got {tool}"));
+    };
     parts.resize(3, Value::Null);
     let (name, payload) = (parts.pop().unwrap_or_default(), parts.pop().unwrap_or_default());
     let kind = parts.pop().and_then(|k| k.as_str().map(str::to_owned)).unwrap_or_default();
@@ -170,7 +218,10 @@ mod tests {
         assert_eq!(indices, [0, 2, 3]);
         assert!(plan[0].1.is_none() && plan[1].1.is_none());
         let rewritten = plan[2].1.as_ref().and_then(ChatItem::as_message).unwrap();
-        assert_eq!((rewritten.role, rewritten.raw_text_content().as_deref()), (Role::User, Some("<mid>")));
+        assert_eq!(
+            (rewritten.role, rewritten.raw_text_content().as_deref()),
+            (Role::User, Some("<mid>"))
+        );
     }
 
     // Catches: an unknown tool kind or `tool_behavior` defaulting instead of refusing.

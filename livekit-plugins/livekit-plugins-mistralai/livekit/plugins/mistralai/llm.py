@@ -282,7 +282,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            entries, extra_data = self._chat_ctx.to_provider_format(format="mistralai")
+            entries, extra_data = await self._chat_ctx.to_provider_format(format="mistralai")
             tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
             for tool in self._tool_ctx.provider_tools:
                 if isinstance(tool, MistralTool):
@@ -347,7 +347,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            messages, _ = self._chat_ctx.to_provider_format(format="openai")
+            messages, _ = await self._chat_ctx.to_provider_format(format="openai")
             tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             extra_kwargs = dict(self._extra_kwargs)

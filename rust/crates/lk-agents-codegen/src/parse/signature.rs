@@ -276,7 +276,7 @@ pub(super) fn rty(at: &str, t: &syn::Type, al: &Aliases) -> Res<RTy> {
                 "Vec" => RTy::Vec(Box::new(one(0)?)),
                 "BTreeSet" | "HashSet" => RTy::Set(Box::new(one(0)?)),
                 "Maybe" => RTy::Maybe(Box::new(one(0)?)),
-                "HashMap" => {
+                "HashMap" | "BTreeMap" => {
                     if one(0)? != RTy::Str {
                         return refuse(
                             "is a map whose key is not a String; a host dict here is keyed by str",

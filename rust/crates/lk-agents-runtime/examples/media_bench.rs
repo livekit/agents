@@ -1,7 +1,7 @@
 //! `cargo run -p lk-agents-runtime --features media-ffmpeg,media-resample,media-images
-//! --example media_bench -- output.json [codecs|recording|images|all]`.
+//! --example media_bench -- output.json [codecs|recording|images|control|all]`.
 //! Measures the registered background decoder, declared recorder implementation and shipped
-//! synchronous image encoder against an independent 1ms Tokio heartbeat.
+//! admitted image preparation against an independent anchored 1ms Tokio heartbeat.
 
 #[cfg(not(all(feature = "media-ffmpeg", feature = "media-images")))]
 fn main() {
@@ -16,18 +16,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(all(feature = "media-ffmpeg", feature = "media-images"))]
 mod bench {
+    use std::future::Future;
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     use lk_agents_abi::AudioFrame;
+    use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
     use lk_agents_abi::recorder::{AudioRecorder, SessionRecorder as RecorderClass};
-    use lk_agents_media::images::encode_image;
+    use lk_agents_abi::utils::video::VideoFrame;
     use lk_agents_runtime::recording::SessionRecorder;
     use serde_json::{Value, json};
     use tokio::sync::oneshot;
 
     type Error = Box<dyn std::error::Error>;
+    const OBSERVATIONS: usize = 1_000;
     const RATE: u32 = 48_000;
     const SAMPLES: usize = RATE as usize * 10;
 
@@ -35,10 +39,10 @@ mod bench {
         let mut arguments = std::env::args().skip(1);
         let output = arguments
             .next()
-            .ok_or("usage: media_bench output.json [codecs|recording|images|all]")?;
+            .ok_or("usage: media_bench output.json [codecs|recording|images|control|all]")?;
         let selected = arguments.next().unwrap_or_else(|| "all".into());
         if arguments.next().is_some()
-            || !["codecs", "recording", "images", "all"].contains(&selected.as_str())
+            || !["codecs", "recording", "images", "control", "all"].contains(&selected.as_str())
         {
             return Err("invalid workload".into());
         }
@@ -61,6 +65,9 @@ mod bench {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build()?;
         let outcome = runtime.block_on(async {
             let mut cases = Vec::new();
+            if ["all", "control"].contains(&selected.as_str()) {
+                cases.push(control().await?);
+            }
             if ["all", "codecs"].contains(&selected.as_str()) {
                 for path in [&wav, &ogg] {
                     for count in [1, 8, 32, 64] {
@@ -77,7 +84,9 @@ mod bench {
             }
             if ["all", "images"].contains(&selected.as_str()) {
                 for (width, height) in [(1920, 1080), (3840, 2160)] {
-                    let rgba = (0..width*height).flat_map(|n| [(n%251) as u8, (n%193) as u8, (n%137) as u8, 255]).collect::<Vec<_>>();
+                    let rgba = (0..width * height)
+                        .flat_map(|n| [(n % 251) as u8, (n % 193) as u8, (n % 137) as u8, 255])
+                        .collect::<Vec<_>>();
                     for count in [1, 8] {
                         for resize in [false, true] {
                             cases.push(image(&rgba, width, height, count, resize).await?);
@@ -87,7 +96,12 @@ mod bench {
             }
             Ok::<_, Error>(json!({
                 "heartbeat_ms": 1, "cadence_ms": 20,
-                "scope": "Shipped native entrypoints: registered background file decoder, ABI recorder implementation, synchronous encode_image. Python/GIL/RTC conversion excluded; loaded shared host; no soak or hardware-profile qualification.",
+                "scope": concat!(
+                    "Shipped native entrypoints: registered background file decoder, ",
+                    "ABI recorder implementation, admitted image preparation. Sustained active waves, ",
+                    "anchored scheduled deadlines including missed ticks; thread CPU and wall poll ",
+                    "timing. Python/GIL/RTC conversion excluded.",
+                ),
                 "cases": cases
             }))
         });
@@ -97,86 +111,186 @@ mod bench {
         Ok(())
     }
 
-    async fn start_heartbeat() -> (oneshot::Sender<()>, tokio::task::JoinHandle<Vec<f64>>) {
+    struct HeartbeatSamples {
+        lag: Vec<f64>,
+        serviced: usize,
+    }
+
+    async fn start_heartbeat()
+    -> (oneshot::Sender<()>, tokio::task::JoinHandle<HeartbeatSamples>, Arc<AtomicUsize>) {
+        let observations = Arc::new(AtomicUsize::new(0));
+        let observed = observations.clone();
         let (stop, mut stopped) = oneshot::channel();
         let (ready, started) = oneshot::channel();
         let task = tokio::spawn(async move {
             let interval = Duration::from_millis(1);
             let mut deadline = tokio::time::Instant::now() + interval;
-            let mut samples = Vec::new();
+            let mut samples = HeartbeatSamples { lag: Vec::new(), serviced: 0 };
             let _ = ready.send(());
             loop {
-                tokio::select! {
-                    _ = &mut stopped => return samples,
-                    _ = tokio::time::sleep_until(deadline) => {
-                        let now = tokio::time::Instant::now();
-                        samples.push(now.saturating_duration_since(deadline).as_secs_f64()*1000.);
-                        deadline = now + interval;
-                    }
+                let ending = tokio::select! {
+                    _ = &mut stopped => true,
+                    _ = tokio::time::sleep_until(deadline) => false,
+                };
+                let now = tokio::time::Instant::now();
+                samples.serviced += usize::from(!ending);
+                // Preserve every scheduled deadline, including ticks missed during a stall.
+                while deadline <= now {
+                    samples.lag.push(now.saturating_duration_since(deadline).as_secs_f64() * 1000.);
+                    deadline += interval;
+                }
+                observed.store(samples.lag.len(), Ordering::Release);
+                if ending {
+                    return samples;
                 }
             }
         });
         started.await.unwrap();
-        (stop, task)
+        (stop, task, observations)
+    }
+
+    fn distribution(mut samples: Vec<f64>) -> Value {
+        assert!(!samples.is_empty(), "measurement collected no observations");
+        samples.sort_by(f64::total_cmp);
+        let p999 = samples[(samples.len() as f64 * 0.999).ceil() as usize - 1];
+        let max = samples[samples.len() - 1];
+        let mut result = json!({"observations":samples.len(),"max_ms":max});
+        if samples.len() >= OBSERVATIONS {
+            result["p999_ms"] = json!(p999);
+        }
+        result
     }
 
     async fn stop_heartbeat(
         stop: oneshot::Sender<()>,
-        task: tokio::task::JoinHandle<Vec<f64>>,
+        task: tokio::task::JoinHandle<HeartbeatSamples>,
     ) -> Result<Value, Error> {
-        tokio::time::sleep(Duration::from_millis(5)).await;
         let _ = stop.send(());
-        let mut samples = task.await?;
-        if samples.is_empty() {
-            return Err("heartbeat collected no observations".into());
+        let samples = task.await?;
+        let mut lag = distribution(samples.lag);
+        lag["serviced_wakeups"] = json!(samples.serviced);
+        let p999 = lag["p999_ms"].as_f64().unwrap();
+        let max = lag["max_ms"].as_f64().unwrap();
+        lag["gate_20ms"] =
+            json!({"p999_limit_ms":4.,"max_exclusive_ms":10.,"passed":p999<=4. && max<10.});
+        lag["observation_kind"] = json!("anchored_1ms_deadlines_including_missed_ticks");
+        Ok(lag)
+    }
+
+    fn thread_cpu() -> f64 {
+        let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: clock_gettime writes to a valid timespec for the calling thread's CPU clock.
+        let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+        assert_eq!(status, 0, "thread CPU clock unavailable");
+        time.tv_sec as f64 + time.tv_nsec as f64 / 1_000_000_000.
+    }
+
+    async fn measure_polls<F: Future>(future: F) -> (F::Output, Vec<f64>, f64) {
+        let mut future = std::pin::pin!(future);
+        let mut cpu = Vec::new();
+        let mut maximum = 0_f64;
+        let result = std::future::poll_fn(|cx| {
+            let start = Instant::now();
+            let cpu_start = thread_cpu();
+            let result = future.as_mut().poll(cx);
+            cpu.push((thread_cpu() - cpu_start) * 1000.);
+            maximum = maximum.max(start.elapsed().as_secs_f64() * 1000.);
+            result
+        })
+        .await;
+        (result, cpu, maximum)
+    }
+
+    async fn control() -> Result<Value, Error> {
+        let (stop, heartbeat, observations) = start_heartbeat().await;
+        while observations.load(Ordering::Acquire) < OBSERVATIONS {
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        samples.sort_by(f64::total_cmp);
-        let p999 = samples[(samples.len() as f64 * 0.999).ceil() as usize - 1];
-        let max = samples[samples.len() - 1];
-        Ok(json!({"observations":samples.len(),"p999_ms":p999,"max_ms":max,
-            "gate_20ms":{"p999_limit_ms":4.,"max_exclusive_ms":10.,"passed":p999<=4. && max<10.}}))
+        let result = json!({
+            "kind": "idle_heartbeat_control",
+            "loop_lag": stop_heartbeat(stop, heartbeat).await?,
+        });
+        eprintln!("{result}");
+        Ok(result)
     }
 
     async fn decode(path: &Path, count: usize) -> Result<Value, Error> {
-        let (stop, heartbeat) = start_heartbeat().await;
+        let (stop, heartbeat, observations) = start_heartbeat().await;
         let start = Instant::now();
-        let mut jobs = tokio::task::JoinSet::new();
-        let mut refused = 0;
-        for _ in 0..count {
-            match lk_agents_abi::media::decoder::open(
-                lk_agents_abi::media::decoder::FileDecoderOptions {
-                    path: path.to_string_lossy().into_owned(),
-                    looping: false,
-                    sample_rate: RATE,
-                    num_channels: 1,
-                },
-            ) {
-                Ok(mut decoder) => {
-                    jobs.spawn(async move {
-                        let mut samples = 0;
-                        let mut signal = false;
-                        while let Some(frame) = decoder.next().await? {
-                            samples += frame.samples_per_channel as usize;
-                            signal |= frame.data.iter().any(|byte| *byte != 0);
-                        }
-                        decoder.close(Duration::from_secs(5)).await?;
-                        if samples.abs_diff(SAMPLES) > 1920 || !signal {
-                            return Err("decoded duration/signal mismatch".to_owned());
-                        }
-                        Ok::<_, String>(samples)
-                    });
-                }
-                Err(error) if error.contains("capacity exhausted") => refused += 1,
-                Err(error) => return Err(error.into()),
-            }
-        }
         let mut samples = 0;
-        while let Some(job) = jobs.join_next().await {
-            samples += job??;
+        let mut refused = 0;
+        let mut waves = 0;
+        let mut poll_cpu = Vec::new();
+        let mut poll_max_ms = 0_f64;
+        let mut open_max_ms = 0_f64;
+        let mut open_cpu = Vec::new();
+        while observations.load(Ordering::Acquire) < OBSERVATIONS || poll_cpu.len() < OBSERVATIONS {
+            waves += 1;
+            let mut jobs = tokio::task::JoinSet::new();
+            let mut starts = Vec::new();
+            for _ in 0..count {
+                let open_started = Instant::now();
+                let open_cpu_start = thread_cpu();
+                match lk_agents_abi::media::decoder::open(
+                    lk_agents_abi::media::decoder::FileDecoderOptions {
+                        path: path.to_string_lossy().into_owned(),
+                        looping: false,
+                        sample_rate: RATE,
+                        num_channels: 1,
+                    },
+                ) {
+                    Ok(mut decoder) => {
+                        let (start, ready) = oneshot::channel();
+                        starts.push(start);
+                        jobs.spawn(measure_polls(async move {
+                            ready.await.map_err(|_| "decoder wave cancelled".to_owned())?;
+                            let mut samples = 0;
+                            let mut signal = false;
+                            while let Some(frame) = decoder.next().await? {
+                                samples += frame.samples_per_channel as usize;
+                                signal |= frame.data.iter().any(|byte| *byte != 0);
+                            }
+                            decoder.close(Duration::from_secs(5)).await?;
+                            if samples.abs_diff(SAMPLES) > 1920 || !signal {
+                                return Err("decoded duration/signal mismatch".to_owned());
+                            }
+                            Ok::<_, String>(samples)
+                        }));
+                    }
+                    Err(error) if error.contains("capacity exhausted") => refused += 1,
+                    Err(error) => return Err(error.into()),
+                }
+                open_cpu.push((thread_cpu() - open_cpu_start) * 1000.);
+                open_max_ms = open_max_ms.max(open_started.elapsed().as_secs_f64() * 1000.);
+                tokio::task::yield_now().await;
+            }
+            for start in starts {
+                let _ = start.send(());
+            }
+            while let Some(job) = jobs.join_next().await {
+                let (result, cpu, maximum) = job?;
+                samples += result?;
+                poll_cpu.extend(cpu);
+                poll_max_ms = poll_max_ms.max(maximum);
+            }
         }
         let elapsed = start.elapsed().as_secs_f64() * 1000.;
         let lag = stop_heartbeat(stop, heartbeat).await?;
-        let result = json!({"kind":"background_file_decoder","format":path.extension().unwrap().to_string_lossy(),"requested":count,"admitted":count-refused,"refused":refused,"decoded_samples":samples,"elapsed_ms":elapsed,"loop_lag":lag});
+        let result = json!({
+            "kind": "background_file_decoder",
+            "format": path.extension().unwrap().to_string_lossy(),
+            "requested": count,
+            "waves": waves,
+            "admitted": count * waves - refused,
+            "refused": refused,
+            "decoded_samples": samples,
+            "poll_cpu": distribution(poll_cpu),
+            "poll_max_ms": poll_max_ms,
+            "open_max_ms": open_max_ms,
+            "open_cpu": distribution(open_cpu),
+            "elapsed_ms": elapsed,
+            "loop_lag": lag,
+        });
         eprintln!("{result}");
         Ok(result)
     }
@@ -186,55 +300,74 @@ mod bench {
             &(0..samples).map(|n| ((n * 37) % 20_000) as i16 - 10_000).collect::<Vec<_>>(),
         );
         let frame = AudioFrame::new(data, RATE, 1, samples as u32);
-        let (stop, heartbeat) = start_heartbeat().await;
+        let (stop, heartbeat, observations) = start_heartbeat().await;
         let start = Instant::now();
-        let mut recorders = Vec::new();
         let mut refused = 0;
-        for index in 0..count {
-            let path = root.join(format!("record-{count}-{samples}-{index}.ogg"));
-            match <SessionRecorder as RecorderClass>::new(
-                path.to_string_lossy().into_owned(),
-                RATE,
-                Some(0.),
-                64_000,
-            ) {
-                Ok(recorder) => recorders.push((Arc::new(recorder), path)),
-                Err(error) if error.to_string().contains("capacity exhausted") => refused += 1,
-                Err(error) => return Err(error.into()),
-            }
-        }
+        let mut waves = 0;
+        let mut poll_cpu = Vec::new();
+        let mut poll_max_ms = 0_f64;
+        let mut open_max_ms = 0_f64;
+        let mut open_cpu = Vec::new();
+        let mut admitted = 0;
         let mut max_capture_ms = 0_f64;
-        let mut jobs = tokio::task::JoinSet::new();
-        for (recorder, path) in recorders {
-            let frame = frame.clone();
-            jobs.spawn(async move {
-                recorder.ready().await.map_err(|e| e.to_string())?;
-                let start = Instant::now();
-                AudioRecorder::capture_frame(&*recorder, 0., &frame);
-                recorder.on_playback_progressed(0., 0., samples as f64 / f64::from(RATE));
-                let capture_ms = start.elapsed().as_secs_f64() * 1000.;
-                recorder
-                    .flush(samples as f64 / f64::from(RATE))
+        let mut paths = Vec::new();
+        while observations.load(Ordering::Acquire) < OBSERVATIONS || poll_cpu.len() < OBSERVATIONS {
+            waves += 1;
+            let mut recorders = Vec::new();
+            for index in 0..count {
+                let open_started = Instant::now();
+                let open_cpu_start = thread_cpu();
+                let path = root.join(format!("record-{count}-{samples}-{index}.ogg"));
+                match <SessionRecorder as RecorderClass>::new(
+                    path.to_string_lossy().into_owned(),
+                    RATE,
+                    Some(0.),
+                    64_000,
+                ) {
+                    Ok(recorder) => recorders.push((Arc::new(recorder), path)),
+                    Err(error) if error.to_string().contains("capacity exhausted") => refused += 1,
+                    Err(error) => return Err(error.into()),
+                }
+                open_cpu.push((thread_cpu() - open_cpu_start) * 1000.);
+                open_max_ms = open_max_ms.max(open_started.elapsed().as_secs_f64() * 1000.);
+                tokio::task::yield_now().await;
+            }
+            admitted += recorders.len();
+            let mut jobs = tokio::task::JoinSet::new();
+            for (recorder, path) in recorders {
+                let frame = frame.clone();
+                jobs.spawn(measure_polls(async move {
+                    recorder.ready().await.map_err(|e| e.to_string())?;
+                    let start = Instant::now();
+                    AudioRecorder::capture_frame(&*recorder, 0., &frame);
+                    recorder.on_playback_progressed(0., 0., samples as f64 / f64::from(RATE));
+                    let capture_ms = start.elapsed().as_secs_f64() * 1000.;
+                    recorder
+                        .flush(samples as f64 / f64::from(RATE))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    <SessionRecorder as RecorderClass>::finish(
+                        &*recorder,
+                        Some(samples as f64 / f64::from(RATE)),
+                    )
                     .await
                     .map_err(|e| e.to_string())?;
-                <SessionRecorder as RecorderClass>::finish(
-                    &*recorder,
-                    Some(samples as f64 / f64::from(RATE)),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                Ok::<_, String>((capture_ms, path))
-            });
-        }
-        let mut paths = Vec::new();
-        while let Some(job) = jobs.join_next().await {
-            let (capture, path) = job??;
-            max_capture_ms = max_capture_ms.max(capture);
-            paths.push(path);
+                    Ok::<_, String>((capture_ms, path))
+                }));
+            }
+            paths.clear();
+            while let Some(job) = jobs.join_next().await {
+                let (result, cpu, maximum) = job?;
+                let (capture, path) = result?;
+                max_capture_ms = max_capture_ms.max(capture);
+                poll_cpu.extend(cpu);
+                poll_max_ms = poll_max_ms.max(maximum);
+                paths.push(path);
+            }
         }
         let elapsed = start.elapsed().as_secs_f64() * 1000.;
         let lag = stop_heartbeat(stop, heartbeat).await?;
-        // Verify actual final output after capture; filesystem/decoder validation is excluded from lag.
+        // Verify final output after capture, outside the filesystem/decoder lag measurement.
         for path in &paths {
             let mut reader = std::fs::File::open(path)?;
             let mut decoded = 0_usize;
@@ -262,7 +395,21 @@ mod bench {
                 return Err("recorded duration/signal mismatch".into());
             }
         }
-        let result = json!({"kind":"declared_session_recorder","requested":count,"admitted":paths.len(),"refused":refused,"frame_samples":samples,"capture_max_ms":max_capture_ms,"elapsed_ms":elapsed,"loop_lag":lag});
+        let result = json!({
+            "kind": "declared_session_recorder",
+            "requested": count,
+            "waves": waves,
+            "admitted": admitted,
+            "refused": refused,
+            "poll_cpu": distribution(poll_cpu),
+            "poll_max_ms": poll_max_ms,
+            "open_max_ms": open_max_ms,
+            "open_cpu": distribution(open_cpu),
+            "frame_samples": samples,
+            "capture_max_ms": max_capture_ms,
+            "elapsed_ms": elapsed,
+            "loop_lag": lag,
+        });
         eprintln!("{result}");
         Ok(result)
     }
@@ -274,26 +421,50 @@ mod bench {
         count: usize,
         resize: bool,
     ) -> Result<Value, Error> {
-        let (stop, heartbeat) = start_heartbeat().await;
+        let frame = VideoFrame { width, height, buffer_type: 0, data: rgba.to_vec().into() };
+        let options = ImageEncodeOptions {
+            format: "JPEG".into(),
+            quality: Some(75),
+            resize_width: resize.then_some(1024),
+            resize_height: resize.then_some(1024),
+            resize_strategy: resize.then(|| "center_aspect_fit".into()),
+        };
+        let (stop, heartbeat, observations) = start_heartbeat().await;
         let mut encoded = 0;
+        let mut waves = 0;
+        let mut poll_cpu = Vec::new();
+        let mut poll_max_ms = 0_f64;
         let mut max_encode_ms = 0_f64;
-        for _ in 0..count {
-            let start = Instant::now();
-            encoded += encode_image(
-                rgba,
-                width,
-                height,
-                "JPEG",
-                Some(75),
-                resize.then_some(1024),
-                resize.then_some(1024),
-                resize.then_some("center_aspect_fit"),
-            )?
-            .len();
-            max_encode_ms = max_encode_ms.max(start.elapsed().as_secs_f64() * 1000.);
+        while observations.load(Ordering::Acquire) < OBSERVATIONS {
+            waves += 1;
+            for _ in 0..count {
+                let start = Instant::now();
+                let (prepared, cpu, maximum) =
+                    measure_polls(lk_agents_abi::media::images::prepare(
+                        ImageInput::Frame(frame.clone()),
+                        options.clone(),
+                    ))
+                    .await;
+                encoded += prepared?.0.ok_or("image preparation returned no bytes")?.len();
+                poll_cpu.extend(cpu);
+                poll_max_ms = poll_max_ms.max(maximum);
+                max_encode_ms = max_encode_ms.max(start.elapsed().as_secs_f64() * 1000.);
+            }
         }
         let lag = stop_heartbeat(stop, heartbeat).await?;
-        let result = json!({"kind":"shipped_sync_image_encoder","width":width,"height":height,"count":count,"resize":resize,"encoded_bytes":encoded,"encode_max_ms":max_encode_ms,"loop_lag":lag});
+        let result = json!({
+            "kind": "admitted_image_encoder",
+            "width": width,
+            "height": height,
+            "count": count,
+            "waves": waves,
+            "resize": resize,
+            "encoded_bytes": encoded,
+            "encode_max_ms": max_encode_ms,
+            "poll_cpu": distribution(poll_cpu),
+            "poll_max_ms": poll_max_ms,
+            "loop_lag": lag,
+        });
         eprintln!("{result}");
         Ok(result)
     }

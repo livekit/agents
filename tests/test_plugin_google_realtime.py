@@ -723,7 +723,7 @@ async def test_tool_response_omits_a_locally_made_call_id(
         assert responses[0].function_responses[0].id is None
 
         # a resumption replays the response from the chat context; it still carries no id
-        session._sync_chat_ctx(chat_ctx, known=llm.ChatContext.empty())
+        await session._sync_chat_ctx(chat_ctx, known=llm.ChatContext.empty())
         replayed = [
             m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
         ]
@@ -1093,3 +1093,223 @@ def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+async def test_context_updates_preserve_order_while_image_preparation_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    preparations: list[list[str]] = []
+
+    async def prepare(
+        context: llm.ChatContext, *args: object, **kwargs: object
+    ) -> tuple[list[dict], None]:
+        ids = [item.id for item in context.items]
+        preparations.append(ids)
+        if len(preparations) == 1:
+            entered.set()
+            await release.wait()
+        return [
+            {"role": "user", "parts": [{"text": message.text_content}]}
+            for message in context.messages()
+        ], None
+
+    monkeypatch.setattr(llm.ChatContext, "to_provider_format", prepare)
+    async with _make_connected_session(monkeypatch) as session:
+        first = llm.ChatContext.empty()
+        first.add_message(role="user", content="first", id="first")
+        second = first.copy()
+        second.add_message(role="user", content="second", id="second")
+        one = asyncio.create_task(session.update_chat_ctx(first))
+        await asyncio.wait_for(entered.wait(), 2)
+        two = asyncio.create_task(session.update_chat_ctx(second))
+        try:
+            await asyncio.sleep(0)
+            assert preparations == [["first"]]
+            release.set()
+            await asyncio.gather(one, two)
+            assert preparations == [["first"], ["second"]]
+            assert [item.id for item in session.chat_ctx.items] == ["first", "second"]
+        finally:
+            release.set()
+            await asyncio.gather(one, two, return_exceptions=True)
+
+
+async def test_session_close_does_not_wait_for_context_image_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def prepare(
+        context: llm.ChatContext, *args: object, **kwargs: object
+    ) -> tuple[list[dict], None]:
+        entered.set()
+        await release.wait()
+        return [], None
+
+    monkeypatch.setattr(llm.ChatContext, "to_provider_format", prepare)
+    async with _make_connected_session(monkeypatch) as session:
+        session._active_session = _FakeVoiceSession()  # type: ignore[assignment]
+        context = llm.ChatContext.empty()
+        context.add_message(role="user", content="image", id="slow-image")
+        update = asyncio.create_task(session.update_chat_ctx(context))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(session.aclose(), 0.5)
+            assert not release.is_set(), "close must not wait for image preparation"
+            release.set()
+            await update
+            assert session._chat_ctx.get_by_id("slow-image") is None
+        finally:
+            release.set()
+            await asyncio.gather(update, return_exceptions=True)
+
+
+async def test_restart_during_initial_image_preparation_is_not_a_connection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.genai.live import AsyncLive
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    opened: list[_FakeVoiceSession] = []
+
+    @asynccontextmanager
+    async def connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeVoiceSession]:
+        socket = _FakeVoiceSession()
+        opened.append(socket)
+        try:
+            yield socket
+        finally:
+            await socket.close()
+
+    async def prepare(
+        context: llm.ChatContext, *args: object, **kwargs: object
+    ) -> tuple[list[dict], None]:
+        if len(opened) == 1:
+            entered.set()
+            await release.wait()
+        return [], None
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", connect)
+    monkeypatch.setattr(llm.ChatContext, "to_provider_format", prepare)
+    session = RealtimeModel().session()
+    errors: list[object] = []
+    session.on("error", errors.append)
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        session.update_options(voice="Kore")
+        release.set()
+        async with asyncio.timeout(2):
+            while len(opened) < 2 or session._active_session is None:
+                await asyncio.sleep(0)
+        assert session._num_retries == 0
+        assert errors == []
+    finally:
+        release.set()
+        await session.aclose()
+
+
+@pytest.mark.parametrize("during_preparation", [False, True])
+async def test_context_update_during_restart_is_preserved_for_the_next_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    during_preparation: bool,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def prepare(
+        context: llm.ChatContext, *args: object, **kwargs: object
+    ) -> tuple[list[dict], None]:
+        entered.set()
+        await release.wait()
+        return [], None
+
+    monkeypatch.setattr(llm.ChatContext, "to_provider_format", prepare)
+    async with _make_connected_session(monkeypatch) as session:
+        context = llm.ChatContext.empty()
+        context.add_message(role="user", content="keep this update", id="pending")
+        if during_preparation:
+            update = asyncio.create_task(session.update_chat_ctx(context))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                session._session_should_close.set()
+                release.set()
+                await update
+            finally:
+                release.set()
+                await asyncio.gather(update, return_exceptions=True)
+        else:
+            session._session_should_close.set()
+            await session.update_chat_ctx(context)
+        assert session.chat_ctx.get_by_id("pending") is not None
+        assert session._pending_chat_ctx is not None
+
+
+async def test_context_update_after_close_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    async with _make_session(monkeypatch) as session:
+        await session.aclose()
+        context = llm.ChatContext.empty()
+        context.add_message(role="user", content="late", id="late")
+        await session.update_chat_ctx(context)
+        assert session._pending_chat_ctx is None
+
+
+async def test_video_dequeue_releases_the_latest_frame_slot_before_session_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit import rtc
+
+    async with _make_connected_session(monkeypatch) as session:
+        frame = rtc.VideoFrame(1, 1, rtc.VideoBufferType.RGBA, bytes(4))
+        session.push_video(frame)
+        session._active_session = None
+        await session._send_task(object())  # type: ignore[arg-type]
+        assert session._pending_video is None
+        session.push_video(frame)
+        assert not session._msg_ch.empty(), "a later frame must enter the outgoing queue"
+
+
+async def test_bad_video_frame_does_not_restart_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from livekit import rtc
+    from livekit.agents.utils import images
+
+    encoded = asyncio.Event()
+    sent = asyncio.Event()
+    calls = 0
+
+    async def encode(frame: rtc.VideoFrame, options: images.EncodeOptions) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            encoded.set()
+            raise ValueError("invalid video frame")
+        return b"jpeg"
+
+    class Socket(_FakeVoiceSession):
+        async def send_realtime_input(self, **kwargs: object) -> None:
+            sent.set()
+
+    monkeypatch.setattr(images, "encode", encode)
+    async with _make_connected_session(monkeypatch) as session:
+        socket = Socket()
+        session._active_session = socket  # type: ignore[assignment]
+        frame = rtc.VideoFrame(1, 1, rtc.VideoBufferType.RGBA, bytes(4))
+        session.push_video(frame)
+        pump = asyncio.create_task(session._send_task(socket))  # type: ignore[arg-type]
+        try:
+            for _ in range(2):
+                await asyncio.wait_for(encoded.wait(), 2)
+                encoded.clear()
+                session.push_video(frame)
+            await asyncio.wait_for(sent.wait(), 1)
+            assert not session._session_should_close.is_set()
+            assert sum("invalid video frame" in record.message for record in caplog.records) == 1
+        finally:
+            await utils.aio.cancel_and_wait(pump)

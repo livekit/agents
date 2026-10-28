@@ -50,7 +50,7 @@ class ImageContent(BaseModel):
     # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
     from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
 
-    image_bytes = encode(
+    image_bytes = await encode(
         event.frame,
         EncodeOptions(
             format="PNG",
@@ -499,7 +499,7 @@ class ChatContext:
         )
 
     @overload
-    def to_provider_format(
+    async def to_provider_format(
         self,
         format: Literal["openai", "openai.responses"],
         *,
@@ -507,7 +507,7 @@ class ChatContext:
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
-    def to_provider_format(
+    async def to_provider_format(
         self,
         format: Literal["google"],
         *,
@@ -516,24 +516,24 @@ class ChatContext:
     ) -> tuple[list[dict], _provider_format.GoogleFormatData]: ...
 
     @overload
-    def to_provider_format(
+    async def to_provider_format(
         self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.BedrockFormatData]: ...
 
     @overload
-    def to_provider_format(
+    async def to_provider_format(
         self, format: Literal["anthropic"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.AnthropicFormatData]: ...
 
     @overload
-    def to_provider_format(
+    async def to_provider_format(
         self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.MistralFormatData]: ...
 
     @overload
-    def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
+    async def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
 
-    def to_provider_format(
+    async def to_provider_format(
         self,
         format: Literal["openai", "openai.responses", "google", "aws", "anthropic", "mistralai"]
         | str,
@@ -549,7 +549,7 @@ class ChatContext:
         This is necessary because some providers expect a user message to be present for
         generating a response.
         """
-        return _provider_format.to_chat_ctx(
+        return await _provider_format.to_chat_ctx(
             self, format, inject_dummy_user_message=inject_dummy_user_message, **kwargs
         )
 

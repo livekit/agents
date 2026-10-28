@@ -22,6 +22,8 @@ pub struct Runtime {
     events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
     watch: crate::agent_session::WatchHub,
     forwarder: AudioForwarder,
+    /// One refused-audio warning per active stream, retired when that input ends.
+    push_warned: std::collections::BTreeSet<ResourceId>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Every source's events, in arrival order. Frames never come this way.
     pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
@@ -83,6 +85,7 @@ impl Runtime {
             events,
             watch,
             forwarder,
+            push_warned: Default::default(),
             queue,
             frames,
             reports,
@@ -276,13 +279,19 @@ impl Runtime {
         let resources = &self.shared.resources;
         for effect in effects {
             match effect {
-                // A dead host stream is the drain's to report, not the forwarder's per frame.
                 ForwarderEffect::Push { sink, frame } => {
-                    if let Some(sink) = resources.audio_sink(sink) {
-                        let _ = sink.push(frame);
+                    if let Some(stream) = resources.audio_sink(sink)
+                        && let Err(error) = stream.push(frame)
+                        && self.push_warned.insert(sink)
+                    {
+                        log::warn!(
+                            target: "livekit.agents",
+                            "audio stream {sink:?} refused input: {error}; suppressing repeats"
+                        );
                     }
                 }
                 ForwarderEffect::EndInput(sink) => {
+                    self.push_warned.remove(&sink);
                     if let Some(stream) = resources.audio_sink(sink) {
                         stream.end_input();
                     }

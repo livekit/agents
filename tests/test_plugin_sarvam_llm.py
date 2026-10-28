@@ -355,8 +355,8 @@ def _chat_ctx_with_tool_call() -> ChatContext:
     return ctx
 
 
-def _tool_messages(stream: Any) -> list[dict[str, Any]]:
-    messages, _ = stream._chat_ctx.to_provider_format(format="openai")
+async def _tool_messages(stream: Any) -> list[dict[str, Any]]:
+    messages, _ = await stream._chat_ctx.to_provider_format(format="openai")
     return [m for m in messages if m.get("role") == "tool" or "tool_calls" in m]
 
 
@@ -365,7 +365,7 @@ async def test_tool_history_stripped_when_turn_has_no_tools() -> None:
     """Sarvam 400s on tool messages with no `tools` array, poisoning the session."""
     llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
     stream = llm.chat(chat_ctx=_chat_ctx_with_tool_call())
-    assert _tool_messages(stream) == []
+    assert await _tool_messages(stream) == []
     await stream.aclose()
 
 
@@ -384,7 +384,7 @@ async def test_tool_history_kept_when_turn_has_tools() -> None:
         tools=[get_weather],
         tool_choice="none",
     )
-    assert _tool_messages(stream)
+    assert await _tool_messages(stream)
     await stream.aclose()
 
 

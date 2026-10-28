@@ -42,6 +42,9 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         return if started.pid == pid { Ok(read(started)) } else { Err(ProcessError::Forked) };
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        // Codec/model work has its own admitted workers. Starting one async worker per CPU
+        // here makes the first loop-facing constructor pay for unrelated native capacity.
+        .worker_threads(2)
         .thread_name("lk-agents-runtime")
         .enable_all()
         .build()
