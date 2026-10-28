@@ -59,7 +59,7 @@ impl OutputNodes {
     pub fn text_output(&self, below: Option<Arc<dyn TextOutput>>) -> Option<Arc<dyn TextOutput>> {
         let below = below?;
         let Some(factory) = &self.transcription else { return Some(below) };
-        match factory.text_node(crate::io::CoreTextOutput::new(Arc::clone(&below))) {
+        match factory.text_node(Arc::clone(&below)) {
             Ok(node) => Some(Arc::new(crate::io::NodeTextOutput::new(node, below))),
             Err(e) => {
                 log::error!(target: "livekit.agents", error = e.to_string().as_str();
@@ -280,14 +280,14 @@ mod tests {
     impl NodeFactory for GaveUp {
         fn text_node(
             &self,
-            _below: crate::io::CoreTextOutput,
+            _below: Arc<dyn TextOutput>,
         ) -> Result<Arc<dyn crate::io::TextNode>, HostError> {
             unreachable!()
         }
 
         fn audio_node(
             &self,
-            _below: crate::io::CoreAudioSink,
+            _below: Arc<dyn lk_agents_abi::voice::io::AudioOutput>,
         ) -> Result<Arc<dyn crate::io::RealtimeAudioNode>, HostError> {
             unreachable!()
         }

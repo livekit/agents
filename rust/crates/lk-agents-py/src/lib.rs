@@ -16,10 +16,11 @@ use pyo3::prelude::*;
 extern crate lk_agents_inference as _;
 extern crate lk_agents_media as _;
 extern crate lk_agents_rtc as _;
+extern crate lk_agents_voice as _;
 
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
-/// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over `lk-agents-voice`'s `NodeFactory`.
+/// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over the core's `NodeFactory`.
 pub mod nodes;
 /// `init(role)` and the registration table.
 pub mod runtime;

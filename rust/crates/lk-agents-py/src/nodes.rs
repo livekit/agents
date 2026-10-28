@@ -19,8 +19,9 @@ use lk_agents_abi::{
     StreamSink as _, StreamSource as _, Stt, SttSink, SttSource, SynthesizedAudio, TimedString,
     Tts, TtsSink, TtsSource,
 };
-use lk_agents_voice::agent_session::api::NodeFactory;
-use lk_agents_voice::io::{CoreAudioSink, CoreTextOutput, RealtimeAudioNode, TextNode};
+use lk_agents_abi::voice::nodes::NodeFactory;
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
+use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 use pyo3::IntoPyObjectExt as _;
 use pyo3::prelude::*;
 
@@ -203,14 +204,14 @@ impl AgentNodes {
 
 #[async_trait]
 impl NodeFactory for AgentNodes {
-    fn text_node(&self, below: CoreTextOutput) -> Result<Arc<dyn TextNode>, HostError> {
-        let node = TranscriptionNode { nodes: self.share(), below: Arc::new(below), segment: Mutex::new(None) };
+    fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
+        let node = TranscriptionNode { nodes: self.share(), below, segment: Mutex::new(None) };
         Ok(Arc::new(node))
     }
 
-    fn audio_node(&self, below: CoreAudioSink) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
+    fn audio_node(&self, below: Arc<dyn AudioOutput>) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
         let cut = Arc::new(AtomicBool::new(false));
-        let node = AudioOutputNode { nodes: self.share(), below: Arc::new(below), generation: Mutex::new(None), cut };
+        let node = AudioOutputNode { nodes: self.share(), below, generation: Mutex::new(None), cut };
         Ok(Arc::new(node))
     }
 
@@ -237,7 +238,7 @@ impl NodeFactory for AgentNodes {
 /// its flush. What the node yields goes down the leg below, flushed once the node has ended.
 struct TranscriptionNode {
     nodes: AgentNodes,
-    below: Arc<CoreTextOutput>,
+    below: Arc<dyn TextOutput>,
     /// The open segment's input, while the node reads it.
     segment: Mutex<Option<ItemSink<TimedString>>>,
 }
@@ -255,11 +256,7 @@ impl TranscriptionNode {
                     let below = Arc::clone(&below);
                     async move {
                         let timed = t.start_time.is_some() || t.end_time.is_some();
-                        let sent = if timed {
-                            below.capture_timed(t.text, t.start_time, t.end_time).await
-                        } else {
-                            below.capture_text(t.text).await
-                        };
+                        let sent = if timed { below.capture_timed(&t).await } else { below.capture_text(&t.text).await };
                         sent.is_ok()
                     }
                 },
@@ -303,7 +300,7 @@ fn timed_to_py(py: Python<'_>, text: &TimedString) -> PyResult<Py<PyAny>> {
 /// boundaries the core sets. Once cut (`clear`) nothing it yields goes down.
 struct AudioOutputNode {
     nodes: AgentNodes,
-    below: Arc<CoreAudioSink>,
+    below: Arc<dyn AudioOutput>,
     /// The open invocation's input, while the node reads it.
     generation: Mutex<Option<ItemSink<AudioFrame>>>,
     cut: Arc<AtomicBool>,
@@ -321,7 +318,7 @@ impl RealtimeAudioNode for AudioOutputNode {
                 Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)),
                 move |frame: AudioFrame| {
                     let (below, cut) = (Arc::clone(&below), Arc::clone(&cut));
-                    async move { !cut.load(Ordering::SeqCst) && below.capture_frame(frame).await.is_ok() }
+                    async move { !cut.load(Ordering::SeqCst) && below.capture_frame(&frame).await.is_ok() }
                 },
                 || {},
             );

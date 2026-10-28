@@ -75,7 +75,7 @@ pub(crate) async fn realtime_generation_task(
     let node = ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(
         |(nodes, out)| {
             nodes
-                .audio_node(crate::io::CoreAudioSink::new(Arc::clone(out)))
+                .audio_node(Arc::clone(out))
                 .inspect_err(|e| {
                     log::error!(target: "livekit.agents", error = e.to_string().as_str();
                     "failed to open the realtime_audio_output_node");

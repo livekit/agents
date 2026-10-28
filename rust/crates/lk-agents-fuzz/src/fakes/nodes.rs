@@ -7,12 +7,13 @@
 use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamSource, Stt,
     SttSink, SttSource, TimedString, Ts, Tts, TtsSink, TtsSource,
 };
 use lk_agents_voice::agent_session::api::NodeFactory;
-use lk_agents_voice::io::{CoreAudioSink, CoreTextOutput, RealtimeAudioNode, TextNode};
+use lk_agents_voice::io::{RealtimeAudioNode, TextNode};
 
 use crate::record::NodeUse;
 
@@ -143,15 +144,15 @@ fn missing(leg: &str) -> ProviderError {
 impl NodeFactory for FakeNodes {
     /// `transcription_node` as the default: each delta down the leg below, in order, and the
     /// segment's flush after its last one.
-    fn text_node(&self, below: CoreTextOutput) -> Result<Arc<dyn TextNode>, HostError> {
+    fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TimedString>>();
         self.registry.world.spawn(Box::pin(async move {
             while let Some(op) = rx.recv().await {
                 let sent = match op {
                     Some(t) if t.start_time.is_none() && t.end_time.is_none() => {
-                        below.capture_text(t.text).await
+                        below.capture_text(&t.text).await
                     }
-                    Some(t) => below.capture_timed(t.text, t.start_time, t.end_time).await,
+                    Some(t) => below.capture_timed(&t).await,
                     None => {
                         below.flush();
                         Ok(())
@@ -167,14 +168,17 @@ impl NodeFactory for FakeNodes {
 
     /// `realtime_audio_output_node` as the default: each frame to the leg below, in order, none
     /// once cut.
-    fn audio_node(&self, below: CoreAudioSink) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
+    fn audio_node(
+        &self,
+        below: Arc<dyn AudioOutput>,
+    ) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AudioFrame>();
         let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cleared = Arc::clone(&cut);
         self.registry.world.spawn(Box::pin(async move {
             while let Some(frame) = rx.recv().await {
                 if cleared.load(std::sync::atomic::Ordering::SeqCst)
-                    || below.capture_frame(frame).await.is_err()
+                    || below.capture_frame(&frame).await.is_err()
                 {
                     break;
                 }

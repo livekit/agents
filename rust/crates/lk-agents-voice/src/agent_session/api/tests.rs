@@ -5,6 +5,7 @@ use crate::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnC
 use crate::agent_session::host_events::{HookCall, HookKind};
 use crate::agent_session::{HandoffRefused, SpeechId};
 use crate::speech_handle::SpeechHandle;
+use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::CloseReason;
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicBool, Ordering};

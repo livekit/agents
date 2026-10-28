@@ -8,6 +8,7 @@ pub mod background_audio;
 pub mod calls;
 pub mod events;
 pub mod io;
+pub mod nodes;
 pub mod room_io;
 pub mod rtc;
 pub mod run_result;

@@ -19,12 +19,9 @@ use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{CoreStep, Step};
-use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::session_effects::StartPlan;
-use lk_agents_abi::{
-    Clock, Llm, LlmStream, Maybe, Spawner, SpawnerExt, Stt, SttSink, SttSource, Tts, TtsSink,
-    TtsSource, Vad,
-};
+use lk_agents_abi::{Clock, Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1057,29 +1054,7 @@ impl HostAgents {
     }
 }
 
-/// An `Agent`'s overridden nodes, as the core calls them. `transcription_node` and
-/// `realtime_audio_output_node` are opened per segment and per realtime generation over the core
-/// leg below (called under the GIL; what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
-/// `stt_node` are opened per request in place of the provider ([`Node`](super::nodes)): one
-/// completion, one segment's synthesis, one recognition stream.
-#[lk_agents_abi::host(proxy(clock))]
-#[async_trait::async_trait]
-pub trait NodeFactory: Send + Sync {
-    fn text_node(
-        &self,
-        below: crate::io::CoreTextOutput,
-    ) -> Result<Arc<dyn crate::io::TextNode>, lk_agents_abi::errors::HostError>;
-    fn audio_node(
-        &self,
-        below: crate::io::CoreAudioSink,
-    ) -> Result<Arc<dyn crate::io::RealtimeAudioNode>, lk_agents_abi::errors::HostError>;
-    /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks.
-    async fn llm_node(&self, req: &lk_agents_abi::ChatRequest) -> Result<LlmStream, ProviderError>;
-    /// `tts_node(text, model_settings)`: text pushed in, its frames out.
-    async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError>;
-    /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out.
-    async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError>;
-}
+pub use lk_agents_abi::voice::nodes::NodeFactory;
 
 /// The agent a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent`,
 /// Each provider is three-state: absent keeps the leg,

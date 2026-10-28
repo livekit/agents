@@ -95,7 +95,6 @@ from ._generated._core_classes import (
     ChatRequest as ChatRequest,
     ConnectionPoolState as ConnectionPoolState,
     ConsoleIo as ConsoleIo,
-    CoreAudioSink as CoreAudioSink,
     CoreTextOutput as CoreTextOutput,
     DataStreamAudioOutput as DataStreamAudioOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,

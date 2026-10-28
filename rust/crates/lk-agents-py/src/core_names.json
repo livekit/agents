@@ -25,7 +25,6 @@
     "ChatRequest",
     "ConnectionPoolState",
     "ConsoleIo",
-    "CoreAudioSink",
     "CoreTextOutput",
     "DataStreamAudioOutput",
     "DataStreamAudioReceiver",
