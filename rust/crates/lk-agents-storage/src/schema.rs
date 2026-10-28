@@ -90,8 +90,7 @@ pub struct TaskRow {
     /// The A2A `Task` fields: `history`, `artifacts`, `metadata`.
     #[table(json)]
     pub data: TaskData,
-    /// What the framework keeps to resume the task: the question it waits on the person to
-    /// answer, while it does.
+    /// The pending question and ordered durable response streams used to resume this task.
     #[table(json)]
     pub internal: Option<TaskInternal>,
 }
