@@ -55,14 +55,30 @@ pub struct MediaWorkers {
     vad_models: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
     worker_io: Arc<Semaphore>,
+    released: Arc<tokio::sync::Notify>,
 }
 
 /// A class reservation for an async I/O resource or a native job. Native jobs must retain this
 /// until actual settlement; `try_spawn` also retains it when the receipt is abandoned.
 pub struct MediaWorkerPermit {
-    _class: OwnedSemaphorePermit,
-    _total: OwnedSemaphorePermit,
+    _class: Option<OwnedSemaphorePermit>,
+    _total: Option<OwnedSemaphorePermit>,
     _payload: Option<OwnedSemaphorePermit>,
+    // Fields drop in declaration order: notify only after all reservations are released.
+    _released: AdmissionReleased,
+}
+
+struct AdmissionReleased {
+    changed: Arc<tokio::sync::Notify>,
+    armed: bool,
+}
+
+impl Drop for AdmissionReleased {
+    fn drop(&mut self) {
+        if self.armed {
+            self.changed.notify_waiters();
+        }
+    }
 }
 
 /// An awaited completion receipt. Dropping the awaiter transfers the join and admission to the
@@ -141,6 +157,7 @@ impl MediaWorkers {
             vad_models: Arc::new(Semaphore::new(limits.vad_models)),
             uploads: Arc::new(Semaphore::new(limits.uploads)),
             worker_io: Arc::new(Semaphore::new(limits.worker_io)),
+            released: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -149,7 +166,32 @@ impl MediaWorkers {
         &self,
         class: MediaWorkerClass,
     ) -> Result<MediaWorkerPermit, MediaWorkerError> {
-        let capacity = match class {
+        let mut permit = MediaWorkerPermit {
+            _class: None,
+            _total: None,
+            _payload: None,
+            _released: AdmissionReleased { changed: self.released.clone(), armed: false },
+        };
+        for (slot, capacity) in [
+            (&mut permit._payload, (class != MediaWorkerClass::WorkerIo).then_some(&self.payload)),
+            (&mut permit._class, Some(self.class_capacity(class))),
+            (&mut permit._total, Some(&self.total)),
+        ] {
+            if let Some(capacity) = capacity {
+                *slot = Some(
+                    capacity
+                        .clone()
+                        .try_acquire_owned()
+                        .map_err(|_| MediaWorkerError::Exhausted(class))?,
+                );
+                permit._released.armed = true;
+            }
+        }
+        Ok(permit)
+    }
+
+    fn class_capacity(&self, class: MediaWorkerClass) -> &Arc<Semaphore> {
+        match class {
             MediaWorkerClass::Decoder => &self.decoders,
             MediaWorkerClass::Recording => &self.recordings,
             MediaWorkerClass::Image => &self.images,
@@ -158,25 +200,24 @@ impl MediaWorkers {
             MediaWorkerClass::VadModel => &self.vad_models,
             MediaWorkerClass::Upload => &self.uploads,
             MediaWorkerClass::WorkerIo => &self.worker_io,
-        };
-        let payload = if class == MediaWorkerClass::WorkerIo {
-            None
-        } else {
-            Some(
-                self.payload
-                    .clone()
-                    .try_acquire_owned()
-                    .map_err(|_| MediaWorkerError::Exhausted(class))?,
-            )
-        };
-        let class_permit =
-            capacity.clone().try_acquire_owned().map_err(|_| MediaWorkerError::Exhausted(class))?;
-        let total_permit = self
-            .total
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| MediaWorkerError::Exhausted(class))?;
-        Ok(MediaWorkerPermit { _class: class_permit, _total: total_permit, _payload: payload })
+        }
+    }
+
+    /// Wait after refused admission without retaining work or reserving capacity. A notification
+    /// is enabled before checking every ceiling, so concurrent release cannot strand the caller.
+    pub async fn wait_for_capacity(&self, class: MediaWorkerClass) {
+        loop {
+            let changed = self.released.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.class_capacity(class).available_permits() > 0
+                && self.total.available_permits() > 0
+                && (class == MediaWorkerClass::WorkerIo || self.payload.available_permits() > 0)
+            {
+                return;
+            }
+            changed.await;
+        }
     }
 
     /// Synchronous ingress refuses overload before retaining work. There is no admission queue.
@@ -224,6 +265,44 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn capacity_notification_observes_released_reservations() {
+        let workers = workers(3);
+        let permit = workers.try_admit(MediaWorkerClass::Recording).unwrap();
+        assert!(workers.try_admit(MediaWorkerClass::Recording).is_err());
+        let available = workers.wait_for_capacity(MediaWorkerClass::Recording);
+        tokio::pin!(available);
+        assert!(futures_util::poll!(available.as_mut()).is_pending());
+        drop(permit);
+        available.await;
+        let _admitted = workers.try_admit(MediaWorkerClass::Recording).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_partial_admission_notifies_after_releasing_its_reservations() {
+        let workers = workers(3);
+        let _recording = workers.try_admit(MediaWorkerClass::Recording).unwrap();
+        let changed = workers.released.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        assert!(workers.try_admit(MediaWorkerClass::Recording).is_err());
+        assert!(futures_util::poll!(changed.as_mut()).is_ready());
+        let _decoder = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refusing_admission_without_a_reservation_does_not_notify_capacity() {
+        let workers = workers(1);
+        let permit = workers.try_admit(MediaWorkerClass::Recording).unwrap();
+        let changed = workers.released.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        assert!(workers.try_admit(MediaWorkerClass::Decoder).is_err());
+        assert!(futures_util::poll!(changed.as_mut()).is_pending());
+        drop(permit);
+        changed.await;
     }
 
     #[tokio::test]
