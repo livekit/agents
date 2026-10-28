@@ -23,6 +23,7 @@ pub enum RemoteError {
 #[derive(Debug, Clone, Default)]
 pub struct RemoteChatContext {
     items: Vec<ChatItem>,
+    revision: u64,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// id -> index, rebuilt on every structural change.
     index: HashMap<String, usize>,
@@ -37,8 +38,71 @@ impl RemoteChatContext {
         ChatContext::new(self.items.clone())
     }
 
+    pub(crate) fn into_chat_ctx(self) -> ChatContext {
+        ChatContext::new(self.items)
+    }
+
+    /// Apply a desired update over the acknowledged mirror without losing unsolicited server
+    /// items. New items follow their nearest surviving target predecessor, before server-only
+    /// items that followed that predecessor. Index links avoid repeatedly shifting the history.
+    pub(crate) fn with_update(
+        &self,
+        target: &ChatContext,
+        touched: &std::collections::BTreeSet<String>,
+        tail_creates: &std::collections::BTreeSet<String>,
+    ) -> ChatContext {
+        let mut nodes: Vec<(&ChatItem, Option<usize>)> = Vec::new();
+        let mut positions = std::collections::BTreeMap::new();
+        for item in self.items.iter().filter(|item| !touched.contains(item.id())) {
+            let index = nodes.len();
+            if let Some((_, next)) = nodes.last_mut() {
+                *next = Some(index);
+            }
+            positions.insert(item.id(), index);
+            nodes.push((item, None));
+        }
+        let mut head = (!nodes.is_empty()).then_some(0);
+        let mut previous = None;
+        let mut tail = nodes.len().checked_sub(1);
+        for item in &target.items {
+            if let Some(&index) = positions.get(item.id()) {
+                previous = Some(index);
+                continue;
+            }
+            if !touched.contains(item.id()) {
+                continue;
+            }
+            if tail_creates.contains(item.id()) {
+                previous = tail;
+            }
+            let next = previous.map_or(head, |index| nodes[index].1);
+            let index = nodes.len();
+            nodes.push((item, next));
+            if next.is_none() {
+                tail = Some(index);
+            }
+            if let Some(previous) = previous {
+                nodes[previous].1 = Some(index);
+            } else {
+                head = Some(index);
+            }
+            positions.insert(item.id(), index);
+            previous = Some(index);
+        }
+        let mut items = Vec::with_capacity(nodes.len());
+        while let Some(index) = head {
+            items.push(nodes[index].0.clone());
+            head = nodes[index].1;
+        }
+        ChatContext::new(items)
+    }
+
     pub fn items(&self) -> &[ChatItem] {
         &self.items
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn get(&self, item_id: &str) -> Option<&ChatItem> {
@@ -47,6 +111,7 @@ impl RemoteChatContext {
 
     pub fn get_mut(&mut self, item_id: &str) -> Option<&mut ChatItem> {
         let i = *self.index.get(item_id)?;
+        self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Some(&mut self.items[i])
     }
 
@@ -77,6 +142,7 @@ impl RemoteChatContext {
 
         self.items.insert(at, item);
         self.reindex_from(at);
+        self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Ok(())
     }
 
@@ -87,6 +153,7 @@ impl RemoteChatContext {
         let removed = self.items.remove(at);
         self.index.remove(item_id);
         self.reindex_from(at);
+        self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Ok(removed)
     }
 

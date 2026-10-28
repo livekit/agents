@@ -33,7 +33,6 @@ const HANDWRITTEN: &[&str] = &[
     "JobRun",
     "ProcPool",
     "ProcSupervisor",
-    "RealtimeFallbackModel",
     "Role",
     "Run",
     "ServerConfig",

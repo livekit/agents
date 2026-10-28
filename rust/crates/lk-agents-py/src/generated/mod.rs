@@ -40,6 +40,8 @@ pub trait Implementations: 'static {
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
+    type NativeRealtimeModel: ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel;
+    type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation>;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
@@ -82,6 +84,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::mcp_http_transport, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_render_result, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_check_result, m)?)?;
+    m.add_class::<llm::NativeRealtimeModel>()?;
+    m.add_class::<llm::RealtimeFallbackModel>()?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::_core_ContextActivation>()?;

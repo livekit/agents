@@ -25,7 +25,7 @@ pub use policy::{
     resampling_plan,
 };
 pub use realtime::{
-    CapabilityMismatch, FallbackSession, RealtimeChild, RealtimeFallbackModel,
+    CapabilityMismatch,
     merge_capabilities_of,
 };
 pub use realtime_policy::{AvailabilityChange, ErrorPlan, RealtimePolicy};

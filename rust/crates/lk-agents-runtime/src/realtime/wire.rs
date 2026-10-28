@@ -11,7 +11,7 @@ use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCa
 use serde_json::{Map, Value, json};
 use std::time::SystemTime;
 
-use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
+use lk_agents_inference::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 
 /// Azure's deployment, for the URL.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -145,11 +145,9 @@ impl IdGen for RandomIds {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct SeqIds(std::sync::atomic::AtomicU64);
 
 impl Default for SeqIds {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         SeqIds(std::sync::atomic::AtomicU64::new(0))
     }
@@ -357,8 +355,7 @@ pub fn to_wire_item(item: &ChatItem, images: &dyn ImageResolver) -> Result<Value
                     ChatContent::Image(img) if m.role == Role::User => {
                         let s = images.resolve(img)?;
                         if s.external_url.is_some() {
-                            // "External URL is not supported for input_image": warned, skipped.
-                            continue;
+                            return Err("realtime images require an inline data URL; external URLs are unsupported".into());
                         }
                         let Some(bytes) = s.data_bytes else { continue };
                         let mime = s.mime_type.as_deref().unwrap_or("image/jpeg");
@@ -388,28 +385,22 @@ pub fn to_wire_item(item: &ChatItem, images: &dyn ImageResolver) -> Result<Value
 pub fn from_wire_item(item: &Value, created_at: SystemTime) -> Result<ChatItem, String> {
     let id = item.get("id").and_then(Value::as_str).ok_or("id is None")?.to_owned();
     match item.get("type").and_then(Value::as_str) {
-        Some("function_call") => {
-            let s = |k: &str| item.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-            Ok(ChatItem::FunctionCall(FunctionCall {
-                id,
-                call_id: s("call_id"),
-                arguments: s("arguments"),
-                name: s("name"),
-                created_at,
-                extra: Default::default(),
-                group_id: None,
-            }))
-        }
-        Some("function_call_output") => {
-            let s = |k: &str| item.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-            Ok(ChatItem::FunctionCallOutput(FunctionCallOutput::new(
-                id,
-                s("call_id"),
-                s("output"),
-                false,
-                created_at,
-            )))
-        }
+        Some("function_call") => Ok(ChatItem::FunctionCall(FunctionCall {
+            id,
+            call_id: required_string(item, "call_id")?,
+            arguments: required_string(item, "arguments")?,
+            name: required_string(item, "name")?,
+            created_at,
+            extra: Default::default(),
+            group_id: None,
+        })),
+        Some("function_call_output") => Ok(ChatItem::FunctionCallOutput(FunctionCallOutput::new(
+            id,
+            required_string(item, "call_id")?,
+            required_string(item, "output")?,
+            false,
+            created_at,
+        ))),
         Some("message") => {
             let role = match item.get("role").and_then(Value::as_str) {
                 Some("system") => Role::System,
@@ -457,131 +448,37 @@ pub fn from_wire_item(item: &Value, created_at: SystemTime) -> Result<ChatItem, 
     }
 }
 
-/// One decoded server message. Covers xAI's extra types for every dialect.
-#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-pub enum Incoming {
-    SpeechStarted {
-        item_id: Option<String>,
-    },
-    SpeechStopped,
-    ResponseCreated {
-        response_id: String,
-        client_event_id: Option<String>,
-    },
-    OutputItemAdded {
-        item_id: String,
-        item_type: String,
-    },
-    ContentPartAdded {
-        item_id: String,
-        part_type: String,
-    },
-    ItemAdded {
-        previous_item_id: Option<String>,
-        item: Value,
-    },
-    ItemDeleted {
-        item_id: String,
-    },
-    TranscriptionDelta {
-        item_id: String,
-        content_index: usize,
-        delta: String,
-    },
-    TranscriptionCompleted(TranscriptionCompleted),
-    TranscriptionFailed {
-        item_id: String,
-        content_index: usize,
-    },
-    /// xAI only: an interim transcript -- the whole transcript so far, re-sent.
-    TranscriptionUpdated {
-        item_id: String,
-        transcript: String,
-    },
-    TextDelta {
-        item_id: String,
-        delta: String,
-    },
-    /// The transcript of audio output. `start_time` only when the provider sent it.
-    AudioTranscriptDelta {
-        item_id: String,
-        delta: String,
-        start_time: Option<f64>,
-    },
-    AudioDelta {
-        item_id: String,
-        pcm: Vec<u8>,
-    },
-    OutputItemDone {
-        item: Value,
-    },
-    ResponseDone(ResponseDone),
-    Error(ServerError),
-    /// xAI only. The server is about to take a proactive turn.
-    IdleTimeoutTriggered,
-    SessionCreated {
-        model: Option<String>,
-    },
-    /// An unhandled event, carried so the raw-event passthrough can forward it.
-    Unhandled {
-        event_type: String,
-    },
-}
+pub use lk_agents_inference::realtime::protocol::{
+    Incoming, ResponseDone, ServerError, TranscriptionCompleted, TranscriptionUsage,
+};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TranscriptionCompleted {
-    pub item_id: String,
-    pub content_index: usize,
-    pub transcript: String,
-    /// Geometric mean of `exp(logprob)`, or `None` when the provider sent no logprobs.
-    pub confidence: Option<f64>,
-    /// xAI sends `status: "in_progress"` on a transcript it will revise. Absent on OpenAI.
-    pub in_progress: bool,
-    pub event_id: String,
-    /// The transcription's billed usage, when the provider reports it.
-    pub usage: Option<TranscriptionUsage>,
-}
-
-/// `UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration`, told apart by `type`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TranscriptionUsage {
-    Tokens { input: u32, output: u32, total: u32, input_audio: u32 },
-    Duration { seconds: f64 },
-}
-
-impl TranscriptionUsage {
-    /// `_coerce_transcription_usage`: anything else is no usage.
-    fn decode(v: Option<&Value>) -> Option<Self> {
-        let v = v?;
-        let n = |path: &[&str]| u32::try_from(u(v, path)).unwrap_or(u32::MAX);
-        match v.get("type").and_then(Value::as_str)? {
-            "tokens" => Some(TranscriptionUsage::Tokens {
-                input: n(&["input_tokens"]),
-                output: n(&["output_tokens"]),
-                total: n(&["total_tokens"]),
-                input_audio: n(&["input_token_details", "audio_tokens"]),
-            }),
-            "duration" => Some(TranscriptionUsage::Duration { seconds: v.get("seconds")?.as_f64()? }),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResponseDone {
-    pub response_id: String,
-    pub status: lk_agents_abi::llm::realtime::GenerationStatus,
-    pub error_type: Option<String>,
-    pub error_code: Option<String>,
-    pub usage: lk_agents_abi::llm::realtime::TokenUsage,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ServerError {
-    pub event_id: Option<String>,
-    pub code: Option<String>,
-    pub type_: Option<String>,
-    pub message: String,
+fn transcription_usage(v: Option<&Value>) -> Result<Option<TranscriptionUsage>, String> {
+    let Some(v) = v.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let n = |path: &[&str]| -> Result<u32, String> {
+        u32::try_from(u(v, path)?)
+            .map_err(|_| format!("{} exceeds the transcription token range", path.join(".")))
+    };
+    let usage = match required_string(v, "type")?.as_str() {
+        "tokens" => TranscriptionUsage::Tokens {
+            input: n(&["input_tokens"])?,
+            output: n(&["output_tokens"])?,
+            total: n(&["total_tokens"])?,
+            input_audio: n(&["input_token_details", "audio_tokens"])?,
+        },
+        "duration" => TranscriptionUsage::Duration {
+            seconds: v
+                .get("seconds")
+                .and_then(Value::as_f64)
+                .filter(|seconds| *seconds >= 0.0)
+                .ok_or_else(|| {
+                    "transcription usage seconds must be a non-negative number".to_owned()
+                })?,
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(usage))
 }
 
 /// `calculate_confidence_from_logprobs`: the geometric mean `exp(sum(logprob) / n)`, not
@@ -599,155 +496,250 @@ fn s(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn u(v: &Value, path: &[&str]) -> u64 {
+fn u(v: &Value, path: &[&str]) -> Result<u64, String> {
     let mut cur = v;
-    for p in path {
-        match cur.get(p) {
+    for part in path {
+        if cur.is_null() {
+            return Ok(0);
+        }
+        match cur.get(part) {
             Some(next) => cur = next,
-            None => return 0,
+            None if cur.is_object() => return Ok(0),
+            None => return Err(format!("{} must be an unsigned integer", path.join("."))),
         }
     }
-    cur.as_u64().unwrap_or(0)
+    cur.as_u64().ok_or_else(|| format!("{} must be an unsigned integer", path.join(".")))
+}
+
+/// A malformed provider frame retains its operation and correlated event identity.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid realtime {operation} ({event_id:?}): {cause}")]
+pub struct DecodeError {
+    pub operation: String,
+    pub event_id: Option<String>,
+    pub cause: String,
+}
+
+impl DecodeError {
+    fn at(ev: &Value, cause: String) -> Self {
+        Self {
+            operation: ev.get("type").and_then(Value::as_str).unwrap_or("message").to_owned(),
+            event_id: ev.get("event_id").and_then(Value::as_str).map(str::to_owned),
+            cause,
+        }
+    }
+}
+
+/// Parse and validate one socket frame before any core transition.
+pub fn decode_text(
+    text: &str,
+    shape: &WireShape,
+    created_at: SystemTime,
+) -> Result<Incoming, DecodeError> {
+    let mut value: Value = serde_json::from_str(text).map_err(|error| DecodeError {
+        operation: "message".into(),
+        event_id: None,
+        cause: error.to_string(),
+    })?;
+    shape.inbound(&mut value);
+    decode_at(&value, created_at)
+}
+
+fn required_string(value: &Value, field: &str) -> Result<String, String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{field} must be a string"))
+}
+
+#[cfg(test)]
+pub fn decode(ev: &Value) -> Incoming {
+    decode_at(ev, SystemTime::UNIX_EPOCH).expect("valid fixture")
 }
 
 /// The `if/elif` chain of `_recv_task`, as a total function.
-pub fn decode(ev: &Value) -> Incoming {
-    let ty = ev.get("type").and_then(Value::as_str).unwrap_or("");
-    match ty {
-        "input_audio_buffer.speech_started" => {
-            Incoming::SpeechStarted { item_id: s(ev, "item_id") }
-        }
-        "input_audio_buffer.speech_stopped" => Incoming::SpeechStopped,
-        "response.created" => {
-            let response = ev.get("response").unwrap_or(&Value::Null);
-            Incoming::ResponseCreated {
-                response_id: s(response, "id").unwrap_or_default(),
-                client_event_id: response
-                    .get("metadata")
-                    .and_then(|m| m.get("client_event_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+pub fn decode_at(ev: &Value, created_at: SystemTime) -> Result<Incoming, DecodeError> {
+    let ty = required_string(ev, "type").map_err(|cause| DecodeError::at(ev, cause))?;
+    let decoded = (|| -> Result<Incoming, String> {
+        Ok(match ty.as_str() {
+            "input_audio_buffer.speech_started" => {
+                Incoming::SpeechStarted { item_id: s(ev, "item_id") }
             }
-        }
-        "response.output_item.added" => {
-            let item = ev.get("item").unwrap_or(&Value::Null);
-            Incoming::OutputItemAdded {
-                item_id: s(item, "id").unwrap_or_default(),
-                item_type: s(item, "type").unwrap_or_default(),
+            "input_audio_buffer.speech_stopped" => Incoming::SpeechStopped,
+            "response.created" => {
+                let response = ev.get("response").unwrap_or(&Value::Null);
+                Incoming::ResponseCreated {
+                    response_id: required_string(response, "id")?,
+                    client_event_id: response
+                        .get("metadata")
+                        .and_then(|m| m.get("client_event_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                }
             }
-        }
-        "response.content_part.added" => Incoming::ContentPartAdded {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            part_type: ev
-                .get("part")
-                .and_then(|p| p.get("type"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-        },
-        "conversation.item.added" => Incoming::ItemAdded {
-            previous_item_id: s(ev, "previous_item_id"),
-            item: ev.get("item").cloned().unwrap_or(Value::Null),
-        },
-        "conversation.item.deleted" => {
-            Incoming::ItemDeleted { item_id: s(ev, "item_id").unwrap_or_default() }
-        }
-        "conversation.item.input_audio_transcription.delta" => Incoming::TranscriptionDelta {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            content_index: u(ev, &["content_index"]) as usize,
-            delta: s(ev, "delta").unwrap_or_default(),
-        },
-        "conversation.item.input_audio_transcription.completed" => {
-            Incoming::TranscriptionCompleted(TranscriptionCompleted {
-                item_id: s(ev, "item_id").unwrap_or_default(),
-                content_index: u(ev, &["content_index"]) as usize,
-                transcript: s(ev, "transcript").unwrap_or_default(),
-                confidence: confidence_from_logprobs(ev.get("logprobs").and_then(Value::as_array)),
-                in_progress: ev.get("status").and_then(Value::as_str) == Some("in_progress"),
-                event_id: s(ev, "event_id").unwrap_or_default(),
-                usage: TranscriptionUsage::decode(ev.get("usage")),
-            })
-        }
-        "conversation.item.input_audio_transcription.failed" => Incoming::TranscriptionFailed {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            content_index: u(ev, &["content_index"]) as usize,
-        },
-        "conversation.item.input_audio_transcription.updated" => Incoming::TranscriptionUpdated {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            transcript: s(ev, "transcript").unwrap_or_default(),
-        },
-        "response.output_text.delta" => Incoming::TextDelta {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            delta: s(ev, "delta").unwrap_or_default(),
-        },
-        "response.output_audio_transcript.delta" => Incoming::AudioTranscriptDelta {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            delta: s(ev, "delta").unwrap_or_default(),
-            start_time: ev.get("start_time").and_then(Value::as_f64),
-        },
-        "response.output_audio.delta" => Incoming::AudioDelta {
-            item_id: s(ev, "item_id").unwrap_or_default(),
-            pcm: ev
-                .get("delta")
-                .and_then(Value::as_str)
-                .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
-                .unwrap_or_default(),
-        },
-        "response.output_item.done" => {
-            Incoming::OutputItemDone { item: ev.get("item").cloned().unwrap_or(Value::Null) }
-        }
-        "response.done" => {
-            let r = ev.get("response").unwrap_or(&Value::Null);
-            let details = r.get("status_details");
-            let error = details.and_then(|d| d.get("error"));
-            Incoming::ResponseDone(ResponseDone {
-                response_id: s(r, "id").unwrap_or_default(),
-                status: lk_agents_abi::llm::realtime::GenerationStatus::parse(
-                    r.get("status").and_then(Value::as_str).unwrap_or("completed"),
-                ),
-                error_type: error.and_then(|e| s(e, "type")),
-                error_code: error.and_then(|e| s(e, "code")),
-                usage: lk_agents_abi::llm::realtime::TokenUsage {
-                    input_tokens: u(r, &["usage", "input_tokens"]),
-                    output_tokens: u(r, &["usage", "output_tokens"]),
-                    total_tokens: u(r, &["usage", "total_tokens"]),
-                    input_audio_tokens: u(r, &["usage", "input_token_details", "audio_tokens"]),
-                    input_text_tokens: u(r, &["usage", "input_token_details", "text_tokens"]),
-                    input_cached_tokens: u(r, &["usage", "input_token_details", "cached_tokens"]),
-                    input_image_tokens: u(r, &["usage", "input_token_details", "image_tokens"]),
-                    cached_text_tokens: u(
-                        r,
-                        &["usage", "input_token_details", "cached_tokens_details", "text_tokens"],
+            "response.output_item.added" => {
+                let item = ev.get("item").unwrap_or(&Value::Null);
+                Incoming::OutputItemAdded {
+                    item_id: required_string(item, "id")?,
+                    item_type: required_string(item, "type")?,
+                }
+            }
+            "response.content_part.added" => Incoming::ContentPartAdded {
+                item_id: required_string(ev, "item_id")?,
+                part_type: required_string(ev.get("part").unwrap_or(&Value::Null), "type")?,
+            },
+            "conversation.item.added" => Incoming::ItemAdded {
+                previous_item_id: s(ev, "previous_item_id"),
+                item: from_wire_item(ev.get("item").unwrap_or(&Value::Null), created_at)?,
+            },
+            "conversation.item.deleted" => {
+                Incoming::ItemDeleted { item_id: required_string(ev, "item_id")? }
+            }
+            "conversation.item.input_audio_transcription.delta" => Incoming::TranscriptionDelta {
+                item_id: required_string(ev, "item_id")?,
+                content_index: u(ev, &["content_index"])? as usize,
+                delta: required_string(ev, "delta")?,
+            },
+            "conversation.item.input_audio_transcription.completed" => {
+                Incoming::TranscriptionCompleted(TranscriptionCompleted {
+                    item_id: required_string(ev, "item_id")?,
+                    content_index: u(ev, &["content_index"])? as usize,
+                    transcript: required_string(ev, "transcript")?,
+                    confidence: confidence_from_logprobs(
+                        ev.get("logprobs").and_then(Value::as_array),
                     ),
-                    cached_audio_tokens: u(
-                        r,
-                        &["usage", "input_token_details", "cached_tokens_details", "audio_tokens"],
-                    ),
-                    cached_image_tokens: u(
-                        r,
-                        &["usage", "input_token_details", "cached_tokens_details", "image_tokens"],
-                    ),
-                    output_audio_tokens: u(r, &["usage", "output_token_details", "audio_tokens"]),
-                    output_text_tokens: u(r, &["usage", "output_token_details", "text_tokens"]),
-                    output_image_tokens: u(r, &["usage", "output_token_details", "image_tokens"]),
+                    in_progress: ev.get("status").and_then(Value::as_str) == Some("in_progress"),
+                    event_id: s(ev, "event_id").unwrap_or_default(),
+                    usage: transcription_usage(ev.get("usage"))?,
+                })
+            }
+            "conversation.item.input_audio_transcription.failed" => Incoming::TranscriptionFailed {
+                item_id: required_string(ev, "item_id")?,
+                content_index: u(ev, &["content_index"])? as usize,
+            },
+            "conversation.item.input_audio_transcription.updated" => {
+                Incoming::TranscriptionUpdated {
+                    item_id: required_string(ev, "item_id")?,
+                    transcript: required_string(ev, "transcript")?,
+                }
+            }
+            "response.output_text.delta" => Incoming::TextDelta {
+                item_id: required_string(ev, "item_id")?,
+                delta: required_string(ev, "delta")?,
+            },
+            "response.output_audio_transcript.delta" => Incoming::AudioTranscriptDelta {
+                item_id: required_string(ev, "item_id")?,
+                delta: required_string(ev, "delta")?,
+                start_time: ev.get("start_time").and_then(Value::as_f64),
+            },
+            "response.output_audio.delta" => Incoming::AudioDelta {
+                item_id: required_string(ev, "item_id")?,
+                frame: {
+                    let data = base64::engine::general_purpose::STANDARD
+                        .decode(required_string(ev, "delta")?)
+                        .map_err(|error| format!("invalid PCM base64: {error}"))?;
+                    if data.len() % 2 != 0 {
+                        return Err("PCM data ends in a partial i16 sample".into());
+                    }
+                    audio_frame(data)
                 },
-            })
-        }
-        "error" => {
-            let e = ev.get("error").unwrap_or(&Value::Null);
-            Incoming::Error(ServerError {
-                event_id: s(e, "event_id"),
-                code: s(e, "code"),
-                type_: s(e, "type"),
-                message: s(e, "message").unwrap_or_default(),
-            })
-        }
-        "input_audio_buffer.timeout_triggered" => Incoming::IdleTimeoutTriggered,
-        "session.created" => {
-            Incoming::SessionCreated { model: ev.get("session").and_then(|s_| s(s_, "model")) }
-        }
-        other => Incoming::Unhandled { event_type: other.to_owned() },
-    }
+            },
+            "response.output_item.done" => Incoming::OutputItemDone {
+                item: from_wire_item(ev.get("item").unwrap_or(&Value::Null), created_at)?,
+            },
+            "response.done" => {
+                let r = ev.get("response").unwrap_or(&Value::Null);
+                let details = r.get("status_details");
+                let error = details.and_then(|d| d.get("error"));
+                Incoming::ResponseDone(ResponseDone {
+                    response_id: required_string(r, "id")?,
+                    status: match required_string(r, "status")?.as_str() {
+                        "completed" => lk_agents_abi::llm::realtime::GenerationStatus::Completed,
+                        "cancelled" => lk_agents_abi::llm::realtime::GenerationStatus::Cancelled,
+                        "incomplete" => lk_agents_abi::llm::realtime::GenerationStatus::Incomplete,
+                        "failed" => lk_agents_abi::llm::realtime::GenerationStatus::Failed,
+                        other => return Err(format!("unsupported response status: {other}")),
+                    },
+                    error_type: error.and_then(|e| s(e, "type")),
+                    error_code: error.and_then(|e| s(e, "code")),
+                    usage: lk_agents_abi::llm::realtime::TokenUsage {
+                        input_tokens: u(r, &["usage", "input_tokens"])?,
+                        output_tokens: u(r, &["usage", "output_tokens"])?,
+                        total_tokens: u(r, &["usage", "total_tokens"])?,
+                        input_audio_tokens: u(
+                            r,
+                            &["usage", "input_token_details", "audio_tokens"],
+                        )?,
+                        input_text_tokens: u(r, &["usage", "input_token_details", "text_tokens"])?,
+                        input_cached_tokens: u(
+                            r,
+                            &["usage", "input_token_details", "cached_tokens"],
+                        )?,
+                        input_image_tokens: u(
+                            r,
+                            &["usage", "input_token_details", "image_tokens"],
+                        )?,
+                        cached_text_tokens: u(
+                            r,
+                            &[
+                                "usage",
+                                "input_token_details",
+                                "cached_tokens_details",
+                                "text_tokens",
+                            ],
+                        )?,
+                        cached_audio_tokens: u(
+                            r,
+                            &[
+                                "usage",
+                                "input_token_details",
+                                "cached_tokens_details",
+                                "audio_tokens",
+                            ],
+                        )?,
+                        cached_image_tokens: u(
+                            r,
+                            &[
+                                "usage",
+                                "input_token_details",
+                                "cached_tokens_details",
+                                "image_tokens",
+                            ],
+                        )?,
+                        output_audio_tokens: u(
+                            r,
+                            &["usage", "output_token_details", "audio_tokens"],
+                        )?,
+                        output_text_tokens: u(
+                            r,
+                            &["usage", "output_token_details", "text_tokens"],
+                        )?,
+                        output_image_tokens: u(
+                            r,
+                            &["usage", "output_token_details", "image_tokens"],
+                        )?,
+                    },
+                })
+            }
+            "error" => {
+                let e = ev.get("error").unwrap_or(&Value::Null);
+                Incoming::Error(ServerError {
+                    event_id: s(e, "event_id"),
+                    code: s(e, "code"),
+                    type_: s(e, "type"),
+                    message: s(e, "message").unwrap_or_default(),
+                })
+            }
+            "input_audio_buffer.timeout_triggered" => Incoming::IdleTimeoutTriggered,
+            "session.created" => {
+                Incoming::SessionCreated { model: ev.get("session").and_then(|s_| s(s_, "model")) }
+            }
+            other => Incoming::Unhandled { event_type: other.to_owned() },
+        })
+    })()
+    .map_err(|cause| DecodeError::at(ev, cause));
+    decoded
 }
 
 /// An `AudioDelta`'s PCM as an [`AudioFrame`](lk_agents_abi::AudioFrame) at the session rate.
@@ -935,7 +927,7 @@ mod tests {
             decode(&json!({"type": "response.mcp_call.completed"})),
             Incoming::Unhandled { event_type: "response.mcp_call.completed".into() }
         );
-        assert_eq!(decode(&json!({})), Incoming::Unhandled { event_type: String::new() });
+        assert!(decode_at(&json!({}), TIME).is_err());
     }
 
     // Catches: reading token usage off the flat `usage` object only (cached tokens are nested).

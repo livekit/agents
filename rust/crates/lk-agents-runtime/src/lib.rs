@@ -28,6 +28,8 @@ pub mod a2a_card;
 pub mod a2a_client;
 pub mod http;
 pub mod llm;
+pub mod duplex;
+pub mod realtime;
 pub mod mcp;
 pub mod process;
 pub mod source;

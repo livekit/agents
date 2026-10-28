@@ -2,21 +2,25 @@
 //! generations at the gate's edges, its transcript fragments attached to the sound that carries
 //! them, and the conversation the session sees. Every input returns the events it produced.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, FunctionCallReady, GenerateReplyFailed, GenerationCreated, GenerationDone,
     GenerationStatus, MessageDone, MessageModalities, MessageStarted, Modalities, RealtimeError,
-    RealtimeModelError, SessionReconnected, TextDelta, TokenUsage,
+    RealtimeModelError, SessionReconnected, TextDelta, TokenUsage, TranscriptAttribution,
 };
-use lk_agents_abi::{AudioFrame, ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, Role, Ts};
-
-use crate::duplex::gate::AudioGate;
+use lk_agents_abi::{
+    AudioFrame, ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, Role, Ts,
+};
 
 /// Transcript no sound ever opens a burst for is emitted as a text-only generation this much audio
 /// later, rather than lost. Audio is never held for it.
 pub const UNCLAIMED_TRANSCRIPT_MS: i64 = 3000;
+
+/// Buffered future transcript, shared across fragments; audio is never delayed for these words.
+pub const MAX_TRANSCRIPT_FRAGMENTS: usize = 1024;
+pub const MAX_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
 /// How long a requested reply waits for the model to start speaking before it counts as declined.
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -51,7 +55,7 @@ enum Kind {
 #[derive(Debug)]
 struct Burst {
     id: String,
-    has_message: bool,
+    kind: Kind,
     /// Where on the audio clock the burst opened.
     audio_start_ms: i64,
     /// The audio clock after the last frame the burst forwarded.
@@ -63,26 +67,38 @@ struct Burst {
     last_annotation: f64,
 }
 
-/// What the previous anchored burst left behind: its anchor tells text for audio it already played
-/// from the words of the next utterance.
-#[derive(Debug, Clone)]
-struct LastBurst {
+/// The source of transcript fragments delivered after their speech generation completed.
+#[derive(Debug)]
+struct CompletedBurst {
     id: String,
-    anchor_ms: Option<i64>,
-    heard_ms: i64,
+    span_end_ms: i64,
+}
+
+/// Runtime actions produced by one segmenter transition.
+#[derive(Debug, Default)]
+pub struct Step {
+    pub events: Vec<Event>,
+    pub deactivate_gate: bool,
+}
+
+impl From<Vec<Event>> for Step {
+    fn from(events: Vec<Event>) -> Self {
+        Self { events, deactivate_gate: false }
+    }
 }
 
 pub struct Segmenter {
-    gate: Box<dyn AudioGate>,
     /// The model's label, on the error a failed gate reports.
     label: String,
     audio_timeout: Duration,
-    ids: Box<dyn FnMut() -> String + Send>,
+    id_prefix: String,
+    next_id: u64,
     burst: Option<Burst>,
-    last: Option<LastBurst>,
+    completed: BTreeMap<i64, CompletedBurst>,
     /// The adapter's clock: output audio heard so far, which arrives at playback pace.
     audio_ms: i64,
     fragments: VecDeque<Fragment>,
+    fragment_bytes: usize,
     waiting_since_ms: i64,
     /// The reply asked for: the next speech to open answers it.
     pending_reply: Option<(String, Ts)>,
@@ -94,21 +110,17 @@ pub struct Segmenter {
 }
 
 impl Segmenter {
-    pub fn new(
-        gate: Box<dyn AudioGate>,
-        label: impl Into<String>,
-        audio_timeout: Duration,
-        ids: Box<dyn FnMut() -> String + Send>,
-    ) -> Self {
+    pub fn new(label: impl Into<String>, audio_timeout: Duration, id_prefix: String) -> Self {
         Segmenter {
-            gate,
             label: label.into(),
             audio_timeout,
-            ids,
+            id_prefix,
+            next_id: 0,
             burst: None,
-            last: None,
+            completed: BTreeMap::new(),
             audio_ms: 0,
             fragments: VecDeque::new(),
+            fragment_bytes: 0,
             waiting_since_ms: 0,
             pending_reply: None,
             idle_deadline: None,
@@ -134,12 +146,22 @@ impl Segmenter {
     }
 
     pub fn next_deadline(&self) -> Option<Ts> {
-        [self.idle_deadline, self.pending_reply.as_ref().map(|(_, at)| *at)].into_iter().flatten().min()
+        [self.idle_deadline, self.pending_reply.as_ref().map(|(_, at)| *at)]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// One frame of the model's output. A gate that fails ends the output for good.
-    pub fn on_audio(&mut self, now: Ts, frame: AudioFrame, start_ms: Option<i64>) -> Vec<Event> {
-        let mut out = Vec::new();
+    pub fn on_audio(
+        &mut self,
+        now: Ts,
+        wall: SystemTime,
+        frame: AudioFrame,
+        start_ms: Option<i64>,
+        gate_open: Result<bool, String>,
+    ) -> Step {
+        let mut out = Step::default();
         if self.failed {
             return out;
         }
@@ -149,18 +171,19 @@ impl Segmenter {
         }
         // the gate is the one boundary: a burst is open exactly while the model is audibly
         // producing output, its own pauses inside an utterance included
-        let open = match self.gate.update(&frame) {
+        let open = match gate_open {
             Ok(open) => open,
             Err(message) => {
                 self.failed = true;
                 log::error!(target: "livekit.agents", "duplex audio stream failed: {message}");
-                out.push(Event::Error(RealtimeModelError {
+                out.events.push(Event::Error(RealtimeModelError {
                     timestamp: now,
                     label: self.label.clone(),
                     message,
                     recoverable: false,
                     req_id: None,
                     code: None,
+                    provider_error: None,
                 }));
                 self.close_burst(&mut out);
                 return out;
@@ -169,18 +192,18 @@ impl Segmenter {
         let frame_duration = Duration::from_secs_f64(frame.duration());
         if open {
             if self.burst.is_none() {
-                let burst = self.open_burst(Kind::Speech, &mut out);
+                let burst = self.open_burst(wall, Kind::Speech, &mut out.events);
                 self.burst = Some(burst);
             }
             let burst = self.burst.as_mut().expect("just opened");
-            out.push(Event::AudioDelta(AudioDelta {
+            out.events.push(Event::AudioDelta(AudioDelta {
                 message_id: burst.id.clone(),
                 response_id: Some(burst.id.clone()),
                 frame,
             }));
             self.audio_ms += duration_ms;
             burst.heard_ms = self.audio_ms;
-            self.attach_fragments(&mut out);
+            self.attach_fragments(&mut out.events);
             // from the end of the audio just handed over, not from its arrival
             self.idle_deadline = Some(now.saturating_add(self.audio_timeout + frame_duration));
             return out;
@@ -193,72 +216,101 @@ impl Segmenter {
             && self.audio_ms - self.waiting_since_ms >= UNCLAIMED_TRANSCRIPT_MS
         {
             log::error!(target: "livekit.agents", "duplex transcript outlived the audio it describes");
-            let mut burst = self.open_burst(Kind::Text, &mut out);
-            while let Some(f) = self.fragments.pop_front() {
-                Self::attach(&mut burst, f, &mut out);
-            }
-            self.finish(burst, &mut out);
+            self.flush_unclaimed(wall, &mut out.events);
         }
         out
     }
 
     /// The output stream ended (or failed, with `error`): the burst in flight ends with it.
-    pub fn on_output_ended(&mut self, now: Ts, error: Option<String>) -> Vec<Event> {
-        let mut out = Vec::new();
+    pub fn on_output_ended(&mut self, now: Ts, wall: SystemTime, error: Option<String>) -> Step {
+        let mut out = Step::default();
         if let Some(message) = error {
-            out.push(Event::Error(RealtimeModelError {
+            out.events.push(Event::Error(RealtimeModelError {
                 timestamp: now,
                 label: self.label.clone(),
                 message,
                 recoverable: false,
                 req_id: None,
                 code: None,
+                provider_error: None,
             }));
         }
         self.close_burst(&mut out);
+        self.flush_unclaimed(wall, &mut out.events);
         out
     }
 
-    pub fn on_transcript(&mut self, fragment: Fragment) -> Vec<Event> {
+    pub fn on_transcript(&mut self, now: Ts, wall: SystemTime, fragment: Fragment) -> Step {
         let mut out = Vec::new();
+        if self.failed {
+            return out.into();
+        }
+        let source = fragment.start_ms.and_then(|start| {
+            self.completed
+                .range(..=start)
+                .next_back()
+                .and_then(|(_, burst)| (start <= burst.span_end_ms).then(|| burst.id.clone()))
+        });
+        if let Some(source_response_id) = source {
+            // Completed speech stays completed. A separate transcript generation names its source.
+            let mut burst = self.open_burst(wall, Kind::Text, &mut out);
+            out.insert(
+                0,
+                Event::TranscriptAttribution(TranscriptAttribution {
+                    response_id: burst.id.clone(),
+                    source_response_id,
+                }),
+            );
+            Self::attach(&mut burst, fragment, &mut out);
+            self.finish(burst, &mut out);
+            return out.into();
+        }
+        if self.fragments.len() >= MAX_TRANSCRIPT_FRAGMENTS
+            || fragment.text.capacity() > MAX_TRANSCRIPT_BYTES.saturating_sub(self.fragment_bytes)
+        {
+            self.failed = true;
+            self.fragments.clear();
+            self.fragment_bytes = 0;
+            self.fail_pending_reply("duplex transcript backlog exceeded", &mut out);
+            out.push(Event::Error(RealtimeModelError {
+                timestamp: now,
+                label: self.label.clone(),
+                message: "duplex transcript backlog exceeded".into(),
+                recoverable: false,
+                req_id: None,
+                code: Some("duplex_transcript_backlog_exceeded".into()),
+                provider_error: Some(
+                    lk_agents_abi::errors::ApiError::new("duplex transcript backlog exceeded")
+                        .with_retryable(false),
+                ),
+            }));
+            let mut step = out.into();
+            self.close_burst(&mut step);
+            return step;
+        }
         if self.fragments.is_empty() {
             self.waiting_since_ms = self.audio_ms;
         }
+        self.fragment_bytes += fragment.text.capacity();
         self.fragments.push_back(fragment);
-        // words for sound the last burst already played go out at once, as text on their own,
-        // rather than wait for the next sound and be taken for its words
-        let Some(last) = self.last.clone() else { return out };
-        let Some(anchor) = last.anchor_ms else { return out };
-        if self.burst.as_ref().is_some_and(|b| b.id == last.id) {
-            return out;
-        }
-        let late = self
-            .fragments
-            .iter()
-            .take_while(|f| f.start_ms.is_some_and(|s| s - anchor <= last.heard_ms))
-            .count();
-        if late > 0 {
-            let mut burst = self.open_burst(Kind::Text, &mut out);
-            for _ in 0..late {
-                let f = self.fragments.pop_front().expect("counted");
-                Self::attach(&mut burst, f, &mut out);
-            }
-            self.finish(burst, &mut out);
-        }
-        out
+        out.into()
     }
 
     /// A call joins the burst in flight so the tool runs while the model talks; alone, it is a
     /// generation of its own, over as soon as it is delivered.
     pub fn on_function_call(&mut self, call: FunctionCall) -> Vec<Event> {
         let mut out = Vec::new();
+        if self.failed {
+            return out;
+        }
         self.chat_ctx.insert(ChatItem::FunctionCall(call.clone()));
+        let wall = call.created_at;
         let ready = Event::FunctionCall(FunctionCallReady { call: Box::new(call) });
         if self.burst.is_some() {
             out.push(ready);
             return out;
         }
-        let burst = self.open_burst(Kind::Tool, &mut out);
+        let burst = self.open_burst(wall, Kind::Tool, &mut out);
         out.push(ready);
         self.finish(burst, &mut out);
         out
@@ -283,19 +335,30 @@ impl Segmenter {
 
     /// A dropped connection never delivers the rest of a burst, the sound its waiting words
     /// describe, or the reply it was asked for.
-    pub fn on_reconnected(&mut self) -> Vec<Event> {
-        let mut out = Vec::new();
+    pub fn on_reconnected(&mut self) -> Step {
+        let mut out = Step::default();
         self.fragments.clear();
+        self.fragment_bytes = 0;
         self.close_burst(&mut out);
-        self.last = None;
-        self.fail_pending_reply("the session reconnected before the model replied", &mut out);
-        out.push(Event::SessionReconnected(SessionReconnected {}));
+        self.completed.clear();
+        self.fail_pending_reply(
+            "the session reconnected before the model replied",
+            &mut out.events,
+        );
+        out.events.push(Event::SessionReconnected(SessionReconnected {}));
         out
     }
 
     /// The reply is the next speech to open; a newer ask supersedes the one waiting.
     pub fn generate_reply(&mut self, now: Ts, req_id: String) -> Vec<Event> {
         let mut out = Vec::new();
+        if self.failed {
+            out.push(Event::GenerateReplyFailed(GenerateReplyFailed {
+                req_id,
+                error: RealtimeError::new("duplex output already ended"),
+            }));
+            return out;
+        }
         self.fail_pending_reply("a newer ask superseded this one", &mut out);
         self.pending_reply = Some((req_id, now.saturating_add(REPLY_TIMEOUT)));
         out
@@ -308,10 +371,10 @@ impl Segmenter {
         }
     }
 
-    pub fn tick(&mut self, now: Ts) -> Vec<Event> {
-        let mut out = Vec::new();
+    pub fn tick(&mut self, now: Ts) -> Step {
+        let mut out = Step::default();
         if self.pending_reply.as_ref().is_some_and(|(_, at)| *at <= now) {
-            self.fail_pending_reply("the model did not start speaking when asked", &mut out);
+            self.fail_pending_reply("the model did not start speaking when asked", &mut out.events);
         }
         if self.idle_deadline.is_some_and(|at| at <= now) {
             // the provider stopped sending, and that absence is silence too
@@ -320,10 +383,13 @@ impl Segmenter {
         out
     }
 
-    pub fn close(&mut self) -> Vec<Event> {
-        let mut out = Vec::new();
+    pub fn close(&mut self) -> Step {
+        let mut out = Step::default();
+        self.failed = true;
         self.close_burst(&mut out);
-        self.fail_pending_reply("the session closed before the model replied", &mut out);
+        self.fragments.clear();
+        self.fragment_bytes = 0;
+        self.fail_pending_reply("the session closed before the model replied", &mut out.events);
         out
     }
 
@@ -366,20 +432,27 @@ impl Segmenter {
 
     fn fail_pending_reply(&mut self, reason: &str, out: &mut Vec<Event>) {
         if let Some((req_id, _)) = self.pending_reply.take() {
-            out.push(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error: RealtimeError::new(reason) }));
+            out.push(Event::GenerateReplyFailed(GenerateReplyFailed {
+                req_id,
+                error: RealtimeError::new(reason),
+            }));
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    fn open_burst(&mut self, kind: Kind, out: &mut Vec<Event>) -> Burst {
-        let id = (self.ids)();
+    fn open_burst(&mut self, wall: SystemTime, kind: Kind, out: &mut Vec<Event>) -> Burst {
+        self.next_id += 1;
+        let id = format!("{}{}", self.id_prefix, self.next_id);
         // the model answers on the one stream it has, so speech opening is the reply asked for;
         // a call on its own is not, nor is text for sound already played
-        let req_id = if kind == Kind::Speech { self.pending_reply.take().map(|(id, _)| id) } else { None };
+        let req_id =
+            if kind == Kind::Speech { self.pending_reply.take().map(|(id, _)| id) } else { None };
         out.push(Event::GenerationCreated(GenerationCreated { response_id: id.clone(), req_id }));
         let has_message = kind != Kind::Tool;
         if has_message {
-            out.push(Event::MessageStarted(MessageStarted { message_id: id.clone(), response_id: Some(id.clone()) }));
+            out.push(Event::MessageStarted(MessageStarted {
+                message_id: id.clone(),
+                response_id: Some(id.clone()),
+            }));
             out.push(Event::MessageModalities(MessageModalities {
                 message_id: id.clone(),
                 response_id: Some(id.clone()),
@@ -388,11 +461,11 @@ impl Segmenter {
         }
         Burst {
             id,
-            has_message,
+            kind,
             audio_start_ms: self.audio_ms,
             heard_ms: self.audio_ms,
             anchor_ms: None,
-            opened_at: SystemTime::now(),
+            opened_at: wall,
             transcript: String::new(),
             last_annotation: 0.0,
         }
@@ -410,10 +483,8 @@ impl Segmenter {
                 }
             }
             let f = self.fragments.pop_front().expect("peeked");
+            self.fragment_bytes -= f.text.capacity();
             Self::attach(burst, f, out);
-        }
-        if burst.anchor_ms.is_some() {
-            self.last = Some(LastBurst { id: burst.id.clone(), anchor_ms: burst.anchor_ms, heard_ms: burst.heard_ms });
         }
     }
 
@@ -439,15 +510,25 @@ impl Segmenter {
         }));
     }
 
-    fn close_burst(&mut self, out: &mut Vec<Event>) {
+    fn flush_unclaimed(&mut self, wall: SystemTime, out: &mut Vec<Event>) {
+        if self.fragments.is_empty() {
+            return;
+        }
+        let mut burst = self.open_burst(wall, Kind::Text, out);
+        while let Some(fragment) = self.fragments.pop_front() {
+            self.fragment_bytes -= fragment.text.capacity();
+            Self::attach(&mut burst, fragment, out);
+        }
+        self.finish(burst, out);
+    }
+
+    fn close_burst(&mut self, out: &mut Step) {
         self.idle_deadline = None;
-        // the gate never stays open past the burst it opened, so the next opens on sound again
-        self.gate.deactivate();
+        out.deactivate_gate = true;
         if self.burst.is_some() {
-            // words that arrived after the last frame still describe its sound
-            self.attach_fragments(out);
+            self.attach_fragments(&mut out.events);
             let burst = self.burst.take().expect("checked");
-            self.finish(burst, out);
+            self.finish(burst, &mut out.events);
         }
         self.waiting_since_ms = self.audio_ms;
     }
@@ -455,13 +536,19 @@ impl Segmenter {
     /// End a generation; what it said enters the conversation under the id and time the framework
     /// uses for it, so a context update matches.
     fn finish(&mut self, burst: Burst, out: &mut Vec<Event>) {
-        if let Some(last) = self.last.as_mut()
-            && last.id == burst.id
+        if burst.kind == Kind::Speech
+            && let Some(anchor) = burst.anchor_ms
         {
-            last.heard_ms = burst.heard_ms;
+            self.completed.insert(
+                anchor + burst.audio_start_ms,
+                CompletedBurst { id: burst.id.clone(), span_end_ms: anchor + burst.heard_ms },
+            );
         }
-        if burst.has_message {
-            out.push(Event::MessageDone(MessageDone { message_id: burst.id.clone(), response_id: Some(burst.id.clone()) }));
+        if burst.kind != Kind::Tool {
+            out.push(Event::MessageDone(MessageDone {
+                message_id: burst.id.clone(),
+                response_id: Some(burst.id.clone()),
+            }));
         }
         out.push(Event::GenerationDone(GenerationDone {
             response_id: burst.id.clone(),

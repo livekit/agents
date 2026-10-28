@@ -1,35 +1,16 @@
-//! Tier 4 (§4): the real OpenAI Realtime API, over the real transport.
-//!
-//! `#[ignore]`d and behind a feature, for the same reason as
-//! `lk-agents-inference/tests/live_gateway.rs`: CI has no credentials, and this is the only test
-//! in the crate that can fail for a reason that is not a bug. Run it with:
-//!
-//! ```sh
-//! set -a && . ~/livekit/.env && set +a
-//! cargo test -p lk-agents-realtime --features live \
-//!   --test live_realtime -- --ignored --nocapture
-//! ```
-//!
-//! What it is for is narrow: the 57 offline tests pin the logic, and none of them can catch a
-//! wrong assumption about the wire itself -- the URL shape, the `Authorization` scheme, or a
-//! `session.update` the server silently rejects because a field moved between API versions. This
-//! test asserts exactly those three and nothing else, because everything else is cheaper to test
-//! offline.
-
-#![cfg(feature = "live")]
+//! Real-peer realtime protocol acceptance. Run with `cargo test -p lk-agents-runtime --test realtime_live -- --ignored`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::RealClock;
+use lk_agents_abi::TokioSpawner;
 use lk_agents_inference::native::TungsteniteTransport;
 use lk_agents_inference::testkit::NoImages;
-use lk_agents_inference::realtime::{
+use lk_agents_runtime::realtime::{
     AudioDelta, Event, GenerationCreated, GenerationDone, NativeRealtime, OPENAI,
 };
 
-#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 #[tokio::test]
 #[ignore = "requires OPENAI_API_KEY and reaches the network"]
 async fn a_real_session_accepts_our_opening_update_and_answers() {
@@ -65,8 +46,8 @@ async fn a_real_session_accepts_our_opening_update_and_answers() {
             Event::GenerationCreated(GenerationCreated { req_id: Some(got), .. }) => {
                 assert_eq!(got, req_id, "the correlation survives a real round trip");
             }
-            Event::AudioDelta (AudioDelta { .. }) => saw_audio = true,
-            Event::GenerationDone (GenerationDone { status, usage, .. }) => {
+            Event::AudioDelta(AudioDelta { .. }) => saw_audio = true,
+            Event::GenerationDone(GenerationDone { status, usage, .. }) => {
                 assert_eq!(status, lk_agents_inference::realtime::GenerationStatus::Completed);
                 assert!(usage.output_tokens > 0, "the usage block is where we think it is");
                 assert!(saw_audio, "an audio session that produced no audio");

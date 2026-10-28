@@ -57,6 +57,7 @@ rusqlite = { version = "0.32.1", features = ["bundled"] }
 libc = "0.2"
 
 [dev-dependencies]
+lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 
 [features]
@@ -64,4 +65,4 @@ media-ffmpeg = ["lk-agents-media/ffmpeg"]
 media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images"]
 # The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
-python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python", "lk-agents-a2a/python"]
+python = ["media-images", "dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python", "lk-agents-a2a/python"]

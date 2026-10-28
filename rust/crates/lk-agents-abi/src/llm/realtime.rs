@@ -103,6 +103,10 @@ pub struct RealtimeModelError {
     /// The provider's error code, when it has one -- the same reason [`RealtimeError::code`] exists.
     #[binding(default)]
     pub code: Option<String>,
+    /// Native transport failure, emitted with its category and timeout phase. Host failures
+    /// already carry their captured exception through the host-error boundary.
+    #[binding(extract_skip)]
+    pub provider_error: Option<crate::errors::ApiError>,
 }
 
 /// The wire contract of `remote_item_added`: the mirror gained an item the server created.
@@ -196,6 +200,14 @@ pub struct GenerationCreated {
     /// `Some` exactly when this answers a [`RealtimeCommand::GenerateReply`].
     #[binding(default)]
     pub req_id: Option<String>,
+}
+
+/// A transcript generation whose audio belonged to an already completed speech generation.
+#[derive(Debug, Clone, PartialEq, Eq, Host)]
+#[binding(extract, from_items, tag = "kind", tag_value = "transcript_attribution")]
+pub struct TranscriptAttribution {
+    pub response_id: String,
+    pub source_response_id: String,
 }
 
 /// A new assistant message inside the current generation. `message_started`.
@@ -360,6 +372,7 @@ pub enum Event {
 
     MessageStarted(MessageStarted),
     TextDelta(TextDelta),
+    TranscriptAttribution(TranscriptAttribution),
     AudioDelta(AudioDelta),
     /// Settled once per message, as early as the provider allows.
     MessageModalities(MessageModalities),
@@ -420,6 +433,7 @@ mod tests {
 
 /// A session is a socket that outlives every turn, so the driver opens one per agent frame.
 /// `async fn session` because the reference's session starts running in its constructor.
+#[crate::host(native(refused = "expected NativeRealtime"))]
 #[async_trait::async_trait]
 pub trait Realtime: Send + Sync + 'static {
     fn label(&self) -> String;
@@ -520,7 +534,10 @@ impl<'py> pyo3::IntoPyObject<'py> for &UpdateChatCtx {
     type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
     type Error = pyo3::PyErr;
 
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    fn into_pyobject(
+        self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
         use pyo3::types::PyDictMethods as _;
         let d = pyo3::types::PyDict::new(py);
         d.set_item("kind", UpdateChatCtx::KIND)?;
@@ -550,7 +567,10 @@ impl<'py> pyo3::IntoPyObject<'py> for &UpdateTools {
     type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
     type Error = pyo3::PyErr;
 
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    fn into_pyobject(
+        self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
         use pyo3::types::PyDictMethods as _;
         let d = pyo3::types::PyDict::new(py);
         d.set_item("kind", UpdateTools::KIND)?;
@@ -844,7 +864,10 @@ impl HostRealtimeLeg {
         });
         let weak = std::sync::Arc::downgrade(&leg);
         // Not among `tasks`: it runs until the host reports the end, so a close loses no event.
-        let _ = crate::SpawnerExt::spawn_unboxed(&**spawner, Self::forward(weak.clone(), host, anchor, events_tx.clone()));
+        let _ = crate::SpawnerExt::spawn_unboxed(
+            &**spawner,
+            Self::forward(weak.clone(), host, anchor, events_tx.clone()),
+        );
         leg.spawn(Self::run_lane(weak, lane_rx, events_tx));
         leg
     }
@@ -878,7 +901,9 @@ impl HostRealtimeLeg {
                 }
                 Ok(None) => return,
                 // A malformed event is the plugin's bug; the session goes on.
-                Err(e) => log::warn!(target: "livekit.agents", error = e.message.as_str(); "realtime event refused"),
+                Err(e) => {
+                    log::warn!(target: "livekit.agents", error = e.message.as_str(); "realtime event refused")
+                }
             }
         }
     }
@@ -908,7 +933,8 @@ impl HostRealtimeLeg {
             let request = match leg.host.request(cmd).await {
                 Ok(request) => request,
                 Err(error) => {
-                    let _ = events.send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+                    let _ = events
+                        .send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
                     continue;
                 }
             };
@@ -928,7 +954,10 @@ impl HostRealtimeLeg {
                 match generation {
                     Ok(generation) => host.drain(generation, Some(req_id)).await,
                     Err(error) if asked => {
-                        let _ = events.send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+                        let _ = events.send(Event::GenerateReplyFailed(GenerateReplyFailed {
+                            req_id,
+                            error,
+                        }));
                     }
                     Err(_) => {}
                 }
@@ -991,21 +1020,5 @@ impl RealtimeSession for HostRealtimeLeg {
             task.abort();
         }
         self.host.aclose().await;
-    }
-}
-
-/// Only a native model crosses as `realtime`: a plugin's `RealtimeModel` is its `realtime_host`.
-#[cfg(feature = "python")]
-impl crate::python::HostProxy for dyn Realtime {
-    fn from_host(
-        obj: &pyo3::Bound<'_, pyo3::PyAny>,
-        _clock: Option<std::sync::Arc<dyn crate::Clock>>,
-    ) -> pyo3::PyResult<std::sync::Arc<Self>> {
-        crate::python::native::<dyn Realtime>(obj)
-            .ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("expected NativeRealtime"))
-    }
-
-    fn view(_handle: crate::python::HostHandle, _clock: Option<std::sync::Arc<dyn crate::Clock>>) -> pyo3::PyResult<Box<Self>> {
-        Err(pyo3::exceptions::PyTypeError::new_err("expected NativeRealtime"))
     }
 }

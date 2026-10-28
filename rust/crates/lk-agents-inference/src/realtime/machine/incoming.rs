@@ -1,16 +1,13 @@
 //! The server's side: every `Incoming` event, and what it does to the generation, the transcript
 //! and the mirrored conversation.
 
-use super::{Generation, MessageState, RealtimeMachine, SPOKEN_REMEMBERED, Step};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
-use std::time::SystemTime;
+use super::{Generation, MessageState, Outgoing, RealtimeMachine, SPOKEN_REMEMBERED, Step};
+use std::collections::BTreeMap;
 
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::Ts;
-use serde_json::Value;
 
-use crate::realtime::wire::{self, Incoming, TranscriptionCompleted};
+use crate::realtime::protocol::{Incoming, TranscriptionCompleted};
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, GenerateReplyFailed, GenerationCreated, GenerationDone, GenerationStatus,
     InputSpeechStopped, InputTranscription, MessageDone, MessageModalities, MessageStarted,
@@ -18,7 +15,7 @@ use lk_agents_abi::llm::realtime::{
 };
 
 impl RealtimeMachine {
-    pub fn incoming(&mut self, now: Ts, msg: Incoming) -> Step {
+    pub(super) fn incoming(&mut self, now: Ts, msg: Incoming) -> Step {
         if self.closing {
             // "draining after aclose; the generation is already discarded"
             return Step::default();
@@ -38,7 +35,9 @@ impl RealtimeMachine {
                     self.speech_started_at.entry(id).or_insert(now);
                 }
                 self.user_speaking = true;
-                step.events.push(Event::InputSpeechStarted(lk_agents_abi::llm::realtime::InputSpeechStarted {}));
+                step.events.push(Event::InputSpeechStarted(
+                    lk_agents_abi::llm::realtime::InputSpeechStarted {},
+                ));
                 step
             }
 
@@ -62,7 +61,8 @@ impl RealtimeMachine {
                 if item_type != "message" {
                     return Step::default();
                 }
-                let Generation::Active { response_id, messages, order, .. } = &mut self.generation else {
+                let Generation::Active { response_id, messages, order, .. } = &mut self.generation
+                else {
                     return Step::default();
                 };
                 let response_id = Some(response_id.clone());
@@ -83,7 +83,7 @@ impl RealtimeMachine {
                     {
                         m.modalities = Some(Modalities::TextOnly);
                     }
-                    step.events.push(Event::MessageModalities (MessageModalities {
+                    step.events.push(Event::MessageModalities(MessageModalities {
                         message_id: item_id,
                         response_id,
                         modalities: Modalities::TextOnly,
@@ -120,7 +120,9 @@ impl RealtimeMachine {
                 }
                 self.transcript_acc.remove(&item_id);
                 self.speech_started_at.remove(&item_id);
+                let before = self.remote.revision();
                 let _ = self.remote.delete(&item_id);
+                self.context_acknowledged(before, true, &item_id);
                 self.settle_ctx_item(true, &item_id)
             }
 
@@ -161,7 +163,8 @@ impl RealtimeMachine {
                 // Close any open partial stream so a consumer waiting for `is_final` does not
                 // hang. With nothing accumulated nothing is emitted.
                 let partial = self.take_accumulated(&item_id, content_index);
-                let turn_started_at = self.speech_started_at.remove(&item_id).map(|t| self.wall_secs(t));
+                let turn_started_at =
+                    self.speech_started_at.remove(&item_id).map(|t| self.wall_secs(t));
                 match partial {
                     None => Step::default(),
                     Some(transcript) => {
@@ -208,10 +211,15 @@ impl RealtimeMachine {
                     m.transcript.push_str(&delta);
                 }
                 let response_id = self.response_id();
-                Step::event(Event::TextDelta(TextDelta { message_id: item_id, response_id, delta, start_time }))
+                Step::event(Event::TextDelta(TextDelta {
+                    message_id: item_id,
+                    response_id,
+                    delta,
+                    start_time,
+                }))
             }
 
-            Incoming::AudioDelta { item_id, pcm } => {
+            Incoming::AudioDelta { item_id, frame } => {
                 if self.stale(&item_id) {
                     return Step::default();
                 }
@@ -219,10 +227,10 @@ impl RealtimeMachine {
                 let mut step = self.on_output(now, &item_id);
                 step.merge(self.settle_modalities(&item_id, Modalities::AudioAndText));
                 if matches!(self.generation, Generation::Active { .. }) {
-                    step.events.push(Event::AudioDelta (AudioDelta {
+                    step.events.push(Event::AudioDelta(AudioDelta {
                         message_id: item_id,
                         response_id: self.response_id(),
-                        frame: wire::audio_frame(pcm),
+                        frame,
                     }));
                 }
                 step
@@ -240,7 +248,6 @@ impl RealtimeMachine {
         }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn on_response_created(
         &mut self,
         response_id: String,
@@ -267,18 +274,26 @@ impl RealtimeMachine {
             // in flight) and skip its trailing deltas.
             self.stale_say.remove(id);
             self.say_tags.retain(|t| t != id);
-            step.frames.push(wire::response_cancel(Some(&response_id)));
+            step.frames.push(Outgoing::ResponseCancel { response_id: Some(response_id.clone()) });
             if matches!(self.generation, Generation::Active { .. }) {
                 // Created late, behind a reply the server opened meanwhile, which still generates:
                 // that one stays, and the discarded one's end is skipped.
                 self.discarded_responses.insert(response_id);
+                if self.discarded_responses.len() >= super::DISCARDED_RESPONSES {
+                    step.recycle = true;
+                }
             } else {
                 step.merge(self.close_generation());
                 self.generation = Generation::Discarded;
             }
             // Created and cancelled: the server takes the next reply.
-            let error = RealtimeError::new("generate_reply cancelled");
-            step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed { req_id: id.clone(), error }));
+            if !self.settled_discards.remove(id) {
+                let error = RealtimeError::new("generate_reply cancelled");
+                step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed {
+                    req_id: id.clone(),
+                    error,
+                }));
+            }
             return step;
         }
 
@@ -289,7 +304,7 @@ impl RealtimeMachine {
         self.response_spoke = false;
         self.generation = Generation::Active {
             response_id: response_id.clone(),
-            messages: HashMap::new(),
+            messages: BTreeMap::new(),
             order: Vec::new(),
         };
 
@@ -298,37 +313,42 @@ impl RealtimeMachine {
         let req_id = client_event_id.filter(|id| self.pending_replies.remove(id));
         if let Some(id) = &req_id {
             self.stale_say.remove(id);
+            self.reply_deadlines.remove(id);
+            self.reply_frames.remove(id);
+            self.say_frames.remove(id);
+            self.forget_deferred_reply(id);
         }
         step.events.push(Event::GenerationCreated(GenerationCreated { response_id, req_id }));
         step
     }
 
-    fn on_item_added(&mut self, now: Ts, previous_item_id: Option<String>, item: Value) -> Step {
-        let mut previous_item_id = previous_item_id;
-        // "the server can anchor to an item it just deleted; the item belongs at the tail"
+    fn on_item_added(
+        &mut self,
+        _now: Ts,
+        mut previous_item_id: Option<String>,
+        item: ChatItem,
+    ) -> Step {
         if let Some(prev) = &previous_item_id
             && self.remote.get(prev).is_none()
         {
             previous_item_id = self.remote.tail_id().map(str::to_owned);
         }
-        // xAI: a null anchor means the tail, not the head.
         if previous_item_id.is_none() && self.dialect.anchor_root_at_tail {
             previous_item_id = self.remote.tail_id().map(str::to_owned);
         }
-
         let mut step = Step::default();
-        let created_at = self.wall_at(now);
-        match wire::from_wire_item(&item, created_at) {
-            Ok(lk_item) => {
-                let id = lk_item.id().to_owned();
-                if self.remote.insert(previous_item_id.as_deref(), lk_item.clone()).is_ok() {
-                    step.events
-                        .push(Event::RemoteItemAdded(lk_agents_abi::llm::realtime::RemoteItemAdded { previous_item_id, item: Box::new(lk_item) }));
-                }
-                step.merge(self.settle_ctx_item(false, &id));
-            }
-            Err(_) => return step,
+        let id = item.id().to_owned();
+        let before = self.remote.revision();
+        if self.remote.insert(previous_item_id.as_deref(), item.clone()).is_ok() {
+            step.events.push(Event::RemoteItemAdded(
+                lk_agents_abi::llm::realtime::RemoteItemAdded {
+                    previous_item_id,
+                    item: Box::new(item),
+                },
+            ));
         }
+        self.context_acknowledged(before, false, &id);
+        step.merge(self.settle_ctx_item(false, &id));
         step
     }
 
@@ -378,46 +398,29 @@ impl RealtimeMachine {
         Step::default()
     }
 
-    fn on_output_item_done(&mut self, item: Value) -> Step {
-        let ty = item.get("type").and_then(Value::as_str).unwrap_or("");
-        // `conversation.item.added` carries a function call before its arguments are generated;
-        // the mirror needs the completed ones, since a reconnection replays it.
-        if ty == "function_call"
-            && let (Some(id), Some(arguments)) =
-                (item.get("id").and_then(Value::as_str), item.get("arguments").and_then(Value::as_str))
-            && let Some(ChatItem::FunctionCall(call)) = self.remote.get_mut(id)
+    fn on_output_item_done(&mut self, item: ChatItem) -> Step {
+        if let ChatItem::FunctionCall(call) = &item
+            && let Some(ChatItem::FunctionCall(remote)) = self.remote.get_mut(&call.id)
         {
-            call.arguments = arguments.to_owned();
+            remote.arguments = call.arguments.clone();
         }
         if !matches!(self.generation, Generation::Active { .. }) {
             return Step::default();
         }
-        if ty == "function_call" {
-            let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-            // xAI emits `function_call` items for its own server-side tools; they have no local
-            // handler.
+        if let ChatItem::FunctionCall(call) = item {
             if self.dialect.ignore_unknown_function_calls
-                && !self.tools.iter().any(|t| t.name == name)
+                && !self.tools.iter().any(|t| t.name == call.name)
             {
                 return Step::default();
             }
-            let s = |k: &str| item.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-            let call = Box::new(lk_agents_abi::FunctionCall {
-                id: s("id"),
-                call_id: s("call_id"),
-                arguments: s("arguments"),
-                name: s("name"),
-                created_at: SystemTime::UNIX_EPOCH,
-                extra: Default::default(),
-                group_id: None,
-            });
-            return Step::event(Event::FunctionCall(lk_agents_abi::llm::realtime::FunctionCallReady { call }));
+            return Step::event(Event::FunctionCall(
+                lk_agents_abi::llm::realtime::FunctionCallReady { call: Box::new(call) },
+            ));
         }
-        if ty != "message" {
+        let ChatItem::Message(message) = item else {
             return Step::default();
-        }
-        let Some(item_id) = item.get("id").and_then(Value::as_str) else { return Step::default() };
-        let item_id = item_id.to_owned();
+        };
+        let item_id = message.id;
         let mut step = Step::default();
         let default_modalities = self.default_modalities();
         let response_id = self.response_id();
@@ -427,7 +430,7 @@ impl RealtimeMachine {
             m.open = false;
             if m.modalities.is_none() {
                 m.modalities = Some(default_modalities);
-                step.events.push(Event::MessageModalities (MessageModalities {
+                step.events.push(Event::MessageModalities(MessageModalities {
                     message_id: item_id.clone(),
                     response_id: response_id.clone(),
                     modalities: default_modalities,
@@ -445,7 +448,7 @@ impl RealtimeMachine {
         self.closed_messages.contains(item_id)
     }
 
-    fn on_response_done(&mut self, now: Ts, done: crate::realtime::wire::ResponseDone) -> Step {
+    fn on_response_done(&mut self, now: Ts, done: crate::realtime::protocol::ResponseDone) -> Step {
         if self.discarded_responses.remove(&done.response_id) {
             return Step::default();
         }
@@ -474,7 +477,7 @@ impl RealtimeMachine {
         for id in &order {
             let Some(m) = messages.get(id) else { continue };
             if m.modalities.is_none() {
-                step.events.push(Event::MessageModalities (MessageModalities {
+                step.events.push(Event::MessageModalities(MessageModalities {
                     message_id: id.clone(),
                     response_id: Some(response_id.clone()),
                     modalities: default_modalities,
@@ -485,29 +488,38 @@ impl RealtimeMachine {
                 remote.content.push(lk_agents_abi::ChatContent::Text(m.transcript.clone()));
             }
             if m.open {
-                step.events.push(Event::MessageDone(MessageDone { message_id: id.clone(), response_id: Some(response_id.clone()) }));
+                step.events.push(Event::MessageDone(MessageDone {
+                    message_id: id.clone(),
+                    response_id: Some(response_id.clone()),
+                }));
             }
         }
 
-        step.events.push(Event::GenerationDone (GenerationDone {
+        step.events.push(Event::GenerationDone(GenerationDone {
             response_id: done.response_id.clone(),
             status: done.status,
             usage: done.usage,
         }));
-        if let Some(metrics) = self.response_metrics(now, &done.response_id, done.status, &done.usage) {
+        if let Some(metrics) =
+            self.response_metrics(now, &done.response_id, done.status, &done.usage)
+        {
             step.events.push(metrics);
         }
 
         if done.status == GenerationStatus::Failed {
             // "failures are largely undocumented by openai, so we assume optimistically
             // recoverable unless the code is a known-fatal one".
-            let fatal = self.dialect.is_fatal(done.error_code.as_deref(), done.error_type.as_deref());
+            let fatal =
+                self.dialect.is_fatal(done.error_code.as_deref(), done.error_type.as_deref());
             let message = format!(
                 "{} response failed with error type: {}",
                 self.dialect.provider_label,
                 done.error_type.as_deref().unwrap_or("unknown")
             );
-            let error = RealtimeModelError { code: done.error_code.clone(), ..self.error(now, message, !fatal) };
+            let error = RealtimeModelError {
+                code: done.error_code.clone(),
+                ..self.error(now, message, !fatal)
+            };
             log::error!(target: "livekit.agents", code = error.code.as_deref().unwrap_or(""); "{}", error.message);
             // Raised in the reference when fatal: the session stops, and reports it once.
             if fatal { step.fatal = Some(error) } else { step.events.push(Event::Error(error)) }
@@ -515,7 +527,7 @@ impl RealtimeMachine {
         step
     }
 
-    fn on_error(&mut self, now: Ts, err: crate::realtime::wire::ServerError) -> Step {
+    fn on_error(&mut self, now: Ts, err: crate::realtime::protocol::ServerError) -> Step {
         let mut step = Step::default();
         let fatal = self.dialect.is_fatal(err.code.as_deref(), err.type_.as_deref());
 
@@ -525,15 +537,41 @@ impl RealtimeMachine {
             if let Some(update) = &mut self.ctx_update
                 && let Some((is_delete, item_id)) = update.by_event_id.remove(event_id)
             {
+                let confirmed = if !is_delete
+                    && err.code.as_deref() == Some("item_create_duplicate_item_id")
+                    && self.remote.get(&item_id).is_none()
+                {
+                    update.target.items.iter().position(|item| item.id() == item_id).map(
+                        |position| {
+                            let previous = update.target.items[..position]
+                                .iter()
+                                .rev()
+                                .find(|item| self.remote.get(item.id()).is_some())
+                                .map(|item| item.id().to_owned());
+                            (previous, update.target.items[position].clone())
+                        },
+                    )
+                } else {
+                    None
+                };
+                if let Some((previous, item)) = confirmed {
+                    // A duplicate rejection confirms existence even when the original added
+                    // acknowledgement was lost. Install it before settling the desired state.
+                    step.merge(self.on_item_added(now, previous, item));
+                }
                 step.merge(self.settle_ctx_item(is_delete, &item_id));
                 if !fatal {
                     return step;
                 }
             } else if self.pending_replies.remove(event_id) {
+                self.reply_deadlines.remove(event_id);
+                self.reply_frames.remove(event_id);
+                self.say_frames.remove(event_id);
+                self.forget_deferred_reply(event_id);
                 // A rejected `response.create` never gets `response.created`; fail it now rather
                 // than at the 10 s timeout.
                 self.say_tags.retain(|t| t != event_id);
-                step.events.push(Event::GenerateReplyFailed (GenerateReplyFailed {
+                step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed {
                     req_id: event_id.clone(),
                     error: RealtimeError::with_code(err.message.clone(), err.code.clone()),
                 }));
@@ -554,7 +592,8 @@ impl RealtimeMachine {
         // The server's own words and code: "returned an error" alone says nothing of a bad voice,
         // a tool schema or the quota.
         let message = format!("{} returned an error: {}", self.dialect.provider_label, err.message);
-        let error = RealtimeModelError { code: err.code.clone(), ..self.error(now, message, !fatal) };
+        let error =
+            RealtimeModelError { code: err.code.clone(), ..self.error(now, message, !fatal) };
         log::error!(
             target: "livekit.agents",
             code = err.code.as_deref().unwrap_or(""),
@@ -562,8 +601,11 @@ impl RealtimeMachine {
             "{}", error.message
         );
         // Raised in the reference when fatal: the session stops, and reports it once.
-        if fatal { step.fatal = Some(error) } else { step.events.push(Event::Error(error)) }
+        if fatal {
+            step.fatal = Some(error)
+        } else {
+            step.events.push(Event::Error(error))
+        }
         step
     }
 }
-

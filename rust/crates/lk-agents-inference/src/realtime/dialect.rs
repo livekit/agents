@@ -100,7 +100,7 @@ pub type Promotion = (&'static [&'static str], &'static str);
 pub struct Dialect {
     /// `self._provider_label`. Appears in every error message the session emits.
     pub provider_label: &'static str,
-    /// `base_url` before [`crate::realtime::wire::process_base_url`] turns it into a socket URL.
+    /// `base_url` before the runtime turns it into a socket URL.
     pub default_base_url: &'static str,
     /// The env var `api_key=None` falls back to; read by the host, named in its error message.
     pub api_key_env: &'static str,
@@ -237,7 +237,11 @@ pub struct UnknownDialect(pub String);
 
 impl std::fmt::Display for UnknownDialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown realtime dialect {:?}; this port speaks \"openai\", \"xai\" and \"inference\"", self.0)
+        write!(
+            f,
+            "unknown realtime dialect {:?}; this port speaks \"openai\", \"xai\" and \"inference\"",
+            self.0
+        )
     }
 }
 

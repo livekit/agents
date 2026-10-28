@@ -1,13 +1,21 @@
 //! The machine against scripted server frames, on both dialects.
 
-use super::*;
-use crate::realtime::dialect::{OPENAI, XAI};
+use super::testfix::{RealtimeMachine, Step};
+use super::wire;
 use crate::realtime::testfix::{machine, msg};
+use lk_agents_abi::RealtimeCommand as Command;
+use lk_agents_abi::llm::realtime::*;
 use lk_agents_abi::llm::realtime::{
-    GenerateReply, GenerationCreated, Interrupt, PushAudio, PushItem, Say, UpdateChatCtx, UpdateInstructions,
+    GenerateReply, GenerationCreated, Interrupt, PushAudio, PushItem, Say, UpdateChatCtx,
+    UpdateInstructions,
 };
+use lk_agents_abi::{ChatContext, ChatItem, Maybe, Ts};
 use lk_agents_abi::{Clock, VirtualClock};
+use lk_agents_inference::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, XAI};
+use lk_agents_inference::realtime::machine::{OptionsPatch, SessionOptions};
+use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
 
 fn at(secs: u64) -> Ts {
     Ts::from_nanos(secs * 1_000_000_000)
@@ -38,7 +46,11 @@ fn item_added(prev: Option<&str>, id: &str, text: &str) -> Value {
 }
 
 fn reply(req_id: &str) -> Command {
-    Command::GenerateReply(GenerateReply { req_id: req_id.into(), instructions: None, tool_choice: None })
+    Command::GenerateReply(GenerateReply {
+        req_id: req_id.into(),
+        instructions: None,
+        tool_choice: None,
+    })
 }
 
 fn types(frames: &[Value]) -> Vec<&str> {
@@ -99,8 +111,7 @@ fn a_reply_abandoned_is_cancelled_by_id_when_it_arrives_anyway() {
     assert!(step.frames.is_empty() && step.events.is_empty(), "{step:?}");
 
     clock.advance_to(at(11));
-    let step =
-        recv(&mut m, clock.now(), response_created("resp_late", Some("response_create_1")));
+    let step = recv(&mut m, clock.now(), response_created("resp_late", Some("response_create_1")));
     assert_eq!(step.frames, [json!({"type": "response.cancel", "response_id": "resp_late"})]);
     assert!(
         !step
@@ -110,7 +121,9 @@ fn a_reply_abandoned_is_cancelled_by_id_when_it_arrives_anyway() {
         "a turn the caller gave up on must not be surfaced"
     );
     assert!(
-        step.events.iter().any(|e| matches!(e, Event::GenerateReplyFailed(f) if f.req_id == "response_create_1")),
+        step.events
+            .iter()
+            .any(|e| matches!(e, Event::GenerateReplyFailed(f) if f.req_id == "response_create_1")),
         "the caller hears the end once the server is free of it"
     );
 
@@ -118,7 +131,7 @@ fn a_reply_abandoned_is_cancelled_by_id_when_it_arrives_anyway() {
     let step = recv(
         &mut m,
         clock.now(),
-        json!({"type": "response.output_audio.delta", "item_id": "i1", "delta": "AAAA"}),
+        json!({"type": "response.output_audio.delta", "item_id": "i1", "delta": "AAA="}),
     );
     assert!(step.events.is_empty(), "the discarded generation swallows its own deltas");
 }
@@ -140,7 +153,7 @@ fn a_rejected_response_create_fails_its_request_at_once_and_keeps_the_code() {
             "message": "Conversation already has an active response",
         }}),
     );
-    assert!(step.events.contains(&Event::GenerateReplyFailed (GenerateReplyFailed {
+    assert!(step.events.contains(&Event::GenerateReplyFailed(GenerateReplyFailed {
         req_id: "response_create_1".into(),
         error: RealtimeError::with_code(
             "Conversation already has an active response",
@@ -159,7 +172,10 @@ fn a_rejected_response_create_fails_its_request_at_once_and_keeps_the_code() {
 fn interrupt_reaches_a_reply_that_has_been_asked_for_but_not_created() {
     let mut m = machine(OPENAI);
     m.open(at(0));
-    assert!(m.command(at(0), Command::Interrupt(Interrupt { response_id: None })).frames.is_empty(), "nothing to interrupt");
+    assert!(
+        m.command(at(0), Command::Interrupt(Interrupt { response_id: None })).frames.is_empty(),
+        "nothing to interrupt"
+    );
 
     m.command(at(0), reply("response_create_1"));
     assert!(m.has_active_generation());
@@ -174,7 +190,10 @@ fn interrupt_reaches_a_reply_that_has_been_asked_for_but_not_created() {
 fn per_response_instructions_are_concatenated_onto_the_session_prompt() {
     let mut m = machine(OPENAI);
     m.open(at(0));
-    m.command(at(0), Command::UpdateInstructions(UpdateInstructions { instructions: "You are terse.".into() }));
+    m.command(
+        at(0),
+        Command::UpdateInstructions(UpdateInstructions { instructions: "You are terse.".into() }),
+    );
     let step = m.command(
         at(0),
         Command::GenerateReply(GenerateReply {
@@ -221,12 +240,9 @@ fn a_context_update_becomes_the_delete_and_create_ops_its_diff_implies() {
     assert!(step.events.is_empty(), "not settled until the server acks both");
 
     // the acks, in the order the server sends them
-    let step =
-        recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": "b"}));
+    let step = recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": "b"}));
     assert!(step.events.is_empty(), "one of two");
-    assert!(m.ctx_update.is_some(), "one ack still owed");
     recv(&mut m, at(2), item_added(Some("a"), "c", "third"));
-    assert!(m.ctx_update.is_none(), "settled once the server acked both");
     assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a", "c"]);
 }
 
@@ -251,7 +267,6 @@ fn a_context_update_does_not_recreate_an_item_still_being_pushed() {
     );
     assert!(step.frames.is_empty(), "nothing to bring: {:?}", types(&step.frames));
     recv(&mut m, at(2), item_added(Some("a"), "b", "typed"));
-    assert!(m.ctx_update.is_none(), "settled once the push is confirmed");
 }
 
 // Catches: treating `item_create_duplicate_item_id` as a rejection.
@@ -276,7 +291,13 @@ fn a_duplicate_item_id_rejection_counts_as_success() {
             "message": "Item with that id already exists",
         }}),
     );
-    assert!(m.ctx_update.is_none(), "already-there settles the create");
+    let repeated = m.command(
+        at(2),
+        Command::UpdateChatCtx(UpdateChatCtx {
+            chat_ctx: ChatContext::new(vec![msg("a", "first"), msg("b", "new")]),
+        }),
+    );
+    assert!(repeated.frames.is_empty(), "a server-confirmed duplicate must not be created again");
 }
 
 // Catches: dropping or head-inserting an item anchored to one just deleted (the reference
@@ -288,10 +309,7 @@ fn an_item_anchored_to_a_vanished_one_lands_at_the_tail() {
     recv(&mut m, at(0), item_added(None, "a", "first"));
     recv(&mut m, at(0), item_added(Some("a"), "b", "second"));
     recv(&mut m, at(0), item_added(Some("ghost"), "c", "third"));
-    assert_eq!(
-        m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(),
-        ["a", "b", "c"]
-    );
+    assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a", "b", "c"]);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -304,7 +322,10 @@ fn an_item_anchored_to_a_vanished_one_lands_at_the_tail() {
 fn xai_matches_a_metadata_less_response_to_the_oldest_say_and_only_once() {
     let mut m = machine(XAI);
     m.open(at(0));
-    let step = m.command(at(0), Command::Say(Say { req_id: "say_1".into(), text: "hello".into(), add_to_chat_ctx: true }));
+    let step = m.command(
+        at(0),
+        Command::Say(Say { req_id: "say_1".into(), text: "hello".into(), add_to_chat_ctx: true }),
+    );
     assert_eq!(step.frames[0]["item"]["type"], json!("force_message"));
     assert_eq!(step.frames[0]["item"]["content"][0]["text"], json!("hello"));
 
@@ -335,9 +356,12 @@ fn xai_matches_a_metadata_less_response_to_the_oldest_say_and_only_once() {
 fn say_on_openai_fails_rather_than_disappearing() {
     let mut m = machine(OPENAI);
     m.open(at(0));
-    let step = m.command(at(0), Command::Say(Say { req_id: "say_1".into(), text: "hi".into(), add_to_chat_ctx: true }));
+    let step = m.command(
+        at(0),
+        Command::Say(Say { req_id: "say_1".into(), text: "hi".into(), add_to_chat_ctx: true }),
+    );
     assert!(step.frames.is_empty());
-    assert!(matches!(step.events[0], Event::GenerateReplyFailed (GenerateReplyFailed { .. })));
+    assert!(matches!(step.events[0], Event::GenerateReplyFailed(GenerateReplyFailed { .. })));
 }
 
 // Catches: finalising xAI's first `transcription.completed`, which is only a prefix.
@@ -374,7 +398,7 @@ fn xai_holds_a_completed_transcript_until_the_agent_starts_answering() {
     turn.merge(recv(
         &mut m,
         at(3),
-        json!({"type": "response.output_audio.delta", "item_id": "msg_1", "delta": "AAAA"}),
+        json!({"type": "response.output_audio.delta", "item_id": "msg_1", "delta": "AAA="}),
     ));
     let finals: Vec<_> = turn
         .events
@@ -405,7 +429,7 @@ fn xai_replaces_rather_than_appends_the_transcript_it_already_wrote() {
         })
     };
     let audio = json!({
-        "type": "response.output_audio.delta", "item_id": "msg_1", "delta": "AAAA",
+        "type": "response.output_audio.delta", "item_id": "msg_1", "delta": "AAA=",
     });
 
     recv(&mut m, at(1), completed("hel"));
@@ -441,17 +465,13 @@ fn xai_resolves_the_empty_item_id_on_a_delete_ack() {
     );
 
     recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": ""}));
-    assert!(m.ctx_update.is_none(), "the empty ack answered the delete of `b`");
     assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a"]);
 
     // and OpenAI must NOT do this: an empty id there is a bug, not a convention
     let mut m = machine(OPENAI);
     m.open(at(0));
     recv(&mut m, at(0), item_added(None, "a", "first"));
-    m.command(
-        at(1),
-        Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: ChatContext::empty() }),
-    );
+    m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: ChatContext::empty() }));
     let step = recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": ""}));
     assert!(step.events.is_empty());
     assert_eq!(m.chat_ctx().items.len(), 1, "nothing was deleted");
@@ -510,7 +530,7 @@ fn xai_discards_a_response_the_server_left_silent() {
     // the silent one was closed out, not left dangling
     assert!(step.events.iter().any(|e| matches!(
         e,
-        Event::GenerationDone (GenerationDone { status: GenerationStatus::Cancelled, .. })
+        Event::GenerationDone(GenerationDone { status: GenerationStatus::Cancelled, .. })
     )));
 }
 
@@ -559,7 +579,12 @@ fn a_reconnect_replays_the_conversation_and_asks_again_for_the_pending_reply() {
     let step = m.reconnect(at(2));
     assert_eq!(
         types(&step.frames),
-        ["session.update", "conversation.item.create", "conversation.item.create", "response.create"],
+        [
+            "session.update",
+            "conversation.item.create",
+            "conversation.item.create",
+            "response.create"
+        ],
     );
     assert_eq!(step.frames[1]["previous_item_id"], json!("root"));
     assert_eq!(step.frames[2]["previous_item_id"], json!("a"));
@@ -569,8 +594,10 @@ fn a_reconnect_replays_the_conversation_and_asks_again_for_the_pending_reply() {
         "the reply is still owed: {:?}",
         step.events
     );
-    assert_eq!(step.events.last(), Some(&Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {})));
-    assert!(m.pending_replies.contains("response_create_2"));
+    assert_eq!(
+        step.events.last(),
+        Some(&Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {}))
+    );
     let step = recv(&mut m, at(3), response_created("resp_2", Some("response_create_2")));
     assert!(step.events.contains(&Event::GenerationCreated(GenerationCreated {
         response_id: "resp_2".into(),
@@ -617,7 +644,9 @@ fn a_fatal_error_code_stops_the_reconnect_loop() {
         }}),
     );
     assert!(step.fatal.is_none());
-    assert!(matches!(&step.events[0], Event::Error(e) if e.recoverable && e.message.ends_with("try again")));
+    assert!(
+        matches!(&step.events[0], Event::Error(e) if e.recoverable && e.message.ends_with("try again"))
+    );
 }
 
 // Catches: committing a buffer of exactly 100 ms (OpenAI needs strictly more).
@@ -634,15 +663,27 @@ fn a_commit_needs_strictly_more_than_one_hundred_milliseconds() {
 
     let step = m.command(at(0), Command::PushAudio(PushAudio { frame: frame(100) }));
     assert_eq!(types(&step.frames), ["input_audio_buffer.append"]);
-    assert!(m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {})).frames.is_empty(), "exactly 100 ms");
+    assert!(
+        m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {}))
+            .frames
+            .is_empty(),
+        "exactly 100 ms"
+    );
 
     m.command(at(0), Command::PushAudio(PushAudio { frame: frame(100) }));
     assert_eq!(
-        types(&m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {})).frames),
+        types(
+            &m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {}))
+                .frames
+        ),
         ["input_audio_buffer.commit"]
     );
     // and the counter resets, so the next commit needs its own 100 ms
-    assert!(m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {})).frames.is_empty());
+    assert!(
+        m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {}))
+            .frames
+            .is_empty()
+    );
 }
 
 // Catches: room audio (48 kHz) reaching the socket unconverted, a pitch shift the provider
@@ -660,7 +701,8 @@ fn room_rate_audio_is_resampled_to_twenty_four_kilohertz() {
     // 300 ms at 48 kHz is 300 ms at 24 kHz: two whole 100 ms chunks out (soxr holds a little)
     let mut appended = 0;
     for _ in 0..3 {
-        appended += m.command(at(0), Command::PushAudio(PushAudio { frame: room(100) })).frames.len();
+        appended +=
+            m.command(at(0), Command::PushAudio(PushAudio { frame: room(100) })).frames.len();
     }
     assert_eq!(appended, 2, "unconverted, 300 ms at 48 kHz is six 100 ms chunks");
 }
@@ -671,10 +713,18 @@ fn room_rate_audio_is_resampled_to_twenty_four_kilohertz() {
 fn a_finished_function_call_completes_its_arguments_in_the_mirror() {
     let mut m = machine(OPENAI);
     m.open(at(0));
-    recv(&mut m, at(0), json!({"type": "conversation.item.added", "previous_item_id": null,
-        "item": {"id": "fc", "type": "function_call", "call_id": "c1", "name": "f", "arguments": ""}}));
-    recv(&mut m, at(1), json!({"type": "response.output_item.done",
-        "item": {"id": "fc", "type": "function_call", "call_id": "c1", "name": "f", "arguments": "{\"x\": 1}"}}));
+    recv(
+        &mut m,
+        at(0),
+        json!({"type": "conversation.item.added", "previous_item_id": null,
+        "item": {"id": "fc", "type": "function_call", "call_id": "c1", "name": "f", "arguments": ""}}),
+    );
+    recv(
+        &mut m,
+        at(1),
+        json!({"type": "response.output_item.done",
+        "item": {"id": "fc", "type": "function_call", "call_id": "c1", "name": "f", "arguments": "{\"x\": 1}"}}),
+    );
     match &m.chat_ctx().items[0] {
         ChatItem::FunctionCall(call) => assert_eq!(call.arguments, "{\"x\": 1}"),
         other => panic!("{other:?}"),
@@ -712,7 +762,14 @@ fn the_session_carries_every_option_as_the_reference_sends_it() {
 fn update_options_moves_the_capabilities_and_skips_a_no_op() {
     let mut m = machine(OPENAI);
     m.open(at(0));
-    assert!(m.update_options(OptionsPatch { voice: Maybe::Given("marin".into()), ..Default::default() }).frames.is_empty());
+    assert!(
+        m.update_options(OptionsPatch {
+            voice: Maybe::Given("marin".into()),
+            ..Default::default()
+        })
+        .frames
+        .is_empty()
+    );
     let step = m.update_options(OptionsPatch {
         transcription: Maybe::Given(None),
         turn_detection: Maybe::Given(None),
@@ -748,7 +805,7 @@ fn a_re_announced_speech_onset_keeps_the_original_timestamp() {
         &mut m,
         at(9),
         json!({
-            "type": "response.output_audio.delta", "item_id": "msg_1", "delta": "AAAA",
+            "type": "response.output_audio.delta", "item_id": "msg_1", "delta": "AAA=",
         }),
     );
     let turn_started = step.events.iter().find_map(|e| match e {
@@ -776,14 +833,14 @@ fn closing_releases_the_in_flight_turn_and_every_waiting_caller() {
     m.command(at(1), reply("response_create_2"));
 
     let step = m.close(at(2));
-    assert!(
-        step.events.iter().any(|e| matches!(e, Event::MessageDone(MessageDone { message_id, .. }) if message_id == "msg_1"))
-    );
+    assert!(step.events.iter().any(
+        |e| matches!(e, Event::MessageDone(MessageDone { message_id, .. }) if message_id == "msg_1")
+    ));
     assert!(step.events.iter().any(|e| matches!(
         e,
-        Event::GenerationDone (GenerationDone { status: GenerationStatus::Cancelled, .. })
+        Event::GenerationDone(GenerationDone { status: GenerationStatus::Cancelled, .. })
     )));
-    assert!(step.events.contains(&Event::GenerateReplyFailed (GenerateReplyFailed {
+    assert!(step.events.contains(&Event::GenerateReplyFailed(GenerateReplyFailed {
         req_id: "response_create_2".into(),
         error: RealtimeError::new("realtime session closed"),
     })));
@@ -798,7 +855,11 @@ fn a_finished_response_reports_its_realtime_metrics() {
     m.open(at(0));
     recv(&mut m, at(1), response_created("r1", None));
     let audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 480]);
-    recv(&mut m, Ts::from_nanos(1_250_000_000), json!({"type": "response.output_audio.delta", "item_id": "m1", "delta": audio}));
+    recv(
+        &mut m,
+        Ts::from_nanos(1_250_000_000),
+        json!({"type": "response.output_audio.delta", "item_id": "m1", "delta": audio}),
+    );
     let step = recv(
         &mut m,
         at(3),
@@ -812,10 +873,12 @@ fn a_finished_response_reports_its_realtime_metrics() {
         .events
         .iter()
         .filter_map(|e| match e {
-            Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics { metrics }) => match &**metrics {
-                AgentMetrics::RealtimeModel(r) => Some(r.clone()),
-                _ => None,
-            },
+            Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics { metrics }) => {
+                match &**metrics {
+                    AgentMetrics::RealtimeModel(r) => Some(r.clone()),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect();
@@ -855,16 +918,21 @@ fn a_transcription_with_usage_reports_stt_metrics() {
         .events
         .iter()
         .filter_map(|e| match e {
-            Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics { metrics }) => match &**metrics {
-                AgentMetrics::Stt(s) => Some(s.clone()),
-                _ => None,
-            },
+            Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics { metrics }) => {
+                match &**metrics {
+                    AgentMetrics::Stt(s) => Some(s.clone()),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect();
     assert_eq!(stt.len(), 1, "{:?}", step.events);
     assert_eq!(stt[0].request_id, "event_7");
-    assert_eq!((stt[0].input_tokens, stt[0].output_tokens, stt[0].total_tokens, stt[0].input_audio_tokens), (12, 3, 15, 12));
+    assert_eq!(
+        (stt[0].input_tokens, stt[0].output_tokens, stt[0].total_tokens, stt[0].input_audio_tokens),
+        (12, 3, 15, 12)
+    );
     assert!(stt[0].streamed);
     let md = stt[0].metadata.as_ref().unwrap();
     assert_eq!(md.model_name.as_deref(), Some("gpt-4o-mini-transcribe"), "the transcription model");
@@ -909,4 +977,18 @@ fn a_reconnect_replays_an_unconfirmed_update_whole() {
         .filter_map(|f| f["item"]["id"].as_str())
         .collect();
     assert_eq!(created, ["a", "b"]);
+}
+
+#[test]
+fn realtime_pending_response_deadline_is_owned_by_the_core() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    m.command(at(0), reply("response_deadline"));
+    assert_eq!(m.next_deadline(), Some(at(5)));
+    let step = m.tick(at(5));
+    assert!(step.events.iter().any(|event| matches!(event,
+        Event::GenerateReplyFailed(failed) if failed.req_id == "response_deadline")));
+    assert!(!m.has_active_generation());
+    let late = recv(&mut m, at(6), response_created("late", Some("response_deadline")));
+    assert!(!late.events.iter().any(|event| matches!(event, Event::GenerationCreated(_))));
 }

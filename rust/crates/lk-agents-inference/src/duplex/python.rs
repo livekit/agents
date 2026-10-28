@@ -10,18 +10,20 @@ use lk_agents_abi::llm::realtime::{
     Event, GenerateReply, GenerateReplyFailed, HostRealtimeError, PushAudio, RealtimeError,
     RealtimeModelError,
 };
-use lk_agents_abi::python::{CancellingHandle, FromHostErr, HostBridge, check_pid, extract_generated};
+use lk_agents_abi::python::{
+    CancellingHandle, FromHostErr, HostBridge, check_pid, extract_generated,
+};
 use lk_agents_abi::{AbortHandle, AudioFrame, Realtime, Spawner, SpawnerExt};
-use tokio::sync::mpsc;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods};
+use tokio::sync::mpsc;
 
 use super::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, DuplexHost,
     DuplexHostSession, DuplexModel, FixedGate, Fragment,
 };
-use crate::python::{clear, register_class};
+
 use lk_agents_abi::errors::{ApiError, ProviderError};
 
 // ------------------------------------------------------------------------------------ gates
@@ -49,15 +51,19 @@ pub struct PyFixedGate(SharedGate);
 #[pyclass(frozen, name = "AdaptiveNoiseGate", module = "livekit.agents._core")]
 pub struct PyAdaptiveNoiseGate(SharedGate);
 
-register_class!(PyFixedGate, PyAdaptiveNoiseGate);
-
 #[pymethods]
 impl PyFixedGate {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (silence, *, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5))]
-    fn new(silence: f64, activation_ratio: f64, deactivation_ratio: f64, min_silence_duration: f64) -> Self {
-        let gate = FixedGate::new(silence, activation_ratio, deactivation_ratio, min_silence_duration);
+    fn new(
+        silence: f64,
+        activation_ratio: f64,
+        deactivation_ratio: f64,
+        min_silence_duration: f64,
+    ) -> Self {
+        let gate =
+            FixedGate::new(silence, activation_ratio, deactivation_ratio, min_silence_duration);
         PyFixedGate(SharedGate(Arc::new(Mutex::new(gate))))
     }
 
@@ -77,8 +83,18 @@ impl PyAdaptiveNoiseGate {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (*, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5, window = 10.0))]
-    fn new(activation_ratio: f64, deactivation_ratio: f64, min_silence_duration: f64, window: f64) -> Self {
-        let gate = AdaptiveNoiseGate::new(activation_ratio, deactivation_ratio, min_silence_duration, window);
+    fn new(
+        activation_ratio: f64,
+        deactivation_ratio: f64,
+        min_silence_duration: f64,
+        window: f64,
+    ) -> Self {
+        let gate = AdaptiveNoiseGate::new(
+            activation_ratio,
+            deactivation_ratio,
+            min_silence_duration,
+            window,
+        );
         PyAdaptiveNoiseGate(SharedGate(Arc::new(Mutex::new(gate))))
     }
 
@@ -100,11 +116,17 @@ impl AudioGate for HostGate {
     fn update(&mut self, frame: &AudioFrame) -> Result<bool, String> {
         Python::attach(|py| {
             let frame = frame.clone().into_pyobject(py).map_err(|e| e.to_string())?;
-            self.0.bind(py).call_method1("update", (frame,)).and_then(|v| v.is_truthy()).map_err(|e| {
-                let message = format!("{}: {}", e.get_type(py).qualname().map(|n| n.to_string()).unwrap_or_default(), e.value(py));
-                clear(py, e);
-                message
-            })
+            self.0.bind(py).call_method1("update", (frame,)).and_then(|v| v.is_truthy()).map_err(
+                |e| {
+                    let message = format!(
+                        "{}: {}",
+                        e.get_type(py).qualname().map(|n| n.to_string()).unwrap_or_default(),
+                        e.value(py)
+                    );
+                    drop(e);
+                    message
+                },
+            )
         })
     }
 
@@ -154,12 +176,19 @@ impl DuplexHost for PyDuplexHost {
         self.caps
     }
 
-    async fn open(&self) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError> {
-        let pair = self.view.await_call(|v| v.call_method0("_core_session")).await.map_err(host_error)?;
+    async fn open(
+        &self,
+    ) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError> {
+        let pair =
+            self.view.await_call(|v| v.call_method0("_core_session")).await.map_err(host_error)?;
         let (session, audio, gate) = Python::attach(|py| -> PyResult<_> {
             let (session, gate): (Bound<'_, PyAny>, Bound<'_, PyAny>) = pair.bind(py).extract()?;
             let audio = session.call_method0("_core_audio_stream")?;
-            Ok((self.view.child(session.unbind()), self.view.child(audio.unbind()), gate_from_py(&gate)))
+            Ok((
+                self.view.child(session.unbind()),
+                self.view.child(audio.unbind()),
+                gate_from_py(&gate),
+            ))
         })
         .map_err(host_error)?;
         Ok((PyDuplexSession::open(session, audio, self.label.clone(), &self.spawner), gate))
@@ -185,9 +214,13 @@ struct PyDuplexSession {
 fn command_to_py<'py>(py: Python<'py>, cmd: DuplexCommand) -> PyResult<Bound<'py, PyAny>> {
     let d = PyDict::new(py);
     match cmd {
-        DuplexCommand::PushAudio(frame) => return Ok((&PushAudio { frame }).into_pyobject(py)?.into_any()),
+        DuplexCommand::PushAudio(frame) => {
+            return Ok((&PushAudio { frame }).into_pyobject(py)?.into_any());
+        }
         DuplexCommand::GenerateReply { req_id, instructions, tool_choice } => {
-            return Ok((&GenerateReply { req_id, instructions, tool_choice }).into_pyobject(py)?.into_any());
+            return Ok((&GenerateReply { req_id, instructions, tool_choice })
+                .into_pyobject(py)?
+                .into_any());
         }
         DuplexCommand::UpdateInstructions(instructions) => {
             d.set_item("kind", "update_instructions")?;
@@ -232,7 +265,12 @@ fn describe(py: Python<'_>, e: &PyErr) -> String {
 impl PyDuplexSession {
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn open(view: CancellingHandle, audio: CancellingHandle, label: String, spawner: &Arc<dyn Spawner>) -> Arc<Self> {
+    fn open(
+        view: CancellingHandle,
+        audio: CancellingHandle,
+        label: String,
+        spawner: &Arc<dyn Spawner>,
+    ) -> Arc<Self> {
         let (lane, lane_rx) = mpsc::unbounded_channel();
         let (tx, events) = mpsc::unbounded_channel();
         let session = Arc::new(PyDuplexSession {
@@ -259,7 +297,9 @@ impl PyDuplexSession {
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn forward(view: Arc<CancellingHandle>, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
         loop {
-            let Ok(ev) = view.await_call(|s| s.call_method0("_core_next_event")).await else { return };
+            let Ok(ev) = view.await_call(|s| s.call_method0("_core_next_event")).await else {
+                return;
+            };
             let parsed = Python::attach(|py| -> PyResult<Option<DuplexEvent>> {
                 let ev = ev.bind(py);
                 if ev.is_none() { Ok(None) } else { event_from_py(ev).map(Some) }
@@ -275,7 +315,9 @@ impl PyDuplexSession {
                     }
                 }
                 // a malformed event is the view's bug; the session goes on
-                Err(e) => log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "duplex event refused"),
+                Err(e) => {
+                    log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "duplex event refused")
+                }
             }
         }
     }
@@ -320,26 +362,45 @@ impl PyDuplexSession {
     ) {
         while let Some(cmd) = lane.recv().await {
             let configure = matches!(cmd, DuplexCommand::Configure { .. });
-            let applied = view.await_call(|s| s.call_method1("_core_update", (command_to_py(s.py(), cmd)?,))).await;
+            let applied = view
+                .await_call(|s| s.call_method1("_core_update", (command_to_py(s.py(), cmd)?,)))
+                .await;
             let Err(e) = applied else { continue };
             let message = Python::attach(|py| e.value(py).to_string());
             if !configure {
                 log::error!(target: "livekit.agents", error = message.as_str(); "failed to update the duplex session");
                 continue;
             }
-            let error = RealtimeModelError { label: label.clone(), message, recoverable: false, ..Default::default() };
-            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError { error, timestamp: lk_agents_abi::unix_now() }))));
+            let error = RealtimeModelError {
+                label: label.clone(),
+                message,
+                recoverable: false,
+                ..Default::default()
+            };
+            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError {
+                error,
+                timestamp: lk_agents_abi::unix_now(),
+            }))));
             let _ = view.await_call(|s| s.call_method0("_core_close_plugin")).await;
         }
     }
 
     /// A reply the plugin refused is reported, so the turn waiting for it fails.
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    async fn generate(view: Arc<CancellingHandle>, cmd: DuplexCommand, req_id: String, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
-        let asked = view.await_call(|s| s.call_method1("_core_generate", (command_to_py(s.py(), cmd)?,))).await;
+    async fn generate(
+        view: Arc<CancellingHandle>,
+        cmd: DuplexCommand,
+        req_id: String,
+        tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
+    ) {
+        let asked = view
+            .await_call(|s| s.call_method1("_core_generate", (command_to_py(s.py(), cmd)?,)))
+            .await;
         if let Err(e) = asked {
             let error = Python::attach(|py| <RealtimeError as FromHostErr>::from_host(py, &e));
-            let _ = tx.send(Some(DuplexEvent::Session(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }))));
+            let _ = tx.send(Some(DuplexEvent::Session(Event::GenerateReplyFailed(
+                GenerateReplyFailed { req_id, error },
+            ))));
         }
     }
 }
@@ -352,7 +413,10 @@ impl DuplexHostSession for PyDuplexSession {
                 let sent = Python::attach(|py| -> PyResult<()> {
                     let cmd = (&PushAudio { frame }).into_pyobject(py)?;
                     let push = self.view.object().bind(py).getattr("_core_push_audio")?;
-                    self.view.task_locals().event_loop(py).call_method1("call_soon_threadsafe", (push, cmd))?;
+                    self.view
+                        .task_locals()
+                        .event_loop(py)
+                        .call_method1("call_soon_threadsafe", (push, cmd))?;
                     Ok(())
                 });
                 if let Err(e) = sent {
@@ -392,7 +456,14 @@ pub struct PyDuplexRealtimeModel {
     inner: Arc<DuplexModel>,
 }
 
-register_class!(PyDuplexRealtimeModel);
+lk_agents_abi::python::inventory::submit! {
+    lk_agents_abi::python::Registration(|module| {
+        use pyo3::types::PyModuleMethods;
+        module.add_class::<PyFixedGate>()?;
+        module.add_class::<PyAdaptiveNoiseGate>()?;
+        module.add_class::<PyDuplexRealtimeModel>()
+    })
+}
 
 lk_agents_abi::python::inventory::submit! {
     lk_agents_abi::python::HostNative {

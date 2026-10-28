@@ -13,6 +13,7 @@ pub mod mcp;
 mod persistence;
 pub mod provider_format;
 pub mod realtime;
+pub mod realtime_native;
 pub mod schema;
 pub mod to_dict;
 pub mod tool_arguments;

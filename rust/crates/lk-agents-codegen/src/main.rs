@@ -170,7 +170,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-inference/src/vad/mod.rs",
     "rust/crates/lk-agents-inference/src/tts/mod.rs",
     "rust/crates/lk-agents-abi/src/llm/realtime.rs",
-    "rust/crates/lk-agents-inference/src/realtime/session.rs",
     "rust/crates/lk-agents-inference/src/realtime/dialect.rs",
     "rust/crates/lk-agents-inference/src/stt/options.rs",
     "rust/crates/lk-agents-inference/src/tts/wire.rs",

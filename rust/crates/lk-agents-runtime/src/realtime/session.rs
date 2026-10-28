@@ -3,23 +3,20 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::Clock;
+use lk_agents_abi::RealtimeCommand as Command;
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
-use lk_agents_abi::{Clock, Elapsed};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_inference::transport::{TransportError, WsMessage, WsTransport};
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::{Mutex, mpsc};
 
-use crate::headers::BoundIdentity;
-use crate::realtime::dialect::{Dialect, TurnDetection};
 use crate::realtime::wire::{self, Azure, IdGen, RandomIds, WireShape};
-// The trait a native model is taken as (`as_dyn`), named in the binding's registration.
-#[cfg(feature = "python")]
-use lk_agents_abi::Realtime;
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
-use crate::realtime::machine::{Command, OptionsPatch, RealtimeMachine, SessionOptions, Step};
+use lk_agents_inference::headers::BoundIdentity;
+use lk_agents_inference::realtime::dialect::{Dialect, TurnDetection};
+use lk_agents_inference::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 
 /// How a connection authenticates.
 pub enum Auth {
@@ -81,23 +78,20 @@ impl Connect {
             Auth::Inference { api_key, api_secret, provider, inference_class, identity } => {
                 // `get_inference_headers()` as the host bound it; unbound, the job-less half.
                 let mut h = identity.for_connection().unwrap_or_else(|| {
-                    let mut h = crate::headers::Headers::new();
-                    h.set("User-Agent", crate::headers::user_agent(env!("CARGO_PKG_VERSION")));
+                    let mut h = lk_agents_inference::headers::Headers::new();
+                    h.set(
+                        "User-Agent",
+                        lk_agents_inference::headers::user_agent(env!("CARGO_PKG_VERSION")),
+                    );
                     if let Some(class) = inference_class {
-                        h.set(crate::HEADER_INFERENCE_PRIORITY, class.clone());
+                        h.set(lk_agents_inference::HEADER_INFERENCE_PRIORITY, class.clone());
                     }
                     h
                 });
-                let token = crate::token::create_access_token(
-                    api_key,
-                    api_secret,
-                    crate::token::DEFAULT_TTL_SECS,
-                    crate::token::now_unix(),
-                )
-                .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+                let token = crate::token::inference_bearer(api_key, api_secret)?;
                 h.set("Authorization", format!("Bearer {token}"));
                 if let Some(p) = provider {
-                    h.set(crate::HEADER_INFERENCE_PROVIDER, p.clone());
+                    h.set(lk_agents_inference::HEADER_INFERENCE_PROVIDER, p.clone());
                 }
                 h.into_vec()
             }
@@ -108,7 +102,6 @@ impl Connect {
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
 pub struct NativeRealtime {
     dialect: Dialect,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The model's options: what each new session starts from, and what `update_options` edits.
     opts: std::sync::Mutex<SessionOptions>,
     connect: Arc<Connect>,
@@ -122,13 +115,11 @@ pub struct NativeRealtime {
     turn_detection_given: bool,
     /// The host class's `label`, stamped on errors and metrics; `None` names the dialect.
     label: Option<String>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `self._sessions`: the live sessions an `update_options` reaches.
-    sessions: std::sync::Mutex<Vec<Weak<mpsc::UnboundedSender<Cmd>>>>,
+    sessions: std::sync::Mutex<Vec<Weak<super::queue::Ingress>>>,
 }
 
 impl NativeRealtime {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         dialect: Dialect,
         api_key: impl Into<String>,
@@ -154,7 +145,6 @@ impl NativeRealtime {
         }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `turn_detection_given` is `is_given(turn_detection)` before a default was applied.
     pub fn with_options(mut self, opts: SessionOptions, turn_detection_given: bool) -> Self {
         self.opts = std::sync::Mutex::new(opts);
@@ -183,7 +173,7 @@ impl NativeRealtime {
 
     /// `get_inference_headers()` of the job the model now serves; every later connection carries
     /// them, with a fresh session id. A no-op off the gateway.
-    pub fn bind_identification(&self, headers: crate::headers::Headers) {
+    pub fn bind_identification(&self, headers: lk_agents_inference::headers::Headers) {
         if let Auth::Inference { identity, .. } = &self.connect.auth {
             identity.bind(headers);
         }
@@ -193,17 +183,20 @@ impl NativeRealtime {
     /// live session diffs them against its own. `transcription` and `noise_reduction` are always
     /// handed on, as the reference does.
     pub fn update_options(&self, mut patch: OptionsPatch) {
+        warn_on_half_disabled_turn_taking(&patch.turn_detection);
         let (transcription, noise_reduction) = {
             let mut opts = self.options();
             opts.apply(&patch);
-            warn_on_half_disabled_turn_taking(&patch.turn_detection);
             (opts.transcription.clone(), opts.noise_reduction.clone())
         };
         patch.transcription = lk_agents_abi::Maybe::Given(transcription);
         patch.noise_reduction = lk_agents_abi::Maybe::Given(noise_reduction);
         let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.retain(|s| match s.upgrade() {
-            Some(tx) => tx.send(Cmd::Options(patch.clone())).is_ok(),
+            Some(tx) => {
+                tx.send(Cmd::Options(patch.clone()));
+                true
+            }
             None => false,
         });
     }
@@ -232,35 +225,14 @@ pub(crate) enum Cmd {
     Close,
 }
 
-/// `_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `VoiceSession`
-/// takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
-/// `update_options` and `bind_identification` are `realtime::python`'s.
-#[lk_agents_abi::host(object(
-    name = "NativeRealtimeModel",
-    cell = "arc",
-    rust_name = PyNativeRealtimeModel,
-    pid = false,
-    as_dyn(Realtime = as_realtime),
-    stub = "def __init__(self, **kwargs: Any) -> None: ...",
-    stub = "def update_options(self, **kwargs: Any) -> None: ...",
-    stub = "def bind_identification(self, headers: list[tuple[str, str]]) -> None: ..."
-))]
 impl NativeRealtime {
-    /// The model as the session's realtime provider (a native model is not proxied).
-    pub fn as_realtime(self: &Arc<Self>) -> Arc<dyn lk_agents_abi::Realtime> {
-        Arc::clone(self) as Arc<dyn lk_agents_abi::Realtime>
-    }
-
     /// `provider`: `urlparse(base_url).netloc`.
-    #[host(getter)]
     pub fn provider(&self) -> String {
         let url = &self.connect.base_url;
         let s = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
         s.split(['/', '?']).next().unwrap_or(s).to_owned()
     }
 
-    #[host(getter)]
     pub fn model(&self) -> String {
         self.options().model.clone()
     }
@@ -268,7 +240,9 @@ impl NativeRealtime {
     /// The `model_provider` the metrics name: the host's `provider` (LiveKit Inference reports
     /// `"livekit"`, as its host class does).
     fn metrics_provider(&self) -> String {
-        if self.dialect.provider_label == crate::realtime::dialect::INFERENCE.provider_label {
+        if self.dialect.provider_label
+            == lk_agents_inference::realtime::dialect::INFERENCE.provider_label
+        {
             "livekit".to_owned()
         } else {
             self.provider()
@@ -276,13 +250,13 @@ impl NativeRealtime {
     }
 
     /// `RealtimeModel.label`.
-    #[host(getter)]
     pub fn label(&self) -> String {
-        self.label.clone().unwrap_or_else(|| format!("lk_agents_realtime.{}", self.dialect.provider_label))
+        self.label
+            .clone()
+            .unwrap_or_else(|| format!("lk_agents_realtime.{}", self.dialect.provider_label))
     }
 
     /// `RealtimeCapabilities`, as a dict.
-    #[host(method)]
     pub fn capabilities(&self) -> RealtimeCapabilities {
         let opts = self.options();
         self.dialect.capabilities(
@@ -293,8 +267,6 @@ impl NativeRealtime {
         )
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
     /// model stays reusable.
     pub async fn session(&self, turn_detection_disabled: bool) -> SessionHandle {
@@ -311,25 +283,29 @@ impl NativeRealtime {
         let azure = self.connect.azure.as_ref();
         let url = wire::process_base_url(&self.connect.base_url, &opts.model, azure);
         let label = self.label();
-        let machine = RealtimeMachine::new(
-            self.dialect.clone(),
-            opts,
-            caps,
-            self.ids.clone(),
-            self.images.clone(),
-        )
-        .with_label(label.clone())
-        .with_provider(self.metrics_provider())
-        .with_wall_anchor(self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()));
+        let machine = RealtimeMachine::new(self.dialect.clone(), opts, caps, self.ids.short(""))
+            .with_response_timeout(self.connect.conn.read_timeout.map(Duration::from_secs_f64))
+            .with_label(label.clone())
+            .with_provider(self.metrics_provider())
+            .with_wall_anchor(
+                self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()),
+            );
 
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel(super::queue::COMMAND_BACKLOG);
+        let (ev_tx, ev_rx) = super::queue::events();
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
             caps: std::sync::Mutex::new(caps),
             closing: tokio::sync::Notify::new(),
+            cleanup: std::sync::Mutex::new(None),
         });
-        let commands = Arc::new(cmd_tx);
+        let commands = Arc::new(super::queue::Ingress {
+            commands: cmd_tx,
+            shared: shared.clone(),
+            events: ev_tx.clone(),
+            clock: self.clock.clone(),
+            label: label.clone(),
+        });
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&commands));
 
         let pump = Pump {
@@ -342,6 +318,8 @@ impl NativeRealtime {
             provider_label: self.dialect.provider_label,
             label,
             events: ev_tx,
+            images: self.images.clone(),
+            spawner: self.spawner.clone(),
         };
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
         let abort = self.spawner.spawn_unboxed(async move {
@@ -361,27 +339,36 @@ impl NativeRealtime {
     }
 }
 
-struct Shared {
+pub(super) struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
-    closing: tokio::sync::Notify,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    pub(super) closing: tokio::sync::Notify,
+    cleanup: std::sync::Mutex<Option<lk_agents_inference::realtime::ConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
+}
+
+impl Shared {
+    fn incomplete_cleanup(&self, generation: u64, label: &str) {
+        let mut cleanup = self.cleanup.lock().unwrap_or_else(|error| error.into_inner());
+        if cleanup.is_some() {
+            return;
+        }
+        *cleanup =
+            Some(lk_agents_inference::realtime::ConnectionEffect::CleanupIncomplete { generation });
+        drop(cleanup);
+        log::error!(target: "livekit.agents", connection_generation = generation, model = label; "realtime transport cleanup did not settle within its deadline");
+    }
 }
 
 /// A live session. Cheap to clone the way the swapper needs (`Arc<SessionHandle>`), and every
 /// mutating method takes `&self`.
 pub struct SessionHandle {
     shared: Arc<Shared>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    commands: Arc<mpsc::UnboundedSender<Cmd>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    commands: Arc<super::queue::Ingress>,
     /// One consumer is the contract.
-    events: Mutex<mpsc::UnboundedReceiver<Event>>,
+    events: Mutex<super::queue::EventReceiver>,
     abort: lk_agents_abi::AbortHandle,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Resolves (closed) when the pump has ended.
     done: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     clock: Arc<dyn Clock>,
@@ -391,6 +378,11 @@ pub struct SessionHandle {
 impl SessionHandle {
     pub fn capabilities(&self) -> RealtimeCapabilities {
         *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Framework cleanup diagnostics stay separate from provider errors and conversation events.
+    pub fn cleanup_observation(&self) -> Option<lk_agents_inference::realtime::ConnectionEffect> {
+        self.shared.cleanup.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// The *mirror*: what the server believes.
@@ -424,21 +416,30 @@ impl SessionHandle {
     }
 
     pub async fn next_event(&self) -> Option<Event> {
-        self.events.lock().await.recv().await
+        self.events.lock().await.next().await
     }
 
     /// `aclose`: the response in flight is cancelled and the socket closed with a close frame,
     /// the machine's `close()` failing what still waits; a pump that cannot take the close (it is
     /// connecting) is aborted at the bound.
     pub async fn aclose(&self) {
-        self.send(Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt { response_id: None }));
+        self.send(Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt {
+            response_id: None,
+        }));
         let _ = self.commands.send(Cmd::Close);
         self.shared.closing.notify_one();
         let done = self.done.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(done) = done {
-            let _ = lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done).await;
+            if lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done)
+                .await
+                .is_err()
+            {
+                let generation = self.shared.machine.lock().await.connection_generation();
+                self.shared.incomplete_cleanup(generation, &self.commands.label);
+            }
         }
         self.abort.abort();
+        self.commands.events.finish();
     }
 }
 
@@ -451,100 +452,130 @@ struct Pump {
     clock: Arc<dyn Clock>,
     provider_label: &'static str,
     label: String,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    events: mpsc::UnboundedSender<Event>,
+    events: super::queue::Delivery,
+    images: Arc<dyn ImageResolver + Send + Sync>,
+    spawner: Arc<dyn Spawner>,
 }
 
 impl Pump {
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `_main_task`: connect, run, and reconnect, retrying a failed connection on the connect
     /// options' budget, until a terminal error or a close.
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    async fn run(self, mut commands: mpsc::UnboundedReceiver<Cmd>) {
-        let max_retries = self.connect.conn.max_retry;
-        let mut num_retries: u32 = 0;
+    async fn run(self, commands: mpsc::Receiver<Cmd>) {
+        self.run_loop(commands).await;
+        self.events.finish();
+    }
+
+    async fn run_loop(&self, mut commands: mpsc::Receiver<Cmd>) {
+        use lk_agents_inference::realtime::connection::{ConnectionEffect, RealtimeConnection};
+        let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
+        let mut effects = connection.start(self.clock.now());
         let mut reconnecting = false;
         loop {
-            let err = match self.connect_and_run(&mut commands, reconnecting, &mut num_retries).await {
-                Ok(Outcome::Closed) => return,
-                Ok(Outcome::Fatal(error)) => {
-                    let _ = self.events.send(Event::Error(error));
-                    self.close().await;
-                    return;
+            let mut follow_up = Vec::new();
+            for effect in effects {
+                match effect {
+                    ConnectionEffect::Connect { generation } => {
+                        let outcome = self
+                            .connect_and_run(
+                                &mut commands,
+                                reconnecting,
+                                &mut connection,
+                                generation,
+                            )
+                            .await;
+                        reconnecting = true;
+                        match outcome {
+                            Ok(Outcome::Closed) => {
+                                let _ = connection.close(self.clock.now());
+                                let _ = connection.released(generation, self.clock.now());
+                                return;
+                            }
+                            Ok(Outcome::Fatal(error)) => {
+                                let _ = self.events.send(Event::Error(error));
+                                let _ = connection.close(self.clock.now());
+                                let _ = connection.released(generation, self.clock.now());
+                                self.close().await;
+                                return;
+                            }
+                            Ok(Outcome::ConnectionEffects(effects)) => follow_up.extend(effects),
+                            Ok(Outcome::Recycle) => follow_up.extend(connection.failed(
+                                generation,
+                                self.clock.now(),
+                                self.lost(),
+                            )),
+                            Err(error) => follow_up.extend(connection.failed(
+                                generation,
+                                self.clock.now(),
+                                error,
+                            )),
+                        }
+                        follow_up.extend(connection.released(generation, self.clock.now()));
+                    }
+                    ConnectionEffect::Retry { error } => self.emit_error(error, true),
+                    ConnectionEffect::Failed { error } => {
+                        self.emit_error(error, false);
+                        self.close().await;
+                        return;
+                    }
+                    ConnectionEffect::Close { .. } => {}
+                    effect @ ConnectionEffect::CleanupIncomplete { .. } => {
+                        self.observe_cleanup(effect)
+                    }
                 }
-                Ok(Outcome::Recycle) => {
-                    reconnecting = true;
-                    continue;
-                }
-                Err(err) => err,
-            };
-            if max_retries == 0 || !err.retryable || num_retries == max_retries {
-                let err = if err.retryable && num_retries == max_retries && max_retries > 0 {
-                    ApiError::connection(Some(format!(
-                        "{} connection failed after {num_retries} attempts",
-                        self.provider_label
-                    )))
-                } else {
-                    err
-                };
-                self.emit_error(err, false);
-                self.close().await;
+            }
+            if !follow_up.is_empty() {
+                effects = follow_up;
+                continue;
+            }
+            let Some(deadline) = connection.next_deadline() else {
                 return;
-            }
-            self.emit_error(err, true);
-            let interval = self.connect.conn.interval_for_retry(num_retries);
-            log::warn!(
-                "{} connection failed, retrying in {interval}s (attempt {num_retries}, max {max_retries})",
-                self.provider_label
-            );
-            let at = self.clock.now().saturating_add(Duration::from_secs_f64(interval));
+            };
             tokio::select! {
-                () = self.clock.wait_until(at) => {}
+                biased;
                 () = self.shared.closing.notified() => {
+                    let _ = connection.close(self.clock.now());
                     self.close().await;
                     return;
                 }
+                () = self.clock.wait_until(deadline) => effects = connection.tick(self.clock.now()),
             }
-            num_retries += 1;
-            reconnecting = true;
         }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// One connection: open, replay on a reconnect, run until it ends. `Err` is the attempt's
     /// failure, retryable or not.
     async fn connect_and_run(
         &self,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-        commands: &mut mpsc::UnboundedReceiver<Cmd>,
+        commands: &mut mpsc::Receiver<Cmd>,
         reconnecting: bool,
-        num_retries: &mut u32,
+        connection: &mut lk_agents_inference::realtime::connection::RealtimeConnection,
+        generation: u64,
     ) -> Result<Outcome, ApiError> {
         let t0 = self.clock.now();
         let headers = self.connect.headers()?;
-        // The handshake, bounded by `connect_timeout` on the session clock.
-        let deadline = self.connect.conn.connect_deadline(self.clock.now());
         let connect = self.transport.connect(&self.url, headers);
-        let (sender, receiver) = match lk_agents_abi::before(&*self.clock, deadline, connect).await {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(TransportError::Status { status, message, .. })) => {
-                return Err(ApiError::from_http(&message, status, None));
-            }
-            Ok(Err(_)) => {
-                return Err(ApiError::connection(Some(format!(
-                    "{} client connection error",
-                    self.provider_label
-                ))));
-            }
-            Err(Elapsed) => {
-                return Err(ApiError::connection(Some(format!(
-                    "{} connection timed out",
-                    self.provider_label
-                ))));
+        tokio::pin!(connect);
+        let (sender, receiver) = loop {
+            let deadline = connection.next_deadline();
+            tokio::select! {
+                biased;
+                () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); }
+                () = async { match deadline { Some(at) => self.clock.wait_until(at).await, None => std::future::pending().await } } => {
+                    let effects = connection.tick(self.clock.now());
+                    if effects.iter().any(|effect| !matches!(effect, lk_agents_inference::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
+                        return Ok(Outcome::ConnectionEffects(effects));
+                    }
+                    for effect in effects { self.observe_cleanup(effect); }
+                }
+                result = &mut connect => match result {
+                    Ok(pair) => break pair,
+                    Err(error) => return Err(lk_agents_inference::transport::connect_error(self.provider_label, error)),
+                }
             }
         };
         let acquire_time = self.clock.now().saturating_duration_since(t0);
-        let metrics = self.shared.machine.lock().await.connection_metrics(self.clock.now(), acquire_time);
+        let metrics =
+            self.shared.machine.lock().await.connection_metrics(self.clock.now(), acquire_time);
         let _ = self.events.send(metrics);
 
         let step = {
@@ -552,45 +583,107 @@ impl Pump {
             let now = self.clock.now();
             if reconnecting { m.reconnect(now) } else { m.open(now) }
         };
-        if let Err(error) = self.dispatch(step, sender.as_ref()).await {
-            sender.close().await;
-            return Err(error);
-        }
-        if reconnecting {
-            *num_retries = 0;
-            log::debug!("reconnected to {}", self.provider_label);
+        if !connection.connected(generation, self.clock.now()) {
+            self.close_sender(sender, generation).await;
+            return Ok(Outcome::Closed);
         }
 
-        let outcome = self.run_ws(commands, sender.clone(), receiver).await;
-        sender.close().await;
-        outcome
+        let outcome = self.run_ws(commands, sender.clone(), receiver, step, connection).await;
+        if self.close_sender(sender, generation).await { outcome } else { Ok(Outcome::Closed) }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn run_ws(
         &self,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-        commands: &mut mpsc::UnboundedReceiver<Cmd>,
+        commands: &mut mpsc::Receiver<Cmd>,
         sender: Arc<dyn lk_agents_inference::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_inference::transport::WsReceiver>,
+        initial: Step,
+        connection: &mut lk_agents_inference::realtime::connection::RealtimeConnection,
     ) -> Result<Outcome, ApiError> {
+        let generation = self.shared.machine.lock().await.connection_generation();
+        let (sent, mut receipts) = mpsc::channel(super::writer::RESPONSE_RECEIPTS);
+        let (outgoing, writes) = mpsc::channel(super::writer::WRITE_BACKLOG);
+        let writer = super::writer::run(
+            writes,
+            sender,
+            self.shape.clone(),
+            self.connect.conn,
+            self.clock.clone(),
+            self.images.clone(),
+            generation,
+            sent,
+        );
+        tokio::pin!(writer);
+        self.dispatch(initial, &outgoing)?;
+        let mut decoding: Option<
+            std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<wire::Incoming, ApiError>> + Send>,
+            >,
+        > = None;
         loop {
+            {
+                let mut machine = self.shared.machine.lock().await;
+                while let Ok(sent) = receipts.try_recv() {
+                    machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say);
+                }
+            }
+
             // The machine owns every deadline; the driver only asks how long to sleep.
-            let deadline = self.shared.machine.lock().await.next_deadline();
+            let deadline = self
+                .shared
+                .machine
+                .lock()
+                .await
+                .next_deadline()
+                .into_iter()
+                .chain(connection.next_deadline())
+                .min();
             let sleep = deadline.map(|at| self.clock.wait_until(at));
+            let context_work_pending = self.shared.machine.lock().await.context_work_pending();
 
             let mut step = tokio::select! {
                 biased;
-                msg = receiver.recv() => match msg {
+                () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } } => {
+                    let effects = connection.tick(self.clock.now());
+                    if effects.iter().any(|effect| !matches!(effect, lk_agents_inference::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
+                        return Ok(Outcome::ConnectionEffects(effects));
+                    }
+                    for effect in effects { self.observe_cleanup(effect); }
+                    let mut m = self.shared.machine.lock().await;
+                    m.tick(self.clock.now())
+                },
+                result = &mut writer => return result.map(|()| Outcome::Closed),
+                () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); },
+                Some(sent) = receipts.recv() => {
+                    self.shared.machine.lock().await.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say);
+                    continue;
+                },
+                decoded = async { match decoding.as_mut() {
+                    Some(work) => work.await,
+                    None => std::future::pending().await,
+                } } => {
+                    decoding = None;
+                    let incoming = decoded?;
+                    let mut machine = self.shared.machine.lock().await;
+                    while let Ok(sent) = receipts.try_recv() { machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say); }
+                    machine.incoming_on(generation, self.clock.now(), incoming)
+                },
+                msg = receiver.recv(), if decoding.is_none() => match msg {
                     Ok(WsMessage::Text(text)) => {
-                        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
-                            continue;
-                        };
-                        self.shape.inbound(&mut value);
-                        let incoming = wire::decode(&value);
-                        let mut m = self.shared.machine.lock().await;
-                        m.incoming(self.clock.now(), incoming)
+                        if text.len() > 16 * 1024 * 1024 {
+                            return Err(ApiError::new("realtime message exceeds 16 MiB").with_retryable(false));
+                        }
+                        let shape = self.shape.clone();
+                        let created_at = self.clock.wall();
+                        decoding = Some(Box::pin(async move {
+                            let workers = crate::process::workers().map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+                            let worker = workers.try_spawn(crate::media_workers::MediaWorkerClass::Decoder, move || {
+                                wire::decode_text(&text, &shape, created_at)
+                            }).map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+                            worker.await.map_err(|error| ApiError::new(format!("realtime decoder worker failed: {error}")).with_retryable(false))?
+                                .map_err(|error| { let mut api = ApiError::new(error.to_string()).with_retryable(false); api.request_id = error.event_id; api })
+                        }));
+                        continue;
                     }
                     Ok(WsMessage::Closed) => return Err(self.lost()),
                     Ok(WsMessage::Other) => continue,
@@ -613,18 +706,20 @@ impl Pump {
                         return Ok(Outcome::Closed);
                     }
                 },
-                () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } } => {
-                    let mut m = self.shared.machine.lock().await;
-                    m.tick(self.clock.now())
+
+
+                () = tokio::task::yield_now(), if context_work_pending && outgoing.capacity() > 0 => {
+                    self.shared.machine.lock().await.continue_context(self.clock.now())
                 }
+
             };
 
             if let Some(error) = step.fatal.take() {
-                let _ = self.dispatch(step, sender.as_ref()).await;
+                let _ = self.dispatch(step, &outgoing);
                 return Ok(Outcome::Fatal(error));
             }
             let recycle = step.recycle;
-            self.dispatch(step, sender.as_ref()).await?;
+            self.dispatch(step, &outgoing)?;
             if recycle {
                 log::debug!("recycling the {} connection", self.provider_label);
                 return Ok(Outcome::Recycle);
@@ -648,45 +743,78 @@ impl Pump {
             m.close(now)
         };
         for ev in step.events {
-            let _ = self.events.send(ev);
+            if let Err(error) = self.events.send(ev) {
+                self.events.fail(self.clock.now(), &self.label, error);
+            }
         }
     }
 
-    /// Each frame is sent within `write_timeout`; a socket that died or stalled mid-send fails the
-    /// connection, retryably.
-    async fn dispatch(
+    fn dispatch(
         &self,
         step: Step,
-        sender: &dyn lk_agents_inference::transport::WsSender,
+        outgoing: &mpsc::Sender<Vec<lk_agents_inference::realtime::machine::Outgoing>>,
     ) -> Result<(), ApiError> {
-        for mut frame in step.frames {
-            self.shape.outbound(&mut frame);
-            let deadline = self.connect.conn.write_deadline(self.clock.now());
-            match lk_agents_abi::before(&*self.clock, deadline, sender.send_text(frame.to_string())).await {
-                Ok(Ok(())) => {}
-                Ok(Err(_)) => return Err(self.lost()),
-                Err(Elapsed) => return Err(ApiError::timed_out(TimeoutPhase::Write)),
-            }
+        if !step.frames.is_empty() {
+            outgoing.try_send(step.frames).map_err(|_| {
+                ApiError::new("realtime write backlog exceeded").with_retryable(false)
+            })?;
         }
-        for ev in step.events {
-            let _ = self.events.send(ev);
+        for event in step.events {
+            self.events.send(event)?;
         }
         Ok(())
     }
 
+    async fn close_sender(
+        &self,
+        sender: Arc<dyn lk_agents_inference::transport::WsSender>,
+        generation: u64,
+    ) -> bool {
+        let (settled, done) = tokio::sync::oneshot::channel();
+        // The executor retains this one resource cleanup even if its caller's budget expires.
+        // An incomplete cleanup stops this session rather than accumulating more sockets.
+        let _owner = self.spawner.spawn_unboxed(async move {
+            sender.close().await;
+            let _ = settled.send(());
+        });
+        if matches!(
+            lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done).await,
+            Ok(Ok(()))
+        ) {
+            true
+        } else {
+            self.shared.incomplete_cleanup(generation, &self.label);
+            false
+        }
+    }
+
+    fn observe_cleanup(&self, effect: lk_agents_inference::realtime::connection::ConnectionEffect) {
+        if let lk_agents_inference::realtime::connection::ConnectionEffect::CleanupIncomplete {
+            generation,
+        } = effect
+        {
+            self.shared.incomplete_cleanup(generation, &self.label);
+        }
+    }
+
     fn emit_error(&self, err: ApiError, recoverable: bool) {
-        let _ = self.events.send(Event::Error(lk_agents_abi::llm::realtime::RealtimeModelError {
+        let event = Event::Error(lk_agents_abi::llm::realtime::RealtimeModelError {
             timestamp: self.clock.now(),
             label: self.label.clone(),
-            message: err.message,
+            message: err.message.clone(),
             recoverable,
             req_id: None,
             code: None,
-        }));
+            provider_error: Some(err.clone()),
+        });
+        if self.events.send(event).is_err() {
+            self.events.fail(self.clock.now(), &self.label, err);
+        }
     }
 }
 
 enum Outcome {
+    ConnectionEffects(Vec<lk_agents_inference::realtime::connection::ConnectionEffect>),
     Recycle,
     Closed,
     /// The server said the session cannot go on: no reconnect.

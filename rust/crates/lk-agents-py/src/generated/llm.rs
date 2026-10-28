@@ -314,6 +314,130 @@ pub fn mcp_check_result(result: Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
+
+#[pyclass(frozen, name = "NativeRealtimeModel", module = "livekit.agents._core")]
+pub struct NativeRealtimeModel(::std::sync::Arc<NativeRealtimeModelImpl>);
+
+#[pymethods]
+impl NativeRealtimeModel {
+    #[new]
+    #[pyo3(signature = (config))]
+    fn new(config: ::lk_agents_abi::llm::realtime_native::NativeRealtimeConfig) -> PyResult<NativeRealtimeModel> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::new(config).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(NativeRealtimeModel(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn provider(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::provider(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn model(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::model(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn label(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::label(&self.0);
+        Ok(out)
+    }
+
+    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::capabilities(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (options))]
+    fn update_options(&self, options: ::lk_agents_abi::llm::realtime_native::RealtimeOptions) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::update_options(&self.0, options);
+        Ok(())
+    }
+
+    #[pyo3(signature = (headers))]
+    fn bind_identification(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::bind_identification(&self.0, headers);
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
+        read: |obj| {
+            let this = obj.cast::<NativeRealtimeModel>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
+
+/// The generated facade holds native resources; host provider objects use the shared bridge.
+#[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
+pub struct RealtimeFallbackModel(::std::sync::Arc<RealtimeFallbackModelImpl>);
+
+#[pymethods]
+impl RealtimeFallbackModel {
+    #[new]
+    #[pyo3(signature = (models, *, cooldown = 10.0, regenerate_on_swap = true, on_availability = None))]
+    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, cooldown: f64, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(models, cooldown, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn active_index(&self) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::active_index(&self.0);
+        Ok(out)
+    }
+
+    fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::capabilities(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (*, switch_model = false))]
+    fn restart<'py>(&self, py: Python<'py>, switch_model: bool) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::restart(&this, switch_model)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
+        read: |obj| {
+            let this = obj.cast::<RealtimeFallbackModel>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Realtime> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
 
 /// [`::lk_agents_abi::Llm`] over a host `livekit.agents.llm.LLM`.

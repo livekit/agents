@@ -18,11 +18,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::TokioSpawner;
-use lk_agents_abi::RealClock;
-use lk_agents_inference::testkit::{FakeWs, NoImages, text};
 use lk_agents_abi::Maybe;
-use lk_agents_inference::realtime::{
+use lk_agents_abi::RealClock;
+use lk_agents_abi::TokioSpawner;
+use lk_agents_inference::testkit::{FakeWs, NoImages, text};
+use lk_agents_runtime::realtime::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, NativeRealtime, OPENAI,
     OptionsPatch, SeqIds, XAI,
 };
@@ -32,15 +32,13 @@ use serde_json::json;
 /// rather than as a hung CI job.
 const BOUND: Duration = Duration::from_secs(5);
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-async fn next_event(session: &lk_agents_inference::realtime::SessionHandle) -> Event {
+async fn next_event(session: &lk_agents_runtime::realtime::SessionHandle) -> Event {
     tokio::time::timeout(BOUND, session.next_event())
         .await
         .expect("the driver produced no event within the bound")
         .expect("the event stream ended early")
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Wait until the fake has recorded at least `n` frames, or fail. Polling rather than sleeping:
 /// the send is a `tokio` task hop away, not a delay.
 async fn frames(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
@@ -169,7 +167,8 @@ async fn server_audio_reaches_the_event_stream_as_frames() {
     })));
 
     loop {
-        if let Event::AudioDelta (AudioDelta { message_id, frame, .. }) = next_event(&session).await {
+        if let Event::AudioDelta(AudioDelta { message_id, frame, .. }) = next_event(&session).await
+        {
             assert_eq!(message_id, "msg_1");
             assert_eq!(frame.sample_rate, 24_000);
             assert_eq!(frame.num_channels, 1);
@@ -205,7 +204,9 @@ async fn pushed_audio_is_reframed_to_one_hundred_millisecond_chunks() {
         sent.iter().filter(|f| f["type"] == json!("input_audio_buffer.append")).collect();
     assert_eq!(appends.len(), 2, "250 ms is two whole 100 ms chunks, with 50 ms left buffered");
 
-    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {}));
+    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(
+        lk_agents_abi::llm::realtime::CommitAudio {},
+    ));
     let sent = frames(&ws, 4).await;
     assert_eq!(sent.last().unwrap()["type"], json!("input_audio_buffer.commit"));
     session.aclose().await;
@@ -242,7 +243,9 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
     lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     match next_event(&session).await {
         Event::Error(err) => {
-            assert!(err.message.contains("connection timed out"), "{}", err.message);
+            let error = err.provider_error.expect("typed provider error retained");
+            assert_eq!(error.kind, lk_agents_abi::errors::ApiErrorKind::Timeout);
+            assert_eq!(error.phase, Some(lk_agents_abi::errors::TimeoutPhase::Connect));
             assert!(!err.recoverable, "no retry budget: there is nothing to resume");
         }
         other => panic!("expected the connection timeout, got {other:?}"),
@@ -288,12 +291,11 @@ async fn a_send_that_stalls_fails_the_connection_within_the_write_timeout() {
 // Catches: a dropped connection ending the session, or reconnecting without telling the caller
 // or without replaying the session. The reference's `_main_task` reports the drop as a recoverable
 // error, waits its first retry interval and reconnects, sending the session again.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    // the first socket closes at once (the script is empty and not kept open)
-    let ws = Arc::new(FakeWs::new(vec![]));
+    // Drop one established socket after the provider received its opening update.
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let realtime = NativeRealtime::new(
         OPENAI,
         "sk-test",
@@ -304,6 +306,8 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     )
     .with_ids(Arc::new(SeqIds::default()));
     let session = realtime.session(false).await;
+    frames(&ws, 1).await;
+    ws.feed(Ok(lk_agents_inference::transport::WsMessage::Closed));
 
     loop {
         match next_event(&session).await {
@@ -415,5 +419,370 @@ async fn update_options_sends_only_what_changed_to_the_live_session() {
         "speed did not change, transcription and noise reduction are the model's own"
     );
     assert_eq!(realtime.model(), "gpt-realtime");
+    session.aclose().await;
+}
+
+#[tokio::test]
+async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_timeout() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let ws = Arc::new(FakeWs::stalling_sends());
+    let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
+    connect.conn.max_retry = 0;
+    connect.conn.write_timeout = Some(3.0);
+    connect.conn.read_timeout = Some(1.0);
+    let realtime = NativeRealtime::new(
+        OPENAI,
+        "sk-test",
+        ws,
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect);
+    let session = realtime.session(false).await;
+    assert!(matches!(next_event(&session).await, Event::Metrics(_)));
+    session.generate_reply(None);
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(1)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), session.next_event()).await.is_err(),
+        "a queued response is not waiting for the remote reader yet"
+    );
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(2)).await;
+    let Event::Error(error) = next_event(&session).await else {
+        panic!("expected write timeout");
+    };
+    let provider = error.provider_error.expect("native timeout category is retained");
+    assert_eq!(provider.kind, lk_agents_abi::errors::ApiErrorKind::Timeout);
+    assert_eq!(provider.phase, Some(lk_agents_abi::errors::TimeoutPhase::Write));
+    session.aclose().await;
+}
+
+#[test]
+fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
+    let error = lk_agents_runtime::realtime::wire::decode_text(
+        r#"{"type":"response.created","event_id":"evt_bad","response":{"id":42}}"#,
+        &Default::default(),
+        std::time::SystemTime::UNIX_EPOCH,
+    )
+    .expect_err("malformed known fields must fail before core dispatch");
+    assert_eq!(error.operation, "response.created");
+    assert_eq!(error.event_id.as_deref(), Some("evt_bad"));
+    assert_eq!(error.cause, "id must be a string");
+    let error = lk_agents_runtime::realtime::wire::decode_text(
+        r#"{"type":"response.output_audio.delta","item_id":"m1","delta":"not base64"}"#,
+        &Default::default(),
+        std::time::SystemTime::UNIX_EPOCH,
+    )
+    .expect_err("invalid base64 cannot produce an empty audio frame");
+    assert!(error.cause.contains("invalid PCM base64"));
+    let error = lk_agents_runtime::realtime::wire::decode_text(
+        r#"{"type":"response.done","response":{"id":"r1","status":"unknown"}}"#,
+        &Default::default(),
+        std::time::SystemTime::UNIX_EPOCH,
+    )
+    .expect_err("an unknown terminal status cannot become a completed response");
+    assert!(error.cause.contains("unsupported response status"));
+    let error = lk_agents_runtime::realtime::wire::decode_text(
+        r#"{"type":"response.done","event_id":"evt_usage","response":{"id":"r1","status":"completed","usage":{"input_tokens":"invalid"}}}"#,
+        &Default::default(), std::time::SystemTime::UNIX_EPOCH,
+    ).expect_err("malformed known numeric fields cannot become zero usage on clean completion");
+    assert_eq!(error.event_id.as_deref(), Some("evt_usage"));
+    assert!(error.cause.contains("usage.input_tokens"));
+}
+
+#[tokio::test]
+async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result() {
+    use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
+    struct StalledImage {
+        started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        settled: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+    impl ImageResolver for StalledImage {
+        fn resolve(&self, image: &lk_agents_abi::ImageContent) -> Result<SerializedImage, String> {
+            assert_eq!(image.id, "frame_1");
+            if let Some(started) = self.started.lock().unwrap().take() {
+                let _ = started.send(());
+            }
+            self.release.lock().unwrap().recv().unwrap();
+            if let Some(settled) = self.settled.lock().unwrap().take() {
+                let _ = settled.send(());
+            }
+            Ok(SerializedImage::inline(vec![1, 2, 3], "image/jpeg", Default::default()))
+        }
+    }
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let (settled, done) = tokio::sync::oneshot::channel();
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let model = NativeRealtime::new(
+        OPENAI,
+        "sk",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(RealClock::new()),
+        Arc::new(StalledImage {
+            started: std::sync::Mutex::new(Some(started)),
+            release: std::sync::Mutex::new(wait),
+            settled: std::sync::Mutex::new(Some(settled)),
+        }),
+    );
+    let session = model.session(false).await;
+    frames(&ws, 1).await;
+    let image = lk_agents_abi::ImageContent {
+        id: "frame_1".into(),
+        image: lk_agents_abi::ImageSource::Url("data:image/jpeg;base64,AQID".into()),
+        inference_width: None,
+        inference_height: None,
+        inference_detail: Default::default(),
+        mime_type: None,
+    };
+    session.send(lk_agents_abi::RealtimeCommand::PushItem(lk_agents_abi::PushItem {
+        item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::new(
+            "video_1",
+            lk_agents_abi::Role::User,
+            vec![lk_agents_abi::ChatContent::Image(image)],
+            std::time::SystemTime::UNIX_EPOCH,
+        ))),
+        reply_required: false,
+    }));
+    tokio::time::timeout(BOUND, ready).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, session.aclose()).await.expect("image work cannot delay close");
+    release.send(()).unwrap();
+    tokio::time::timeout(BOUND, done).await.unwrap().unwrap();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        ws.sent_json().len(),
+        1,
+        "the retired connection must never send the prepared image"
+    );
+}
+
+#[tokio::test]
+async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let mut connect = Connect::openai("sk", "https://api.openai.com/v1");
+    connect.conn.total_timeout = Some(3.0);
+    connect.conn.connect_timeout = Some(30.0);
+    let model = NativeRealtime::new(
+        OPENAI,
+        "sk",
+        Arc::new(FakeWs::hanging()),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect);
+    let session = model.session(false).await;
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(3)).await;
+    let Event::Error(error) = next_event(&session).await else {
+        panic!("expected total timeout");
+    };
+    assert!(!error.recoverable);
+    assert_eq!(
+        error.provider_error.unwrap().phase,
+        Some(lk_agents_abi::errors::TimeoutPhase::Total)
+    );
+    session.aclose().await;
+}
+
+#[tokio::test]
+async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
+    use lk_agents_inference::transport::{TransportError, WsReceiver, WsSender, WsTransport};
+    struct StalledClose {
+        sender: Arc<dyn WsSender>,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        settled: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl WsSender for StalledClose {
+        async fn send_text(&self, text: String) -> Result<(), TransportError> {
+            self.sender.send_text(text).await
+        }
+        async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError> {
+            self.sender.send_binary(data).await
+        }
+        fn is_closed(&self) -> bool {
+            self.sender.is_closed()
+        }
+        async fn close(&self) {
+            self.started.notify_one();
+            self.release.notified().await;
+            self.sender.close().await;
+            self.settled.notify_one();
+        }
+    }
+    struct Transport {
+        socket: Arc<FakeWs>,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        settled: Arc<tokio::sync::Notify>,
+        owner: std::sync::Mutex<Option<std::sync::Weak<dyn WsSender>>>,
+    }
+    #[async_trait::async_trait]
+    impl WsTransport for Transport {
+        async fn connect(
+            &self,
+            url: &str,
+            headers: Vec<(String, String)>,
+        ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
+            let (sender, receiver) = self.socket.connect(url, headers).await?;
+            let sender: Arc<dyn WsSender> = Arc::new(StalledClose {
+                sender,
+                started: self.started.clone(),
+                release: self.release.clone(),
+                settled: self.settled.clone(),
+            });
+            *self.owner.lock().unwrap() = Some(Arc::downgrade(&sender));
+            Ok((sender, receiver))
+        }
+    }
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let transport = Arc::new(Transport {
+        socket: Arc::new(FakeWs::new(vec![]).keep_open()),
+        started: Arc::default(),
+        release: Arc::default(),
+        settled: Arc::default(),
+        owner: Default::default(),
+    });
+    let model = NativeRealtime::new(
+        OPENAI,
+        "sk",
+        transport.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    );
+    let session = Arc::new(model.session(false).await);
+    frames(&transport.socket, 1).await;
+    let closing = tokio::spawn({
+        let session = session.clone();
+        async move { session.aclose().await }
+    });
+    tokio::time::timeout(BOUND, transport.started.notified()).await.unwrap();
+    lk_agents_inference::testkit::arm_then_advance(&clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
+        .await;
+    tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let owner = transport.owner.lock().unwrap().as_ref().unwrap().clone();
+    assert!(
+        owner.upgrade().is_some(),
+        "the runtime must retain a transport whose close missed its deadline"
+    );
+    assert_eq!(
+        transport.socket.connect_count(),
+        1,
+        "incomplete cleanup cannot start another connection"
+    );
+    assert!(matches!(
+        session.cleanup_observation(),
+        Some(lk_agents_inference::realtime::ConnectionEffect::CleanupIncomplete { generation: 1 })
+    ));
+    transport.release.notify_one();
+    tokio::time::timeout(BOUND, transport.settled.notified()).await.unwrap();
+    tokio::time::timeout(BOUND, async {
+        while owner.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn realtime_fallback_byte_budget_counts_retained_string_allocations() {
+    use lk_agents_inference::fallback::realtime::{
+        BacklogOverload, FALLBACK_PENDING_BYTES, FallbackBacklog,
+    };
+    let mut instructions = String::with_capacity(FALLBACK_PENDING_BYTES + 1);
+    instructions.push('x');
+    let refused = FallbackBacklog::default()
+        .hold(lk_agents_abi::RealtimeCommand::GenerateReply(lk_agents_abi::GenerateReply {
+            req_id: "retained".into(),
+            instructions: Some(instructions),
+            tool_choice: None,
+        }))
+        .expect_err("short text with a large retained allocation must exceed the byte budget");
+    assert_eq!(refused.0, BacklogOverload::Bytes);
+}
+
+#[cfg(feature = "media-images")]
+#[test]
+fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
+    use lk_agents_abi::llm::provider_format::ImageResolver;
+    let image = lk_agents_abi::ImageContent {
+        id: "data_image".into(),
+        image: lk_agents_abi::ImageSource::Url("data:image/jpeg;base64,AQID".into()),
+        inference_width: None,
+        inference_height: None,
+        inference_detail: Default::default(),
+        mime_type: None,
+    };
+    let prepared = lk_agents_runtime::realtime::images::NativeImages
+        .resolve(&image)
+        .expect("the native constructor's resolver must accept a prepared inline image");
+    assert_eq!(prepared.data_bytes.as_deref(), Some(&[1, 2, 3][..]));
+    assert_eq!(prepared.mime_type.as_deref(), Some("image/jpeg"));
+    let mut external = image.clone();
+    external.image = lk_agents_abi::ImageSource::Url("https://example.test/image.jpg".into());
+    let item = lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::new(
+        "external",
+        lk_agents_abi::Role::User,
+        vec![lk_agents_abi::ChatContent::Image(external)],
+        std::time::SystemTime::UNIX_EPOCH,
+    ));
+    assert!(
+        lk_agents_runtime::realtime::wire::to_wire_item(
+            &item,
+            &lk_agents_runtime::realtime::images::NativeImages
+        )
+        .is_err(),
+        "this realtime protocol requires inline images"
+    );
+    let mut oversized = image;
+    oversized.image = lk_agents_abi::ImageSource::Url(
+        "x".repeat(lk_agents_runtime::realtime::images::MAX_IMAGE_URL_BYTES + 1),
+    );
+    assert!(lk_agents_runtime::realtime::images::NativeImages.resolve(&oversized).is_err());
+}
+
+#[tokio::test]
+async fn realtime_unsent_say_never_claims_a_proactive_server_response() {
+    let ws = Arc::new(FakeWs::stalling_sends());
+    let model = NativeRealtime::new(
+        XAI,
+        "sk",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        Arc::new(RealClock::new()),
+        Arc::new(NoImages),
+    );
+    let session = model.session(false).await;
+    assert!(matches!(next_event(&session).await, Event::Metrics(_)));
+    session.send(lk_agents_abi::RealtimeCommand::Say(lk_agents_abi::llm::realtime::Say {
+        req_id: "unsent_say".into(),
+        text: "Say this after the socket writes".into(),
+        add_to_chat_ctx: true,
+    }));
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    ws.feed(text(json!({"type":"response.created","response":{"id":"proactive"}})));
+    let Event::GenerationCreated(created) = next_event(&session).await else {
+        panic!("expected server generation");
+    };
+    assert_eq!(created.response_id, "proactive");
+    assert_eq!(
+        created.req_id, None,
+        "an unconfirmed local write cannot claim a proactive response"
+    );
     session.aclose().await;
 }

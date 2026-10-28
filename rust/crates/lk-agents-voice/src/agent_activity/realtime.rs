@@ -203,7 +203,24 @@ impl Driver {
     }
 
     fn on_realtime_event(&mut self, now: Ts, ev: Event, out: &mut Out) {
+        if !matches!(ev, Event::TranscriptAttribution(_))
+            && response_id_of(&ev).is_some_and(|id| self.activity.realtime_state.attributed(id))
+        {
+            let result = self.activity.realtime_state.transcript_event(ev);
+            self.commit_attributed_transcript(now, result, out);
+            return;
+        }
         match ev {
+            Event::TranscriptAttribution(attribution) => {
+                let created_at = self
+                    .session
+                    .chat_ctx
+                    .entry(&attribution.source_response_id)
+                    .map_or_else(|| self.step.wall(), |entry| entry.item.created_at());
+                let result =
+                    self.activity.realtime_state.attribute_transcript(attribution, created_at);
+                self.commit_attributed_transcript(now, result.map(|()| None), out);
+            }
             Event::InputSpeechStarted(_) => {
                 // Server-side VAD in the local `StartOfSpeech`'s position: the turn learns the
                 // onset, then `interrupt(source="audio_activity")`, a barge-in that is never a
@@ -255,6 +272,34 @@ impl Driver {
             Event::SessionReconnected(_) => {}
             Event::SessionSwapped { regenerate } => self.on_session_swapped(now, regenerate, out),
             Event::Error(err) => self.on_realtime_error(now, err, out),
+        }
+    }
+
+    fn commit_attributed_transcript(
+        &mut self,
+        now: Ts,
+        result: Result<Option<ChatMessage>, ApiError>,
+        out: &mut Out,
+    ) {
+        match result {
+            Ok(Some(message)) => {
+                let source = Source::Remote { item_id: message.id.clone() };
+                self.commit_item(message.into(), source, Visibility::Both, out);
+            }
+            Ok(None) => {}
+            Err(error) => self.on_realtime_error(
+                now,
+                rt::RealtimeModelError {
+                    timestamp: now,
+                    label: "RealtimeSession".into(),
+                    message: error.message.clone(),
+                    recoverable: false,
+                    req_id: None,
+                    code: Some("realtime_transcript_attribution_refused".into()),
+                    provider_error: Some(error),
+                },
+                out,
+            ),
         }
     }
 
@@ -707,7 +752,11 @@ impl Driver {
     fn on_realtime_error(&mut self, now: Ts, err: rt::RealtimeModelError, out: &mut Out) {
         let error = RealtimeError::with_code(err.message.clone(), err.code.clone());
         let recoverable = err.recoverable;
-        let reported = ProviderError::Local(ApiError::new(err.message).with_retryable(recoverable));
+        let reported = ProviderError::Local(
+            err.provider_error
+                .unwrap_or_else(|| ApiError::new(err.message))
+                .with_retryable(recoverable),
+        );
         let source = crate::events::ErrorSource::Realtime;
         if recoverable {
             let pending = err

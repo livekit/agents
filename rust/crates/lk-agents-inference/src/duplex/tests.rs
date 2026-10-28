@@ -15,7 +15,8 @@ const FRAME_MS: u32 = 100;
 fn frame_ms(level: f64, ms: u32) -> AudioFrame {
     let n = SAMPLE_RATE * ms / 1000;
     let amp = (level * 32767.0) as i16;
-    let data: Vec<u8> = (0..n).flat_map(|i| if i % 2 == 0 { amp } else { -amp }.to_le_bytes()).collect();
+    let data: Vec<u8> =
+        (0..n).flat_map(|i| if i % 2 == 0 { amp } else { -amp }.to_le_bytes()).collect();
     AudioFrame::new(data, SAMPLE_RATE, 1, n)
 }
 
@@ -155,18 +156,26 @@ fn gate_decides_on_audio_duration_not_on_frame_count() {
 
 struct Fake {
     seg: Segmenter,
+    gate: Box<dyn AudioGate>,
     now: Ts,
     events: Vec<Event>,
 }
 
 impl Fake {
     fn new() -> Self {
-        let mut n = 0;
-        let ids = Box::new(move || {
-            n += 1;
-            format!("item_{n}")
-        });
-        Fake { seg: Segmenter::new(Box::new(adaptive()), "fake", super::AUDIO_TIMEOUT, ids), now: Ts::ZERO, events: vec![] }
+        Fake {
+            seg: Segmenter::new("fake", super::AUDIO_TIMEOUT, "item_".into()),
+            gate: Box::new(adaptive()),
+            now: Ts::ZERO,
+            events: vec![],
+        }
+    }
+
+    fn apply(&mut self, step: super::Step) {
+        if step.deactivate_gate {
+            self.gate.deactivate();
+        }
+        self.events.extend(step.events);
     }
 
     fn push(&mut self, level: f64, count: usize) {
@@ -176,19 +185,38 @@ impl Fake {
     fn push_at(&mut self, level: f64, count: usize, start_ms: Option<i64>) {
         for i in 0..count {
             let at = start_ms.map(|s| s + (i as i64) * i64::from(FRAME_MS));
-            let evs = self.seg.on_audio(self.now, frame(level), at);
-            self.events.extend(evs);
+            let frame = frame(level);
+            let gate_open = self.gate.update(&frame);
+            let evs = self.seg.on_audio(
+                self.now,
+                std::time::SystemTime::UNIX_EPOCH
+                    + Duration::from_millis(self.seg.audio_ms().max(0) as u64),
+                frame,
+                at,
+                gate_open,
+            );
+            self.apply(evs);
         }
     }
 
     fn say(&mut self, text: &str, start: i64, end: i64) {
-        let evs = self.seg.on_transcript(Fragment { text: text.into(), start_ms: Some(start), end_ms: Some(end) });
-        self.events.extend(evs);
+        let evs = self.seg.on_transcript(
+            self.now,
+            std::time::SystemTime::UNIX_EPOCH
+                + Duration::from_millis(self.seg.audio_ms().max(0) as u64),
+            Fragment { text: text.into(), start_ms: Some(start), end_ms: Some(end) },
+        );
+        self.apply(evs);
     }
 
     fn end(&mut self) {
-        let evs = self.seg.on_output_ended(self.now, None);
-        self.events.extend(evs);
+        let evs = self.seg.on_output_ended(
+            self.now,
+            std::time::SystemTime::UNIX_EPOCH
+                + Duration::from_millis(self.seg.audio_ms().max(0) as u64),
+            None,
+        );
+        self.apply(evs);
     }
 
     /// Per generation: (frames forwarded, transcript, finished).
@@ -196,10 +224,18 @@ impl Fake {
         let mut out: Vec<(String, usize, String, bool)> = vec![];
         for ev in &self.events {
             match ev {
-                Event::GenerationCreated(g) => out.push((g.response_id.clone(), 0, String::new(), false)),
-                Event::AudioDelta(a) => out.iter_mut().find(|g| g.0 == a.message_id).unwrap().1 += 1,
-                Event::TextDelta(t) => out.iter_mut().find(|g| g.0 == t.message_id).unwrap().2.push_str(&t.delta),
-                Event::GenerationDone(d) => out.iter_mut().find(|g| g.0 == d.response_id).unwrap().3 = true,
+                Event::GenerationCreated(g) => {
+                    out.push((g.response_id.clone(), 0, String::new(), false))
+                }
+                Event::AudioDelta(a) => {
+                    out.iter_mut().find(|g| g.0 == a.message_id).unwrap().1 += 1
+                }
+                Event::TextDelta(t) => {
+                    out.iter_mut().find(|g| g.0 == t.message_id).unwrap().2.push_str(&t.delta)
+                }
+                Event::GenerationDone(d) => {
+                    out.iter_mut().find(|g| g.0 == d.response_id).unwrap().3 = true
+                }
                 _ => {}
             }
         }
@@ -381,7 +417,7 @@ fn call() -> FunctionCall {
         call_id: "c1".into(),
         arguments: "{}".into(),
         name: "lookup".into(),
-        created_at: std::time::SystemTime::now(),
+        created_at: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(86400),
         extra: Default::default(),
         group_id: None,
     }
@@ -418,7 +454,7 @@ fn reconnect_releases_the_burst_and_the_words_waiting_on_it() {
     f.push(0.3, 1);
     assert_eq!(f.seg.waiting_fragments(), 1);
     let evs = f.seg.on_reconnected();
-    f.events.extend(evs);
+    f.apply(evs);
     assert!(!f.seg.burst_open() && f.seg.waiting_fragments() == 0);
     f.push(0.001, 3);
     let g = f.generations();
@@ -440,7 +476,7 @@ fn a_stream_that_stops_mid_burst_ends_the_generation_on_the_audio_timeout() {
     let _ = f.seg.tick(Ts::ZERO.saturating_add(Duration::from_millis(899)));
     assert!(f.seg.burst_open());
     let evs = f.seg.tick(deadline);
-    f.events.extend(evs);
+    f.apply(evs);
     assert!(!f.seg.burst_open());
     f.push(0.3, 3);
     assert_eq!(f.generations().len(), 2);
@@ -465,23 +501,35 @@ fn a_requested_reply_is_the_speech_that_follows_it_and_otherwise_fails() {
     let mut f = Fake::new();
     let _ = f.seg.generate_reply(Ts::ZERO, "r1".into());
     let evs = f.seg.generate_reply(Ts::ZERO, "r2".into());
-    assert!(matches!(&evs[..], [Event::GenerateReplyFailed(x)] if x.req_id == "r1" && x.error.message.contains("superseded")));
+    assert!(
+        matches!(&evs[..], [Event::GenerateReplyFailed(x)] if x.req_id == "r1" && x.error.message.contains("superseded"))
+    );
     let evs = f.seg.on_reconnected();
-    assert!(matches!(&evs[0], Event::GenerateReplyFailed(x) if x.error.message.contains("reconnected")));
+    assert!(
+        matches!(&evs.events[0], Event::GenerateReplyFailed(x) if x.error.message.contains("reconnected"))
+    );
     let _ = f.seg.generate_reply(Ts::ZERO, "r3".into());
-    assert!(f.seg.tick(Ts::ZERO.saturating_add(Duration::from_millis(9_999))).is_empty());
+    assert!(f.seg.tick(Ts::ZERO.saturating_add(Duration::from_millis(9_999))).events.is_empty());
     let evs = f.seg.tick(Ts::ZERO.saturating_add(Duration::from_secs(10)));
-    assert!(matches!(&evs[..], [Event::GenerateReplyFailed(x)] if x.req_id == "r3"));
+    assert!(matches!(&evs.events[..], [Event::GenerateReplyFailed(x)] if x.req_id == "r3"));
     let _ = f.seg.generate_reply(Ts::ZERO, "r4".into());
     let evs = f.seg.close();
-    assert!(matches!(&evs[..], [Event::GenerateReplyFailed(x)] if x.error.message.contains("closed")));
+    assert!(
+        matches!(&evs.events[..], [Event::GenerateReplyFailed(x)] if x.error.message.contains("closed"))
+    );
 }
 
 #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[test]
 fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is_new() {
     let mut f = Fake::new();
-    f.seg.on_input_transcription("u1", "What is the weather?", true, None, std::time::SystemTime::now());
+    f.seg.on_input_transcription(
+        "u1",
+        "What is the weather?",
+        true,
+        None,
+        std::time::SystemTime::UNIX_EPOCH,
+    );
     f.push(0.001, 20);
     f.push(0.3, 3);
     f.say("Let me check.", 2000, 2400);
@@ -494,7 +542,12 @@ fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is
     assert_eq!(ids, ["u1", gen_id.as_str(), "call_1"]);
 
     let mut ctx = f.seg.chat_ctx().clone();
-    ctx.insert(ChatItem::Message(ChatMessage::text("typed_1", Role::User, "typed by the app", std::time::SystemTime::now())));
+    ctx.insert(ChatItem::Message(ChatMessage::text(
+        "typed_1",
+        Role::User,
+        "typed by the app",
+        std::time::SystemTime::now(),
+    )));
     let new = f.seg.update_chat_ctx(&ctx);
     assert_eq!(new.iter().map(ChatItem::id).collect::<Vec<_>>(), ["typed_1"]);
 
@@ -507,7 +560,12 @@ fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is
 #[test]
 fn startup_history_seeds_both_the_adapter_and_the_model() {
     let mut f = Fake::new();
-    let ctx = ChatContext::new(vec![ChatItem::Message(ChatMessage::text("m1", Role::User, "a prior turn", std::time::SystemTime::now()))]);
+    let ctx = ChatContext::new(vec![ChatItem::Message(ChatMessage::text(
+        "m1",
+        Role::User,
+        "a prior turn",
+        std::time::SystemTime::now(),
+    ))]);
     let items = f.seg.seed(&ctx);
     assert_eq!(items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["m1"]);
     assert_eq!(f.seg.chat_ctx().items.len(), 1);
@@ -524,8 +582,135 @@ impl AudioGate for Failing {
 
 #[test]
 fn a_failed_gate_reports_an_unrecoverable_error_under_the_models_label() {
-    let mut seg = Segmenter::new(Box::new(Failing), "plugin.Model", super::AUDIO_TIMEOUT, Box::new(|| "item_1".into()));
-    let evs = seg.on_audio(Ts::ZERO, frame(0.5), None);
-    assert!(matches!(&evs[..], [Event::Error(e)] if !e.recoverable && e.label == "plugin.Model"));
-    assert!(seg.on_audio(Ts::ZERO, frame(0.5), None).is_empty(), "the output is over");
+    let mut seg = Segmenter::new("plugin.Model", super::AUDIO_TIMEOUT, "item_".into());
+    let mut gate = Failing;
+    let frame = frame(0.5);
+    let outcome = gate.update(&frame);
+    let evs =
+        seg.on_audio(Ts::ZERO, std::time::SystemTime::UNIX_EPOCH, frame.clone(), None, outcome);
+    assert!(
+        matches!(&evs.events[..], [Event::Error(e)] if !e.recoverable && e.label == "plugin.Model")
+    );
+    assert!(
+        seg.on_audio(Ts::ZERO, std::time::SystemTime::UNIX_EPOCH, frame, None, Ok(true))
+            .events
+            .is_empty(),
+        "the output is over"
+    );
+}
+
+#[test]
+fn duplex_late_fragment_never_joins_the_next_speaking_burst() {
+    let mut f = Fake::new();
+    f.push(0.001, 20);
+    f.push(0.3, 3);
+    f.say("First", 2000, 2200);
+    f.push(0.3, 1);
+    f.push(0.001, 8);
+    f.push(0.3, 3);
+    f.say("Second", 4000, 4200);
+    f.push(0.3, 1);
+    f.say(" late", 2200, 2300);
+    f.push(0.3, 1);
+    f.push(0.001, 8);
+    let generations = f.generations();
+    assert_eq!(generations.len(), 3, "late text needs its own generation");
+    assert_eq!(generations[1].2, "Second");
+    assert!(f.events.iter().any(|event| matches!(event,
+        Event::TranscriptAttribution(attribution)
+            if attribution.response_id == generations[2].0
+                && attribution.source_response_id == generations[0].0
+    )));
+    assert_eq!((generations[2].1, generations[2].2.as_str(), generations[2].3), (0, " late", true));
+
+    f.push(0.3, 3);
+    f.say("Third", 6000, 6200);
+    f.push(0.3, 1);
+    f.say("future", 9000, 9200);
+    f.say(" oldest", 2250, 2300);
+    let generations = f.generations();
+    assert_eq!(generations.len(), 5, "future text cannot hold up a late fragment");
+    assert_eq!(generations[3].2, "Third");
+    assert_eq!(generations[4].2, " oldest");
+    assert!(f.events.iter().any(|event| matches!(event,
+        Event::TranscriptAttribution(attribution)
+            if attribution.response_id == generations[4].0
+                && attribution.source_response_id == generations[0].0
+    )));
+}
+
+#[test]
+fn duplex_supplied_clock_replays_the_same_conversation_timestamps() {
+    let replay = || {
+        let mut f = Fake::new();
+        f.push(0.001, 20);
+        f.push(0.3, 3);
+        f.say("Hello", 2000, 2200);
+        f.end();
+        f.seg.chat_ctx().items[0].created_at()
+    };
+    assert_eq!(replay(), replay());
+}
+
+#[test]
+fn duplex_future_transcript_overload_fails_instead_of_retaining_unbounded_text() {
+    use super::segmenter::{MAX_TRANSCRIPT_BYTES, MAX_TRANSCRIPT_FRAGMENTS};
+    eprintln!(
+        "duplex future transcript: {MAX_TRANSCRIPT_FRAGMENTS} fragments, {MAX_TRANSCRIPT_BYTES} payload bytes, {} bytes of fragment metadata",
+        std::mem::size_of::<Fragment>() * MAX_TRANSCRIPT_FRAGMENTS
+    );
+    for (count, bytes, reserve) in [
+        (MAX_TRANSCRIPT_FRAGMENTS + 1, 1, 1),
+        (1, MAX_TRANSCRIPT_BYTES + 1, MAX_TRANSCRIPT_BYTES + 1),
+        (1, 1, MAX_TRANSCRIPT_BYTES + 1),
+    ] {
+        let mut seg = Segmenter::new("fake", super::AUDIO_TIMEOUT, "item_".into());
+        let mut events = Vec::new();
+        for _ in 0..count {
+            let mut text = "x".repeat(bytes);
+            text.reserve(reserve.saturating_sub(text.len()));
+            let step = seg.on_transcript(
+                Ts::ZERO,
+                std::time::SystemTime::UNIX_EPOCH,
+                Fragment { text, start_ms: Some(10_000), end_ms: Some(11_000) },
+            );
+            events.extend(step.events);
+        }
+        assert!(events.iter().any(|event| matches!(event, Event::Error(error)
+            if !error.recoverable && error.code.as_deref() == Some("duplex_transcript_backlog_exceeded"))));
+        assert_eq!(seg.waiting_fragments(), 0, "failed output releases retained future text");
+        assert!(matches!(&seg.generate_reply(Ts::ZERO, "after_failure".into())[..],
+            [Event::GenerateReplyFailed(failed)] if failed.req_id == "after_failure"));
+        assert!(seg.on_function_call(call()).is_empty());
+        assert!(
+            seg.on_transcript(
+                Ts::ZERO,
+                std::time::SystemTime::UNIX_EPOCH,
+                Fragment { text: "late".into(), start_ms: None, end_ms: None }
+            )
+            .events
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn duplex_output_eof_flushes_retained_future_text_without_waiting_for_audio() {
+    for prior_speech in [false, true] {
+        let mut f = Fake::new();
+        if prior_speech {
+            f.push(0.001, 20);
+            f.push(0.3, 3);
+            f.say("Spoken", 2000, 2200);
+            f.push(0.3, 1);
+        }
+        f.say("Final text", 10_000, 10_200);
+        assert_eq!(f.seg.waiting_fragments(), 1);
+        f.end();
+        let generations = f.generations();
+        assert_eq!(generations.len(), if prior_speech { 2 } else { 1 });
+        let last = generations.last().unwrap();
+        assert_eq!((last.1, last.2.as_str(), last.3), (0, "Final text", true));
+        assert_eq!(f.seg.waiting_fragments(), 0);
+    }
 }

@@ -41,6 +41,8 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type NativeRealtimeModel = lk_agents_runtime::realtime::NativeRealtime;
+    type RealtimeFallbackModel = lk_agents_runtime::realtime::fallback::RealtimeFallbackModel;
     type AgentClient = lk_agents_runtime::a2a_client::AgentClient;
     type Reply = lk_agents_runtime::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::a2a_client::remote::RemoteInteraction;

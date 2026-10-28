@@ -11,8 +11,10 @@ import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
+from .._generated.realtime_options import NativeRealtimeConfig
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from . import realtime as llm_realtime
+from ._realtime_options import realtime_options
 from .tool_context import ToolChoice
 
 if TYPE_CHECKING:
@@ -119,25 +121,29 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             else f"{type(self).__module__}.{type(self).__name__}"
         )
         self._native = _core.NativeRealtimeModel(
-            api_key=api_key,
-            base_url=base_url or os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
-            model=model,
-            voice=voice,
-            modalities=modalities or None,
-            azure_deployment=azure_deployment,
-            entra_token=entra_token,
-            azure_defaults=_azure_defaults,
-            conn_options=conn_options,
-            label=label,
-            input_audio_transcription=input_audio_transcription,
-            input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=turn_detection,
-            tool_choice=tool_choice,
-            speed=speed,
-            tracing=tracing,
-            truncation=truncation,
-            reasoning=reasoning,
-            max_session_duration=max_session_duration,
+            NativeRealtimeConfig(
+                api_key=api_key,
+                base_url=base_url or os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
+                model=model,
+                voice=voice,
+                modalities=modalities or None,
+                azure_deployment=azure_deployment,
+                entra_token=entra_token,
+                azure_defaults=_azure_defaults,
+                conn_options=conn_options,
+                label=label,
+                options=realtime_options(
+                    input_audio_transcription=input_audio_transcription,
+                    input_audio_noise_reduction=input_audio_noise_reduction,
+                    turn_detection=turn_detection,
+                    tool_choice=tool_choice,
+                    speed=speed,
+                    tracing=tracing,
+                    truncation=truncation,
+                    reasoning=reasoning,
+                    max_session_duration=max_session_duration,
+                ),
+            )
         )
         super().__init__(capabilities=self.capabilities)
         self._label = label
@@ -247,16 +253,18 @@ class RealtimeModel(llm_realtime.RealtimeModel):
     ) -> None:
         """Change the model's options; every live session sends what changed."""
         self._native.update_options(
-            voice=voice,
-            turn_detection=turn_detection,
-            tool_choice=tool_choice,
-            input_audio_transcription=input_audio_transcription,
-            input_audio_noise_reduction=input_audio_noise_reduction,
-            max_response_output_tokens=max_response_output_tokens,
-            speed=speed,
-            tracing=tracing,
-            truncation=truncation,
-            reasoning=reasoning,
+            realtime_options(
+                voice=voice,
+                turn_detection=turn_detection,
+                tool_choice=tool_choice,
+                input_audio_transcription=input_audio_transcription,
+                input_audio_noise_reduction=input_audio_noise_reduction,
+                max_response_output_tokens=max_response_output_tokens,
+                speed=speed,
+                tracing=tracing,
+                truncation=truncation,
+                reasoning=reasoning,
+            )
         )
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:

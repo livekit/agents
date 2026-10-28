@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
+from .._generated.realtime_options import NativeRealtimeConfig
 from ..llm import realtime as llm_realtime
 from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession
+from ..llm._realtime_options import realtime_options
 from ..llm.tool_context import ToolChoice
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ._utils import (
@@ -54,26 +56,30 @@ class RealtimeModel(_RealtimeModel):
         api_key, api_secret = resolve_credentials(api_key, api_secret)
         self._inference_class = inference_class
         self._native = _core.NativeRealtimeModel(
-            dialect="inference",
-            api_key=api_key,
-            api_secret=api_secret,
-            base_url=base_url or get_default_inference_url(),
-            model=model,
-            voice=voice or None,
-            modalities=modalities or None,
-            inference_provider=provider,
-            inference_class=inference_class,
-            conn_options=conn_options,
-            label=f"{type(self).__module__}.{type(self).__name__}",
-            input_audio_transcription=input_audio_transcription,
-            input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=turn_detection,
-            tool_choice=tool_choice,
-            speed=speed,
-            tracing=tracing,
-            truncation=truncation,
-            reasoning=reasoning,
-            max_session_duration=max_session_duration,
+            NativeRealtimeConfig(
+                dialect="inference",
+                api_key=api_key,
+                api_secret=api_secret,
+                base_url=base_url or get_default_inference_url(),
+                model=model,
+                voice=voice or None,
+                modalities=modalities or None,
+                inference_provider=provider,
+                inference_class=inference_class,
+                conn_options=conn_options,
+                label=f"{type(self).__module__}.{type(self).__name__}",
+                options=realtime_options(
+                    input_audio_transcription=input_audio_transcription,
+                    input_audio_noise_reduction=input_audio_noise_reduction,
+                    turn_detection=turn_detection,
+                    tool_choice=tool_choice,
+                    speed=speed,
+                    tracing=tracing,
+                    truncation=truncation,
+                    reasoning=reasoning,
+                    max_session_duration=max_session_duration,
+                ),
+            )
         )
         llm_realtime.RealtimeModel.__init__(self, capabilities=self.capabilities)
 

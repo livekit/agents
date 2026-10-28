@@ -652,20 +652,6 @@ class DuplexRealtimeModel:
     def capabilities(self) -> Any:
         """The realtime capabilities the model runs under."""
 
-class RealtimeFallbackModel:
-    def __init__(
-        self,
-        models: list[Any],
-        *,
-        cooldown: float = 10.0,
-        regenerate_on_swap: bool = True,
-        on_availability: Any = None,
-    ) -> None: ...
-    @property
-    def active_index(self) -> int: ...
-    def capabilities(self) -> Any: ...
-    def restart(self, *, switch_model: bool = False) -> Awaitable[None]: ...
-
 # --- tts -----------------------------------------------------------------------------------------
 
 class AudioEmitter:

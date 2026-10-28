@@ -9,6 +9,135 @@ use lk_agents_abi::voice::events::CloseReason;
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[tokio::test(start_paused = true)]
+async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
+    use crate::agent_activity::realtime::RealtimeWake;
+    use crate::agent_session::effects::Effect;
+    use lk_agents_abi::Ts;
+    use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
+    use lk_agents_abi::llm::realtime as rt;
+
+    let api = unobserved(fake_room("realtime-timeout-identity").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+        panic!("session must be ready");
+    };
+    let (mut runtime, _) = ready.builder.start().await.unwrap();
+    let driver = &mut runtime.driver;
+    let mut out = driver.out();
+    let mut timeout = ApiError::timed_out(TimeoutPhase::Connect);
+    timeout.request_id = Some("handshake-7".into());
+    driver.on_realtime(
+        Ts::ZERO,
+        RealtimeWake::Event(rt::Event::Error(rt::RealtimeModelError {
+            timestamp: Ts::ZERO,
+            label: "realtime".into(),
+            message: timeout.message.clone(),
+            recoverable: true,
+            req_id: None,
+            code: None,
+            provider_error: Some(timeout),
+        })),
+        &mut out,
+    );
+    let effects = driver.settle_step(out);
+    let error = effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            Effect::Emit(SessionEvent::Error(error)) => Some(error),
+            _ => None,
+        })
+        .expect("the session did not report the transport error");
+    let ProviderError::Local(error) = error.error else {
+        panic!("a native transport error changed to a host error");
+    };
+    assert_eq!(error.kind, ApiErrorKind::Timeout);
+    assert_eq!(error.phase, Some(TimeoutPhase::Connect));
+    assert_eq!(error.request_id.as_deref(), Some("handshake-7"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
+    use crate::agent_activity::realtime::RealtimeWake;
+    use crate::agent_session::effects::Effect;
+    use lk_agents_abi::llm::realtime as rt;
+    use lk_agents_abi::{ChatMessage, Role, Ts};
+
+    let api = unobserved(fake_room("late-realtime-transcript").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+        panic!("session must be ready");
+    };
+    let (mut runtime, _) = ready.builder.start().await.unwrap();
+    let driver = &mut runtime.driver;
+    let mut out = driver.out();
+    let source =
+        ChatMessage::text("old-response", Role::Assistant, "Already heard", api.time().read().wall);
+    let source_time = source.created_at;
+    driver.commit_item(
+        source.into(),
+        crate::agent::Source::Remote { item_id: "old-response".into() },
+        crate::agent::Visibility::Both,
+        &mut out,
+    );
+    driver.on_realtime(
+        Ts::ZERO,
+        RealtimeWake::Event(rt::Event::GenerationCreated(rt::GenerationCreated {
+            response_id: "new-response".into(),
+            req_id: None,
+        })),
+        &mut out,
+    );
+    let players = driver.activity.realtime_players.clone();
+    out.take();
+    for event in [
+        rt::Event::TranscriptAttribution(rt::TranscriptAttribution {
+            response_id: "late-transcript".into(),
+            source_response_id: "old-response".into(),
+        }),
+        rt::Event::GenerationCreated(rt::GenerationCreated {
+            response_id: "late-transcript".into(),
+            req_id: None,
+        }),
+        rt::Event::MessageStarted(rt::MessageStarted {
+            message_id: "late-transcript".into(),
+            response_id: Some("late-transcript".into()),
+        }),
+        rt::Event::TextDelta(rt::TextDelta {
+            message_id: "late-transcript".into(),
+            response_id: Some("late-transcript".into()),
+            delta: "A delayed transcription".into(),
+            start_time: None,
+        }),
+        rt::Event::MessageDone(rt::MessageDone {
+            message_id: "late-transcript".into(),
+            response_id: Some("late-transcript".into()),
+        }),
+        rt::Event::GenerationDone(rt::GenerationDone {
+            response_id: "late-transcript".into(),
+            status: rt::GenerationStatus::Completed,
+            usage: Default::default(),
+        }),
+    ] {
+        driver.on_realtime(Ts::ZERO, RealtimeWake::Event(event), &mut out);
+    }
+    assert_eq!(driver.activity.realtime_players, players, "a correction took the voice floor");
+    assert!(
+        !out.take().iter().any(|effect| matches!(
+            effect,
+            Effect::RealtimePlayer { .. } | Effect::SpeechStart { .. }
+        )),
+        "a correction was sent through speech playback"
+    );
+    let correction =
+        &driver.session.chat_ctx.entry("late-transcript").expect("late words were lost").item;
+    let correction = correction.as_message().unwrap();
+    assert_eq!(correction.text_content().as_deref(), Some("A delayed transcription"));
+    assert_eq!(
+        correction.metrics.provider_request_ids.as_deref(),
+        Some(["old-response".to_owned()].as_slice())
+    );
+    assert_eq!(correction.created_at, source_time);
+}
+
 fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
     AgentUpdate {
         agent: agent.to_owned(),
@@ -166,7 +295,7 @@ fn assembled(
     #[rustfmt::skip]
     let api = SessionApi::host_new(
         Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None, None,
-        None, None, None, true, 24_000, 24_000, options, None, None, None, None, None, true,
+        None, None, None, None, true, 24_000, 24_000, options, None, None, None, None, None, true,
         Some(crate::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
         None, None,
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,

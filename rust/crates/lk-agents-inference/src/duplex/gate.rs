@@ -77,10 +77,21 @@ pub struct FixedGate {
 }
 
 impl FixedGate {
-    pub fn new(silence: f64, activation_ratio: f64, deactivation_ratio: f64, min_silence_duration: f64) -> Self {
+    pub fn new(
+        silence: f64,
+        activation_ratio: f64,
+        deactivation_ratio: f64,
+        min_silence_duration: f64,
+    ) -> Self {
         FixedGate {
             floor: silence.max(SILENCE_FLOOR),
-            h: Hysteresis { activation_ratio, deactivation_ratio, min_silence_duration, open: false, quiet: 0.0 },
+            h: Hysteresis {
+                activation_ratio,
+                deactivation_ratio,
+                min_silence_duration,
+                open: false,
+                quiet: 0.0,
+            },
         }
     }
 }
@@ -108,14 +119,25 @@ pub struct AdaptiveNoiseGate {
 }
 
 impl AdaptiveNoiseGate {
-    pub fn new(activation_ratio: f64, deactivation_ratio: f64, min_silence_duration: f64, window: f64) -> Self {
+    pub fn new(
+        activation_ratio: f64,
+        deactivation_ratio: f64,
+        min_silence_duration: f64,
+        window: f64,
+    ) -> Self {
         AdaptiveNoiseGate {
             window,
             history: VecDeque::new(),
             history_duration: 0.0,
             stretch_sum: 0.0,
             stretch_duration: 0.0,
-            h: Hysteresis { activation_ratio, deactivation_ratio, min_silence_duration, open: false, quiet: 0.0 },
+            h: Hysteresis {
+                activation_ratio,
+                deactivation_ratio,
+                min_silence_duration,
+                open: false,
+                quiet: 0.0,
+            },
         }
     }
 }
