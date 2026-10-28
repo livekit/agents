@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
-from typing import Any
 
 import pytest
 
@@ -11,6 +10,17 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
 from livekit.agents.metrics import STTMetrics
 from livekit.plugins.aws import stt as aws_stt
+
+if sys.version_info >= (3, 12):
+    import aws_sdk_transcribe_streaming.client as transcribe_client
+    from aws_sdk_transcribe_streaming.config import AsyncTranscribeStreamingConfig
+    from aws_sdk_transcribe_streaming.models import (
+        AudioStream,
+        BadRequestException,
+        StartStreamTranscriptionInput,
+        TranscriptResultStream,
+    )
+    from smithy_http.aio.crt import AWSCRTHTTPClient
 
 pytestmark = [
     pytest.mark.unit,
@@ -23,11 +33,11 @@ pytestmark = [
 
 class _FakeAudioStream:
     def __init__(self) -> None:
-        self.events: list[Any] = []
+        self.events: list[AudioStream] = []
         self.event_sent = asyncio.Event()
         self.closed = False
 
-    async def send(self, event: Any) -> None:
+    async def send(self, event: AudioStream) -> None:
         self.events.append(event)
         self.event_sent.set()
 
@@ -42,7 +52,7 @@ class _FakeOutputStream:
     def __aiter__(self) -> _FakeOutputStream:
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> TranscriptResultStream:
         if self._error is not None:
             error, self._error = self._error, None
             raise error
@@ -53,7 +63,7 @@ class _FakeOutputStream:
 class _FakeTranscribeStream:
     def __init__(self, output_error: Exception | None = None) -> None:
         self.input_stream = _FakeAudioStream()
-        self.configs: list[Any] = []
+        self.configs: list[AsyncTranscribeStreamingConfig] = []
         self.restarted = asyncio.Event()
         self._output_error = output_error
 
@@ -81,15 +91,17 @@ def _make_stream(
     transcribe_stream = _FakeTranscribeStream(output_error)
 
     class _FakeTranscribeClient:
-        def __init__(self, *, config: Any) -> None:
+        def __init__(self, *, config: AsyncTranscribeStreamingConfig) -> None:
             transcribe_stream.configs.append(config)
             if len(transcribe_stream.configs) > 1:
                 transcribe_stream.restarted.set()
 
-        async def start_stream_transcription(self, *, input: Any) -> _FakeTranscribeStream:
+        async def start_stream_transcription(
+            self, *, input: StartStreamTranscriptionInput
+        ) -> _FakeTranscribeStream:
             return transcribe_stream
 
-    monkeypatch.setattr(aws_stt, "TranscribeStreamingClient", _FakeTranscribeClient)
+    monkeypatch.setattr(transcribe_client, "AsyncTranscribeStreamingClient", _FakeTranscribeClient)
     provider = aws_stt.STT(
         region="us-east-1",
         sample_rate=16000,
@@ -171,7 +183,7 @@ async def test_aws_stream_flushes_pending_usage_when_input_channel_closes(
 
     try:
         stream.push_frame(_frame(100))
-        stream._input_ch.close()
+        stream.input.close()
 
         event = await asyncio.wait_for(anext(stream), timeout=1.0)
 
@@ -210,18 +222,18 @@ async def test_aws_stream_cleanup_survives_closed_event_channel(
 async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    closed: list[Any] = []
-    crt_close = aws_stt.AWSCRTHTTPClient.close
+    closed: list[AWSCRTHTTPClient] = []
+    crt_close = AWSCRTHTTPClient.close
 
-    async def tracking_close(self: Any) -> None:
+    async def tracking_close(self: AWSCRTHTTPClient) -> None:
         closed.append(self)
         await crt_close(self)
 
-    monkeypatch.setattr(aws_stt.AWSCRTHTTPClient, "close", tracking_close)
+    monkeypatch.setattr(AWSCRTHTTPClient, "close", tracking_close)
 
     provider, stream, transcribe_stream = _make_stream(
         monkeypatch,
-        output_error=aws_stt.BadRequestException(
+        output_error=BadRequestException(
             "Your request timed out because no new audio was received for 15 seconds."
         ),
     )
@@ -232,7 +244,7 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
 
         first, second = transcribe_stream.configs
         # StartStreamTranscription is bidirectional, which only the CRT transport carries
-        assert isinstance(first.transport, aws_stt.AWSCRTHTTPClient)
+        assert isinstance(first.transport, AWSCRTHTTPClient)
         # AWS finishes the stream on its idle timeout, and the pooled connection dies with
         # it, so the restarted attempt needs a transport of its own
         assert second.transport is not first.transport
