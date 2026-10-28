@@ -12,10 +12,10 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from importlib import import_module
 from typing import Literal, Protocol, cast
 
-from pydantic import BaseModel, JsonValue
+import socketio  # type: ignore[import-untyped]  # python-socketio does not ship a py.typed marker.
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -262,6 +262,8 @@ class _SocketFactory(Protocol):
         self,
         *,
         reconnection: bool,
+        reconnection_attempts: int,
+        reconnection_delay: float,
         logger: bool,
         engineio_logger: bool,
     ) -> _SocketClient: ...
@@ -291,10 +293,12 @@ class WebSocketClient:
             return True
 
         try:
-            # python-socketio does not ship a complete typed AsyncClient contract.
-            factory = cast(_SocketFactory, import_module("socketio").AsyncClient)
+            # python-socketio does not annotate the consumed AsyncClient constructor contract.
+            factory = cast(_SocketFactory, socketio.AsyncClient)  # pyright: ignore[reportUnknownMemberType]
             self.sio = factory(
-                reconnection=False,
+                reconnection=True,
+                reconnection_attempts=3,
+                reconnection_delay=1,
                 logger=False,
                 engineio_logger=False,
             )
@@ -385,7 +389,18 @@ class WebSocketClient:
         logger.debug("WebSocket connected")
 
     async def _on_message(self, data: object) -> None:
-        message = _ServerMessage.model_validate(data)
+        try:
+            message = _ServerMessage.model_validate(data)
+        except ValidationError as exc:
+            # An invalid frame cannot reliably identify which shared request it belongs to.
+            queues = list(self.audio_callbacks.values())
+            self.audio_callbacks.clear()
+            self.active_requests.clear()
+            for pending_queue in queues:
+                error = APIConnectionError("Uplift returned an invalid message", retryable=False)
+                error.__cause__ = exc
+                await pending_queue.put(error)
+            return
         if message.type == "ready":
             self.connected = True
             logger.debug("Ready with session: %s", message.sessionId)
