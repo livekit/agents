@@ -21,11 +21,12 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Literal
 
 import aiohttp
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -62,6 +63,8 @@ from .log import logger
 
 NUM_CHANNELS = 1
 WS_CLOSE_TIMEOUT_S = 1.0
+_FLUSH_MSG = json.dumps({"type": "flush"})
+_MESSAGE = TypeAdapter(dict[str, JsonValue])
 
 # ElevenLabs generates one audio fragment per incoming text frame when
 # auto_mode is enabled, so single-word frames produce fragmented (choppy,
@@ -82,7 +85,7 @@ async def _close_ws(ws: aiohttp.ClientWebSocketResponse, *, context: str) -> Non
         logger.warning("[TTS] websocket close failed", extra={"context": context}, exc_info=True)
 
 
-def _extract_audio_b64(resp: dict[str, object]) -> str | None:
+def _extract_audio_b64(resp: dict[str, JsonValue]) -> str | None:
     data = resp.get("data")
     if isinstance(data, str) and data:
         return data
@@ -98,7 +101,7 @@ def _extract_audio_b64(resp: dict[str, object]) -> str | None:
     return None
 
 
-def _extract_error_message(resp: dict[str, object]) -> str:
+def _extract_error_message(resp: dict[str, JsonValue]) -> str:
     data = resp.get("data")
     if isinstance(data, dict):
         nested = data.get("message") or data.get("description") or data.get("error")
@@ -112,7 +115,7 @@ def _extract_error_message(resp: dict[str, object]) -> str:
     return "Unknown error"
 
 
-def _extract_error_status(resp: dict[str, object]) -> int | None:
+def _extract_error_status(resp: dict[str, JsonValue]) -> int | None:
     """Extract an HTTP status from an error frame's int/numeric/string code."""
     return extract_error_status(resp)
 
@@ -138,7 +141,7 @@ class _ReceivedWsEvent:
     error_status: int | None = None
 
 
-def _decode_audio_payload(resp: dict[str, object], *, context: str) -> bytes | None:
+def _decode_audio_payload(resp: dict[str, JsonValue], *, context: str) -> bytes | None:
     audio_b64 = _extract_audio_b64(resp)
     if not audio_b64:
         return None
@@ -149,7 +152,7 @@ def _decode_audio_payload(resp: dict[str, object], *, context: str) -> bytes | N
         return None
 
 
-def _normalize_ws_message_type(resp: dict[str, object]) -> str | None:
+def _normalize_ws_message_type(resp: dict[str, JsonValue]) -> str | None:
     mtype = resp.get("type")
     if not isinstance(mtype, str):
         return None
@@ -177,7 +180,7 @@ def _normalize_ws_message_type(resp: dict[str, object]) -> str | None:
     return mtype
 
 
-def _parse_ws_event(resp: dict[str, object]) -> _ReceivedWsEvent:
+def _parse_ws_event(resp: dict[str, JsonValue]) -> _ReceivedWsEvent:
     mtype = _normalize_ws_message_type(resp)
     if mtype is None:
         return _ReceivedWsEvent(kind="ignore")
@@ -479,17 +482,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
     def _forward_plugin_event(self, event: PluginEvent) -> None:
         self.emit("slng_event", event)
 
-    def _emit_plugin_event(
-        self,
-        name: str,
-        level: Literal["info", "warning", "error"] = "info",
-        **data: object,
-    ) -> None:
-        self.emit(
-            "slng_event",
-            PluginEvent(name=name, component="tts", level=level, data=data),
-        )
-
     @property
     def model(self) -> str:
         return self._fallback.model if self._fallback is not None else self._opts.model
@@ -562,7 +554,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
 
         return ws
 
-    def _start_standby_replenish(self, *, conn_options: APIConnectOptions) -> bool:
+    def _start_standby_replenish(self, conn_options: APIConnectOptions) -> bool:
         if not self.warm_standby_enabled:
             return False
         if self._standby is not None and self._is_ws_usable(self._standby.ws):
@@ -714,14 +706,29 @@ class TTS(tts.TTS[Literal["slng_event"]]):
     ) -> tts.ChunkedStream:
         if self._fallback is not None:
             return self._fallback.synthesize(text, conn_options=conn_options)
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            options=self._opts,
+            connect=self._connect_ws,
+            connection_timings=self._ws_connection_timings,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.SynthesizeStream:
         if self._fallback is not None:
             return self._fallback.stream(conn_options=conn_options)
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            options=self._opts,
+            connect=self._connect_ws,
+            connection_timings=self._ws_connection_timings,
+            checkout_standby=self._checkout_standby,
+            replenish_standby=self._start_standby_replenish,
+        )
         self._streams.add(stream)
         return stream
 
@@ -760,10 +767,20 @@ def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
 class ChunkedStream(tts.ChunkedStream):
     """Non-streaming synthesis: send the full text once over the SLNG WebSocket."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        connect: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        connection_timings: dict[int, _WsConnectionTiming],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._connect = connect
+        self._connection_timings = connection_timings
+        self._opts = replace(options)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         _check_stream_timeouts(self._conn_options)
@@ -781,10 +798,10 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             # Chunked synthesis always uses a dedicated connection: terminal
             # protocols close the socket after the final audio.
-            ws = await self._tts._connect_ws(self._conn_options)
+            ws = await self._connect(self._conn_options)
             if self._input_text:
                 await ws.send_str(json.dumps({"type": "text", "text": self._input_text}))
-            await ws.send_str(SynthesizeStream._FLUSH_MSG)
+            await ws.send_str(_FLUSH_MSG)
 
             while True:
                 msg = await ws.receive(timeout=self._conn_options.read_timeout)
@@ -811,15 +828,12 @@ class ChunkedStream(tts.ChunkedStream):
                     continue
 
                 try:
-                    resp = json.loads(msg.data)
-                except json.JSONDecodeError:
+                    resp = _MESSAGE.validate_json(msg.data)
+                except ValidationError:
                     logger.debug(
                         "[SLNG TTS] ignoring non-JSON text frame",
                         extra={"lk.pii.data": msg.data},
                     )
-                    continue
-
-                if not isinstance(resp, dict):
                     continue
 
                 if "type" not in resp:
@@ -890,22 +904,48 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
         finally:
             if ws is not None:
-                self._tts._ws_connection_timings.pop(id(ws), None)
+                self._connection_timings.pop(id(ws), None)
                 await _close_ws(ws, context="chunked_synthesis")
 
 
 class SynthesizeStream(tts.SynthesizeStream):
     # SLNG protocol messages (different from Deepgram)
-    _FLUSH_MSG: str = json.dumps({"type": "flush"})
     _CANCEL_MSG: str = json.dumps({"type": "cancel"})
     _CLOSE_MSG: str = json.dumps({"type": "close"})
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        connect: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        connection_timings: dict[int, _WsConnectionTiming],
+        checkout_standby: Callable[
+            [], Awaitable[tuple[aiohttp.ClientWebSocketResponse | None, float | None, str | None]]
+        ],
+        replenish_standby: Callable[[APIConnectOptions], bool],
+    ) -> None:
         logger.debug("[TTS] SynthesizeStream.__init__ STARTING")
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._connect = connect
+        self._connection_timings = connection_timings
+        self._checkout_standby = checkout_standby
+        self._replenish_standby = replenish_standby
+        self._opts = replace(options)
         logger.debug("[TTS] SynthesizeStream.__init__ DONE")
+
+    def _emit_plugin_event(
+        self,
+        name: str,
+        level: Literal["info", "warning", "error"] = "info",
+        **data: object,
+    ) -> None:
+        self._tts.emit(
+            "slng_event",
+            PluginEvent(name=name, component="tts", level=level, data=data),
+        )
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
@@ -937,7 +977,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._segments_ch.send_nowait(word_stream)
                         logger.debug("[TTS] New word_stream created")
                     word_stream.push_text(the_input)
-                elif isinstance(the_input, self.Flush):
+                else:
                     logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
                     if word_stream:
                         word_stream.end_input()
@@ -999,7 +1039,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         gateway_request_id: str | None = None
         gateway_session_id: str | None = None
         audio_chunks_seen = 0
-        standby_enabled = self._tts.warm_standby_enabled
+        standby_enabled = self._opts.warm_standby_enabled
         standby_used = False
         standby_ready_ms: float | None = None
         standby_miss_reason: str | None = None
@@ -1008,7 +1048,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         def capture_ws_timing(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal ws_connect_ms, init_send_ms, connect_total_ms
-            timing = self._tts._ws_connection_timings.pop(id(ws), None)
+            timing = self._connection_timings.pop(id(ws), None)
             if timing is None:
                 return
             ws_connect_ms = timing.ws_connect_ms
@@ -1030,9 +1070,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not standby_enabled or standby_replenish_requested:
                 return
             standby_replenish_requested = True
-            standby_replenish_started = self._tts._start_standby_replenish(
-                conn_options=self._conn_options
-            )
+            standby_replenish_started = self._replenish_standby(self._conn_options)
 
         def log_segment_timing() -> None:
             logger.info(
@@ -1129,7 +1167,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await _emit_text(text_buffer)
 
             logger.debug(f"[TTS] send_task: sent {word_count} words, flushing")
-            await ws.send_str(self._FLUSH_MSG)
+            await ws.send_str(_FLUSH_MSG)
             input_sent_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -1161,15 +1199,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.push(msg.data)
                 elif msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        resp = json.loads(msg.data)
-                    except json.JSONDecodeError:
+                        resp = _MESSAGE.validate_json(msg.data)
+                    except ValidationError:
                         logger.debug(
                             "[SLNG TTS] ignoring non-JSON text frame",
                             extra={"lk.pii.data": msg.data},
                         )
-                        continue
-
-                    if not isinstance(resp, dict):
                         continue
 
                     if resp.get("type") == "ready":
@@ -1181,7 +1216,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raw_session_id = resp.get("session_id")
                         if isinstance(raw_session_id, str):
                             gateway_session_id = raw_session_id
-                        self._tts._emit_plugin_event(
+                        self._emit_plugin_event(
                             "gateway.session",
                             gateway_request_id=gateway_request_id,
                             gateway_session_id=gateway_session_id,
@@ -1266,10 +1301,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     ws,
                     standby_ready_ms,
                     standby_miss_reason,
-                ) = await self._tts._checkout_standby()
+                ) = await self._checkout_standby()
                 standby_used = ws is not None
             if ws is None:
-                ws = await self._tts._connect_ws(self._conn_options)
+                ws = await self._connect(self._conn_options)
             capture_ws_timing(ws)
             tasks = [
                 asyncio.create_task(send_task(ws)),

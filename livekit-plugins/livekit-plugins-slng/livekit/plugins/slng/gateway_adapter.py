@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from typing import cast
 
 from pydantic import JsonValue
 
@@ -42,7 +43,10 @@ def extract_error_status(frame: Mapping[str, object]) -> int | None:
     candidates: list[object] = []
     nested = frame.get("data")
     if isinstance(nested, Mapping):
-        candidates.extend(nested.get(key) for key in ("status_code", "code", "err_code"))
+        candidates.extend(
+            cast(Mapping[object, object], nested).get(key)
+            for key in ("status_code", "code", "err_code")
+        )
     candidates.extend(frame.get(key) for key in ("status_code", "code", "err_code"))
     for value in candidates:
         if isinstance(value, bool):
@@ -59,7 +63,7 @@ def extract_error_status(frame: Mapping[str, object]) -> int | None:
     return None
 
 
-def validate_model_identifier(model: str) -> str:
+def validate_model_identifier(model: object) -> str:
     if not isinstance(model, str) or not _MODEL_IDENTIFIER_RE.fullmatch(model):
         raise ValueError("model must be a provider/model identifier, for example 'deepgram/nova:3'")
     return model
@@ -151,7 +155,7 @@ def normalize_world_part_override(world_part_override: str | None) -> str | None
     return value or None
 
 
-def _validate_external_tracking_id(value: str | None, *, name: str) -> str | None:
+def _validate_external_tracking_id(value: object, *, name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):

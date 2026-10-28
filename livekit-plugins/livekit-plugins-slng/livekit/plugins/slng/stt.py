@@ -124,8 +124,7 @@ def _extract_error_text(data: _Message) -> str:
             if isinstance(value, str) and value:
                 return value
 
-    for key in ("message", "description", "error"):
-        outer_value = data.get(key)
+    for outer_value in (data.get("message"), data.get("description"), data.get("error")):
         if isinstance(outer_value, str) and outer_value:
             return outer_value
         if isinstance(outer_value, dict):
@@ -167,7 +166,7 @@ class STTOptions:
     language: str = "en"
 
 
-class STT(stt.STT):
+class STT(stt.STT[Literal["slng_event"]]):
     def __bool__(self) -> bool:
         # LiveKit Agents code may use truthiness checks like `stt or None`.
         # Some EventEmitter-style bases can be falsy when they have no listeners,
@@ -368,17 +367,6 @@ class STT(stt.STT):
             self._extra_headers["X-Slng-Provider-Key"] = byok_key
         self._streams = weakref.WeakSet[SpeechStream]()
 
-    def _emit_plugin_event(
-        self,
-        name: str,
-        level: Literal["info", "warning", "error"] = "info",
-        **data: object,
-    ) -> None:
-        self.emit(
-            "slng_event",
-            PluginEvent(name=name, component="stt", level=level, data=data),
-        )
-
     @property
     def model(self) -> str:
         return "slng"
@@ -542,6 +530,17 @@ class SpeechStream(stt.SpeechStream):
         self._user_state: Literal["speaking", "listening"] | None = None
         self._has_spoken_since_last_response = False
         self._final_timeout_allowed = True
+
+    def _emit_plugin_event(
+        self,
+        name: str,
+        level: Literal["info", "warning", "error"] = "info",
+        **data: object,
+    ) -> None:
+        self._slng_stt.emit(
+            "slng_event",
+            PluginEvent(name=name, component="stt", level=level, data=data),
+        )
 
     def update_options(
         self,
@@ -838,7 +837,7 @@ class SpeechStream(stt.SpeechStream):
                     from_model,
                     exc_info=exc_info,
                 )
-                self._slng_stt._emit_plugin_event(
+                self._emit_plugin_event(
                     "fallback.exhausted",
                     "error",
                     from_model=from_model,
@@ -860,7 +859,7 @@ class SpeechStream(stt.SpeechStream):
                 to_model,
                 exc_info=exc_info,
             )
-            self._slng_stt._emit_plugin_event(
+            self._emit_plugin_event(
                 "fallback.attempt_failed",
                 "warning",
                 from_model=from_model,
@@ -994,7 +993,7 @@ class SpeechStream(stt.SpeechStream):
             self._active_endpoint_index = 0
             candidate_attempts = 0
             recover_primary_after_final = False
-            self._slng_stt._emit_plugin_event("fallback.primary_recovered")
+            self._emit_plugin_event("fallback.primary_recovered")
             self._reconnect_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> bool:
@@ -1191,7 +1190,7 @@ class SpeechStream(stt.SpeechStream):
                         from_model,
                         to_model,
                     )
-                    self._slng_stt._emit_plugin_event(
+                    self._emit_plugin_event(
                         "fallback.switch_succeeded",
                         from_model=from_model,
                         to_model=to_model,
@@ -1212,8 +1211,7 @@ class SpeechStream(stt.SpeechStream):
                 keepalive = asyncio.create_task(keepalive_task(ws))
                 send.add_done_callback(retrieve_task_exception)
                 recv.add_done_callback(retrieve_task_exception)
-                if keepalive is not None:
-                    keepalive.add_done_callback(retrieve_task_exception)
+                keepalive.add_done_callback(retrieve_task_exception)
                 wait_switch = asyncio.create_task(switch_event.wait())
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
                 wait_user_state = asyncio.create_task(self._user_state_event.wait())
@@ -1319,7 +1317,7 @@ class SpeechStream(stt.SpeechStream):
                         send = None
                         continue
 
-                    if recv is not None and recv in done:
+                    if recv in done:
                         input_exhausted = recv.result()
                         await utils.aio.gracefully_cancel(
                             *[
@@ -1415,7 +1413,7 @@ class SpeechStream(stt.SpeechStream):
                 if is_payload_too_large(exc):
                     # Every candidate receives the same oversized body, so
                     # failing over cannot help; surface immediately.
-                    self._slng_stt._emit_plugin_event(
+                    self._emit_plugin_event(
                         "fallback.exhausted",
                         "error",
                         from_model=current_model(),
@@ -1521,7 +1519,7 @@ class SpeechStream(stt.SpeechStream):
                 raise APIStatusError(f"SLNG STT error: {message}")
 
     def _emit_session_event(self, data: _Message) -> None:
-        self._slng_stt._emit_plugin_event(
+        self._emit_plugin_event(
             "gateway.session",
             gateway_request_id=(
                 data.get("slng_request_id")

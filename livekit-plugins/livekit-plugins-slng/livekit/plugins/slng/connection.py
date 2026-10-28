@@ -15,7 +15,7 @@ from .gateway_adapter import validate_model_identifier
 class STTConnectionConfig:
     endpoint: str
     model: str | None = None
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
     init: Mapping[str, JsonValue] | None = None
 
 
@@ -24,7 +24,7 @@ class TTSConnectionConfig:
     endpoint: str
     model: str | None = None
     voice: str | None = None
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
     init: Mapping[str, JsonValue] | None = None
 
 
@@ -33,7 +33,7 @@ class PluginEvent:
     name: str
     component: Literal["stt", "tts"]
     level: Literal["info", "warning", "error"] = "info"
-    data: Mapping[str, object] = field(default_factory=dict)
+    data: Mapping[str, object] = field(default_factory=dict[str, object])
 
 
 class CandidateState:
