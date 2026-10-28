@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -35,6 +36,10 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
 )
 
+# set inside recovery probes; the child streams they open inherit it, so their notices are
+# told apart from a user attempt's on the same instance
+_in_recovery_probe: ContextVar[bool] = ContextVar("tts_fallback_in_recovery_probe", default=False)
+
 
 @dataclass
 class _TTSStatus:
@@ -45,7 +50,7 @@ class _TTSStatus:
     recovering_synthesize_task: asyncio.Task[None] | None
     recovering_stream_task: asyncio.Task[None] | None
     needs_resampling: bool
-    # user attempts in flight; recovery probes discard their audio, so their notices aren't forwarded
+    # user attempts in flight; only their notices are forwarded (a probe's audio is discarded)
     serving: int = 0
 
 
@@ -176,7 +181,7 @@ class FallbackAdapter(
 
     def _fallback_forwarder(self, status: _TTSStatus) -> Callable[..., None]:
         def forward(*args: Any, **kwargs: Any) -> None:
-            if status.serving:
+            if status.serving and not _in_recovery_probe.get():
                 self.emit("fallback_activated", *args, **kwargs)
 
         return forward
@@ -290,6 +295,7 @@ class FallbackChunkedStream(ChunkedStream):
         if recovering_task is None or recovering_task.done():
 
             async def _recover_tts_task(tts: TTS) -> None:
+                _in_recovery_probe.set(True)
                 try:
                     async for _ in self._try_synthesize(tts=tts, recovering=True):
                         pass
@@ -608,6 +614,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
         if recovering_task is None or recovering_task.done():
 
             async def _recover_tts_task(tts: TTS) -> None:
+                _in_recovery_probe.set(True)
                 try:
                     input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
                     for t in retry_text:
