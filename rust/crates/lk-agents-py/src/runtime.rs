@@ -44,6 +44,8 @@ pub enum Role {
 #[pyfunction]
 pub fn init(role: Role) -> PyResult<()> {
     let _ = role;
+    // A forked child declaring itself abandons the parent's Tokio runtime; its own starts on use.
+    lk_agents_runtime::process::reinit();
     // the Rust `log` lines' route to Python (installed at import) survives a fork
     lk_agents_abi::python::declare()
 }
