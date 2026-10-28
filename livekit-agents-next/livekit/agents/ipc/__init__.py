@@ -25,6 +25,7 @@ from .._generated.worker_ipc import ProcessCompletion
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
+from ..telemetry._transport import capture_trace_carrier
 from ..utils import shortuuid
 from . import child
 from .launch import ProcessReceipt, preload_module_names, start_process, validate_setup_fnc
@@ -342,6 +343,7 @@ class JobExecutor:
                 accepted_at=info.accepted_at,
                 assigned_at=info.assigned_at,
                 launched_at=info.launched_at,
+                trace=capture_trace_carrier(),
             )
         )
         if self._killable:

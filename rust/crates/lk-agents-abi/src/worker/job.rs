@@ -1,6 +1,7 @@
 //! The end of a job (`job.py`). Deliberately better than the reference's unbounded `gather`: the
 //! shutdown callbacks run in order, each failure isolated, each bounded.
 
+use crate::telemetry::transport::TraceCarrier;
 use lk_agents_host_derive::Host;
 use std::future::Future;
 use std::time::Duration;
@@ -307,6 +308,9 @@ pub struct StartJobFields {
     pub accepted_at: f64,
     pub assigned_at: f64,
     pub launched_at: f64,
+    #[binding(default)]
+    #[python(import = ".telemetry_transport:TraceCarrier")]
+    pub trace: Option<TraceCarrier>,
 }
 
 /// The job a session runs in, as `start()` sequences it: the room connected beside the opening,

@@ -10,8 +10,9 @@ import time
 from pathlib import Path
 
 import pytest
-from scripts.bench import sessions
+from scripts.bench import reports, sessions
 from scripts.bench.metrics import (
+    CallbackSlices,
     LoopLag,
     NativeCalls,
     cadence_budget_pass,
@@ -26,12 +27,16 @@ def test_loop_monitor_retains_a_blocking_callback_stall() -> None:
     async def workload() -> None:
         monitor = LoopLag()
         heartbeat = asyncio.create_task(monitor.run())
+        original_run = asyncio.Handle._run
         try:
             await monitor.ready.wait()
             # A deliberately bad integration must remain visible despite skipped deadlines.
-            time.sleep(0.025)
-            await asyncio.sleep(0.01)
+            with CallbackSlices() as callbacks:
+                asyncio.get_running_loop().call_soon(time.sleep, 0.025)
+                await asyncio.sleep(0.03)
             assert distribution(monitor.samples).max_ms >= 20
+            assert distribution(callbacks.wall).max_ms >= 20
+            assert asyncio.Handle._run is original_run
         finally:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -84,11 +89,33 @@ def test_failed_workload_never_replaces_existing_capture(
     async def failed(*args: object) -> dict[str, object]:
         raise RuntimeError("incomplete playback")
 
+    def provenance_command(command: list[str], *, text: bool = False) -> str | bytes:
+        return "test-revision\n" if text else b""
+
     monkeypatch.setattr(sessions, "run", failed)
+    monkeypatch.setattr(sessions.subprocess, "check_output", provenance_command)
     args = argparse.Namespace(output=output, sessions=[1], cadence_ms=[10])
     with pytest.raises(RuntimeError, match="incomplete playback"):
         asyncio.run(sessions.main(args))
     assert output.read_text() == "previous valid baseline"
+
+
+@pytest.mark.asyncio
+async def test_report_qualification_refuses_an_unqualified_idle_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failed_idle(*args: object) -> dict[str, object]:
+        return {
+            "workload_complete": True,
+            "baseline_budget_pass": False,
+            "measured_budget_pass": True,
+        }
+
+    monkeypatch.setattr(reports, "run", failed_idle)
+    args = argparse.Namespace(
+        output=tmp_path / "reports.json", sessions=[1], items=10_000, check=True
+    )
+    assert await reports.main(args) == 1
 
 
 def test_exceeded_frame_budgets_fail_even_when_average_work_is_fast() -> None:
@@ -96,4 +123,5 @@ def test_exceeded_frame_budgets_fail_even_when_average_work_is_fast() -> None:
     stalled = distribution([100_000] * 1000 + [10_000_000])
     assert cadence_budget_pass(healthy, 10, healthy)
     assert not cadence_budget_pass(stalled, 10, healthy)
+    assert not cadence_budget_pass(distribution([2_000_000] * 1000), 10)
     assert not cadence_budget_pass(healthy, 10, distribution([2_000_000]))

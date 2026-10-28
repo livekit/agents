@@ -77,6 +77,19 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Stub>, String> {
         b.push_str(&format!("from typing import {}\n", typing.join(", ")));
         wrote = true;
     }
+    let field_imports: std::collections::BTreeSet<_> = classes
+        .iter()
+        .flat_map(|(declaration, _)| declaration.fields())
+        .filter(|field| !field.private && !field.emit_skip)
+        .flat_map(|field| &field.imports)
+        .collect();
+    for import in field_imports {
+        let (module, name) = import
+            .split_once(':')
+            .ok_or_else(|| format!("invalid field import {import:?}: expected module:name"))?;
+        b.push_str(&format!("from {module} import {name}\n"));
+        wrote = true;
+    }
     for l in imports(exposed) {
         b.push_str(&format!("{l}\n"));
         wrote = true;

@@ -47,6 +47,7 @@ from .telemetry.traces import (
     _prepare_cloud_tracer,
     _setup_cloud_tracer,
     _shutdown_telemetry,
+    capture_content_enabled,
     install_rpc_tracing,
     tracer,
 )
@@ -306,9 +307,15 @@ class JobContext:
                 )
                 try:
                     directory.mkdir(parents=True, exist_ok=True)
-                    (directory / "session_report.json").write_text(
-                        json.dumps(report.to_dict(), indent=2)
+                    destination = _core._core_TelemetryPolicy(
+                        True, report._capture_content, self._redaction_enabled
                     )
+                    snapshot = {
+                        key: value
+                        for key, value in report.to_dict().items()
+                        if destination.attribute_action("session_report", key, True)[0]
+                    }
+                    (directory / "session_report.json").write_text(json.dumps(snapshot, indent=2))
                 except Exception:
                     logger.exception("failed to save session report")
             return report
@@ -424,6 +431,9 @@ class JobContext:
             model_usage=session.usage.model_usage,
             audio_recording_path=session._recording_path,
             audio_recording_started_at=recording_started_at,
+            _capture_content=session._event_retention.accepts(
+                "conversation_item_added", session._recording_options["redaction"]
+            ),
         )
         if recording_started_at is not None:
             sr.duration = sr.timestamp - recording_started_at
@@ -979,6 +989,10 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
+    # Framework reports retain their session's consent; explicit reports capture it at construction.
+    _capture_content: bool = field(
+        default_factory=capture_content_enabled, repr=False, kw_only=True
+    )
 
     def to_dict(self) -> dict:
         events_dict = [event.model_dump() for event in self.events]

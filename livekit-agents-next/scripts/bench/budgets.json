@@ -186,6 +186,38 @@
         "This change integrates the existing ceiling; it does not qualify native I/O throughput across Linux CPU quotas or Windows.",
         "Worker control/outbox, IPC and process-pool byte ceilings still need their own aggregate calibration; endpoint payload admission and native running-work admission do not establish those bounds."
       ]
+    },
+    "session_report": {
+      "workload": {
+        "sessions": [
+          1,
+          8,
+          32,
+          64
+        ],
+        "history_items": 10000,
+        "minimum_observations_per_distribution": 1000,
+        "heartbeat_ms": 1,
+        "control_cadence_ms": 10
+      },
+      "limits": {
+        "loop_lag_p999_ms_exclusive": 2,
+        "loop_lag_max_ms_exclusive": 5,
+        "callback_thread_cpu_p999_ms": 1,
+        "callback_thread_cpu_max_ms": 2
+      },
+      "measurement": [
+        "idle and workload absolute-deadline heartbeats",
+        "SDK callback wall/thread CPU by preparation stage",
+        "asyncio callback wall/thread CPU by coroutine or callback name",
+        "same-thread GC overlap and host load",
+        "complete transcript and SDK item counts with observable admission refusals"
+      ],
+      "checks": [
+        "test_report_qualification_refuses_an_unqualified_idle_baseline",
+        "test_completed_capture_releases_report_samples_before_the_next_workload",
+        "test_loop_monitor_retains_a_blocking_callback_stall"
+      ]
     }
   },
   "evidence_limits": [

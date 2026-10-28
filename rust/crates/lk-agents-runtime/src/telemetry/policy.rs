@@ -146,6 +146,11 @@ impl TelemetryPolicy for DestinationPolicy {
             || (self.redacted
                 && (is_pii_attribute(&key)
                     || key == "exception.stacktrace"
+                    || (parent.as_deref() == Some("session_report")
+                        && !matches!(
+                            key.as_str(),
+                            "job_id" | "room_id" | "room" | "timestamp" | "usage" | "sdk_version"
+                        ))
                     || matches!(
                         (parent.as_deref(), key.as_str()),
                         (Some("evaluation"), "reasoning" | "instructions")
@@ -318,6 +323,35 @@ mod tests {
             (true, None)
         );
         assert_eq!(opted_in.log_body(true, Some("customer secret".into())), None);
+    }
+
+    #[test]
+    fn console_recording_cannot_bypass_destination_content_policy() {
+        for (capture, redaction, allowed) in
+            [(false, false, false), (true, false, true), (true, true, false)]
+        {
+            let policy = DestinationPolicy::new(true, capture, redaction);
+            for key in [
+                "chat_history",
+                "events",
+                "options",
+                "audio_recording_path",
+                "audio_recording_started_at",
+            ] {
+                assert_eq!(
+                    policy.attribute_action(Some("session_report".into()), key.into(), true).0,
+                    allowed,
+                    "console field {key} capture={capture} redaction={redaction}",
+                );
+                assert!(
+                    policy.attribute_action(Some("application".into()), key.into(), true).0,
+                    "a local report field must not redact unrelated application schemas",
+                );
+            }
+            assert!(
+                policy.attribute_action(Some("session_report".into()), "job_id".into(), true).0
+            );
+        }
     }
 
     #[test]

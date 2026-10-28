@@ -163,5 +163,6 @@ pub mod report;
 
 pub mod loop_monitor;
 pub mod observation;
+pub mod transport;
 pub mod upload;
 pub mod work;

@@ -1,5 +1,8 @@
 {
   "session_events": {
+    "worker_items": 65536,
+    "worker_bytes": 67108864,
+    "capacity_workload": "64 full 1 MiB session stores; a 65th refuses, expiry and drop release capacity",
     "items": 1024,
     "bytes": 1048576,
     "record_bytes": 65536,

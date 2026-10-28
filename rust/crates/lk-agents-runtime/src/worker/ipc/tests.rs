@@ -30,6 +30,7 @@ fn job() -> StartJob {
         accepted_at: 1761500000.5,
         assigned_at: 0.0,
         launched_at: 1761500001.0,
+        trace: None,
     }
 }
 

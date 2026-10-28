@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// The version both ends must speak; a change to a message is a new version.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// The largest message a side reads: a job's `Job` protobuf is a few kilobytes.
 pub const MAX_FRAME: usize = 4 << 20;

@@ -30,8 +30,9 @@ rust/target/release/lk-agents-bench-steps --check > bench-steps.json
 - Voice fakes stream at declared STT/LLM/TTS/VAD timings through generated crossings. Frame dispatch,
   startup, steady-state and shutdown measurements are separate.
 - Report captures replace the final network destination, retaining native policy, bounded preparation
-  and SDK emission. They record a baseline heartbeat, admitted-report completeness, observable capacity
-  refusals, callback wall/thread CPU and SDK callbacks overlapping the largest scheduling delay.
+  and SDK emission. They record at least 1,000 idle/workload heartbeats, capacity refusals, SDK stages,
+  event-loop callback wall/thread CPU, and overlapping GC. `--check` requires complete reports and
+  sufficient samples, with passing idle/workload scheduling and SDK/event-loop CPU gates.
 - `--profile` captures synchronous Python-to-native calls and `memoryview.tobytes()` copies.
 - `--sample` records inclusive native stack counts per thread.
 - FakeRoom provides 20 ms media frames; `--cadence-ms 10` exercises 10 ms control service.

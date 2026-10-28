@@ -83,6 +83,7 @@ const EVENT_RETENTION_NS: u64 = 3600 * 1_000_000_000;
 
 #[derive(Default)]
 struct RetainedEvents {
+    budget: super::work::EventBudget,
     job_id: Option<String>,
     entries: VecDeque<(u64, usize)>,
     bytes: usize,
@@ -103,6 +104,7 @@ impl RetainedEvents {
         {
             let (_, bytes) = self.entries.pop_front().expect("front exists");
             self.bytes -= bytes;
+            self.budget.release(bytes);
             expired += 1;
         }
         self.expired = self.expired.saturating_add(expired as u64);
@@ -114,6 +116,7 @@ impl RetainedEvents {
         if bytes > EVENT_RECORD_BYTES
             || self.entries.len() >= EVENT_ITEMS
             || bytes > EVENT_BYTES.saturating_sub(self.bytes)
+            || !self.budget.admit(bytes)
         {
             self.dropped = self.dropped.saturating_add(1);
             return (expired, false);
@@ -223,6 +226,50 @@ mod tests {
         let counters = recording.diagnostics();
         assert!(counters.contains(&("retained_bytes".into(), 0)));
         assert!(counters.contains(&("dropped_events".into(), 3)));
+    }
+
+    #[test]
+    fn session_event_stores_share_capacity_until_expiry_or_drop() {
+        use lk_agents_abi::telemetry::observation::EventRetention as _;
+        // Sixty-four sessions may each retain their full byte budget; the next session cannot
+        // bypass the process ceiling, even though its local store is empty.
+        let work = super::super::work::Work::start(0);
+        let store = || EventRetention {
+            capture_content: false,
+            retained: Mutex::new(RetainedEvents {
+                budget: super::super::work::EventBudget::new(work.clone()),
+                ..Default::default()
+            }),
+        };
+        let mut stores: Vec<_> = (0..64).map(|_| store()).collect();
+        for store in &stores {
+            for _ in 0..16 {
+                assert_eq!(store.admit(EVENT_RECORD_BYTES, 1), (0, true));
+            }
+        }
+        let overflow = store();
+        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, false));
+        assert_eq!(stores[0].expire(EVENT_RETENTION_NS + 1), 16);
+        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
+        drop(stores.pop());
+        for _ in 0..15 {
+            assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
+        }
+        assert_eq!(overflow.admit(1, 1), (0, false), "session ceiling still applies");
+        drop(stores);
+        drop(overflow);
+
+        // Tiny events can exhaust item capacity before byte capacity.
+        let stores: Vec<_> = (0..64).map(|_| store()).collect();
+        for session in &stores {
+            for _ in 0..EVENT_ITEMS {
+                assert_eq!(session.admit(1, 1), (0, true));
+            }
+        }
+        let overflow = store();
+        assert_eq!(overflow.admit(1, 1), (0, false));
+        drop(stores);
+        assert_eq!(overflow.admit(1, 1), (0, true));
     }
 
     fn record(job: &str, operation: &str, at: u64, parent: Option<&str>) -> Observation {

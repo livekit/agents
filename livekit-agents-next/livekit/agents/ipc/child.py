@@ -50,6 +50,7 @@ from ..job import (
 )
 from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
+from ..telemetry._transport import use_trace_carrier
 from ..utils import aio, http_context, log_exceptions
 from .launch import load_preload_modules
 
@@ -178,22 +179,23 @@ class _JobProc:
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
     async def _core_start_job(self, fields: _core.StartJobFields) -> _core.JobRun:
-        return self._start_job(
-            RunningJobInfo(
-                accept_arguments=JobAcceptArguments(
-                    name=fields.name, identity=fields.identity, metadata=fields.metadata
-                ),
-                job=agent.Job.FromString(bytes(fields.job)),
-                url=fields.url,
-                token=fields.token,
-                worker_id=fields.worker_id,
-                fake_job=fields.fake_job,
-                received_at=fields.received_at,
-                accepted_at=fields.accepted_at,
-                assigned_at=fields.assigned_at,
-                launched_at=fields.launched_at,
+        with use_trace_carrier(fields.trace):
+            return self._start_job(
+                RunningJobInfo(
+                    accept_arguments=JobAcceptArguments(
+                        name=fields.name, identity=fields.identity, metadata=fields.metadata
+                    ),
+                    job=agent.Job.FromString(bytes(fields.job)),
+                    url=fields.url,
+                    token=fields.token,
+                    worker_id=fields.worker_id,
+                    fake_job=fields.fake_job,
+                    received_at=fields.received_at,
+                    accepted_at=fields.accepted_at,
+                    assigned_at=fields.assigned_at,
+                    launched_at=fields.launched_at,
+                )
             )
-        )
 
     async def _core_dump_stacks(self) -> None:
         _dump_stack_traces()

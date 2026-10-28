@@ -168,8 +168,15 @@ async def _upload_session_report(
         raise ValueError("session report metadata exceeds the native input budget")
     metadata = dict(metadata or {})
     emission_context = otel_context.get_current()
-    uploader = _core._core_SessionReportUpload(
-        os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", "")
+    credentials = (os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", ""))
+    credential_bytes = attribute_bytes(credentials)
+    if credential_bytes > policy().max_record_bytes:
+        raise ValueError("session report credentials exceed the native input budget")
+    uploader = await call_bounded(
+        f"session-report-client/{id(report):x}",
+        partial(_core._core_SessionReportUpload, *credentials),
+        credential_bytes,
+        policy().upload_timeout_seconds,
     )
     report_options = report.options
     options = (
@@ -177,7 +184,7 @@ async def _upload_session_report(
         if report_options is not None
         else _core.RecordingOptions()
     )
-    capture_content = capture_content_enabled()
+    capture_content = report._capture_content
     redacted = options.redaction or telemetry_utils.redaction_enabled(metadata)
     transcript_allowed, audio_allowed = uploader.content_policy(
         options.transcript, options.audio, capture_content, redacted

@@ -135,7 +135,7 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
         )
     owner = object.__new__(JobContext)
     owner._info = SimpleNamespace(job=job_protocol.Job(id="report-worker"))
-    owner._run = SimpleNamespace(primary_session=session, observability_url=None)
+    owner._run = SimpleNamespace(primary_session=session, observability_url=None, redaction=False)
     owner._tagger = SimpleNamespace(has_evals=lambda: False)
     entered, release = threading.Event(), threading.Event()
     loop_thread = threading.get_ident()
@@ -234,3 +234,85 @@ async def test_bounded_host_callbacks_keep_late_ownership_and_propagate_the_orig
     with pytest.raises(ValueError) as caught:
         await call_bounded(f"failed-report-test:{id(failure):x}", fail, 1, 1)
     assert caught.value is failure
+
+
+@pytest.mark.parametrize(
+    ("creation_consent", "later_consent", "project_redaction", "content_present"),
+    [(False, True, False, False), (True, False, False, True), (True, True, True, False)],
+)
+async def test_console_report_cannot_bypass_creation_consent_or_project_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    creation_consent: bool,
+    later_consent: bool,
+    project_redaction: bool,
+    content_present: bool,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from livekit.agents.job import JobContext
+    from livekit.agents.voice.remote_session import ConsoleCall
+    from livekit.protocol import agent as job_protocol
+
+    set_capture_content(creation_consent)
+    session = VoiceSession(turn_handling={"turn_detection": None})
+    session.history.add_message(role="user", content="private console conversation")
+    session._recording_path = tmp_path / "private-customer-audio.ogg"
+    set_capture_content(later_consent)
+    owner = object.__new__(JobContext)
+    owner._info = SimpleNamespace(job=job_protocol.Job(id="console-policy"))
+    owner._run = SimpleNamespace(
+        primary_session=session, observability_url=None, redaction=project_redaction
+    )
+    owner._tagger = SimpleNamespace(has_evals=lambda: False)
+    monkeypatch.setattr(ConsoleCall, "record", True)
+    monkeypatch.chdir(tmp_path)
+
+    await owner._on_session_end()
+
+    [artifact] = list(tmp_path.glob("console-recordings/*/session_report.json"))
+    snapshot = json.loads(artifact.read_text())
+    assert snapshot["job_id"] == "console-policy"
+    assert ("private console conversation" in artifact.read_text()) is content_present
+    assert ("private-customer-audio.ogg" in artifact.read_text()) is content_present
+    assert ("options" in snapshot) is content_present
+    assert session.history.items[0].text_content == "private console conversation"
+
+
+@pytest.mark.parametrize("creation_consent", [False, True])
+@pytest.mark.parametrize("source", ["session", "explicit"])
+async def test_report_upload_keeps_creation_consent(creation_consent: bool, source: str) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from scripts.bench.reports import capture_reports, prepare
+
+    from livekit.agents.job import JobContext, SessionReport
+    from livekit.protocol import agent as job_protocol
+
+    set_capture_content(creation_consent)
+    session = VoiceSession(turn_handling={"turn_detection": None})
+    session.history.add_message(role="user", content="private before consent changed")
+    session._recording_options["transcript"] = True
+    owner = SimpleNamespace(job=job_protocol.Job(id="report-job"))
+    if source == "explicit":
+        report = SessionReport(
+            job_id="report-job",
+            room_id="report-room",
+            room="report-room-name",
+            options={"recording_options": session._recording_options},
+            events=[],
+            chat_history=session.history,
+        )
+    set_capture_content(not creation_consent)
+    if source == "session":
+        report = JobContext.make_session_report(cast(JobContext, owner), session)
+
+    with capture_reports() as capture:
+        await prepare(report)
+
+    assert bool(capture.uploads) is creation_consent
+    assert bool(capture.items) is creation_consent
+    if creation_consent:
+        assert "private before consent changed" in capture.uploads["report-job"]

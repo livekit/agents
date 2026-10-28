@@ -14,6 +14,8 @@ const WORKERS: usize = 4;
 const JOBS: usize = 64;
 const BYTES: usize = 8 * 1024 * 1024;
 const MONITORS: usize = 32;
+const EVENT_ITEMS: usize = 64 * 1024;
+const EVENT_BYTES: usize = 64 * 1024 * 1024;
 
 static PROCESS_WORK: OnceLock<Arc<Work>> = OnceLock::new();
 
@@ -38,15 +40,19 @@ struct State {
     reserved_bytes: usize,
     conflicts: u64,
     next_upload: u64,
+    event_items: usize,
+    event_bytes: usize,
+    event_drops: u64,
     dropped: u64,
     failed: u64,
     completed: u64,
     incomplete_cleanup: u64,
 }
 
-struct Work {
+pub(super) struct Work {
     pid: u32,
     started_at: Instant,
+    sdk_started: OnceLock<()>,
     state: Mutex<State>,
     metrics: Mutex<super::metrics::MetricSeries>,
     changed: Condvar,
@@ -77,13 +83,14 @@ impl Drop for WorkPermit {
 }
 
 impl Work {
-    fn start(workers: usize) -> Arc<Self> {
-        let work = Arc::new(Self {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
             pid: std::process::id(),
             started_at: Instant::now(),
+            sdk_started: OnceLock::new(),
             state: Mutex::new(State {
                 queue: VecDeque::new(),
-                sdk_available: workers == 0,
+                sdk_available: false,
                 pending: BTreeMap::new(),
                 bytes: 0,
                 monitors: 0,
@@ -93,6 +100,9 @@ impl Work {
                 reserved_bytes: 0,
                 conflicts: 0,
                 next_upload: 0,
+                event_items: 0,
+                event_bytes: 0,
+                event_drops: 0,
                 dropped: 0,
                 failed: 0,
                 completed: 0,
@@ -101,26 +111,39 @@ impl Work {
             metrics: Mutex::new(super::metrics::MetricSeries::default()),
             changed: Condvar::new(),
             settled: tokio::sync::Notify::new(),
-        });
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn start(workers: usize) -> Arc<Self> {
+        let work = Self::new();
+        work.sdk_started.get_or_init(|| work.start_workers(workers));
+        work
+    }
+
+    fn start_workers(self: &Arc<Self>, workers: usize) {
+        if workers == 0 {
+            self.state.lock().unwrap_or_else(|p| p.into_inner()).sdk_available = true;
+            return;
+        }
         // Starting host SDK workers starts native process work, so the existing runtime fork
         // guard must observe this before a child could inherit dead worker handles.
         if crate::process::handle().is_err() {
-            work.state.lock().unwrap_or_else(|p| p.into_inner()).failed += 1;
-            return work;
+            self.state.lock().unwrap_or_else(|p| p.into_inner()).failed += 1;
+            return;
         }
         for worker in 0..workers {
-            let owned = work.clone();
+            let owned = self.clone();
             if std::thread::Builder::new()
                 .name(format!("lk-telemetry-{worker}"))
                 .spawn(move || owned.run())
                 .is_err()
             {
-                work.state.lock().unwrap_or_else(|p| p.into_inner()).failed += 1;
+                self.state.lock().unwrap_or_else(|p| p.into_inner()).failed += 1;
             } else {
-                work.state.lock().unwrap_or_else(|p| p.into_inner()).sdk_available = true;
+                self.state.lock().unwrap_or_else(|p| p.into_inner()).sdk_available = true;
             }
         }
-        work
     }
 
     fn admit(self: &Arc<Self>, key: String, bytes: usize, monitor: bool) -> Option<WorkPermit> {
@@ -152,6 +175,7 @@ impl Work {
         if self.pid != std::process::id() {
             return false;
         }
+        self.sdk_started.get_or_init(|| self.start_workers(WORKERS));
         {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             if !state.sdk_available {
@@ -266,7 +290,7 @@ fn duration(seconds: f64) -> Option<Duration> {
 }
 
 fn process_work() -> &'static Arc<Work> {
-    PROCESS_WORK.get_or_init(|| Work::start(WORKERS))
+    PROCESS_WORK.get_or_init(Work::new)
 }
 
 /// Recording preparation and transport share the process native upload class. SDK byte accounting
@@ -309,6 +333,64 @@ pub fn try_admit_monitor() -> Option<WorkPermit> {
 
 pub fn record_incomplete_cleanup() {
     process_work().state.lock().unwrap_or_else(|p| p.into_inner()).incomplete_cleanup += 1;
+}
+
+/// Charges follow the retained snapshots, independently of SDK callbacks and their settlement.
+/// All session stores share the process telemetry admission owner.
+pub(super) struct EventBudget {
+    work: Option<Arc<Work>>,
+    items: usize,
+    bytes: usize,
+}
+
+impl EventBudget {
+    #[cfg(test)]
+    pub(super) fn new(work: Arc<Work>) -> Self {
+        Self { work: Some(work), items: 0, bytes: 0 }
+    }
+
+    pub(super) fn admit(&mut self, bytes: usize) -> bool {
+        let work = self.work.get_or_insert_with(|| process_work().clone());
+        if work.pid != std::process::id() {
+            return false;
+        }
+        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.event_items >= EVENT_ITEMS || bytes > EVENT_BYTES.saturating_sub(state.event_bytes)
+        {
+            state.event_drops = state.event_drops.saturating_add(1);
+            return false;
+        }
+        state.event_items += 1;
+        state.event_bytes += bytes;
+        self.items += 1;
+        self.bytes += bytes;
+        true
+    }
+
+    pub(super) fn release(&mut self, bytes: usize) {
+        let work = self.work.as_ref().expect("retained events own their budget");
+        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.event_items -= 1;
+        state.event_bytes -= bytes;
+        self.items -= 1;
+        self.bytes -= bytes;
+    }
+}
+
+impl Default for EventBudget {
+    fn default() -> Self {
+        // Configuration may be created during forkserver preload, before a process owns events.
+        Self { work: None, items: 0, bytes: 0 }
+    }
+}
+
+impl Drop for EventBudget {
+    fn drop(&mut self) {
+        let Some(work) = &self.work else { return };
+        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.event_items -= self.items;
+        state.event_bytes -= self.bytes;
+    }
 }
 
 pub struct SdkWorker;
@@ -437,6 +519,9 @@ impl TelemetryWorker for SdkWorker {
         let state = process_work().state.lock().unwrap_or_else(|p| p.into_inner());
         [
             ("dropped", state.dropped),
+            ("session_event_items", state.event_items as u64),
+            ("session_event_bytes", state.event_bytes as u64),
+            ("session_event_drops", state.event_drops),
             ("observation_drops", state.observation_drops),
             ("failed", state.failed),
             ("completed", state.completed),

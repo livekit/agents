@@ -6,9 +6,71 @@ import asyncio
 import math
 import sys
 import time
+from array import array
 from collections import Counter
 from dataclasses import dataclass
 from types import FrameType
+from typing import Literal
+
+
+class CallbackSlices:
+    """Attribute event-loop callback wall and thread CPU without retaining callback objects."""
+
+    def __init__(self) -> None:
+        self.values = array("Q")
+        self.names: list[str] = []
+        self._name_ids: dict[str, int] = {}
+
+    def __enter__(self) -> CallbackSlices:
+        self._original = asyncio.Handle._run
+
+        def run(handle: asyncio.Handle) -> None:
+            callback = handle._callback
+            owner = getattr(callback, "__self__", None)
+            if isinstance(owner, asyncio.Task):
+                callback = owner.get_coro()
+            name = getattr(callback, "__qualname__", type(callback).__name__)
+            if name not in self._name_ids:
+                self._name_ids[name] = len(self.names)
+                self.names.append(name)
+            name_id = self._name_ids[name]
+            started = time.monotonic_ns()
+            cpu = time.thread_time_ns()
+            try:
+                self._original(handle)
+            finally:
+                self.values.extend(
+                    (started, time.monotonic_ns() - started, time.thread_time_ns() - cpu, name_id)
+                )
+
+        asyncio.Handle._run = run
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        asyncio.Handle._run = self._original
+
+    @property
+    def cpu(self) -> list[int]:
+        return list(self.values[2::4])
+
+    @property
+    def wall(self) -> list[int]:
+        return list(self.values[1::4])
+
+    def largest(self, by: Literal["cpu", "wall"], count: int = 10) -> list[dict[str, object]]:
+        field = 2 if by == "cpu" else 1
+        offsets = sorted(
+            range(0, len(self.values), 4), key=lambda at: self.values[at + field], reverse=True
+        )
+        return [
+            {
+                "callback": self.names[self.values[at + 3]],
+                "started_ns": self.values[at],
+                "wall_ms": self.values[at + 1] / 1e6,
+                "cpu_ms": self.values[at + 2] / 1e6,
+            }
+            for at in offsets[:count]
+        ]
 
 
 @dataclass(frozen=True)
@@ -170,7 +232,7 @@ def cadence_budget_pass(
     if cadence_ms not in (10, 20):
         raise ValueError("supported cadence is 10 or 20 ms")
     return (
-        lag.p999_ms <= cadence_ms * 0.2
+        lag.p999_ms < cadence_ms * 0.2
         and lag.max_ms < cadence_ms * 0.5
         and (cpu is None or cpu.max_ms <= cadence_ms * 0.1)
     )

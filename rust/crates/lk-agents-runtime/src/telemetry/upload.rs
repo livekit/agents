@@ -33,15 +33,25 @@ pub struct SessionReportUploader {
 #[async_trait::async_trait]
 impl SessionReportUpload for SessionReportUploader {
     fn new(api_key: String, api_secret: String) -> Result<Self, UploadError> {
-        // Validate credentials before creating a client or retaining a report.
-        crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
-        lk_agents_inference::transport::install_tls_provider();
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(upload_error)?;
-        Ok(Self { api_key, api_secret, disabled: AtomicBool::new(false), client })
+        let create = move || {
+            // Validate credentials before creating a client or retaining a report.
+            crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
+            lk_agents_inference::transport::install_tls_provider();
+            let client = reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(upload_error)?;
+            Ok(Self { api_key, api_secret, disabled: AtomicBool::new(false), client })
+        };
+        #[cfg(feature = "python")]
+        {
+            pyo3::Python::attach(|py| py.detach(create))
+        }
+        #[cfg(not(feature = "python"))]
+        {
+            create()
+        }
     }
 
     fn bearer(&self) -> Result<String, UploadError> {

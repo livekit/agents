@@ -178,6 +178,7 @@ from ._generated._core_classes import (
     _core_a2a_message_text as _core_a2a_message_text,
     _core_resolve_api_connect_options as _core_resolve_api_connect_options,
     _core_session_chat_record as _core_session_chat_record,
+    _core_trace_parent as _core_trace_parent,
     amd_auto_select_models as amd_auto_select_models,
     amd_category_is_human as amd_category_is_human,
     amd_category_is_machine as amd_category_is_machine,
