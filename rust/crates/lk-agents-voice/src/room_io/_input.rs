@@ -3,8 +3,8 @@ use crate::room_io::decide_track;
 use crate::room_io::{AUDIO_INPUT_SOURCES, AudioInputConfig};
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
-use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::voice::io::VideoInput;
+use lk_agents_abi::voice::io::{AudioInput, IoError};
 use lk_agents_abi::{AudioFrame, BoundedLossy, LossyTx, Pushed, Spawner, SpawnerExt, Ts};
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use lk_agents_rtc::{
@@ -478,7 +478,7 @@ pub struct ParticipantAudioInput {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The publications whose pre-connect buffer was awaited once already: a track read again
     /// (a participant switched back, a fallback) goes straight to its live audio.
-    pre_connect_done: Mutex<std::collections::HashSet<(ParticipantIdentity, TrackSid)>>,
+    pre_connect_done: Mutex<std::collections::BTreeSet<(ParticipantIdentity, TrackSid)>>,
     /// The one audio-in leg; drop-oldest (the output leg must not drop).
     reader: TrackReader<AudioFrame>,
 }
@@ -550,10 +550,13 @@ impl ParticipantAudioInput {
             auto_gain_control: self.config.auto_gain_control,
         });
         let key = (participant.identity().clone(), publication.sid().clone());
-        let wants_pre_connect = publication
-            .audio_features()
-            .contains(&AudioTrackFeature::PreconnectBuffer)
-            && self.pre_connect_done.lock().unwrap().insert(key);
+        let wants_pre_connect =
+            if publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer) {
+                let mut done = self.pre_connect_done.lock().unwrap();
+                done.len() < super::_pre_connect_audio::MAX_TRACKS && done.insert(key)
+            } else {
+                false
+            };
         let sid = publication.sid().clone();
 
         let this = self.clone();
@@ -578,14 +581,27 @@ impl ParticipantAudioInput {
         {
             // A timeout or malformed buffer isn't fatal: the live stream follows.
             if let Ok(frames) = handler.wait_for_data(&sid).await {
-                // Through the stream's noise cancellation first, as the live frames are.
-                let frames = match publication.process_audio(frames.clone()).await {
-                    Ok(processed) => processed,
-                    Err(_) => frames,
-                };
-                for frame in self.resample_to_input_rate(frames) {
-                    if !self.reader.deliver(&lease, frame) {
-                        return;
+                match self.normalize_preconnect(frames).await {
+                    Ok(frames) => {
+                        for frame in frames {
+                            match publication.process_audio(vec![frame]).await {
+                                Ok(processed) => {
+                                    for frame in processed {
+                                        if !self.reader.deliver(&lease, frame) {
+                                            return;
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    log::warn!(target: "livekit.agents", "pre-connect processing failed: {error}");
+                                    break;
+                                }
+                            }
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!(target: "livekit.agents", "pre-connect normalization failed: {error}")
                     }
                 }
             }
@@ -617,31 +633,88 @@ impl ParticipantAudioInput {
         self.reader.ended(&lease);
     }
 
-    /// Convert the pre-connect buffer to the live stream's rate once.
-    fn resample_to_input_rate(&self, frames: Vec<AudioFrame>) -> Vec<AudioFrame> {
-        let target = self.config.sample_rate;
-        let Some(first) = frames.first() else { return frames };
-        if first.sample_rate == target {
-            return frames;
+    /// Normalize before processing, including a channel-only conversion.
+    async fn normalize_preconnect(
+        &self,
+        frames: Vec<AudioFrame>,
+    ) -> Result<Vec<AudioFrame>, IoError> {
+        let Some(first) = frames.first() else { return Ok(frames) };
+        let source = AudioFormat::new(first.sample_rate, first.num_channels);
+        let target_channels = self.config.num_channels;
+        if !(8000..=48000).contains(&source.sample_rate)
+            || !(8000..=48000).contains(&self.config.sample_rate)
+            || !(1..=2).contains(&source.num_channels)
+            || !(1..=2).contains(&target_channels)
+        {
+            return Err(IoError::Resample(
+                "pre-connect format must be 8–48 kHz mono or stereo".into(),
+            ));
         }
-        // The first frame's format is the buffer's; every frame is read as it.
-        let format = AudioFormat::new(first.sample_rate, first.num_channels);
-        let Ok(mut resampler) = FrameResampler::fixed(format, target, Quality::default()) else {
-            // The resampler refused the rate pair. The head is lost; the live stream is not.
-            return Vec::new();
+        let mut resampler = if source.sample_rate == self.config.sample_rate {
+            None
+        } else {
+            Some(
+                FrameResampler::fixed(
+                    AudioFormat::new(source.sample_rate, target_channels),
+                    self.config.sample_rate,
+                    Quality::default(),
+                )
+                .map_err(|error| IoError::Resample(error.to_string()))?,
+            )
         };
-
-        let mut out = Vec::with_capacity(frames.len());
-        for frame in &frames {
-            match resampler.push(frame) {
-                Ok(ready) => out.extend(ready),
-                Err(_) => return Vec::new(),
+        let mut output = Vec::new();
+        for frame in frames {
+            if frame.sample_rate != source.sample_rate
+                || frame.num_channels != source.num_channels
+                || frame.data.len()
+                    != frame.samples_per_channel as usize * usize::from(frame.num_channels) * 2
+            {
+                return Err(IoError::Resample("inconsistent pre-connect PCM format".into()));
             }
+            let converted = if source.num_channels == target_channels {
+                frame
+            } else if target_channels == 1 {
+                let data = frame
+                    .data
+                    .chunks_exact(usize::from(source.num_channels) * 2)
+                    .flat_map(|sample| {
+                        let sum: i64 = sample
+                            .chunks_exact(2)
+                            .map(|b| i64::from(i16::from_le_bytes([b[0], b[1]])))
+                            .sum();
+                        ((sum / i64::from(source.num_channels)) as i16).to_le_bytes()
+                    })
+                    .collect::<Vec<_>>();
+                AudioFrame::new(data, frame.sample_rate, 1, frame.samples_per_channel)
+            } else if source.num_channels == 1 {
+                let data = frame
+                    .data
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .flat_map(|sample| {
+                        (0..target_channels).flat_map(move |_| sample.iter().copied())
+                    })
+                    .collect::<Vec<_>>();
+                AudioFrame::new(data, frame.sample_rate, target_channels, frame.samples_per_channel)
+            } else {
+                return Err(IoError::Resample("unsupported pre-connect channel conversion".into()));
+            };
+            if let Some(resampler) = &mut resampler {
+                output.extend(
+                    resampler
+                        .push(&converted)
+                        .map_err(|error| IoError::Resample(error.to_string()))?,
+                );
+            } else {
+                output.push(converted);
+            }
+            tokio::task::yield_now().await;
         }
-        if let Ok(Some(tail)) = resampler.flush() {
-            out.push(tail);
+        if let Some(resampler) = &mut resampler {
+            output.extend(resampler.flush().map_err(|error| IoError::Resample(error.to_string()))?);
         }
-        out
+        Ok(output)
     }
 
     #[host(method)]
@@ -666,5 +739,136 @@ impl AudioInput for ParticipantAudioInput {
 
     fn on_detached(&self) {
         self.reader.set_attached(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_abi::TokioSpawner;
+    use lk_agents_rtc::FakeRtc;
+
+    #[tokio::test]
+    async fn preconnect_normalizes_channels_even_when_rate_matches() {
+        let (rtc, _) = FakeRtc::with_virtual_clock();
+        let input = ParticipantAudioInput::new(
+            rtc.room("normalize"),
+            Arc::new(TokioSpawner::current()),
+            AudioInputConfig::default(),
+            None,
+        );
+        let stereo = AudioFrame::new([100, 0, 200, 0].repeat(480), 24000, 2, 480);
+        let frames = input.normalize_preconnect(vec![stereo]).await.unwrap();
+        assert!(frames.iter().all(|f| f.sample_rate == 24000 && f.num_channels == 1));
+        assert_eq!(frames.iter().map(|f| f.data.len()).sum::<usize>(), 960);
+    }
+    struct Processor {
+        fail: bool,
+        formats: lk_agents_abi::Monotone<Vec<(u32, u16)>>,
+        sid: TrackSid,
+    }
+
+    #[async_trait]
+    impl TrackPublication for Processor {
+        fn sid(&self) -> &TrackSid {
+            &self.sid
+        }
+        fn source(&self) -> TrackSource {
+            TrackSource::Microphone
+        }
+        fn is_subscribed(&self) -> bool {
+            true
+        }
+        fn open_audio_stream(&self, _: AudioStreamOptions, _: lk_agents_rtc::AudioFrameSender) {}
+        fn open_video_stream(&self, _: lk_agents_rtc::VideoFrameSender) {}
+        async fn process_audio(
+            &self,
+            mut frames: Vec<AudioFrame>,
+        ) -> lk_agents_rtc::Result<Vec<AudioFrame>> {
+            let mut formats = self.formats.get();
+            formats.extend(frames.iter().map(|f| (f.sample_rate, f.num_channels)));
+            self.formats.set(formats);
+            if self.fail {
+                return Err(lk_agents_rtc::RtcError::host("processor failed"));
+            }
+            for frame in &mut frames {
+                frame.data = [11, 0].repeat(frame.samples_per_channel as usize).into();
+            }
+            Ok(frames)
+        }
+    }
+
+    #[tokio::test]
+    async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
+        for fail in [false, true] {
+            let (rtc, clock) = FakeRtc::with_virtual_clock();
+            let room = rtc.room("process");
+            let handler = PreConnectAudioHandler::new(
+                room.clone(),
+                Arc::new(TokioSpawner::current()),
+                clock,
+                Duration::from_secs(3),
+            );
+            assert!(handler.register());
+            let input = ParticipantAudioInput::new(
+                room.clone(),
+                Arc::new(TokioSpawner::current()),
+                AudioInputConfig::default(),
+                Some(handler.clone()),
+            );
+            input.reader.link(Some("user".into()));
+            let lease = input
+                .reader
+                .claim(
+                    &"user".into(),
+                    TrackSource::Microphone,
+                    &"TR_buffer".into(),
+                    AUDIO_INPUT_SOURCES,
+                )
+                .unwrap();
+            room.send_byte_stream(
+                "user",
+                lk_agents_rtc::StreamInfo {
+                    id: "buffer".into(),
+                    topic: crate::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+                    attributes: [
+                        ("trackId".into(), "TR_buffer".into()),
+                        ("sampleRate".into(), if fail { "24000" } else { "48000" }.into()),
+                        ("channels".into(), if fail { "1" } else { "2" }.into()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                },
+                [if fail { [100, 0].repeat(480) } else { [100, 0, 200, 0].repeat(960) }],
+            )
+            .unwrap();
+            let processor = Arc::new(Processor {
+                fail,
+                formats: lk_agents_abi::Monotone::new(Vec::new()),
+                sid: "TR_buffer".into(),
+            });
+            let (tx, stream) = BoundedLossy::audio();
+            drop(tx);
+            input.clone().pump(lease, "TR_buffer".into(), stream, Some(processor.clone())).await;
+            let frame = input.next_frame().await.unwrap();
+            assert_eq!((frame.sample_rate, frame.num_channels), (24000, 1));
+            let sample = if fail { 0 } else { 11 };
+            assert!(
+                frame
+                    .data
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .all(|b| i16::from_le_bytes([b[0], b[1]]) == sample),
+                "failed processing must skip the head and resume with the live stream"
+            );
+            assert!(
+                processor.formats.get().iter().all(|format| *format == (24000, 1)),
+                "processing sees normalized session audio"
+            );
+            input.aclose().await;
+            handler.aclose().await;
+        }
     }
 }

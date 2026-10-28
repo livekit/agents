@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 from livekit import rtc
 
 from .. import _core
-from ..log import logger
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .io import TextOutput
@@ -251,8 +250,11 @@ class Room:
         self._bus = _core.RoomEventBus()
         self._local = LocalParticipant(self)
         self._tasks: set[asyncio.Task[Any]] = set()
-        # the frame processor each open audio stream denoises with, by track sid
-        self._processors: dict[str, rtc.FrameProcessor[rtc.AudioFrame]] = {}
+        # SDK processing objects belonging to each live stream, also used for its buffered head.
+        self._processors: dict[
+            str,
+            tuple[rtc.FrameProcessor[rtc.AudioFrame] | None, rtc.AudioProcessingModule | None],
+        ] = {}
         bus = self._bus
         room.on(
             "track_subscribed",
@@ -553,15 +555,16 @@ class TrackPublication:
         await self._publication.wait_for_subscription()
 
     async def _core_process_audio(self, frames: list[rtc.AudioFrame]) -> list[rtc.AudioFrame]:
-        if (processor := self._room._processors.get(self._publication.sid)) is None:
+        if (processing := self._room._processors.get(self._publication.sid)) is None:
             return frames
+        processor, apm = processing
         processed = []
         for frame in frames:
-            try:
-                processed.append(processor._process(frame))
-            except Exception as e:
-                logger.warning("error pre-processing audio frame: %s", e)
-                processed.append(frame)
+            if processor is not None:
+                frame = processor._process(frame)
+            if apm is not None:
+                apm.process_stream(frame)
+            processed.append(frame)
         return processed
 
     def _core_open_audio_stream(self, opts: _core.AudioStreamOptions, frames: Any) -> None:
@@ -582,8 +585,6 @@ class TrackPublication:
         processor = (
             noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
         )
-        if processor is not None:
-            self._room._processors[sid] = processor
         stream = rtc.AudioStream.from_track(
             track=track,
             sample_rate=opts.sample_rate or 48000,
@@ -593,6 +594,8 @@ class TrackPublication:
             auto_close_noise_cancellation=owned,
         )
         apm = rtc.AudioProcessingModule(auto_gain_control=True) if opts.auto_gain_control else None
+        processing = (processor, apm)
+        self._room._processors[sid] = processing
 
         async def _pump() -> None:
             try:
@@ -603,7 +606,7 @@ class TrackPublication:
                         break
             finally:
                 frames.close()
-                if self._room._processors.get(sid) is processor:
+                if self._room._processors.get(sid) is processing:
                     self._room._processors.pop(sid, None)
                 await stream.aclose()
 
