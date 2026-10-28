@@ -95,6 +95,7 @@ class Chan(Generic[T]):
     ) -> None:
         self._on_receive = _on_receive
         self._on_eof = _on_eof
+        self._eof_seen = False
         self._loop = loop or asyncio.get_event_loop()
         self._maxsize = max(maxsize, 0)
         #        self._finished_ev = asyncio.Event()
@@ -148,8 +149,7 @@ class Chan(Generic[T]):
             try:
                 await g
             except ChanClosed:
-                if self._on_eof is not None:
-                    self._on_eof()
+                self._eof()
                 raise
             except BaseException:
                 g.cancel()
@@ -166,18 +166,25 @@ class Chan(Generic[T]):
     def recv_nowait(self) -> T:
         if self.empty():
             if self._close_ev.is_set():
-                if self._on_eof is not None:
-                    self._on_eof()
+                self._eof()
                 raise ChanClosed
             else:
                 raise ChanEmpty
         item = self._queue.popleft()
         if self._on_receive is not None:
             self._on_receive(item)
+        # the last item of a closed channel is its end, whether or not the reader reads past it
+        if self._close_ev.is_set() and self.empty():
+            self._eof()
         #        if self.empty() and self._close_ev.is_set():
         #            self._finished_ev.set()
         self._wakeup_next(self._puts)
         return item
+
+    def _eof(self) -> None:
+        if self._on_eof is not None and not self._eof_seen:
+            self._eof_seen = True
+            self._on_eof()
 
     def close(self) -> None:
         self._closed = True
