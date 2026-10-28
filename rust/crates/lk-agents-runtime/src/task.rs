@@ -66,7 +66,10 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    async fn outcome_of(work: impl Future<Output = ()> + Send + 'static, cancel: bool) -> (TaskOutcome, bool) {
+    async fn outcome_of(
+        work: impl Future<Output = ()> + Send + 'static,
+        cancel: bool,
+    ) -> (TaskOutcome, bool) {
         let (tx, rx) = oneshot::channel();
         let (dropped_tx, dropped_rx) = std::sync::mpsc::channel::<()>();
         struct Owned(std::sync::mpsc::Sender<()>);
@@ -101,7 +104,10 @@ mod tests {
         assert_eq!(outcome_of(async {}, false).await, (TaskOutcome::Completed, true));
         let blocked = std::future::pending::<()>();
         assert_eq!(outcome_of(blocked, true).await, (TaskOutcome::Cancelled, true));
-        assert_eq!(outcome_of(async { panic!("boom") }, false).await, (TaskOutcome::Panicked, true));
+        assert_eq!(
+            outcome_of(async { panic!("boom") }, false).await,
+            (TaskOutcome::Panicked, true)
+        );
     }
 
     // Catches: a dropped handle detaching its task instead of cancelling it.

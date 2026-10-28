@@ -46,7 +46,11 @@ impl<T> Clone for NativeSource<T> {
 impl<T: Send + 'static> NativeSource<T> {
     pub fn new(source: Box<dyn StreamSource<T>>) -> Self {
         NativeSource {
-            inner: Arc::new(Inner { source: Mutex::new(Some(source)), closed: AtomicBool::new(false), closing: Notify::new() }),
+            inner: Arc::new(Inner {
+                source: Mutex::new(Some(source)),
+                closed: AtomicBool::new(false),
+                closing: Notify::new(),
+            }),
         }
     }
 
@@ -102,7 +106,9 @@ mod python {
                         "StreamStateError",
                         PullError::Overlap.to_string(),
                     )),
-                    Err(PullError::Failed(err)) => Err(lk_agents_abi::python::provider_error_to_py(err)),
+                    Err(PullError::Failed(err)) => {
+                        Err(lk_agents_abi::python::provider_error_to_py(err))
+                    }
                 }
             })
         }
@@ -110,7 +116,9 @@ mod python {
         pub fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
             let source = self.clone();
             lk_agents_abi::python::future_into_py(py, async move {
-                if source.close(lk_agents_abi::python::NATIVE_CLOSE_DEADLINE).await == lk_agents_abi::Closed::TimedOut {
+                if source.close(lk_agents_abi::python::NATIVE_CLOSE_DEADLINE).await
+                    == lk_agents_abi::Closed::TimedOut
+                {
                     log::error!(target: "livekit.agents", "a native stream did not release its resources in time");
                 }
                 Ok(())

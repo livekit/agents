@@ -12,11 +12,13 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::provider_format::PreResolved;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{
-    ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk, LlmStream, StreamSource,
-    ToolChoice, ToolSpec, Ts,
+    ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk,
+    LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
 };
 use lk_agents_inference::headers::{Headers, identification_headers};
-use lk_agents_inference::llm::lifecycle::{LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy};
+use lk_agents_inference::llm::lifecycle::{
+    LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy,
+};
 use lk_agents_inference::llm::request::ChatArgs;
 use lk_agents_inference::llm::{LlmOptions, build_request, models};
 use lk_agents_inference::transport::HttpRequest;
@@ -46,7 +48,12 @@ pub struct GatewayLlm {
 }
 
 impl GatewayLlm {
-    pub fn new(opts: LlmOptions, http: Arc<GatewayHttp>, runtime: tokio::runtime::Handle, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(
+        opts: LlmOptions,
+        http: Arc<GatewayHttp>,
+        runtime: tokio::runtime::Handle,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         GatewayLlm {
             opts: Arc::new(Mutex::new(opts)),
             http,
@@ -100,11 +107,17 @@ impl GatewayLlm {
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
         let identification = identification.or(self.identity.as_ref());
         let bearer = crate::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
-        let request = build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
+        let request =
+            build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
         let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
         Ok(LlmChunks {
-            start: Some(Start { id, llm: self.resource, policy, think_tags: models::think_tags(&opts.model) }),
+            start: Some(Start {
+                id,
+                llm: self.resource,
+                policy,
+                think_tags: models::think_tags(&opts.model),
+            }),
             core: None,
             rx,
             reporter: Reporter { tx, clock: self.clock.clone() },
@@ -193,7 +206,14 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         };
         let identification: Option<Headers> = headers.map(|pairs| pairs.into_iter().collect());
         let policy = RequestPolicy::from_options(&conn_options);
-        GatewayLlm::chat(self, &ChatContext::new(items), &tools, args, policy, identification.as_ref())
+        GatewayLlm::chat(
+            self,
+            &ChatContext::new(items),
+            &tools,
+            args,
+            policy,
+            identification.as_ref(),
+        )
     }
 }
 
@@ -214,25 +234,39 @@ impl Llm for GatewayLlm {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId { label: self.label(), model: self.model(), provider: "livekit".into() }
+        lk_agents_abi::ProviderId {
+            label: self.label(),
+            model: self.model(),
+            provider: "livekit".into(),
+        }
     }
 
     /// Opens a connection in the background so the first request finds it pooled.
     fn prewarm(&self) {
         let opts = self.options();
-        let Ok(bearer) = crate::token::inference_bearer(&opts.api_key, &opts.api_secret) else { return };
+        let Ok(bearer) = crate::token::inference_bearer(&opts.api_key, &opts.api_secret) else {
+            return;
+        };
         let mut headers = identification_headers(self.identity.as_ref(), None, None);
         headers.set("Authorization", format!("Bearer {bearer}"));
-        let (http, url) = (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
-        let task = OwnedTask::spawn(&self.runtime, async move { http.warm(url, headers.into_vec()).await }, |_| async {});
+        let (http, url) =
+            (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
+        let task = OwnedTask::spawn(
+            &self.runtime,
+            async move { http.warm(url, headers.into_vec()).await },
+            |_| async {},
+        );
         *self.prewarm.lock().unwrap_or_else(|p| p.into_inner()) = Some(task);
     }
 
     /// The voice session's generation retries its own LLM calls until it delegates them to the
     /// request core, so each call here is one attempt under the session's phase limits.
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        req.conn_options.validate().map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
-        let policy = RequestPolicy { max_retry: 0, ..RequestPolicy::from_options(&req.conn_options) };
+        req.conn_options
+            .validate()
+            .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+        let policy =
+            RequestPolicy { max_retry: 0, ..RequestPolicy::from_options(&req.conn_options) };
         let args = ChatArgs {
             extra_kwargs: req.extra.clone(),
             parallel_tool_calls: req.parallel_tool_calls,
@@ -288,7 +322,8 @@ impl LlmChunks {
         }
         if let Some(start) = self.start.take() {
             let now = self.reporter.clock.now().max(self.now);
-            let (core, effects) = LlmRequest::start(start.id, start.llm, start.policy, start.think_tags, now);
+            let (core, effects) =
+                LlmRequest::start(start.id, start.llm, start.policy, start.think_tags, now);
             self.core = Some(core);
             self.now = now;
             self.apply(effects);
@@ -372,12 +407,20 @@ impl LlmChunks {
                 LlmRequestEffect::LlmRequestStart { attempt, .. } => {
                     let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
                     let closed = self.reporter.clone();
-                    let work = async move { exchange.http.exchange(exchange.request.clone(), attempt, reporter).await };
+                    let work = async move {
+                        exchange.http.exchange(exchange.request.clone(), attempt, reporter).await
+                    };
                     let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
                         if outcome == TaskOutcome::Panicked {
                             log::error!(target: "livekit.agents", attempt; "LLM request attempt panicked");
                         }
-                        let _ = closed.tx.send(Stamped { at: closed.clock.now(), event: LlmRequestEvent::AttemptClosed { attempt } }).await;
+                        let _ = closed
+                            .tx
+                            .send(Stamped {
+                                at: closed.clock.now(),
+                                event: LlmRequestEvent::AttemptClosed { attempt },
+                            })
+                            .await;
                     });
                     self.attempts.insert(attempt, task);
                 }

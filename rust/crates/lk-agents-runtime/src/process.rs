@@ -29,7 +29,11 @@ pub fn handle() -> Result<tokio::runtime::Handle, ProcessError> {
     let pid = std::process::id();
     let mut slot = RUNTIME.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(started) = slot.as_ref() {
-        return if started.pid == pid { Ok(started.runtime.handle().clone()) } else { Err(ProcessError::Forked) };
+        return if started.pid == pid {
+            Ok(started.runtime.handle().clone())
+        } else {
+            Err(ProcessError::Forked)
+        };
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("lk-agents-runtime")

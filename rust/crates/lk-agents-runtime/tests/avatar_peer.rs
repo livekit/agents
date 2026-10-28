@@ -19,7 +19,11 @@ use tokio::sync::Mutex;
 
 #[derive(Clone, Copy)]
 enum Reply {
-    Answer { delay_ms: u64, status: u16, body: &'static str },
+    Answer {
+        delay_ms: u64,
+        status: u16,
+        body: &'static str,
+    },
     /// Never answer.
     Silent,
 }
@@ -28,7 +32,8 @@ fn ok(body: &'static str) -> Reply {
     Reply::Answer { delay_ms: 0, status: 200, body }
 }
 
-const CREATED: &str = r#"{"session_id":"s","provider_session_id":"p","terminate_token":"t","sample_rate":24000}"#;
+const CREATED: &str =
+    r#"{"session_id":"s","provider_session_id":"p","terminate_token":"t","sample_rate":24000}"#;
 
 /// Each received request: its head and its body.
 type Received = Arc<Mutex<Vec<(String, String)>>>;
@@ -49,7 +54,11 @@ async fn peer(replies: Vec<Reply>) -> (String, Received) {
     (url, received)
 }
 
-async fn serve(mut socket: TcpStream, replies: Arc<Mutex<std::vec::IntoIter<Reply>>>, received: Received) {
+async fn serve(
+    mut socket: TcpStream,
+    replies: Arc<Mutex<std::vec::IntoIter<Reply>>>,
+    received: Received,
+) {
     loop {
         let mut request = Vec::new();
         let mut buf = [0u8; 4096];
@@ -104,7 +113,14 @@ fn avatar(url: String, read_ms: u64) -> GatewayAvatar {
     };
     let http = Arc::new(GatewayHttp::new().unwrap());
     let runtime = tokio::runtime::Handle::current();
-    GatewayAvatar::new(opts, ("key".into(), "secret".into()), policy, http, &runtime, Arc::new(RealClock::new()))
+    GatewayAvatar::new(
+        opts,
+        ("key".into(), "secret".into()),
+        policy,
+        http,
+        &runtime,
+        Arc::new(RealClock::new()),
+    )
 }
 
 fn room() -> AvatarRoom {
@@ -131,11 +147,16 @@ async fn requests(received: &Received, n: usize) -> Vec<(String, String)> {
 // rate or ids lost, or close not terminating with the retained identity.
 #[tokio::test]
 async fn a_retried_create_keeps_one_idempotency_key_and_close_terminates_it() {
-    let (url, received) = peer(vec![Reply::Answer { delay_ms: 0, status: 503, body: "busy" }, ok(CREATED), ok("")]).await;
+    let (url, received) =
+        peer(vec![Reply::Answer { delay_ms: 0, status: 503, body: "busy" }, ok(CREATED), ok("")])
+            .await;
     let avatar = avatar(url, 5_000);
     assert_eq!(avatar.create(room(), Headers::new()).await.unwrap(), 24_000);
     use lk_agents_abi::inference::avatar_session::InferenceAvatar as _;
-    assert_eq!((avatar.session_id(), avatar.provider_session_id()), (Some("s".into()), Some("p".into())));
+    assert_eq!(
+        (avatar.session_id(), avatar.provider_session_id()),
+        (Some("s".into()), Some("p".into()))
+    );
     assert_eq!(avatar.close(Headers::new()).await, Closed::Clean);
     assert_eq!(avatar.provider_session_id(), None);
     let seen = requests(&received, 3).await;
@@ -162,7 +183,8 @@ async fn a_retried_create_keeps_one_idempotency_key_and_close_terminates_it() {
 // both creating a billable session, or the refusal disturbing the first.
 #[tokio::test]
 async fn a_concurrent_second_start_is_refused_and_the_first_completes() {
-    let (url, received) = peer(vec![Reply::Answer { delay_ms: 200, status: 200, body: CREATED }]).await;
+    let (url, received) =
+        peer(vec![Reply::Answer { delay_ms: 200, status: 200, body: CREATED }]).await;
     let avatar = avatar(url, 5_000);
     let (first, second) = tokio::join!(avatar.create(room(), Headers::new()), async {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -176,7 +198,9 @@ async fn a_concurrent_second_start_is_refused_and_the_first_completes() {
 // Catches: a client error retried, or the reservation kept after a failure.
 #[tokio::test]
 async fn a_rejected_create_is_raised_unretried_and_the_avatar_can_start_again() {
-    let (url, received) = peer(vec![Reply::Answer { delay_ms: 0, status: 400, body: "bad image" }, ok(CREATED)]).await;
+    let (url, received) =
+        peer(vec![Reply::Answer { delay_ms: 0, status: 400, body: "bad image" }, ok(CREATED)])
+            .await;
     let avatar = avatar(url, 5_000);
     let err = avatar.create(room(), Headers::new()).await.unwrap_err();
     let AvatarError::Api(ProviderError::Local(err)) = err else { panic!("{err:?}") };
@@ -189,9 +213,12 @@ async fn a_rejected_create_is_raised_unretried_and_the_avatar_can_start_again() 
 // still answers with, or adopting it.
 #[tokio::test]
 async fn a_session_created_after_its_start_was_cancelled_is_terminated() {
-    let (url, received) = peer(vec![Reply::Answer { delay_ms: 300, status: 200, body: CREATED }, ok("")]).await;
+    let (url, received) =
+        peer(vec![Reply::Answer { delay_ms: 300, status: 200, body: CREATED }, ok("")]).await;
     let avatar = avatar(url, 5_000);
-    let cancelled = tokio::time::timeout(Duration::from_millis(50), avatar.create(room(), Headers::new())).await;
+    let cancelled =
+        tokio::time::timeout(Duration::from_millis(50), avatar.create(room(), Headers::new()))
+            .await;
     assert!(cancelled.is_err());
     let seen = requests(&received, 2).await;
     assert_eq!(seen.len(), 2, "the late session is terminated");

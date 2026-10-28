@@ -90,7 +90,8 @@ async fn serve(
         match reply {
             Reply::Silent => return hang(socket, released).await,
             Reply::Status(status, body) => {
-                let head = format!("HTTP/1.1 {status} Nope\r\ncontent-length: {}\r\n\r\n", body.len());
+                let head =
+                    format!("HTTP/1.1 {status} Nope\r\ncontent-length: {}\r\n\r\n", body.len());
                 let _ = socket.write_all(head.as_bytes()).await;
                 let _ = socket.write_all(body.as_bytes()).await;
             }
@@ -100,7 +101,9 @@ async fn serve(
                 for part in parts {
                     match part {
                         Part::Bytes(bytes) => {
-                            let chunk = [format!("{:x}\r\n", bytes.len()).as_bytes(), bytes, b"\r\n"].concat();
+                            let chunk =
+                                [format!("{:x}\r\n", bytes.len()).as_bytes(), bytes, b"\r\n"]
+                                    .concat();
                             let _ = socket.write_all(&chunk).await;
                             let _ = socket.flush().await;
                         }
@@ -178,7 +181,9 @@ async fn a_completion_cut_at_hostile_boundaries_streams_whole() {
         Part::Pause(20),
         Part::Bytes(b"l\xc3"),
         Part::Bytes(b"\xb3\"}}]}\r\n\r"),
-        Part::Bytes(b"\ndata: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\" ok\"}}]}\n\nda"),
+        Part::Bytes(
+            b"\ndata: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\" ok\"}}]}\n\nda",
+        ),
         Part::Bytes(b"ta: [DO"),
         Part::Bytes(b"NE]\n\n"),
     ])])
@@ -193,8 +198,11 @@ async fn a_completion_cut_at_hostile_boundaries_streams_whole() {
 // without the response being read, or retried more than `max_retry` times.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_rejected_attempt_is_retried_and_the_retry_answers() {
-    let ok = Reply::Sse(vec![Part::Bytes(b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")]);
-    let peer = Peer::start(vec![Reply::Status(503, "{\"error\":{\"message\":\"busy\"}}"), ok]).await;
+    let ok = Reply::Sse(vec![Part::Bytes(
+        b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+    )]);
+    let peer =
+        Peer::start(vec![Reply::Status(503, "{\"error\":{\"message\":\"busy\"}}"), ok]).await;
     let llm = llm(&peer);
     let mut chunks = open(&llm, policy(1, 2_000));
     assert_eq!(text(&mut chunks).await.unwrap(), "hi");
@@ -203,7 +211,10 @@ async fn a_rejected_attempt_is_retried_and_the_retry_answers() {
     let peer = Peer::start(vec![Reply::Status(401, "{\"error\":{\"message\":\"bad key\"}}")]).await;
     let llm = self::llm(&peer);
     let err = text(&mut open(&llm, policy(3, 2_000))).await.unwrap_err();
-    assert_eq!((err.kind, err.status_code, err.retryable), (ApiErrorKind::Status, Some(401), false));
+    assert_eq!(
+        (err.kind, err.status_code, err.retryable),
+        (ApiErrorKind::Status, Some(401), false)
+    );
     assert!(err.message.contains("bad key"), "{}", err.message);
     assert_eq!(peer.requests.load(Ordering::SeqCst), 1);
 }
@@ -220,9 +231,15 @@ async fn a_stream_stalled_after_output_times_out_on_read_and_releases_its_connec
     let llm = llm(&peer);
     let mut chunks = open(&llm, policy(3, 300));
     let err = text(&mut chunks).await.unwrap_err();
-    assert_eq!((err.kind, err.phase, err.retryable), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read), false));
+    assert_eq!(
+        (err.kind, err.phase, err.retryable),
+        (ApiErrorKind::Timeout, Some(TimeoutPhase::Read), false)
+    );
     assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
-    eventually("the stalled connection was never released", || peer.released.load(Ordering::SeqCst) == 1).await;
+    eventually("the stalled connection was never released", || {
+        peer.released.load(Ordering::SeqCst) == 1
+    })
+    .await;
     assert_eq!(peer.requests.load(Ordering::SeqCst), 1, "output was delivered: no replay");
 }
 
@@ -258,15 +275,23 @@ async fn closing_at_every_await_point_releases_the_attempt() {
         let pulled = tokio::time::timeout(Duration::from_millis(150), chunks.next()).await;
         assert!(pulled.is_err(), "{point}: the peer sent nothing more");
         assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean, "{point}");
-        eventually(&format!("{point}: connection never released"), || peer.released.load(Ordering::SeqCst) == 1).await;
+        eventually(&format!("{point}: connection never released"), || {
+            peer.released.load(Ordering::SeqCst) == 1
+        })
+        .await;
     }
 
     // During the retry backoff: no attempt is live, and none launches after close.
     let peer = Peer::start(vec![Reply::Status(503, "busy"), Reply::Status(503, "busy")]).await;
     let llm = llm(&peer);
-    let mut chunks = open(&llm, RequestPolicy { retry_interval: Duration::from_secs(5), ..policy(3, 10_000) });
+    let mut chunks =
+        open(&llm, RequestPolicy { retry_interval: Duration::from_secs(5), ..policy(3, 10_000) });
     let _ = tokio::time::timeout(Duration::from_millis(400), chunks.next()).await;
-    assert_eq!(peer.requests.load(Ordering::SeqCst), 2, "the 100 ms first retry ran, the next waits 5 s");
+    assert_eq!(
+        peer.requests.load(Ordering::SeqCst),
+        2,
+        "the 100 ms first retry ran, the next waits 5 s"
+    );
     assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(peer.requests.load(Ordering::SeqCst), 2, "nothing launches after close");

@@ -17,9 +17,12 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
 use lk_agents_inference::attempts::RequestPolicy;
 use lk_agents_inference::avatar::lifecycle::{
-    AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle, CreateFailure, ProviderSession,
+    AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
+    CreateFailure, ProviderSession,
 };
-use lk_agents_inference::avatar::{AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request};
+use lk_agents_inference::avatar::{
+    AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request,
+};
 use lk_agents_inference::headers::Headers;
 use lk_agents_inference::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
@@ -45,10 +48,20 @@ struct View {
 }
 
 enum Input {
-    Create { caller: u64, room: AvatarRoom, headers: Headers, reply: oneshot::Sender<Result<u32, AvatarError>> },
+    Create {
+        caller: u64,
+        room: AvatarRoom,
+        headers: Headers,
+        reply: oneshot::Sender<Result<u32, AvatarError>>,
+    },
     /// The create call `caller` stopped waiting.
-    Cancel { caller: u64 },
-    Close { headers: Headers, reply: oneshot::Sender<Closed> },
+    Cancel {
+        caller: u64,
+    },
+    Close {
+        headers: Headers,
+        reply: oneshot::Sender<Closed>,
+    },
 }
 
 /// `_core.InferenceAvatar`.
@@ -157,11 +170,24 @@ impl InferenceAvatar for GatewayAvatar {
         conn_options.validate().map_err(|e| unavailable(e.to_string()))?;
         // Signing then cannot fail when an attempt launches.
         crate::token::inference_bearer(&api_key, &api_secret)?;
-        let opts = AvatarOptions::new(&model, avatar_identity, avatar_name, extra_kwargs.unwrap_or_default(), base_url)?;
+        let opts = AvatarOptions::new(
+            &model,
+            avatar_identity,
+            avatar_name,
+            extra_kwargs.unwrap_or_default(),
+            base_url,
+        )?;
         let runtime = crate::process::handle().map_err(|e| unavailable(e.to_string()))?;
         let http = GatewayHttp::shared().map_err(unavailable)?;
         let policy = RequestPolicy::from_options(&conn_options);
-        Ok(GatewayAvatar::new(opts, (api_key, api_secret), policy, http, &runtime, crate::process::host_clock()))
+        Ok(GatewayAvatar::new(
+            opts,
+            (api_key, api_secret),
+            policy,
+            http,
+            &runtime,
+            crate::process::host_clock(),
+        ))
     }
 
     fn provider(&self) -> String {
@@ -235,7 +261,11 @@ struct Driver {
 }
 
 impl Driver {
-    async fn run(mut self, mut inputs: mpsc::UnboundedReceiver<Input>, mut observed: mpsc::Receiver<Stamped<AvatarSessionEvent>>) {
+    async fn run(
+        mut self,
+        mut inputs: mpsc::UnboundedReceiver<Input>,
+        mut observed: mpsc::Receiver<Stamped<AvatarSessionEvent>>,
+    ) {
         let clock = self.reporter.clock.clone();
         let mut dropped = false;
         while !(dropped && self.core.is_settled()) {
@@ -305,9 +335,15 @@ impl Driver {
                 self.apply(effects);
             }
         }
-        self.exchanges.retain(|request, _| self.attempts.keys().any(|(r, _)| r == request) || self.core.tracks(*request));
+        self.exchanges.retain(|request, _| {
+            self.attempts.keys().any(|(r, _)| r == request) || self.core.tracks(*request)
+        });
         if self.core.is_settled() {
-            let outcome = if std::mem::take(&mut self.cleanup_incomplete) { Closed::TimedOut } else { Closed::Clean };
+            let outcome = if std::mem::take(&mut self.cleanup_incomplete) {
+                Closed::TimedOut
+            } else {
+                Closed::Clean
+            };
             for closer in self.closers.drain(..) {
                 let _ = closer.send(outcome);
             }
@@ -337,7 +373,9 @@ impl Driver {
                         self.launch(request, attempt, exchange, ExchangeKind::Create);
                     }
                 }
-                AvatarSessionEffect::AvatarSessionTerminate { request, attempt, session, .. } => {
+                AvatarSessionEffect::AvatarSessionTerminate {
+                    request, attempt, session, ..
+                } => {
                     let exchange = match self.exchanges.get(&request) {
                         Some(exchange) => Some(exchange.clone()),
                         None => self.terminate_exchange(request, attempt, &session),
@@ -417,18 +455,23 @@ impl Driver {
     }
 
     /// The operation's one exchange: a fresh idempotency key and a signed bearer.
-    fn create_exchange(&mut self, request: AvatarRequestId, attempt: u32) -> Option<Arc<HttpRequest>> {
+    fn create_exchange(
+        &mut self,
+        request: AvatarRequestId,
+        attempt: u32,
+    ) -> Option<Arc<HttpRequest>> {
         let room = self.pending_create.as_ref()?;
         let key: [u8; 16] = rand::random();
         let key: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        let exchange = match crate::token::inference_bearer(&self.credentials.0, &self.credentials.1) {
-            Ok(bearer) => create_request(&self.opts, room, self.headers.clone(), &bearer, &key),
-            Err(error) => {
-                // A launch failure is reported like any other failed attempt.
-                self.failed_launch(request, attempt, error);
-                return None;
-            }
-        };
+        let exchange =
+            match crate::token::inference_bearer(&self.credentials.0, &self.credentials.1) {
+                Ok(bearer) => create_request(&self.opts, room, self.headers.clone(), &bearer, &key),
+                Err(error) => {
+                    // A launch failure is reported like any other failed attempt.
+                    self.failed_launch(request, attempt, error);
+                    return None;
+                }
+            };
         let exchange = Arc::new(exchange);
         self.exchanges.insert(request, exchange.clone());
         Some(exchange)
@@ -440,14 +483,16 @@ impl Driver {
         attempt: u32,
         session: &ProviderSession,
     ) -> Option<Arc<HttpRequest>> {
-        let bearer = match crate::token::inference_bearer(&self.credentials.0, &self.credentials.1) {
+        let bearer = match crate::token::inference_bearer(&self.credentials.0, &self.credentials.1)
+        {
             Ok(bearer) => bearer,
             Err(error) => {
                 self.failed_launch(request, attempt, error);
                 return None;
             }
         };
-        let exchange = Arc::new(terminate_request(&self.opts, session, self.headers.clone(), &bearer)?);
+        let exchange =
+            Arc::new(terminate_request(&self.opts, session, self.headers.clone(), &bearer)?);
         self.exchanges.insert(request, exchange.clone());
         Some(exchange)
     }
@@ -458,9 +503,16 @@ impl Driver {
         self.queued.push(AvatarSessionEvent::AttemptClosed { request, attempt });
     }
 
-    fn launch(&mut self, request: AvatarRequestId, attempt: u32, exchange: Arc<HttpRequest>, kind: ExchangeKind) {
+    fn launch(
+        &mut self,
+        request: AvatarRequestId,
+        attempt: u32,
+        exchange: Arc<HttpRequest>,
+        kind: ExchangeKind,
+    ) {
         let (http, reporter) = (self.http.clone(), self.reporter.clone());
-        let work = async move { kind.run(&http, (*exchange).clone(), request, attempt, &reporter).await };
+        let work =
+            async move { kind.run(&http, (*exchange).clone(), request, attempt, &reporter).await };
         let closed = self.reporter.clone();
         let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
             if outcome == TaskOutcome::Panicked {

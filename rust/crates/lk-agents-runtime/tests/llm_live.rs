@@ -27,7 +27,9 @@ fn llm(model: &str) -> Option<GatewayLlm> {
         api_key,
         api_secret,
         inference_class: None,
-        extra_kwargs: [("max_completion_tokens".to_owned(), serde_json::json!(16))].into_iter().collect(),
+        extra_kwargs: [("max_completion_tokens".to_owned(), serde_json::json!(16))]
+            .into_iter()
+            .collect(),
     };
     let http = Arc::new(GatewayHttp::new().unwrap());
     Some(GatewayLlm::new(opts, http, tokio::runtime::Handle::current(), Arc::new(RealClock::new())))
@@ -47,7 +49,10 @@ fn policy() -> RequestPolicy {
 
 #[allow(clippy::disallowed_methods, reason = "a live test stamps its message with wall time")]
 fn chat_ctx(text: &str) -> ChatContext {
-    ChatContext::new(vec![lk_agents_abi::ChatMessage::text("m1", Role::User, text, std::time::SystemTime::now()).into()])
+    ChatContext::new(vec![
+        lk_agents_abi::ChatMessage::text("m1", Role::User, text, std::time::SystemTime::now())
+            .into(),
+    ])
 }
 
 // Catches: a claim set or auth scheme the gateway rejects, a wrong path, `include_usage`
@@ -56,7 +61,9 @@ fn chat_ctx(text: &str) -> ChatContext {
 #[ignore = "needs LiveKit Inference credentials and the network"]
 async fn a_streamed_completion_round_trips() {
     let Some(llm) = llm("openai/gpt-4o-mini") else { return eprintln!("skipped: no credentials") };
-    let mut chunks = llm.chat(&chat_ctx("Say the single word: pong."), &[], Default::default(), policy(), None).unwrap();
+    let mut chunks = llm
+        .chat(&chat_ctx("Say the single word: pong."), &[], Default::default(), policy(), None)
+        .unwrap();
     let (mut text, mut usage) = (String::new(), None);
     while let Some(chunk) = chunks.next().await.expect("the gateway answered") {
         if let Some(content) = chunk.delta.as_ref().and_then(|d| d.content.as_ref()) {
@@ -74,7 +81,9 @@ async fn a_streamed_completion_round_trips() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs LiveKit Inference credentials and the network"]
 async fn an_unknown_model_is_a_non_retryable_status_error() {
-    let Some(llm) = llm("openai/definitely-not-a-model") else { return eprintln!("skipped: no credentials") };
+    let Some(llm) = llm("openai/definitely-not-a-model") else {
+        return eprintln!("skipped: no credentials");
+    };
     let mut chunks = llm.chat(&chat_ctx("hi"), &[], Default::default(), policy(), None).unwrap();
     let err = chunks.next().await.expect_err("an unknown model fails");
     eprintln!("live 4xx: {err:?}");

@@ -62,7 +62,8 @@ pub struct GatewayHttp {
 impl GatewayHttp {
     /// The process's client, built on first use.
     pub fn shared() -> Result<Arc<GatewayHttp>, String> {
-        static SHARED: std::sync::OnceLock<Result<Arc<GatewayHttp>, String>> = std::sync::OnceLock::new();
+        static SHARED: std::sync::OnceLock<Result<Arc<GatewayHttp>, String>> =
+            std::sync::OnceLock::new();
         SHARED.get_or_init(|| GatewayHttp::new().map(Arc::new)).clone()
     }
 
@@ -120,7 +121,12 @@ impl GatewayHttp {
     }
 
     /// One LLM request attempt: the completion's event stream decoded into chunk events.
-    pub(crate) async fn exchange(&self, request: HttpRequest, attempt: u32, reporter: Reporter<LlmRequestEvent>) {
+    pub(crate) async fn exchange(
+        &self,
+        request: HttpRequest,
+        attempt: u32,
+        reporter: Reporter<LlmRequestEvent>,
+    ) {
         let sent = |sent| match sent {
             Sent::Connected => LlmRequestEvent::Connected { attempt },
             Sent::RequestWritten => LlmRequestEvent::RequestWritten { attempt },
@@ -136,7 +142,10 @@ impl GatewayHttp {
 }
 
 /// A JSON answer's body, read to its end; one larger than `limit` bytes is malformed.
-pub(crate) async fn read_body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, AttemptFailure> {
+pub(crate) async fn read_body(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, AttemptFailure> {
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -150,7 +159,11 @@ pub(crate) async fn read_body(response: reqwest::Response, limit: usize) -> Resu
 }
 
 /// Decodes the event stream into chunk events; `None` once the response ended cleanly.
-async fn read_events(response: reqwest::Response, attempt: u32, reporter: &Reporter<LlmRequestEvent>) -> Option<AttemptFailure> {
+async fn read_events(
+    response: reqwest::Response,
+    attempt: u32,
+    reporter: &Reporter<LlmRequestEvent>,
+) -> Option<AttemptFailure> {
     let mut decoder = SseDecoder::new();
     let mut bytes = response.bytes_stream();
     let mut events = Vec::new();
@@ -181,7 +194,9 @@ async fn read_events(response: reqwest::Response, attempt: u32, reporter: &Repor
             }
             match serde_json::from_str::<WireChunk>(&event.data) {
                 Ok(chunk) => reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await,
-                Err(err) => return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}"))),
+                Err(err) => {
+                    return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}")));
+                }
             }
         }
     }
@@ -189,7 +204,8 @@ async fn read_events(response: reqwest::Response, attempt: u32, reporter: &Repor
 
 async fn rejected(response: reqwest::Response) -> AttemptFailure {
     let status = i64::from(response.status().as_u16());
-    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let header =
+        |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let request_id = header("x-request-id");
     if status == 429 {
         let quota = lk_agents_inference::extract_quota_usage(|name| {
@@ -220,7 +236,8 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
 fn error_message(body: &str) -> Option<String> {
     let text = || Some(body.trim().chars().take(512).collect::<String>()).filter(|t| !t.is_empty());
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else { return text() };
-    let message = parsed.get("error").and_then(|e| e.get("message")).or_else(|| parsed.get("message"));
+    let message =
+        parsed.get("error").and_then(|e| e.get("message")).or_else(|| parsed.get("message"));
     message.and_then(|m| m.as_str()).map(str::to_owned).or_else(text)
 }
 
@@ -252,7 +269,12 @@ impl BodyProgress {
         self.changed.notify_one();
     }
 
-    async fn report<E>(&self, reported: &mut u8, reporter: &Reporter<E>, sent: &impl Fn(Sent) -> E) {
+    async fn report<E>(
+        &self,
+        reported: &mut u8,
+        reporter: &Reporter<E>,
+        sent: &impl Fn(Sent) -> E,
+    ) {
         let stage = self.stage.load(Ordering::SeqCst);
         if *reported < CONNECTED && stage >= CONNECTED {
             reporter.report(sent(Sent::Connected)).await;
@@ -272,7 +294,10 @@ struct ReportingBody {
 impl futures_util::Stream for ReportingBody {
     type Item = Result<bytes::Bytes, std::io::Error>;
 
-    fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
         match self.bytes.take() {
             Some(bytes) => {
                 self.progress.reach(CONNECTED);

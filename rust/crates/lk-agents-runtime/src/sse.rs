@@ -214,7 +214,11 @@ mod tests {
                     id: 7\ndata: first\ndata: second\n\n"
             .as_bytes();
         let expected = vec![
-            SseEvent { event: "message".into(), data: "caf\u{e9} \u{20ac}\u{1f600}".into(), id: "".into() },
+            SseEvent {
+                event: "message".into(),
+                data: "caf\u{e9} \u{20ac}\u{1f600}".into(),
+                id: "".into(),
+            },
             SseEvent { event: "delta".into(), data: " two spaces\n".into(), id: "".into() },
             SseEvent { event: "message".into(), data: "first\nsecond".into(), id: "7".into() },
         ];
@@ -273,9 +277,15 @@ mod tests {
     fn invalid_utf8_fails_with_its_offset_and_stays_failed() {
         let mut decoder = SseDecoder::new();
         let mut out = Vec::new();
-        assert_eq!(decoder.feed(b"data: ok\n\ndata: \xff\n\n", &mut out), Err(SseError::InvalidUtf8 { offset: 16 }));
+        assert_eq!(
+            decoder.feed(b"data: ok\n\ndata: \xff\n\n", &mut out),
+            Err(SseError::InvalidUtf8 { offset: 16 })
+        );
         assert_eq!(data(&out), vec!["ok"]);
-        assert_eq!(decoder.feed(b"data: later\n\n", &mut out), Err(SseError::InvalidUtf8 { offset: 16 }));
+        assert_eq!(
+            decoder.feed(b"data: later\n\n", &mut out),
+            Err(SseError::InvalidUtf8 { offset: 16 })
+        );
         assert_eq!(decode(&[b"data: \xe2\x82"]).1, Err(SseError::InvalidUtf8 { offset: 6 }));
     }
 }
