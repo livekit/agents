@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/telemetry/policy.rs
+#     rust/crates/lk-agents-abi/src/telemetry/report.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/records.rs
 #     rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs
@@ -20,6 +21,56 @@ TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope"
 
 
 TelemetryExportAction: TypeAlias = Literal["export", "hold", "drop", "capacity", "disabled"]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class RecordingOptions:
+    """`RecordingOptions`, the four keys `recording_enabled` reads plus `redaction`.
+
+    `redaction = False` never disables project-level redaction; it only declines to ask for it.
+    """
+
+    audio: bool = False
+    traces: bool = False
+    logs: bool = False
+    transcript: bool = False
+    redaction: bool = False
+    """Not part of `_RECORDING_OPTION_KEYS` -- `recording_enabled` ignores it."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EvaluationRecord:
+    """One entry of `Tagger.evaluations` (`observability.py:120`)."""
+
+    name: str
+    tag: str
+    verdict: str
+    reasoning: str
+    instructions: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SpanUpdateWire:
+    """`{"type": "span_update", "span": .., "attrs": {..}}`."""
+
+    span: int
+    """The span, as a `HostRef` id the host resolves."""
+    attrs: SpanUpdateAttrsWire
+    type: Literal["span_update"] = "span_update"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SpanUpdateAttrsWire:
+    """The nested `attrs` dict: the five values `_apply_span_update` writes onto the span. A wire twin
+    of `lk_agents_inference::interruption::SpanAttributes`, whose `&'static str` field the
+    generator cannot map.
+    """
+
+    is_interruption: str
+    probability: float
+    total_duration: float
+    prediction_duration: float
+    detection_delay: float
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

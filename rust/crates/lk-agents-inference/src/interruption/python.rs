@@ -199,13 +199,13 @@ fn detector_event_to_py<'py>(py: Python<'py>, ev: &DetectorEvent) -> PyResult<Bo
     }
 }
 
-fn stream_event_to_py<'py>(py: Python<'py>, ev: &StreamEvent) -> PyResult<Bound<'py, PyDict>> {
+fn stream_event_to_py<'py>(py: Python<'py>, ev: &StreamEvent) -> PyResult<Bound<'py, PyAny>> {
     match ev {
         StreamEvent::Overlap(event) | StreamEvent::CorrelatedOverlap { event, .. } => {
-            overlap_to_py(py, event)
+            overlap_to_py(py, event).map(Bound::into_any)
         }
         StreamEvent::Error(err) | StreamEvent::CorrelatedError { error: err, .. } => {
-            stream_error_to_py(py, err)
+            stream_error_to_py(py, err).map(Bound::into_any)
         }
         StreamEvent::SpanUpdate { span, attrs } => SpanUpdateWire {
             span: span.id(),
@@ -344,7 +344,7 @@ impl InterruptionDetectorStream {
         }
     }
 
-    /// The next event (`overlapping_speech`, `error` or `span_update`) as a dict, or `None` when
+    /// The next event as a dict or span-update record, or `None` when
     /// the stream is done.
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;

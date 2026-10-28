@@ -1937,6 +1937,34 @@ pub mod telemetry {
             Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+
+    pub fn recording_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::report::RecordingOptions> {
+        obj.extract::<::lk_agents_abi::telemetry::report::RecordingOptions>()
+    }
+
+    pub fn recording_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::RecordingOptions) -> PyResult<Bound<'py, PyAny>> {
+        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+
+    pub fn evaluation_record_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::EvaluationRecord) -> PyResult<Bound<'py, PyAny>> {
+        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+
+    pub fn span_update_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::SpanUpdateWire) -> PyResult<Bound<'py, PyAny>> {
+        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+
+    pub fn span_update_attrs_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::SpanUpdateAttrsWire) -> PyResult<Bound<'py, PyAny>> {
+        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
     static SESSION_REPORT_SNAPSHOT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();

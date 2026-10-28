@@ -97,6 +97,9 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
 /// trait impls move from the derive to the generated module), and leaves when its in-place
 /// consumers are declarations (`check_in_place`).
 pub const IN_PLACE: &[&str] = &[
+    "::lk_agents_abi::EvaluationRecord",
+    "::lk_agents_abi::telemetry::report::RecordingOptions",
+    "::lk_agents_abi::telemetry::report::SpanUpdateWire",
     "::lk_agents_abi::a2a::client::Message",
     "::lk_agents_abi::agent::run::RunError",
     "::lk_agents_abi::LogRecordWire",

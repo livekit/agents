@@ -4,7 +4,6 @@
 use crate::ChatItem;
 use crate::Clock;
 use crate::metrics::ModelUsage;
-use lk_agents_host_derive::Host;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -57,67 +56,24 @@ fn hr_seconds(seconds: f64) -> HrTime {
 /// `RecordingOptions`, the four keys `recording_enabled` reads plus `redaction`.
 ///
 /// `redaction = False` never disables project-level redaction; it only declines to ask for it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(emit)]
-#[host(host_type = "livekit.agents._core.RecordingOptions", handwritten(extract))]
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RecordingOptions {
+    #[host(default = false)]
     pub audio: bool,
+    #[host(default = false)]
     pub traces: bool,
+    #[host(default = false)]
     pub logs: bool,
+    #[host(default = false)]
     pub transcript: bool,
     /// Not part of `_RECORDING_OPTION_KEYS` -- `recording_enabled` ignores it.
+    #[host(default = false)]
     pub redaction: bool,
 }
 
-/// `RecordingOptions`, as five booleans.
-#[crate::host(object(
-    cell = "input",
-    pid = false,
-    pyclass(from_py_object),
-    derive(Clone, Copy, Default)
-))]
 impl RecordingOptions {
-    #[host(new(
-        kw_only,
-        defaults(
-            audio = false,
-            traces = false,
-            logs = false,
-            transcript = false,
-            redaction = false
-        )
-    ))]
-    pub fn new(audio: bool, traces: bool, logs: bool, transcript: bool, redaction: bool) -> Self {
-        RecordingOptions { audio, traces, logs, transcript, redaction }
-    }
-
-    #[host(getter)]
-    pub fn audio(&self) -> bool {
-        self.audio
-    }
-
-    #[host(getter)]
-    pub fn traces(&self) -> bool {
-        self.traces
-    }
-
-    #[host(getter)]
-    pub fn logs(&self) -> bool {
-        self.logs
-    }
-
-    #[host(getter)]
-    pub fn transcript(&self) -> bool {
-        self.transcript
-    }
-
-    #[host(getter)]
-    pub fn redaction(&self) -> bool {
-        self.redaction
-    }
-
-    /// `types.py:64`: any of audio, traces, logs, transcript. `redaction` alone is not recording.
-    #[host(method)]
+    /// Redaction alone does not enable recording.
     pub fn recording_enabled(&self) -> bool {
         self.audio || self.traces || self.logs || self.transcript
     }
@@ -749,8 +705,8 @@ pub struct TagEntry {
 }
 
 /// One entry of `Tagger.evaluations` (`observability.py:120`).
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "telemetry", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationRecord {
     pub name: String,
     pub tag: String,
@@ -919,7 +875,7 @@ impl Tagger {
         self.tags.is_empty()
     }
 
-    /// The judgments recorded by judge groups, one dict each.
+    /// The judgments recorded by judge groups.
     // The reference returns a `.copy()`; a shared slice is the Rust equivalent.
     #[host(getter)]
     pub fn evaluations(&self) -> &[EvaluationRecord] {
@@ -979,8 +935,8 @@ impl Tagger {
 // `{"type": "span_update", ..}`: five attributes the host writes onto a span it owns.
 
 /// `{"type": "span_update", "span": .., "attrs": {..}}`.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "span_update")]
+#[crate::host(record(module = "telemetry", emit, constant(type = "span_update")))]
+#[derive(Debug, Clone)]
 pub struct SpanUpdateWire {
     /// The span, as a `HostRef` id the host resolves.
     pub span: u64,
@@ -990,8 +946,8 @@ pub struct SpanUpdateWire {
 /// The nested `attrs` dict: the five values `_apply_span_update` writes onto the span. A wire twin
 /// of `lk_agents_inference::interruption::SpanAttributes`, whose `&'static str` field the
 /// generator cannot map.
-#[derive(Debug, Clone, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "telemetry", emit))]
+#[derive(Debug, Clone)]
 pub struct SpanUpdateAttrsWire {
     pub is_interruption: String,
     pub probability: f64,

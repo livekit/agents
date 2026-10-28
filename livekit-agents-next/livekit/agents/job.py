@@ -35,7 +35,7 @@ from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
 from . import _core
-from ._generated.telemetry import SessionReportSnapshot
+from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, SessionReportSnapshot
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry._destination import _BufferingHandler, _JobTelemetry
@@ -389,7 +389,7 @@ class JobContext:
 
         has_evals = self._tagger.has_evals()
         obs_url = self._run.observability_url
-        recording = _core.RecordingOptions(**session._recording_options).recording_enabled()
+        recording = _core.recording_enabled(RecordingOptionsRecord(**session._recording_options))
         if (recording or has_evals) and obs_url:
             try:
                 await _upload_session_report(
@@ -1054,12 +1054,12 @@ class SessionReport:
     )
 
     @property
-    def _recording_options(self) -> _core.RecordingOptions:
+    def _recording_options(self) -> RecordingOptionsRecord:
         # Decode the mutable legacy input once per destination into its typed native view.
         return (
-            _core.RecordingOptions(**self.options.get("recording_options", {}))
+            RecordingOptionsRecord(**self.options.get("recording_options", {}))
             if self.options is not None
-            else _core.RecordingOptions()
+            else RecordingOptionsRecord()
         )
 
     async def _snapshot(

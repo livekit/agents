@@ -67,11 +67,7 @@ pub struct ModelUsageCollector {
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `metrics.ModelUsageCollector` -- the live per-model rollup.
-#[crate::host(object(
-    pid = false,
-    cell = "mutex",
-    stub = "def collect(self, metrics: Any) -> None: ..."
-))]
+#[crate::host(object(pid = false, cell = "mutex"))]
 impl ModelUsageCollector {
     #[host(new)]
     pub fn new() -> Self {
@@ -82,6 +78,7 @@ impl ModelUsageCollector {
     ///
     /// VAD, EOU and avatar metrics are not billed; the explicit no-op arms make a new metric type a
     /// compile error. `Interruption` has no producer yet: no `AgentSession` builds that detector.
+    #[host(method)]
     pub fn collect(&mut self, metrics: &AgentMetrics) {
         match metrics {
             AgentMetrics::Llm(m) => self.collect_llm(m),
@@ -188,17 +185,6 @@ impl ModelUsageCollector {
     /// [`flatten`](Self::flatten) wrapped in the record the session event and telemetry carry.
     pub fn session_usage(&self) -> AgentSessionUsage {
         AgentSessionUsage { model_usage: self.flatten() }
-    }
-}
-
-#[cfg(feature = "python")]
-#[pyo3::pymethods]
-impl PyModelUsageCollector {
-    /// Fold one metric record in. A record of a type the rollup ignores is a no-op, not an error.
-    fn collect(&self, metrics: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
-        let Some(record) = AgentMetrics::extract_known(metrics)? else { return Ok(()) };
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).collect(&record);
-        Ok(())
     }
 }
 
@@ -479,6 +465,4 @@ mod tests {
             }
         );
     }
-
-
 }

@@ -19,6 +19,7 @@ from opentelemetry.util.types import AnyValue, AttributeValue
 from livekit import rtc
 
 from .. import _core
+from .._generated.telemetry import RecordingOptions
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import ATTRIBUTE_SIMULATION_ENABLED
@@ -222,7 +223,7 @@ async def _upload_session_report(
     batch_size = 1
     provider = _cloud.logger_provider or get_logger_provider()
     loggers: dict[str, Any] = {}
-    recording_options = _core.RecordingOptions(
+    recording_options = RecordingOptions(
         audio=audio_allowed,
         traces=options.traces,
         logs=options.logs,

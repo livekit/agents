@@ -3,9 +3,9 @@
 //! presence outside and truthiness inside. `tests/test_otel_metrics_seam.py` checks every record
 //! names one of the host's instruments, as the right kind.
 
+use lk_agents_abi::MetricsMetadata;
 use lk_agents_abi::MetricsReport;
 use lk_agents_abi::metrics::base::Metadata;
-use lk_agents_abi::MetricsMetadata;
 
 use crate::metrics::base::AgentMetrics;
 
@@ -35,7 +35,10 @@ pub struct OtelRecord {
 
 impl OtelRecord {
     /// `int` and `float` stay distinct: an OTel series takes its type from the first value.
-    pub fn wire(self) -> (&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>) {
+    pub fn wire(
+        self,
+    ) -> (&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)
+    {
         let value = match self.value {
             OtelValue::Int(i) => i.into(),
             OtelValue::Float(f) => f.into(),
@@ -52,7 +55,11 @@ impl OtelRecord {
         OtelRecord { instrument, kind: InstrumentKind::Counter, value, attributes }
     }
 
-    fn histogram(instrument: &'static str, value: f64, attributes: Vec<(&'static str, String)>) -> Self {
+    fn histogram(
+        instrument: &'static str,
+        value: f64,
+        attributes: Vec<(&'static str, String)>,
+    ) -> Self {
         OtelRecord {
             instrument,
             kind: InstrumentKind::Histogram,
@@ -198,7 +205,8 @@ pub fn usage_records(ev: &AgentMetrics) -> Vec<OtelRecord> {
     if let Some((acquire_time, reused)) = conn {
         if acquire_time > 0.0 {
             let mut conn_attrs = model_attrs(ev.metadata());
-            conn_attrs.push(("connection_reused", if reused { "true" } else { "false" }.to_owned()));
+            conn_attrs
+                .push(("connection_reused", if reused { "true" } else { "false" }.to_owned()));
             out.push(OtelRecord::histogram(CONNECTION_ACQUIRE_TIME, acquire_time, conn_attrs));
         }
     }
@@ -213,7 +221,10 @@ pub fn usage_records(ev: &AgentMetrics) -> Vec<OtelRecord> {
 /// `_record_turn_metrics(report)` minus the recording, as [`OtelRecord::wire`] tuples. `None` and
 /// `{}` yield nothing; a present `0.0` yields a record.
 #[crate::host(export(name = "otel_turn_records"))]
-pub fn turn_records_wire(report: Option<MetricsReport>) -> Vec<(&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)> {
+pub fn turn_records_wire(
+    report: Option<MetricsReport>,
+) -> Vec<(&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)>
+{
     turn_records(&report.unwrap_or_default()).into_iter().map(OtelRecord::wire).collect()
 }
 
@@ -223,11 +234,12 @@ pub fn turn_records(report: &MetricsReport) -> Vec<OtelRecord> {
     let stt = turn_metadata_attrs(report.stt_metadata.as_ref());
 
     let mut out = Vec::new();
-    let mut record = |instrument: &'static str, value: Option<f64>, attrs: &Vec<(&'static str, String)>| {
-        if let Some(v) = value {
-            out.push(OtelRecord::histogram(instrument, v, attrs.clone()));
-        }
-    };
+    let mut record =
+        |instrument: &'static str, value: Option<f64>, attrs: &Vec<(&'static str, String)>| {
+            if let Some(v) = value {
+                out.push(OtelRecord::histogram(instrument, v, attrs.clone()));
+            }
+        };
 
     record(TURN_E2E_LATENCY, report.e2e_latency, &llm);
     record(TURN_LLM_TTFT, report.llm_node_ttft, &llm);
@@ -241,25 +253,13 @@ pub fn turn_records(report: &MetricsReport) -> Vec<OtelRecord> {
 /// `collect_usage(ev)` minus the recording: the counter increments it would make. Empty for
 /// unhandled types, unknown types and honest zeros alike (the reference gates on truthiness).
 /// `otel_turn_records` is generated.
-#[cfg(feature = "python")]
-#[pyo3::pyfunction]
-#[allow(clippy::type_complexity)]
-pub fn otel_usage_records<'py>(
-    py: pyo3::Python<'py>,
-    metrics: &pyo3::Bound<'py, pyo3::PyAny>,
-) -> pyo3::PyResult<Vec<(&'static str, &'static str, pyo3::Bound<'py, pyo3::PyAny>, pyo3::Bound<'py, pyo3::types::PyDict>)>> {
-    let Some(record) = AgentMetrics::extract_known(metrics)? else { return Ok(Vec::new()) };
-    usage_records(&record)
-        .into_iter()
-        .map(|r| {
-            let (instrument, kind, value, attrs) = r.wire();
-            Ok((instrument, kind, crate::python::value_to_py(py, &value)?, crate::python::extra_to_py(py, &attrs)?))
-        })
-        .collect()
+#[crate::host(export)]
+pub fn otel_usage_records(
+    metrics: &AgentMetrics,
+) -> Vec<(&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)>
+{
+    usage_records(metrics).into_iter().map(OtelRecord::wire).collect()
 }
-
-#[cfg(feature = "python")]
-crate::register_host!(fn otel_usage_records);
 
 #[cfg(test)]
 mod tests {
@@ -292,7 +292,8 @@ mod tests {
     // Catches: emitting `model_name=""` for a provider that reports an empty name.
     #[test]
     fn an_empty_model_name_is_dropped_but_an_empty_metadata_is_not_invented() {
-        let md = Metadata { model_name: Some(String::new()), model_provider: Some("openai".into()) };
+        let md =
+            Metadata { model_name: Some(String::new()), model_provider: Some("openai".into()) };
         assert_eq!(model_attrs(Some(&md)), vec![("model_provider", "openai".to_owned())]);
         assert_eq!(model_attrs(None), Vec::new());
     }
@@ -313,10 +314,7 @@ mod tests {
         m.connection_reused = true;
         let out = usage_records(&AgentMetrics::Tts(m));
         assert_eq!(names(&out), vec![TTS_CHARACTERS, CONNECTION_ACQUIRE_TIME]);
-        assert_eq!(
-            out[1].attributes,
-            vec![("connection_reused", "true".to_owned())]
-        );
+        assert_eq!(out[1].attributes, vec![("connection_reused", "true".to_owned())]);
     }
 
     // Catches: spelling the connection gate as truthiness (a negative acquire time is truthy).

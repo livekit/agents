@@ -149,28 +149,25 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
 
 /// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
 /// (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).
-#[cfg(feature = "python")]
-#[pyo3::pyfunction]
-pub fn metrics_log_fields<'py>(
-    py: pyo3::Python<'py>,
-    metrics: &pyo3::Bound<'py, pyo3::PyAny>,
-) -> pyo3::PyResult<Option<(&'static str, pyo3::Bound<'py, pyo3::types::PyDict>)>> {
-    use pyo3::types::PyDictMethods as _;
-    let Some(record) = AgentMetrics::extract_known(metrics)? else { return Ok(None) };
-    let Some(out) = log_fields(&record) else { return Ok(None) };
-    let fields = pyo3::types::PyDict::new(py);
-    for (key, value) in out.fields {
-        match value {
-            LogValue::Str(s) => fields.set_item(key, pyo3::types::PyString::new(py, &s))?,
-            LogValue::Float(f) => fields.set_item(key, f)?,
-            LogValue::Int(i) => fields.set_item(key, i)?,
-        }
-    }
-    Ok(Some((out.message, fields)))
+#[crate::host(export)]
+pub fn metrics_log_fields(
+    metrics: &AgentMetrics,
+) -> Option<(&'static str, serde_json::Map<String, serde_json::Value>)> {
+    let out = log_fields(metrics)?;
+    let fields = out
+        .fields
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                LogValue::Str(s) => s.into(),
+                LogValue::Float(f) => f.into(),
+                LogValue::Int(i) => i.into(),
+            };
+            (key.to_owned(), value)
+        })
+        .collect();
+    Some((out.message, fields))
 }
-
-#[cfg(feature = "python")]
-crate::register_host!(fn metrics_log_fields);
 
 #[cfg(test)]
 mod tests {
@@ -200,7 +197,16 @@ mod tests {
     fn absent_metadata_omits_both_keys_while_empty_strings_become_unknown() {
         let mut m = tk::stt();
         let none = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
-        assert_eq!(keys(&none), ["audio_duration", "input_tokens", "output_tokens", "total_tokens", "input_audio_tokens"]);
+        assert_eq!(
+            keys(&none),
+            [
+                "audio_duration",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "input_audio_tokens"
+            ]
+        );
 
         m.metadata = Some(Metadata { model_name: Some(String::new()), model_provider: None });
         let empty = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
@@ -212,7 +218,6 @@ mod tests {
         assert_eq!(get(&named, "model_name"), Some(LogValue::Str("nova-3".into())));
         assert_eq!(get(&named, "model_provider"), Some(LogValue::Str("deepgram".into())));
     }
-
 
     // Catches: normalising `cached_input_tokens` to `input_cached_tokens`.
     #[test]

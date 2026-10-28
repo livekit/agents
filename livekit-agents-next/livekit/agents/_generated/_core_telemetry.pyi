@@ -5,10 +5,8 @@
 
 from __future__ import annotations
 
-from livekit.agents._core import RecordingOptions
-
 from .._core import ChatItem
-from .telemetry import LogRecordWire, ProjectedReportEvent, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
+from .telemetry import LogRecordWire, ProjectedReportEvent, RecordingOptions, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
 
 class _core_TelemetryPolicy:
     """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""

@@ -31,6 +31,7 @@ from ._generated.storage_class import (
 from ._generated.storage_context import ContextScope, ContextScopeWrite
 from ._generated.storage_options import Policy, TurnOptions
 from ._generated.storage_turn import TurnContext, TurnResult
+from ._generated.telemetry import SpanUpdateWire
 from ._generated.worker_options import ServerOptions
 
 # --- runtime.rs ----------------------------------------------------------------------------------
@@ -73,7 +74,6 @@ class EndpointServer:
     def close_websockets(
         self, code: int = 1001, reason: str = "worker draining"
     ) -> Awaitable[None]: ...
-
 
 class ServerConfig:
     """``AgentServer``'s options, resolved against the environment; writable until it starts."""
@@ -452,10 +452,6 @@ def run_shutdown_callbacks(
 
 # --- metrics and telemetry -----------------------------------------------------------------------
 
-def metrics_log_fields(metrics: Any) -> tuple[str, dict[str, Any]] | None:
-    """``log_metrics(metrics)`` minus the logging: ``(message, extra)``, ``None`` for no log."""
-
-def otel_usage_records(metrics: Any) -> list[tuple[str, str, Any, dict[str, Any]]]: ...
 def session_records(
     gate: UploadGate,
     report: dict[str, Any],
@@ -600,7 +596,7 @@ class InterruptionDetectorStream:
     ) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
-    def recv(self) -> Awaitable[dict[str, Any] | None]:
+    def recv(self) -> Awaitable[dict[str, Any] | SpanUpdateWire | None]:
         """The next event (``overlapping_speech``, ``error`` or ``span_update``), ``None`` at the end."""
 
     def aclose(self) -> Awaitable[None]: ...

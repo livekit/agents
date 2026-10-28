@@ -46,8 +46,6 @@ const HANDWRITTEN: &[&str] = &[
     "init",
     "interruption_metrics",
     "ipc_pair",
-    "metrics_log_fields",
-    "otel_usage_records",
     "resolve_host_ref",
     "run_shutdown_callbacks",
     "session_records",
