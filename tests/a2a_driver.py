@@ -231,7 +231,8 @@ class Door:
 
     async def list_tasks(self, context_id: str) -> list[dict[str, Any]]:
         r = await rpc(self.http, "tasks/list", {"contextId": context_id})
-        return list(r.json()["result"]["tasks"])
+        # an empty list is left out of the response
+        return list(r.json()["result"].get("tasks", []))
 
     async def cancel(self, task_id: str, context_id: str, **metadata: Any) -> dict[str, Any]:
         """``tasks/cancel``: the JSON-RPC response, its ``result`` or its ``error``."""
@@ -320,12 +321,14 @@ def output_of(call_id: str) -> Callable[[ChatContext], bool]:
 
 class ScriptedLLM(FakeLLM):
     """Each request takes the first reply left whose ``when`` matches it, or that has none; with
-    none left the answer is empty. ``requests`` keeps every request's chat context."""
+    none left the answer is empty. ``requests`` keeps every request's chat context, and
+    ``tool_choices`` its tool choice."""
 
     def __init__(self, *replies: Reply) -> None:
         super().__init__()
         self.replies = list(replies)
         self.requests: list[ChatContext] = []
+        self.tool_choices: list[Any] = []
 
     def chat(  # type: ignore[override]
         self,
@@ -336,6 +339,7 @@ class ScriptedLLM(FakeLLM):
         **kwargs: Any,
     ) -> LLMStream:
         self.requests.append(chat_ctx.copy())
+        self.tool_choices.append(kwargs.get("tool_choice"))
         reply = next((r for r in self.replies if r.when is None or r.when(chat_ctx)), None)
         if reply is not None:
             self.replies.remove(reply)

@@ -1,0 +1,734 @@
+"""A busy agent in text (design §2, §7 "When the agent is busy"): under the ``live`` inbox a message
+during a turn interrupts it or waits, every task answers on its own stream, and work in the
+background is delivered when no turn runs, as on a call. Seen only on the A2A wire and in what
+reaches the model."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, TypeVar
+
+import httpx
+import pytest
+
+from livekit.agents import Agent, AgentServer, InputRequired, RunContext
+from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.a2a.codec import metadata_from_wire
+from livekit.agents.a2a.extension import INTERRUPTED, MERGED_INTO
+from livekit.agents.delegation import A2ADelegate
+from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
+from livekit.agents.llm.tool_context import DuplicateMode, ToolFlag
+from livekit.agents.storage import AgentDBStorage
+
+from .a2a_driver import (
+    API_KEY,
+    API_SECRET,
+    EXPERT,
+    Door,
+    Reply,
+    ScriptedLLM,
+    Sent,
+    call,
+    no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
+    output_of,
+    rpc,
+    state_of,
+    wire,
+)
+from .agentdb_fixture import past_the_fresh_acquire
+
+pytestmark = [pytest.mark.unit]
+
+
+def metadata_of(wire_object: dict[str, Any]) -> dict[str, Any]:
+    """A task's or an event's metadata, short keys."""
+    return dict(metadata_from_wire(wire_object.get("metadata")))
+
+
+NO_INTERRUPT: dict[str, Any] = {"livekit/interrupt": False}
+EMAIL = "ana@example.com"
+BACKGROUND = "livekit/background"
+
+
+def said(text: str) -> Callable[[ChatContext], bool]:
+    """A request whose last item is the person's message ``text``."""
+
+    def matches(ctx: ChatContext) -> bool:
+        last = ctx.items[-1] if ctx.items else None
+        return isinstance(last, ChatMessage) and last.role == "user" and last.text_content == text
+
+    return matches
+
+
+def told(*call_ids: str) -> Callable[[ChatContext], bool]:
+    """A request that delivers the outputs of ``call_ids``, a background tool's progress
+    (``b1_update_1``) or end (``b1_final``), with no reply after them yet."""
+
+    def matches(ctx: ChatContext) -> bool:
+        outputs = [n for n, i in enumerate(ctx.items) if i.type == "function_call_output"]
+        delivered = {ctx.items[n].call_id for n in outputs}  # type: ignore[union-attr]
+        later = ctx.items[outputs[-1] + 1 :] if outputs else []
+        return set(call_ids) <= delivered and not any(
+            getattr(i, "role", None) == "assistant" for i in later
+        )
+
+    return matches
+
+
+T = TypeVar("T")
+
+
+async def until(check: Callable[[], Awaitable[T | None]], what: str) -> T:
+    """Polls ``check`` until it returns something truthy, and returns that."""
+    for _ in range(400):
+        if found := await check():
+            return found
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"never {what}")
+
+
+async def listed(desk: Door, thread: str, count: int) -> None:
+    """Waits until the thread holds ``count`` tasks: the later messages are in, and wait."""
+
+    async def held() -> bool:
+        return len(await desk.list_tasks(thread)) >= count
+
+    await until(held, f"{count} tasks")
+
+
+class Busy:
+    """A handler whose first message holds the floor until ``release``; every later turn answers
+    with the texts of the messages it took."""
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.batches: list[list[str]] = []
+
+    async def __call__(self, ctx: A2ASessionContext[Any]) -> str:
+        texts = [str(m.parts[0]["text"]) for m in ctx.messages]
+        self.batches.append(texts)
+        if len(self.batches) == 1:
+            self.entered.set()
+            await self.gate.wait()
+
+            async def reply() -> AsyncIterator[str]:
+                yield "a long answer"
+
+            return await ctx.stream(reply())
+        await ctx.update("looking")
+        return "seen " + " + ".join(texts)
+
+    async def release(self) -> None:
+        # an interrupt that lands right after the lane was taken waits for the next boundary
+        await past_the_fresh_acquire()
+        self.gate.set()
+
+    async def send(self, desk: Door, first: str, *later: str, **flags: Any) -> list[Sent]:
+        """Sends ``first``, then each of ``later`` with ``flags`` while it is answered."""
+        thread = await desk.thread()
+        sends = [asyncio.create_task(desk.send(first, context_id=thread))]
+        await asyncio.wait_for(self.entered.wait(), 20)
+        for count, text in enumerate(later, 2):
+            sends.append(asyncio.create_task(desk.send(text, context_id=thread, **flags)))
+            await listed(desk, thread, count)
+        await self.release()
+        return list(await asyncio.wait_for(asyncio.gather(*sends), 30))
+
+
+# ---------------------------------------------------------------------------------------------
+# a message during a turn interrupts it, or waits
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.rule("R5")
+@pytest.mark.xfail(strict=True, reason="R5: no live inbox, which reads livekit/interrupt")
+async def test_a_message_interrupts_the_reply_by_default(door: Callable[..., Door]) -> None:
+    busy = Busy()
+    stopped, ran = await busy.send(door(busy, inbox="live"), "tell me everything", "never mind")
+
+    assert stopped.state == "canceled"
+    assert stopped.metadata[INTERRUPTED] is True
+    assert ran.state == "completed"
+    assert ran.answer == "seen never mind"
+
+
+@pytest.mark.rule("R5", "R10")
+@pytest.mark.xfail(strict=True, reason="R5, R10: no live inbox, which reads livekit/interrupt")
+async def test_messages_that_do_not_interrupt_wait_and_run_as_one_turn(
+    door: Callable[..., Door],
+) -> None:
+    busy = Busy()
+    desk = door(busy, inbox="live")
+    one, two, three = await busy.send(desk, "one", "two", "three", **NO_INTERRUPT)
+
+    # the reply was not stopped, and the two that waited ran as one turn, with no debounce
+    assert one.state == "completed" and one.answer == "a long answer"
+    assert busy.batches == [["one"], ["two", "three"]]
+    assert two.state == "completed"
+    assert two.metadata[MERGED_INTO] == three.task["id"]
+    assert three.state == "completed" and three.answer == "seen two + three"
+
+
+@pytest.mark.rule("R5")
+async def test_only_the_live_inbox_reads_the_interrupt_flag(door: Callable[..., Door]) -> None:
+    busy = Busy()
+    desk = door(busy, inbox="interrupt")
+    stopped, ran = await busy.send(desk, "tell me everything", "never mind", **NO_INTERRUPT)
+
+    assert stopped.state == "canceled"
+    assert ran.state == "completed"
+
+
+@pytest.mark.rule("R5")
+@pytest.mark.xfail(strict=True, reason="R5: a delegation sends no livekit/interrupt; no live inbox")
+async def test_a_delegation_never_interrupts_the_experts_reply(
+    door: Callable[..., Door], agentdb_storage: AgentDBStorage
+) -> None:
+    busy = Busy()
+    server = AgentServer(
+        storage=agentdb_storage, agent_name=EXPERT, api_key=API_KEY, api_secret=API_SECRET
+    )
+    server.a2a_session(endpoint=EXPERT, description="Knows the fares.", inbox="live")(busy)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.http.app),
+        base_url="http://experts.test",
+        timeout=30.0,
+    ) as http:
+        delegate = A2ADelegate(f"http://experts.test/{EXPERT}", httpx_client=http)
+        model = ScriptedLLM(
+            Reply(tool_calls=[call("ask", "c1", request="the fare to Oslo")]),
+            Reply("It is 120 euros.", when=output_of("c1")),
+        )
+        front = Agent(instructions="front desk", llm=model, tools=[delegate])
+
+        async def front_desk(ctx: A2ASessionContext[Any]) -> Any:
+            return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+        desk = door(front_desk)
+        thread = await desk.thread()
+        # the person talks to the expert too, and its reply is under way
+        direct = asyncio.create_task(
+            http.post(
+                f"/{EXPERT}/v1",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "message/send",
+                    "params": {"message": wire("the whole fare table", "d1", context_id=thread)},
+                },
+            )
+        )
+        await asyncio.wait_for(busy.entered.wait(), 20)
+        asked = asyncio.create_task(desk.send("fare to Oslo?", context_id=thread))
+        # the person's task, the expert's reply and the delegation
+        await listed(desk, thread, 3)
+        await busy.release()
+        reply, sent = await asyncio.wait_for(asyncio.gather(direct, asked), 30)
+        await delegate.aclose()
+
+    assert reply.json()["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert busy.batches == [["the whole fare table"], ["the fare to Oslo"]]
+    assert sent.answer == "It is 120 euros."
+
+
+# ---------------------------------------------------------------------------------------------
+# each task answers on its own stream
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.rule("R2")
+@pytest.mark.xfail(strict=True, reason="R2: no live inbox; a waiting task's progress is dropped")
+async def test_a_message_that_waited_answers_on_its_own_stream(door: Callable[..., Door]) -> None:
+    busy = Busy()
+    _, waited = await busy.send(door(busy, inbox="live"), "one", "two", **NO_INTERRUPT)
+
+    # the holder ran it, and its progress, its answer and its end came on its own response
+    frames = waited.frames[1:]
+    progress = [
+        f["statusUpdate"]["status"]["message"]["parts"][0]["text"]
+        for f in frames
+        if state_of(f) == "TASK_STATE_WORKING" and "message" in f["statusUpdate"]["status"]
+    ]
+    assert progress == ["looking"]
+    assert waited.answer == "seen two"
+    assert state_of(frames[-1]) == "TASK_STATE_COMPLETED"
+    task_ids = {(f.get("statusUpdate") or f["artifactUpdate"])["taskId"] for f in frames}
+    assert task_ids == {waited.task["id"]}
+
+
+@pytest.mark.rule("R2")
+@pytest.mark.xfail(strict=True, reason="R2: no live inbox")
+async def test_an_answer_continues_its_task_on_the_tasks_own_stream(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1")]),
+        Reply(tool_calls=[call("book", "b2", email="ana@example.com")]),
+        Reply("Booked.", when=output_of("b2")),
+    )
+    agent = Agent(instructions="bookings", llm=model)
+
+    @agent.tool
+    async def book(ctx: RunContext, email: str = "") -> str | InputRequired:
+        """Book the visit.
+
+        Args:
+            email: the person's email, when they gave it
+        """
+        return f"booked for {email}" if email else InputRequired("What email?", verbatim=True)
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await agent.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler, inbox="live")
+    thread = await desk.thread()
+    asked = await desk.send("book me in", context_id=thread)
+    assert asked.state == "input_required"
+
+    answered = await desk.send("ana@example.com", context_id=thread)
+    assert answered.task["id"] == asked.task["id"]
+    assert answered.state == "completed" and answered.answer == "Booked."
+    # the response carries the continuation only, not the question the stream held before it
+    assert [state_of(f) for f in answered.frames[1:] if "statusUpdate" in f] == [
+        "TASK_STATE_COMPLETED"
+    ]
+
+
+# ---------------------------------------------------------------------------------------------
+# a tool that reports progress goes on in the background
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Booking:
+    booked: str = ""
+
+
+class Bookings:
+    """A desk whose ``book`` tool reports progress, then waits for ``release[day]`` and books, or
+    asks ``asks[day]``; ``ended`` lists the days whose call returned."""
+
+    def __init__(
+        self,
+        model: ScriptedLLM,
+        *days: str,
+        asks: dict[str, str] | None = None,
+        on_duplicate: DuplicateMode = "allow",
+        flags: ToolFlag = ToolFlag.NONE,
+    ) -> None:
+        self.release = {day: asyncio.Event() for day in days}
+        self.ended: list[str] = []
+        self.agent = Agent(instructions="front desk", llm=model, state_type=Booking)
+
+        @self.agent.tool(on_duplicate=on_duplicate, flags=flags)
+        async def book(ctx: RunContext[None, Booking], day: str) -> str | InputRequired:
+            """Book a cleaning.
+
+            Args:
+                day: the day
+            """
+            await ctx.update("booking now")
+            await self.release[day].wait()
+            self.ended.append(day)
+            if asks and day in asks:
+                return InputRequired(asks[day], verbatim=True)
+            ctx.state.booked = day
+            return f"booked {day}"
+
+    async def __call__(self, ctx: A2ASessionContext[Booking]) -> Any:
+        if ctx.message.text_content == "what did I book?":
+            return f"booked: {ctx.state.booked}"
+        return await self.agent.run(
+            ctx.message, message_history=ctx.message_history, state=ctx.state
+        )
+
+
+async def in_the_background(desk: Door, thread: str, count: int = 1) -> list[dict[str, Any]]:
+    """Waits until ``count`` of the thread's tasks are ``working`` with work in the background."""
+
+    async def working() -> list[dict[str, Any]] | None:
+        tasks = [
+            task
+            for task in await desk.list_tasks(thread)
+            if task["status"]["state"] == "TASK_STATE_WORKING" and metadata_of(task).get(BACKGROUND)
+        ]
+        return tasks if len(tasks) >= count else None
+
+    return await until(working, f"{count} tasks in the background")
+
+
+@pytest.mark.rule("R8", "R9", "R11")
+@pytest.mark.xfail(strict=True, reason="R8, R9, R11: a tool's update in text never frees the run")
+async def test_a_tool_that_reports_progress_runs_on_beside_the_next_message(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")]),
+        Reply("On it.", when=output_of("b1")),
+        Reply("Reminder set.", when=said("and a reminder")),
+        Reply("Booked for Monday.", when=told("b1_final")),
+    )
+    desk = Bookings(model, "monday")
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    # the booking's turn ended on its progress; the task waits for the booking
+    (task,) = await in_the_background(door_, thread)
+
+    # the next message runs at once, beside the booking
+    second = await asyncio.wait_for(door_.send("and a reminder", context_id=thread), 20)
+    assert second.state == "completed" and second.answer == "Reminder set."
+    assert not first.done()
+
+    desk.release["monday"].set()
+    booked = await asyncio.wait_for(first, 20)
+    # the booking's end answered its own task, which said on its stream it went on meanwhile
+    assert booked.task["id"] == task["id"]
+    assert booked.state == "completed" and booked.answer == "Booked for Monday."
+    assert booked.metadata[BACKGROUND] is False
+    assert any(
+        state_of(f) == "TASK_STATE_WORKING" and metadata_of(f["statusUpdate"]).get(BACKGROUND)
+        for f in booked.frames
+    )
+    # the state the booking wrote after its turn committed is kept
+    assert (await door_.send("what did I book?", context_id=thread)).answer == "booked: monday"
+
+
+@pytest.mark.rule("R8")
+@pytest.mark.xfail(strict=True, reason="R8: in text a tool's update never lets the run go on")
+async def test_a_task_waits_for_all_its_work_in_the_background(door: Callable[..., Door]) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday"), call("book", "b2", day="tuesday")]),
+        Reply("On it.", when=output_of("b2")),
+        Reply("Monday is booked.", when=told("b1_final")),
+        Reply("Both are booked.", when=told("b2_final")),
+    )
+    desk = Bookings(model, "monday", "tuesday")
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday and tuesday", context_id=thread))
+    await in_the_background(door_, thread)
+    desk.release["monday"].set()
+
+    # monday's end gets a turn of its own, and the task goes on waiting for tuesday
+    async def monday_answered() -> dict[str, Any] | None:
+        for task in await door_.list_tasks(thread):
+            if task["status"].get("message", {}).get("parts") == [{"text": "Monday is booked."}]:
+                return task
+        return None
+
+    task = await until(monday_answered, "monday's end got a turn")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+
+    desk.release["tuesday"].set()
+    booked = await asyncio.wait_for(first, 20)
+    assert booked.state == "completed" and booked.answer == "Both are booked."
+
+
+# ---------------------------------------------------------------------------------------------
+# what work in the background queued is delivered when no turn runs
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.rule("R28")
+@pytest.mark.xfail(strict=True, reason="R28: in text no work runs in the background to deliver")
+async def test_later_progress_is_told_while_the_work_runs_on(door: Callable[..., Door]) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")]),
+        Reply("On it.", when=output_of("b1")),
+        Reply("Half way there.", when=told("b1_update_1")),
+        Reply("Booked.", when=told("b1_final")),
+    )
+    agent = Agent(instructions="front desk", llm=model)
+    halfway, done = asyncio.Event(), asyncio.Event()
+
+    @agent.tool
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book a cleaning.
+
+        Args:
+            day: the day
+        """
+        await ctx.update("booking now")
+        await halfway.wait()
+        await ctx.update("half way")
+        await done.wait()
+        return f"booked {day}"
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await agent.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler, inbox="live")
+    thread = await desk.thread()
+    first = asyncio.create_task(desk.send("book monday", context_id=thread))
+    await in_the_background(desk, thread)
+    halfway.set()
+
+    async def progress_told() -> bool:
+        (task,) = await desk.list_tasks(thread)
+        return Sent([], task).status_text == "Half way there."
+
+    await until(progress_told, "the progress was told")
+    assert not first.done()
+    done.set()
+    assert (await asyncio.wait_for(first, 20)).answer == "Booked."
+
+
+@pytest.mark.rule("R28", "R58")
+@pytest.mark.xfail(
+    strict=True, reason="R28, R58: in text no work runs in the background to deliver"
+)
+async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_task(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
+        Reply("On it.", when=output_of("b1")),
+        Reply(tool_calls=[call("book", "b2", day="tuesday")], when=said("and tuesday")),
+        Reply("That too.", when=output_of("b2")),
+        Reply("Both are booked.", when=told("b1_final", "b2_final")),
+        Reply("You're welcome.", when=said("thanks")),
+    )
+    desk = Bookings(model, "monday", "tuesday")
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def handler(ctx: A2ASessionContext[Booking]) -> Any:
+        if ctx.message.text_content == "one moment":
+            entered.set()
+            await gate.wait()
+            return "Here."
+        return await desk(ctx)
+
+    door_ = door(handler, inbox="live", state=Booking)
+    thread = await door_.thread()
+    monday = asyncio.create_task(door_.send("book monday", context_id=thread))
+    await in_the_background(door_, thread)
+    tuesday = asyncio.create_task(door_.send("and tuesday", context_id=thread))
+    await in_the_background(door_, thread, 2)
+    # both end while a turn runs, and wait for it
+    busy = asyncio.create_task(door_.send("one moment", context_id=thread))
+    await asyncio.wait_for(entered.wait(), 20)
+    for release in desk.release.values():
+        release.set()
+
+    async def both_ended() -> bool:
+        return len(desk.ended) == 2
+
+    await until(both_ended, "both ended")
+    gate.set()
+    sent = await asyncio.wait_for(asyncio.gather(monday, tuesday, busy), 20)
+
+    assert [s.answer for s in sent] == ["Both are booked.", "Both are booked.", "Here."]
+    assert all(s.state == "completed" for s in sent)
+    # as on a call, the results are told last, by a system message the history does not keep
+    (delivery,) = [r for r in model.requests if told("b1_final", "b2_final")(r)]
+    assert model.tool_choices[model.requests.index(delivery)] == "none"
+    tail = delivery.items[-1]
+    assert isinstance(tail, ChatMessage) and tail.role == "system"
+    await door_.send("thanks", context_id=thread)
+    assert all(
+        getattr(i, "text_content", None) != tail.text_content for i in model.requests[-1].items
+    )
+
+
+@pytest.mark.rule("R29")
+@pytest.mark.xfail(strict=True, reason="R29: in text no work runs in the background to ask")
+async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
+    door: Callable[..., Door],
+) -> None:
+    question = "Which time on Monday?"
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")]),
+        Reply("On it.", when=output_of("b1")),
+        Reply("Booked at nine.", when=said("nine")),
+    )
+    desk = Bookings(model, "monday", asks={"monday": question})
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    (task,) = await in_the_background(door_, thread)
+    desk.release["monday"].set()
+    asked = await asyncio.wait_for(first, 20)
+
+    # as on a call, the question is what the person gets, with no reply generated for it
+    assert asked.state == "input_required" and asked.status_text == question
+    assert len(model.requests) == 2
+    answered = await door_.send("nine", context_id=thread)
+    assert answered.task["id"] == task["id"] and answered.answer == "Booked at nine."
+
+
+@pytest.mark.rule("R55")
+@pytest.mark.xfail(strict=True, reason="R55: in text no tool goes to the background")
+async def test_a_reply_beside_the_call_is_the_only_acknowledgement(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply("On it.", tool_calls=[call("book", "b1", day="monday")]),
+        Reply("A second acknowledgement.", when=output_of("b1")),
+        Reply("Booked for Monday.", when=told("b1_final")),
+    )
+    desk = Bookings(model, "monday")
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    (task,) = await in_the_background(door_, thread)
+    assert len(model.requests) == 1
+    assert task["status"]["message"]["parts"] == [{"text": "On it."}]
+    desk.release["monday"].set()
+    assert (await asyncio.wait_for(first, 20)).answer == "Booked for Monday."
+
+
+@pytest.mark.rule("R57")
+@pytest.mark.xfail(strict=True, reason="R57: in text no tool goes to the background")
+async def test_the_reply_to_progress_calls_no_tools(door: Callable[..., Door]) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")]),
+        # a model that calls anyway
+        Reply("On it.", tool_calls=[call("book", "b9", day="friday")], when=output_of("b1")),
+        Reply("Booked for Monday.", when=told("b1_final")),
+    )
+    desk = Bookings(model, "monday", "friday")
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    await in_the_background(door_, thread)
+    for release in desk.release.values():
+        release.set()
+    booked = await asyncio.wait_for(first, 20)
+
+    assert model.tool_choices[1] == "none"
+    assert booked.answer == "Booked for Monday."
+    ran = {i.call_id for r in model.requests for i in r.items if i.type == "function_call_output"}
+    assert "b9" not in ran
+
+
+@pytest.mark.rule("R30", "B25")
+@pytest.mark.xfail(strict=True, reason="R30, B25: in text no call runs on to be duplicated")
+async def test_a_duplicate_of_a_call_in_the_background_follows_the_tools_policy(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
+        Reply("On it.", when=output_of("b1")),
+        Reply(tool_calls=[call("book", "b2", day="monday")], when=said("book it again")),
+        Reply("It is still being booked.", when=output_of("b2")),
+        Reply("Booked for Monday.", when=told("b1_final")),
+    )
+    desk = Bookings(model, "monday", on_duplicate="reject")
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    await in_the_background(door_, thread)
+    again = await asyncio.wait_for(door_.send("book it again", context_id=thread), 20)
+    assert again.answer == "It is still being booked."
+    refused = model.requests[-1].items[-1]
+    assert refused.type == "function_call_output" and refused.is_error
+    # the refusal names no tool to cancel with
+    assert "lk_agents" not in refused.output
+
+    desk.release["monday"].set()
+    assert (await asyncio.wait_for(first, 20)).answer == "Booked for Monday."
+
+
+@pytest.mark.rule("R30")
+@pytest.mark.parametrize("cancellable", [False, True])
+@pytest.mark.xfail(strict=True, reason="R30: in text no call runs on to be replaced")
+async def test_a_replace_cancels_the_running_call_only_when_it_is_cancellable(
+    door: Callable[..., Door], cancellable: bool
+) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
+        Reply("On it.", when=output_of("b1")),
+        Reply(tool_calls=[call("book", "b2", day="monday")], when=said("book it again")),
+        Reply("Again.", when=output_of("b2")),
+        Reply("Told.", when=told("b1_final")),
+        Reply("Booked again.", when=told("b2_final")),
+    )
+    flags = ToolFlag.CANCELLABLE if cancellable else ToolFlag.NONE
+    desk = Bookings(model, "monday", on_duplicate="replace", flags=flags)
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    await in_the_background(door_, thread)
+    again = asyncio.create_task(door_.send("book it again", context_id=thread))
+
+    async def ran() -> bool:
+        return any(output_of("b2")(r) for r in model.requests)
+
+    await until(ran, "the duplicate ran")
+    desk.release["monday"].set()
+    await asyncio.wait_for(asyncio.gather(first, again), 20)
+
+    # without the flag the duplicate is refused and the first runs on to its end; with it the
+    # first is cancelled, and its task hears so
+    outputs = {
+        i.call_id: i for r in model.requests for i in r.items if i.type == "function_call_output"
+    }
+    assert outputs["b2"].is_error is not cancellable
+    assert outputs["b1_final"].is_error is cancellable
+
+
+@pytest.mark.rule("B53")
+@pytest.mark.xfail(strict=True, reason="B53: in text the model gets no cancel tool")
+async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "b1", day="monday")], when=said("book monday")),
+        Reply("On it.", when=output_of("b1")),
+        Reply(
+            tool_calls=[
+                call("lk_agents_get_running_tasks", "g1"),
+                FunctionToolCall(
+                    name="lk_agents_cancel_task", arguments='{"call_id": "b1"}', call_id="x1"
+                ),
+            ],
+            when=said("cancel it"),
+        ),
+        Reply("Cancelled.", when=output_of("x1")),
+        Reply("The booking was cancelled.", when=told("b1_final")),
+    )
+    desk = Bookings(model, "monday", flags=ToolFlag.CANCELLABLE)
+    door_ = door(desk, inbox="live", state=Booking)
+    thread = await door_.thread()
+
+    first = asyncio.create_task(door_.send("book monday", context_id=thread))
+    await in_the_background(door_, thread)
+    cancelled = await asyncio.wait_for(door_.send("cancel it", context_id=thread), 20)
+    ended = await asyncio.wait_for(first, 20)
+
+    # as on a call, the model lists and cancels the run's own work in the background
+    outputs = {
+        i.call_id: i for r in model.requests for i in r.items if i.type == "function_call_output"
+    }
+    assert "'b1'" in outputs["g1"].output and not outputs["x1"].is_error
+    assert cancelled.answer == "Cancelled."
+    # the cancelled work's task still hears that it ended
+    assert outputs["b1_final"].is_error
+    assert ended.state == "completed" and ended.answer == "The booking was cancelled."
+
+
+# ---------------------------------------------------------------------------------------------
+# a request that fails outside a turn
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.rule("B49")
+@pytest.mark.xfail(strict=True, reason="B49: the error carries the exception's type and text")
+async def test_a_request_that_fails_answers_a_fixed_sentence(door: Callable[..., Door]) -> None:
+    desk = door()
+    thread = await desk.thread()
+    response = await rpc(desk.http, "tasks/list", {"contextId": thread, "pageSize": "a few"})
+    error = response.json()["error"]
+    assert error["message"] == "the request failed before it finished"
+    assert "ValueError" not in response.text and "a few" not in response.text
