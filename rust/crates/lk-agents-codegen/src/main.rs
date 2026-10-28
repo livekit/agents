@@ -3,6 +3,7 @@
 //! The source lists are explicit, not a glob, so generated output never depends on file placement.
 
 mod bases;
+mod forward;
 mod ir;
 mod napi;
 mod node;
@@ -334,11 +335,16 @@ fn run(check: bool) -> Result<usize, String> {
         .collect();
     let records = python::emit_with(&reference, &[], &constants)?;
     let stub = stub::emit(&decls, &exposed)?;
+    let forward = forward::emit(&decls, &exposed)?;
     for package in python_packages {
         let python_root = root.join(package).join(PYTHON_GENERATED);
         // The reference keeps its hand-written base classes.
         let python = if package == REFERENCE_PACKAGE { &records } else { &with_bases };
         for out in python.iter().chain(&stub) {
+            stale += put(&python_root.join(&out.path), &out.text, check)?;
+        }
+        // Every package: the records name these modules (`.language`), the reference's included.
+        for out in &forward {
             stale += put(&python_root.join(&out.path), &out.text, check)?;
         }
         if !check {

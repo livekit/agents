@@ -31,10 +31,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt,
     utils,
 )
-from livekit.agents.language import LanguageCode
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,

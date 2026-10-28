@@ -31,6 +31,7 @@ from ._exceptions import (
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
+from ._generated.language import LanguageCode
 from ._generated.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 from .job import (
     AutoSubscribe,
@@ -40,7 +41,6 @@ from .job import (
     JobRequest,
     get_job_context,
 )
-from .language import LanguageCode
 from .llm.chat_context import (
     AgentConfigUpdate,
     AgentHandoff,

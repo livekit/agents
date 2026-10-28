@@ -1,18 +1,10 @@
-# Copyright 2023 LiveKit, Inc.
+# GENERATED FILE -- DO NOT EDIT.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[python(str_class(..))]` declaration in:
+#     rust/crates/lk-agents-abi/src/tokenize/language/code.rs
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Normalized BCP-47 language identifier."""
+# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
+# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -21,20 +13,22 @@ from typing import Any
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
-from . import _core
+from .. import _core
 
 
 class LanguageCode(str):
     """Normalized BCP-47 language identifier. Accepts any common format.
 
-    Examples::
+    Examples:
 
-        LanguageCode("english")  # → "en"
-        LanguageCode("eng")      # → "en"
-        LanguageCode("en")       # → "en"
-        LanguageCode("en-US")    # → "en-US"
-        LanguageCode("en_us")    # → "en-US"
-        LanguageCode("multi")    # → "multi"
+    ```python
+    LanguageCode("english")  # -> "en"
+    LanguageCode("eng")      # -> "en"
+    LanguageCode("en")       # -> "en"
+    LanguageCode("en-US")    # -> "en-US"
+    LanguageCode("en_us")    # -> "en-US"
+    LanguageCode("multi")    # -> "multi"
+    ```
     """
 
     def __new__(cls, code: str) -> LanguageCode:
@@ -55,18 +49,21 @@ class LanguageCode(str):
 
         E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
         """
-        return _core.base_language(self)  # type: ignore[no-any-return]
+        return _core.base_language(self)
 
     @property
     def iso(self) -> str:
         """ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``."""
-        return _core.language_iso(self)  # type: ignore[no-any-return]
+        return _core.language_iso(self)
 
     @property
     def region(self) -> str | None:
         """Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``."""
-        return _core.language_region(self)  # type: ignore[no-any-return]
+        return _core.language_region(self)
 
     def to_language_name(self) -> str | None:
         """Return the English language name (e.g. ``'english'``), or ``None`` if unknown."""
-        return _core.language_name(self)  # type: ignore[no-any-return]
+        return _core.language_name(self)
+
+
+LanguageCode.__module__ = "livekit.agents"

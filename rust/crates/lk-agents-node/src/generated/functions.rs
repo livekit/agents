@@ -756,25 +756,25 @@ pub fn normalize_language(code: String) -> String {
     lk_agents_abi::tokenize::language::normalize(&code)
 }
 
-/// Base language, ISO 639-1 where one exists: `"en"` from `"en-US"`, `"zh"` from `"cmn-Hans-CN"`.
+/// Base language code (ISO 639-1 when possible).
 #[napi(js_name = "baseLanguage")]
 pub fn base_language(code: String) -> String {
     lk_agents_abi::tokenize::language::base_language(&code).to_string()
 }
 
-/// Region subtag: the first two-character subtag after the primary (`None` for `"es-419"`).
+/// Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``.
 #[napi(js_name = "languageRegion")]
 pub fn language_region(code: String) -> Option<String> {
     lk_agents_abi::tokenize::language::region(&code).map(|v| v.to_string())
 }
 
-/// The 639-1 base plus the region: `"zh-CN"` from `"cmn-Hans-CN"` (`turn_detector/base.py:241`).
+/// ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``.
 #[napi(js_name = "languageIso")]
 pub fn language_iso(code: String) -> String {
     lk_agents_abi::tokenize::language::iso(&code)
 }
 
-/// Lowercase English (NLTK punkt) name of the base language, or `None` if unknown.
+/// Return the English language name (e.g. ``'english'``), or ``None`` if unknown.
 #[napi(js_name = "languageName")]
 pub fn language_name(code: String) -> Option<String> {
     lk_agents_abi::tokenize::language::language_name(&code).map(|v| v.to_string())

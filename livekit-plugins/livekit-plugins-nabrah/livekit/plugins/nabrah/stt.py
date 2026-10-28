@@ -54,10 +54,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
+    LanguageCode,
     stt,
     utils,
 )
-from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 

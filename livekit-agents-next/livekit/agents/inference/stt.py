@@ -29,7 +29,7 @@ from .._generated.inference_stt import (
     XaiModels,
     XaiOptions,
 )
-from ..language import LanguageCode
+from .._generated.language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given

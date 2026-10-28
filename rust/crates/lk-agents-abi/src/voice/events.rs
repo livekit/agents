@@ -104,7 +104,7 @@ pub struct UserInputTranscribed {
     #[python(default = "None")]
     pub speaker_id: Option<String>,
     #[binding(default)]
-    #[python(ty = "LanguageCode | None", import = "..language:LanguageCode", default = "None")]
+    #[python(ty = "LanguageCode | None", import = ".language:LanguageCode", default = "None")]
     #[node(ty = "string | null")]
     pub language: Option<String>,
     #[binding(skip, extract_skip)]

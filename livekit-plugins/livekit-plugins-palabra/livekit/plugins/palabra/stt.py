@@ -45,10 +45,10 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt,
     utils,
 )
-from livekit.agents.language import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 

@@ -8,7 +8,7 @@ from typing import Any, Literal
 from livekit import rtc
 
 from .. import _core, utils
-from ..language import LanguageCode
+from .._generated.language import LanguageCode
 from ..log import logger
 from ..metrics import EOTInferenceMetrics, Metadata
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr

@@ -224,7 +224,7 @@ def _default_total_tokens(metrics: Any) -> Any:
 
 
 def speech_data_post_init(data: Any) -> None:
-    from .language import LanguageCode
+    from ._generated.language import LanguageCode
 
     def code(lang: Any) -> Any:
         return (

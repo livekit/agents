@@ -25,7 +25,6 @@ from livekit import rtc
 
 from .. import _bindings, _core
 from .._exceptions import APIError
-from ..language import LanguageCode
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -35,6 +34,7 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
+from .language import LanguageCode
 
 
 @dataclass

@@ -44,7 +44,9 @@ pub fn normalize(code: &str) -> String {
     out
 }
 
-/// Base language, ISO 639-1 where one exists: `"en"` from `"en-US"`, `"zh"` from `"cmn-Hans-CN"`.
+/// Base language code (ISO 639-1 when possible).
+///
+/// E.g., ``'en'`` from ``'en-US'``, ``'zh'`` from ``'cmn-Hans-CN'``.
 #[crate::host(export(pid = false))]
 pub fn base_language(code: &str) -> &str {
     let base = code.split('-').next().unwrap_or(code);
@@ -54,13 +56,14 @@ pub fn base_language(code: &str) -> &str {
     }
 }
 
-/// Region subtag: the first two-character subtag after the primary (`None` for `"es-419"`).
+/// Region code, e.g., ``'US'`` from ``'en-US'``, or ``None``.
+// The first two-character subtag after the primary (`None` for `"es-419"`).
 #[crate::host(export(name = "language_region", pid = false))]
 pub fn region(code: &str) -> Option<&str> {
     code.split('-').skip(1).find(|part| part.chars().count() == 2)
 }
 
-/// The 639-1 base plus the region: `"zh-CN"` from `"cmn-Hans-CN"` (`turn_detector/base.py:241`).
+/// ISO 639-1 tag with region, e.g., ``'zh-CN'`` from ``'cmn-Hans-CN'``.
 #[crate::host(export(name = "language_iso", pid = false))]
 pub fn iso(code: &str) -> String {
     let base = base_language(code);
@@ -70,15 +73,33 @@ pub fn iso(code: &str) -> String {
     }
 }
 
-/// Lowercase English (NLTK punkt) name of the base language, or `None` if unknown.
+/// Return the English language name (e.g. ``'english'``), or ``None`` if unknown.
 #[crate::host(export(pid = false))]
 pub fn language_name(code: &str) -> Option<&'static str> {
     data::code_to_name(base_language(code))
 }
 
-/// A normalised BCP-47 language identifier: the Rust half of `livekit.agents.LanguageCode`. Only
-/// [`LanguageCode::new`] constructs it, and it normalises. Crosses to a host as its string.
+/// Normalized BCP-47 language identifier. Accepts any common format.
+///
+/// Examples:
+///
+/// ```python
+/// LanguageCode("english")  # -> "en"
+/// LanguageCode("eng")      # -> "en"
+/// LanguageCode("en")       # -> "en"
+/// LanguageCode("en-US")    # -> "en-US"
+/// LanguageCode("en_us")    # -> "en-US"
+/// LanguageCode("multi")    # -> "multi"
+/// ```
+// Only [`LanguageCode::new`] constructs it, and it normalises. Crosses to a host as its string.
 #[crate::host(string)]
+#[python(str_class(
+    module = "language",
+    path = "livekit.agents",
+    new = "normalize_language",
+    property(language = "base_language", iso = "language_iso", region = "language_region"),
+    method(to_language_name = "language_name"),
+))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LanguageCode(String);
 

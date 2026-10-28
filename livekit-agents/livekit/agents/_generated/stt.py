@@ -15,8 +15,8 @@ from enum import Enum, unique
 from typing import Any, Literal
 
 from .. import _bindings
-from ..language import LanguageCode
 from ..types import TimedString
+from .language import LanguageCode
 
 
 @dataclass

@@ -175,11 +175,16 @@ pub fn exposed_with(
                             .streams
                             .push(stream(label, module, &st.ident, &st.attrs, &m, &al, None)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
-                        "string" => out.wire_enums.push(WireEnum {
-                            name: st.ident.to_string(),
-                            values: Vec::new(),
-                            open: true,
-                        }),
+                        "string" => {
+                            out.wire_enums.push(WireEnum {
+                                name: st.ident.to_string(),
+                                values: Vec::new(),
+                                open: true,
+                            });
+                            if let Some(c) = str_class(label, st)? {
+                                out.str_classes.push(c);
+                            }
+                        }
                         other => {
                             return Err(format!(
                                 "{label}: struct {}: #[host({other})] -- a struct takes client, kwargs, error, stream or string",
@@ -218,6 +223,52 @@ pub fn exposed_with(
         }
     }
     Ok(out)
+}
+
+/// A `#[host(string)]` struct's `#[python(str_class(..))]`, if it has one.
+fn str_class(label: &str, st: &syn::ItemStruct) -> Res<Option<StrClass>> {
+    let m: Vec<Meta> = super::meta::metas(&st.attrs)
+        .into_iter()
+        .filter(|m| m.key.starts_with("python."))
+        .collect();
+    if m.is_empty() {
+        return Ok(None);
+    }
+    let at = format!("{label}: {}", st.ident);
+    let get = |k: &str| meta_str(&m, &format!("python.str_class.{k}"));
+    let mut properties = Vec::new();
+    let mut methods = Vec::new();
+    for x in &m {
+        let key = x.key.as_str();
+        if let Some(name) = key.strip_prefix("python.str_class.property.") {
+            properties.push((name.to_owned(), x.value.clone().unwrap_or_default()));
+        } else if let Some(name) = key.strip_prefix("python.str_class.method.") {
+            methods.push((name.to_owned(), x.value.clone().unwrap_or_default()));
+        } else if ![
+            "python.str_class",
+            "python.str_class.module",
+            "python.str_class.path",
+            "python.str_class.new",
+            "python.str_class.property",
+            "python.str_class.method",
+        ]
+        .contains(&key)
+        {
+            return Err(format!(
+                "{at}: #[python(str_class(..))] takes module, path, new, property(..) and method(..), not `{key}`"
+            ));
+        }
+    }
+    Ok(Some(StrClass {
+        name: st.ident.to_string(),
+        module: get("module").ok_or_else(|| format!("{at}: str_class needs module = \"..\""))?,
+        path: get("path"),
+        source: label.to_owned(),
+        doc: doc(&st.attrs),
+        new: get("new").ok_or_else(|| format!("{at}: str_class needs new = \"<exported fn>\""))?,
+        properties,
+        methods,
+    }))
 }
 
 fn export_fn(

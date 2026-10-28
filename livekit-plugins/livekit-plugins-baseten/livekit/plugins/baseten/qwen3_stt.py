@@ -48,10 +48,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt as stt_module,
     utils,
 )
-from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 

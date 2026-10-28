@@ -21,7 +21,6 @@ from ..inference.interruption import (
     InterruptionDetectionError,
     OverlappingSpeechEvent,
 )
-from ..language import LanguageCode
 from ..llm import (
     LLM,
     AgentHandoff,
@@ -35,6 +34,7 @@ from ..llm import (
 from ..metrics import AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
+from .language import LanguageCode
 
 if TYPE_CHECKING:
     from ..voice.speech_handle import SpeechHandle

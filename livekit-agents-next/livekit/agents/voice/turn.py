@@ -6,6 +6,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from livekit import rtc
 
+from .._generated.language import LanguageCode
 from .._generated.turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -13,7 +14,6 @@ from .._generated.turn import (
     TurnHandlingOptions,
     UserTurnLimitOptions,
 )
-from ..language import LanguageCode
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 

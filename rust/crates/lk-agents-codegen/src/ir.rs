@@ -525,6 +525,23 @@ pub struct Exposed {
     pub streams: Vec<Stream>,
     pub proxies: Vec<Proxy>,
     pub providers: Vec<Provider>,
+    pub str_classes: Vec<StrClass>,
+}
+
+/// `#[python(str_class(module, path, new, property(..), method(..)))]` on a `#[host(string)]`
+/// type: a Python `str` subclass whose constructor normalises through the exported fn `new`, and
+/// whose properties and methods each apply one exported fn to the string.
+#[derive(Debug, Clone)]
+pub struct StrClass {
+    pub name: String,
+    pub module: String,
+    pub path: Option<String>,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub new: String,
+    /// `(python name, exported fn)`.
+    pub properties: Vec<(String, String)>,
+    pub methods: Vec<(String, String)>,
 }
 
 impl Exposed {
@@ -547,6 +564,7 @@ impl Exposed {
         self.streams.extend(other.streams);
         self.proxies.extend(other.proxies);
         self.providers.extend(other.providers);
+        self.str_classes.extend(other.str_classes);
     }
 }
 

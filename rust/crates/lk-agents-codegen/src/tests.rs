@@ -910,6 +910,42 @@ fn every_provider_method_gets_its_core_surface() {
     }
 }
 
+// Catches: a str class whose members are not the declared exports (a property named after the fn,
+// a method emitted as a property), or one built without normalising through `new`.
+#[test]
+fn a_str_class_normalises_and_applies_its_exports() {
+    let src = r#"
+/// A code.
+#[crate::host(string)]
+#[python(str_class(module = "code", path = "livekit.agents", new = "normalize", property(base = "base_of"), method(to_name = "name_of")))]
+pub struct Code(String);
+
+/// The base.
+#[crate::host(export(pid = false))]
+pub fn base_of(code: &str) -> &str { code }
+
+#[crate::host(export(pid = false))]
+pub fn name_of(code: &str) -> Option<&str> { None }
+
+#[crate::host(export(pid = false))]
+pub fn normalize(code: &str) -> String { code.to_owned() }
+"#;
+    let x = parse::exposed("a.rs", "m", src).expect("parses");
+    let out = crate::forward::emit(&[], &x).expect("generates");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].path, "code.py");
+    let text = &out[0].text;
+    for want in [
+        "class Code(str):\n    \"\"\"A code.\"\"\"\n",
+        "    def __new__(cls, code: str) -> Code:\n        return super().__new__(cls, _core.normalize(code))\n",
+        "    @property\n    def base(self) -> str:\n        \"\"\"The base.\"\"\"\n        return _core.base_of(self)\n",
+        "\n    def to_name(self) -> str | None:\n        return _core.name_of(self)\n",
+        "Code.__module__ = \"livekit.agents\"\n",
+    ] {
+        assert!(text.contains(want), "{want}: {text}");
+    }
+}
+
 // Catches: a constant's string written unescaped (a quote closing the Python literal early), its
 // docstring dropped, or a module of constants alone missing its `Final` import.
 #[test]
