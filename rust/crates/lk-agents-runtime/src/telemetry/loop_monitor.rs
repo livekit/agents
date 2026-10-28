@@ -1,8 +1,6 @@
 //! Watchdog thresholds, stall classification, sampling and report admission. Every transition
 //! consumes supplied time; host adapters only take clock/stack samples and emit the result.
 
-#[cfg(feature = "python")]
-
 use std::collections::VecDeque;
 
 use lk_agents_abi::telemetry::loop_monitor::{LoopBlock, LoopBlockSeverity, LoopSampleRequest};
