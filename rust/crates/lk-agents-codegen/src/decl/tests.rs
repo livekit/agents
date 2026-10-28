@@ -378,7 +378,9 @@ fn declared_proxies_call_the_host_in_their_context() {
             (ProxyCall::Notify, "abort", Some(0))
         ]
     );
-    let unscoped = refuse_proxy("#[host(await, requires(tool_call))] async fn f(&self) -> Result<(), HostError>;");
+    let unscoped = refuse_proxy(
+        "#[host(await, requires(tool_call))] async fn f(&self) -> Result<(), HostError>;",
+    );
     assert!(unscoped.contains("#[host(context)]"), "{unscoped}");
     let refusal = p.methods[1].ret.refusal.as_ref().expect("declared");
     assert_eq!((refusal.module.as_str(), refusal.class.as_str()), ("livekit.agents", "Refused"));

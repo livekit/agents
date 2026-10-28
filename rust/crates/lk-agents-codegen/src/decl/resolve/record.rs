@@ -14,6 +14,7 @@ impl Resolver<'_> {
         let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
         let persisted = voc::find(&record.nested, "persisted").is_some();
         let transparent = voc::find(&record.nested, "transparent").is_some();
+        let enumeration = voc::find(&record.nested, "enum").is_some();
         let constants = match voc::find(&record.nested, "constant") {
             None => Vec::new(),
             Some(c) => c
@@ -77,6 +78,8 @@ impl Resolver<'_> {
                         values.push((v.ident.to_string(), value));
                     }
                     RecordBody::Literals(values)
+                } else if enumeration {
+                    return Err(format!("{at}: record(.., enum) is a unit-only enum"));
                 } else {
                     let mut variants = Vec::new();
                     for v in &en.variants {
@@ -118,6 +121,7 @@ impl Resolver<'_> {
             clone: derives(item_attrs(item), "Clone"),
             legacy: false,
             transparent,
+            enumeration,
             constants,
             persisted,
             members,
@@ -182,6 +186,7 @@ impl Resolver<'_> {
                         default,
                         skip: false,
                         omitted: None,
+                        factory: None,
                         doc: Vec::new(),
                     }))
                 }
@@ -208,8 +213,14 @@ impl Resolver<'_> {
             let ident = f.ident.as_ref().expect("named").to_string();
             let at = format!("{}({owner}.{ident})", self.at);
             let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-            voc::only(&at, &entries, &["default", "skip", "omitted"])?;
+            voc::only(&at, &entries, &["default", "skip", "omitted", "default_factory"])?;
             let skip = voc::find(&entries, "skip").is_some();
+            let factory = voc::text(&at, &entries, "default_factory")?;
+            if factory.as_ref().is_some_and(|f| !f.contains('.')) {
+                return Err(format!(
+                    "{at}: default_factory names a host callable by `module.name`"
+                ));
+            }
             let omitted = voc::rust(&at, &entries, "omitted")?.map(|path| {
                 let path = quote::quote!(#path).to_string().replace(' ', "");
                 match path.strip_prefix("crate::") {
@@ -217,13 +228,18 @@ impl Resolver<'_> {
                     None => path,
                 }
             });
-            if skip && dirs.0 {
+            if skip && dirs.0 && factory.is_none() {
                 return Err(format!("{at}: an extracted record reads every field: no `skip`"));
             }
-            let ty = if skip { Ty::Unit } else { self.ty(&f.ty, &at)? };
+            let ty = if skip && factory.is_none() { Ty::Unit } else { self.ty(&f.ty, &at)? };
             let default = literal_default(&at, &entries)?;
+            if factory.is_some() && (default.is_some() || omitted.is_some()) {
+                return Err(format!(
+                    "{at}: default_factory is the field's one default (no `default`, `omitted`)"
+                ));
+            }
             check_default(&at, &ty, default.as_ref())?;
-            if !skip {
+            if !skip || factory.is_some() {
                 check_record_field(&at, &ty, dirs)?;
             }
             if omitted.is_some() {
@@ -235,7 +251,15 @@ impl Resolver<'_> {
                     ));
                 }
             }
-            out.push(Field { rust_name: ident, ty, default, skip, omitted, doc: doc(&f.attrs) });
+            out.push(Field {
+                rust_name: ident,
+                ty,
+                default,
+                skip,
+                omitted,
+                factory,
+                doc: doc(&f.attrs),
+            });
         }
         Ok(out)
     }
@@ -250,7 +274,17 @@ pub(super) fn record_target(
     voc::only(
         at,
         &record.nested,
-        &["module", "name", "extract", "emit", "persisted", "transparent", "constant", "nested_in"],
+        &[
+            "module",
+            "name",
+            "extract",
+            "emit",
+            "persisted",
+            "transparent",
+            "enum",
+            "constant",
+            "nested_in",
+        ],
     )?;
     let module = voc::text(at, &record.nested, "module")?
         .ok_or_else(|| format!("{at}: record(module = \"..\") is its generated Python module"))?;

@@ -430,16 +430,17 @@ mod tests {
     // or entering a context itself) generated instead of refused.
     #[test]
     fn a_host_call_outside_host_invoker_is_refused() {
-        let decls = read(&proxy(
-            "#[host(call)] fn state(&self, id: &str) -> Result<String, HostError>;",
-        ))
-        .expect("resolves");
+        let decls =
+            read(&proxy("#[host(call)] fn state(&self, id: &str) -> Result<String, HostError>;"))
+                .expect("resolves");
         let (p, m) = (&decls.proxies[0], &decls.proxies[0].methods[0]);
         assert!(super::dispatched(p, m, super::method(p, m).expect("emits")).is_ok());
-        let direct = "    fn state(&self) { self.host.bind(py).call_method1(\"state\", ()); }".to_owned();
+        let direct =
+            "    fn state(&self) { self.host.bind(py).call_method1(\"state\", ()); }".to_owned();
         let error = super::dispatched(p, m, direct).expect_err("refused");
         assert!(error.contains("dispatches through `lk_agents_runtime::host`"), "{error}");
-        let bypass = "::lk_agents_runtime::host::call_now(..); crate::host::call_in(c, f)".to_owned();
+        let bypass =
+            "::lk_agents_runtime::host::call_now(..); crate::host::call_in(c, f)".to_owned();
         let error = super::dispatched(p, m, bypass).expect_err("refused");
         assert!(error.contains("`call_in(` calls into the host outside HostInvoker"), "{error}");
     }

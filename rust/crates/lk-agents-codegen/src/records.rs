@@ -417,8 +417,15 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
                 .iter()
                 .map(|(v, host)| format!("            Self::{v} => {host:?},\n"))
                 .collect();
+            let value = match r.enumeration {
+                true => {
+                    classes.push(r.name.clone());
+                    format!("{}.call1((value,))?", class_ref(&module, &r.name))
+                }
+                false => "::pyo3::types::PyString::new(py, value).into_any()".to_owned(),
+            };
             let emit = format!(
-                "        let value = match self {{\n{arms}        }};\n        Ok(::pyo3::types::PyString::new(py, value).into_any())\n"
+                "        let value = match self {{\n{arms}        }};\n        Ok({value})\n"
             );
             (extract, emit)
         }
@@ -501,7 +508,7 @@ fn class_ref(module: &str, class: &str) -> String {
 /// `field: read,` lines of a struct literal read off `obj`.
 fn struct_reads(owner: &str, fields: &[Field], obj: &str) -> Result<String, String> {
     let mut s = String::new();
-    for f in fields.iter().filter(|f| !f.skip) {
+    for f in fields.iter().filter(|f| f.modeled()) {
         let read = match f.omitted {
             Some(_) => "::std::default::Default::default()".to_owned(),
             None => attr_read(owner, f, obj)?,
@@ -553,7 +560,7 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
         VariantShape::Named(fields) => {
             let reads: Vec<String> = fields
                 .iter()
-                .filter(|f| !f.skip)
+                .filter(|f| f.modeled())
                 .map(|f| Ok(format!("{}: {}", f.rust_name, attr_read(&v.name, f, "obj")?)))
                 .collect::<Result<_, String>>()?;
             let mut pattern = Vec::new();
@@ -759,8 +766,8 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
     Ok(s)
 }
 
-/// A legacy generated module with the declared records of the same module: their imports and
-/// models right after the legacy imports, so a legacy model or union naming a declared record
+/// A legacy generated module with the declared records of the same module: their imports merged
+/// into the legacy ones and their models right after them, so a legacy model or union naming a declared record
 /// finds it defined; a record reusing a legacy name is refused.
 pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
     const FUTURE: &str = "from __future__ import annotations\n\n";
@@ -782,11 +789,9 @@ pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
     }
     let (imports, classes) = split_header(legacy);
     let (declared_imports, declared) = split_header(body);
-    let declared_imports = declared_imports.trim();
-    let declared_imports =
-        if declared_imports.is_empty() { String::new() } else { format!("{declared_imports}\n") };
+    let imports = crate::imports::merge(imports, declared_imports)?;
     Ok(format!(
-        "{}\n\n{declared_imports}\n\n# The declared records.\n\n\n{}\n\n\n{}",
+        "{}\n\n\n# The declared records.\n\n\n{}\n\n\n{}",
         imports.trim_end(),
         declared.trim(),
         classes.trim_start()
@@ -1000,6 +1005,22 @@ fn model(
 ) -> String {
     // An emit-only record's derived models (`#[derive(Host)]`) reach the host as dicts.
     let out = r.emit && !r.extract;
+    let all: Vec<&Field> = match &r.body {
+        RecordBody::Struct(fields) => fields.iter().collect(),
+        RecordBody::Variants(variants) => variants
+            .iter()
+            .flat_map(|v| match &v.shape {
+                VariantShape::Named(fs) => fs.iter().collect(),
+                VariantShape::Tuple(Some(f)) => vec![f],
+                _ => Vec::new(),
+            })
+            .collect(),
+        RecordBody::Literals(_) => Vec::new(),
+    };
+    for factory in all.iter().filter_map(|f| f.factory.as_deref()) {
+        runtime.add("dataclasses", "field");
+        runtime.add_module(factory.rsplit_once('.').map_or(factory, |(m, _)| m));
+    }
     let mut class = |name: &str, doc: &[String], fields: &[&Field], nested: &str| {
         let name = name.rsplit('.').next().unwrap_or(name);
         let mut s =
@@ -1011,7 +1032,7 @@ fn model(
             }
             s.push_str(nested);
         }
-        let fields: Vec<&&Field> = fields.iter().filter(|f| !f.skip).collect();
+        let fields: Vec<&&Field> = fields.iter().filter(|f| f.modeled()).collect();
         if fields.is_empty() {
             if doc.is_empty() && nested.is_empty() {
                 s.push_str("    pass\n");
@@ -1023,6 +1044,9 @@ fn model(
         }
         for f in fields {
             let default = match (&f.default, &f.omitted) {
+                _ if let Some(factory) = &f.factory => {
+                    format!(" = field(default_factory={factory})")
+                }
                 (Some(d), _) => format!(" = {}", py_literal(d)),
                 // Computed in `__post_init__` when left out: the field is never `None` after.
                 (None, Some(_)) => " = None  # type: ignore[assignment]".to_owned(),
@@ -1116,6 +1140,18 @@ fn model(
             let names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
             s.push_str(&format!("\n\n{}\n", union_alias(&r.name, &names)));
             s.push_str(&docstring(&r.doc, ""));
+            s
+        }
+        RecordBody::Literals(values) if r.enumeration => {
+            runtime.add("enum", "Enum");
+            let mut s = format!("\n\nclass {}(str, Enum):\n", r.name);
+            if !r.doc.is_empty() {
+                s.push_str(&docstring(&r.doc, "    "));
+                s.push('\n');
+            }
+            for (_, host) in values {
+                s.push_str(&format!("    {} = {host:?}\n", host.to_uppercase()));
+            }
             s
         }
         RecordBody::Literals(values) => {

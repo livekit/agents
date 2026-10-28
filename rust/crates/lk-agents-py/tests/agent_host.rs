@@ -225,9 +225,7 @@ fn a_tool_callback_without_a_tool_call_scope_is_refused_before_the_host() {
         (globals.unbind(), AgentHostProxy::from_host(&host).unwrap(), invocation(context))
     });
     let runtime = lk_agents_runtime::process::handle().unwrap();
-    let error = runtime
-        .block_on(proxy.prepare_tool(&inv, serde_json::Map::new()))
-        .unwrap_err();
+    let error = runtime.block_on(proxy.prepare_tool(&inv, serde_json::Map::new())).unwrap_err();
     assert_eq!(error.kind, "RuntimeError");
     assert!(
         error.message.contains("AgentHost.prepare_tool: the call requires a tool call scope"),

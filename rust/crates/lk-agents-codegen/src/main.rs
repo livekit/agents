@@ -12,6 +12,7 @@ mod bases;
 mod class_stub;
 mod decl;
 mod forward;
+mod imports;
 mod ir;
 mod parse;
 mod placement;

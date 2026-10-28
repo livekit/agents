@@ -904,3 +904,69 @@ pub const LIMIT: i32 = 3;
     assert!(text.contains("KEY: Final = \"lk.\\\"key\\\"\"\n\"\"\"The key.\"\"\"\n"), "{text}");
     assert!(text.contains("LIMIT: Final = 3\n"), "{text}");
 }
+
+// Catches: a `record(.., enum)` crossing as a bare string (consumers compare `CloseReason.ERROR`
+// and read `.value`), or a member read back by anything but its string.
+#[test]
+fn an_enum_record_crosses_as_its_str_enum_members() {
+    let decls = crate::decl::tests::read(
+        r#"
+        /// Why a session closed.
+        #[crate::host(record(module = "session", extract, emit, enum))]
+        pub enum CloseReason { Error, JobShutdown }
+        "#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(
+        session.contains("from enum import Enum\n")
+            && session.contains("class CloseReason(str, Enum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job_shutdown\"\n"),
+        "{session}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("::lk_agents_abi::llm::class::CloseReason::JobShutdown => \"job_shutdown\"")
+            && shell.contains(".import(py, \"livekit.agents._generated.session\", \"CloseReason\")?.call1((value,))?")
+            && shell.contains("\"job_shutdown\" => Ok(::lk_agents_abi::llm::class::CloseReason::JobShutdown)"),
+        "{shell}"
+    );
+    let err = crate::decl::tests::read(
+        r#"#[crate::host(record(module = "session", emit, enum))]
+        pub enum Mixed { A, B(String) }"#,
+    )
+    .expect_err("refused");
+    assert!(err.contains("record(.., enum) is a unit-only enum"), "{err}");
+}
+
+// Catches: a host timestamp the model cannot default (`time.time` at construction), one Rust
+// sends although the host stamps it (`skip`), or a stamped field not read back.
+#[test]
+fn a_default_factory_field_is_stamped_by_the_host() {
+    let decls = crate::decl::tests::read(
+        r#"
+        #[crate::host(record(module = "session", extract, emit))]
+        pub struct Stamped {
+            pub state: String,
+            #[host(default_factory = "time.time")] pub at: f64,
+            #[host(skip, default_factory = "time.time")] pub created_at: f64,
+        }
+        "#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(
+        session.contains("import time\nfrom dataclasses import dataclass, field\n")
+            && session.contains("    at: float = field(default_factory=time.time)\n")
+            && session.contains("    created_at: float = field(default_factory=time.time)\n"),
+        "{session}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("kwargs.set_item(\"at\"")
+            && !shell.contains("kwargs.set_item(\"created_at\"")
+            && shell.contains("\"Stamped\", \"created_at\""),
+        "{shell}"
+    );
+}

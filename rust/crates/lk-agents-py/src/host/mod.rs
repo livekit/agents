@@ -22,9 +22,9 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyCFunction, PyTuple};
 use tokio::sync::oneshot;
 
-pub mod stream;
 #[cfg(test)]
 mod parentage_tests;
+pub mod stream;
 
 /// The dispatch a generated proxy's call takes, in `context`, requiring no scope.
 #[cfg(test)]
@@ -548,7 +548,9 @@ async def blocking():
             g: Py<PyDict>,
             name: &'static str,
             i: i64,
-        ) -> impl for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+        ) -> impl for<'py> FnOnce(
+            Python<'py>,
+        ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
         + Send
         + 'static {
             move |py| Ok((g.bind(py).get_item(name)?.expect("defined"), PyTuple::new(py, [i])?))
@@ -567,12 +569,18 @@ async def blocking():
         }
         // The lossy ones arrived while every control one still waited: all dropped.
         let seen = || -> Vec<i64> {
-            Python::attach(|py| globals.bind(py).get_item("seen").unwrap().unwrap().extract().unwrap())
+            Python::attach(|py| {
+                globals.bind(py).get_item("seen").unwrap().unwrap().extract().unwrap()
+            })
         };
         for _ in 0..300 {
             if seen().len() >= total as usize {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                assert_eq!(seen(), (0..total).collect::<Vec<_>>(), "every control notification, in order");
+                assert_eq!(
+                    seen(),
+                    (0..total).collect::<Vec<_>>(),
+                    "every control notification, in order"
+                );
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

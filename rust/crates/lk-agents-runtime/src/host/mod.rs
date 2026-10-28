@@ -14,9 +14,9 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::agent::{HostContext, Invocation};
 use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal, Scope};
+use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{BoxFuture, FunctionCall};
-use lk_agents_abi::llm::tool_executor::Approval;
 use tokio::task::JoinSet;
 
 /// Runs `call` through `entry` in a copy of the host context `scope` captured; dropping the

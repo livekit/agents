@@ -115,45 +115,58 @@ impl Imports {
         }
     }
 
+    /// `import module` (a host callable named by its module, `time.time`).
+    pub(crate) fn add_module(&mut self, module: &str) {
+        self.add(module, "");
+    }
+
     /// isort's order: the standard library, other absolute imports, relative ones; each block
-    /// sorted and separated by a blank line.
+    /// sorted, plain imports first, and separated by a blank line.
     pub(crate) fn render(&self, own: &[&str]) -> String {
         let block = |m: &str| match m {
             _ if m.starts_with('.') => 2,
-            "typing" | "collections.abc" | "enum" | "asyncio" | "dataclasses" => 0,
+            "typing" | "collections.abc" | "enum" | "asyncio" | "dataclasses" | "time" => 0,
             _ => 1,
         };
-        let mut modules: Vec<&str> = self.0.iter().map(|(m, _)| m.as_str()).collect();
-        modules.sort_by_key(|m| (block(m), *m));
-        modules.dedup();
+        let mut statements: Vec<(u8, bool, &str)> =
+            self.0.iter().map(|(m, n)| (block(m), !n.is_empty(), m.as_str())).collect();
+        statements.sort();
+        statements.dedup();
         let mut s = String::new();
         let mut last = None;
-        for m in modules {
-            let mut names: Vec<&str> = self
-                .0
-                .iter()
-                .filter(|(mm, n)| mm == m && !(m == ".._core" && own.contains(&n.as_str())))
-                .map(|(_, n)| n.as_str())
-                .collect();
-            // ruff's order by type: CONSTANTS, then Classes, then the rest.
-            names.sort_by_key(|n| {
-                let kind = if n.chars().all(|c| c.is_uppercase() || c == '_') {
-                    0
-                } else if n.starts_with(char::is_uppercase) {
-                    1
-                } else {
-                    2
-                };
-                (kind, *n)
-            });
-            if names.is_empty() {
-                continue;
-            }
-            if last.is_some_and(|b| b != block(m)) {
+        for (b, from, m) in statements {
+            let line = if from {
+                let mut names: Vec<&str> = self
+                    .0
+                    .iter()
+                    .filter(|(mm, n)| {
+                        mm == m && !n.is_empty() && !(m == ".._core" && own.contains(&n.as_str()))
+                    })
+                    .map(|(_, n)| n.as_str())
+                    .collect();
+                // ruff's order by type: CONSTANTS, then Classes, then the rest.
+                names.sort_by_key(|n| {
+                    let kind = if n.chars().all(|c| c.is_uppercase() || c == '_') {
+                        0
+                    } else if n.starts_with(char::is_uppercase) {
+                        1
+                    } else {
+                        2
+                    };
+                    (kind, *n)
+                });
+                if names.is_empty() {
+                    continue;
+                }
+                format!("from {m} import {}\n", names.join(", "))
+            } else {
+                format!("import {m}\n")
+            };
+            if last.is_some_and(|l| l != b) {
                 s.push('\n');
             }
-            last = Some(block(m));
-            s.push_str(&format!("from {m} import {}\n", names.join(", ")));
+            last = Some(b);
+            s.push_str(&line);
         }
         s
     }

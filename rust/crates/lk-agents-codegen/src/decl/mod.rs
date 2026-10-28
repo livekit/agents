@@ -52,6 +52,9 @@ pub struct RecordDecl {
     /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
     /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
     pub transparent: bool,
+    /// `record(.., enum)`: a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`,
+    /// its `.value` the string) rather than a `Literal` of its strings.
+    pub enumeration: bool,
     /// `record(.., constant(type = "stt_metrics"))`: fields the model holds at a fixed value (a
     /// discriminator its readers compare), never Rust state; read past, emitted by default.
     pub constants: Vec<(String, String)>,
@@ -103,10 +106,18 @@ pub struct Field {
     /// `omitted = path`: when the host leaves it out, `path(&record)` computes it from the rest
     /// (`STTMetrics.total_tokens`: input plus output). The function's Rust path.
     pub omitted: Option<String>,
+    /// `default_factory = "time.time"`: the model's default, the host callable called at
+    /// construction (a host timestamp). With `skip`, Rust never sends it: the host stamps it.
+    pub factory: Option<String>,
     pub doc: Vec<String>,
 }
 
 impl Field {
+    /// In the model and read from it: crossing, or stamped by the host (`skip` with a factory).
+    pub fn modeled(&self) -> bool {
+        !self.skip || self.factory.is_some()
+    }
+
     /// The Python attribute: the Rust name without a raw identifier's `r#` (`r#type` is `type`).
     pub fn host_name(&self) -> &str {
         self.rust_name.trim_start_matches("r#")
