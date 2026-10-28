@@ -1,45 +1,19 @@
-//! The run unit of work (`run` module) against agentstore, the same way `agentdb_local.rs` drives
-//! the statements: through public-api-server with a staging project's `LIVEKIT_URL` and
-//! key pair; skipped when they are not set or when the project cannot
-//! create a database. Every test creates its own database and deletes it at the end.
+//! The run, the shared engine's unit of work, against both storage backends (`storage_common`):
+//! lane leases and waiters, the one fenced commit, abandon, closed runs, version conflicts and the
+//! append-only concurrent runs.
 
 use std::time::{Duration, Instant};
 
-use lk_agents_storage::run::{
-    CommitOptions, ItemRow, RunOptions, RunOutcome, TaskPatch, TaskState, Thread,
-};
-mod common;
+use lk_agents_runtime::storage::{CommitOptions, RunOptions, Thread};
+use lk_agents_storage::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
+mod storage_common;
+use storage_common::Backend;
 
 use livekit_protocol::agent::chat_context::chat_item;
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use livekit_protocol::agent::{ChatMessage, ChatRole};
-use lk_agents_storage::{Storage, StorageError};
+use lk_agents_storage::StorageError;
 use serde_json::json;
-
-/// The storage and a fresh database, or `None` when there is no agent-db to test against.
-async fn fresh_database() -> Option<(Storage, String)> {
-    let (opts, minter) = common::project()?;
-    let storage = Storage::new(opts, minter).unwrap();
-    match common::create_database(&storage).await {
-        Ok(c) => Some((storage, c.database_id)),
-        Err(e) => {
-            eprintln!("skipped: the project cannot create a database: {e}");
-            None
-        }
-    }
-}
-
-/// One handle over the database, as one worker would hold it.
-async fn thread(storage: &Storage, database_id: &str, holder: &str) -> Thread {
-    storage.open(database_id, holder).await.unwrap()
-}
-
-async fn cleanup(storage: &Storage, database_id: &str, sessions: &[&Thread]) {
-    for s in sessions {
-        s.close();
-    }
-    storage.databases().delete(database_id).await.unwrap();
-}
 
 async fn waiter(s: &Thread) -> Option<String> {
     s.lane(LANE).info().await.unwrap().expect("a lane row").waiter
@@ -56,17 +30,16 @@ fn message(id: &str, role: ChatRole, text: &str) -> ItemRow {
 
 const LANE: &str = "front-desk";
 
-#[tokio::test]
-async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit() {
-    let Some((storage, database_id)) = fresh_database().await else { return };
-    let s1 = thread(&storage, &database_id, "w1").await;
+async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s1 = fx.thread("w1").await;
     assert!(s1.holder().starts_with("w1/"));
-    assert_eq!(s1.id(), database_id);
+    assert_eq!(s1.id(), fx.thread_id);
 
     let mut run1 = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
     // The first acquire applies the DDL; the second handle dials once the first run exists, as a
     // worker reached later would.
-    let s2 = thread(&storage, &database_id, "w2").await;
+    let s2 = fx.thread("w2").await;
     assert_ne!(s1.holder(), s2.holder());
     assert_eq!(run1.version(), 0);
     assert!(!run1.closed && run1.lease().is_some());
@@ -142,7 +115,8 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(acquired_at - released_at < Duration::from_millis(1500), "a poll interval at most");
     assert_eq!(run2.version(), 1);
     assert_eq!(run2.history.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec!["i1", "i2"]);
-    assert_eq!(run2.history[0], message("i1", ChatRole::User, "hi"));
+    let first = ItemRow { message_id: Some("m1".into()), ..message("i1", ChatRole::User, "hi") };
+    assert_eq!(run2.history[0], first);
     assert_eq!(run2.state, Some(json!({"patient": "Ann"})));
     assert_eq!(waiter(&s2).await, None, "the waiter that won cleared its own mark");
     assert!(s2.events(0, 100).await.unwrap().iter().any(|e| e.r#type == "usage"));
@@ -173,13 +147,12 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert_eq!(s2.lanes().await.unwrap().len(), 1);
     assert!(s2.events(0, 100).await.unwrap().len() >= 5);
     assert!(lane.db().inbox(true).await.unwrap().is_empty());
-    cleanup(&storage, &database_id, &[&s1, &s2]).await;
+    fx.cleanup(&[&s1, &s2]).await;
 }
 
-#[tokio::test]
-async fn a_run_that_aborts_writes_run_ended_and_nothing_else() {
-    let Some((storage, database_id)) = fresh_database().await else { return };
-    let s = thread(&storage, &database_id, "w1").await;
+async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     run.history.push(message("i1", ChatRole::User, "hi"));
@@ -214,13 +187,12 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else() {
     assert!(next.history.is_empty() && next.state.is_none());
     assert_eq!(next.version(), 0);
     drop(next);
-    cleanup(&storage, &database_id, &[&s]).await;
+    fx.cleanup(&[&s]).await;
 }
 
-#[tokio::test]
-async fn a_committed_run_id_yields_a_closed_run() {
-    let Some((storage, database_id)) = fresh_database().await else { return };
-    let s = thread(&storage, &database_id, "w1").await;
+async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     run.history.push(message("i1", ChatRole::User, "hi"));
@@ -243,15 +215,14 @@ async fn a_committed_run_id_yields_a_closed_run() {
         lane.open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") }).await.unwrap();
     assert!(!free.closed);
     drop(free);
-    cleanup(&storage, &database_id, &[&s]).await;
+    fx.cleanup(&[&s]).await;
 }
 
-#[tokio::test]
-async fn a_stale_commit_is_a_version_conflict() {
-    let Some((storage, database_id)) = fresh_database().await else { return };
-    let s1 = thread(&storage, &database_id, "w1").await;
+async fn a_stale_commit_is_a_version_conflict(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s1 = fx.thread("w1").await;
     let mut stale = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    let s2 = thread(&storage, &database_id, "w2").await;
+    let s2 = fx.thread("w2").await;
     // The lease lapses under the stalled worker (here: released by hand), and another run moves
     // the lane on.
     stale.lease().unwrap().release(None).await.unwrap();
@@ -268,18 +239,17 @@ async fn a_stale_commit_is_a_version_conflict() {
     let err = stale.commit(CommitOptions::default()).await.err().expect("fenced out");
     assert!(matches!(err, StorageError::VersionConflict { expected: 0, .. }), "{err}");
     assert_eq!(s1.lane(LANE).history().await.unwrap().len(), 1, "the loser wrote nothing");
-    cleanup(&storage, &database_id, &[&s1, &s2]).await;
+    fx.cleanup(&[&s1, &s2]).await;
 }
 
-#[tokio::test]
-async fn concurrent_runs_take_no_lease_and_append() {
-    let Some((storage, database_id)) = fresh_database().await else { return };
-    let s1 = thread(&storage, &database_id, "w1").await;
+async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s1 = fx.thread("w1").await;
     // The schema and the lane row come from a first exclusive run; the concurrent runs then share
     // a lane at version 1 and never move it.
     let mut first = s1.lane(LANE).open(RunOptions::new("r0", "AST_0")).await.unwrap();
     first.commit(CommitOptions::default()).await.unwrap();
-    let s2 = thread(&storage, &database_id, "w2").await;
+    let s2 = fx.thread("w2").await;
     let open = |s: &Thread, run_id: &str, task_id: &str| {
         let lane = s.lane(LANE);
         let opts = RunOptions {
@@ -322,5 +292,13 @@ async fn concurrent_runs_take_no_lease_and_append() {
     let mut c = open(&s1, "r3", "AST_3").await;
     c.abandon(RunOutcome::Canceled, "CancelledError").await.unwrap();
     assert_eq!(s1.events(0, 100).await.unwrap().len(), 8, "two items entered the history");
-    cleanup(&storage, &database_id, &[&s1, &s2]).await;
+    fx.cleanup(&[&s1, &s2]).await;
 }
+
+contract!(
+    the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit,
+    a_run_that_aborts_writes_run_ended_and_nothing_else,
+    a_committed_run_id_yields_a_closed_run,
+    a_stale_commit_is_a_version_conflict,
+    concurrent_runs_take_no_lease_and_append,
+);

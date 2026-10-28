@@ -10,13 +10,17 @@
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
 //! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
+//! - [`storage`]: thread storage I/O over AgentDB and local SQLite.
+//! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
 pub mod agent_run;
 pub mod host;
+pub mod a2a;
 pub mod http;
 pub mod llm;
 pub mod process;
 pub mod source;
+pub mod storage;
 pub mod sse;
 pub mod task;
 pub mod token;

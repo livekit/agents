@@ -28,9 +28,12 @@ use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value
 
 use crate::turn::PyThread;
 use lk_agents_host_derive::Host;
-use lk_agents_storage::{
-    StorageError as CoreError, StorageOptions, TokenMinter, service_error, thread_error,
+use lk_agents_runtime::storage::agentdb::{
+    AgentDbOptions, AgentDbStorage, StreamReader, Streams, TokenMinter, service_error,
+    thread_error,
 };
+use lk_agents_runtime::storage::engine::LeaseTiming;
+use lk_agents_storage::StorageError as CoreError;
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -204,7 +207,7 @@ macro_rules! awaitable {
 /// through, derived from `LIVEKIT_URL`.
 #[pyclass(name = "Storage", module = "livekit.agents._core", frozen)]
 pub struct PyStorage {
-    inner: lk_agents_storage::Storage,
+    inner: AgentDbStorage,
 }
 
 #[pymethods]
@@ -221,17 +224,19 @@ impl PyStorage {
         renew_interval: Option<f64>,
     ) -> PyResult<Self> {
         check_pid()?;
-        let mut opts = StorageOptions::new(url);
-        if let Some(seconds) = lease_ttl {
-            opts.lease_ttl = Duration::try_from_secs_f64(seconds)
-                .map_err(|e| PyValueError::new_err(format!("lease_ttl: {e}")))?;
-        }
-        if let Some(seconds) = renew_interval {
-            opts.renew_interval = Duration::try_from_secs_f64(seconds)
-                .map_err(|e| PyValueError::new_err(format!("renew_interval: {e}")))?;
-        }
+        let mut opts = AgentDbOptions::new(url);
+        let seconds = |s: Option<f64>, default: Duration, name: &str| match s {
+            Some(s) => Duration::try_from_secs_f64(s)
+                .map_err(|e| PyValueError::new_err(format!("{name}: {e}"))),
+            None => Ok(default),
+        };
+        opts.lease = LeaseTiming::new(
+            seconds(lease_ttl, opts.lease.ttl, "lease_ttl")?,
+            seconds(renew_interval, opts.lease.renew_interval, "renew_interval")?,
+        )
+        .map_err(to_py_err)?;
         let minter = TokenMinter::new(api_key, api_secret).map_err(to_py_err)?;
-        let inner = lk_agents_storage::Storage::new(opts, minter).map_err(to_py_err)?;
+        let inner = AgentDbStorage::new(opts, minter).map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
@@ -252,7 +257,10 @@ impl PyStorage {
         check_pid()?;
         let storage = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let thread = storage.open(&database_id, &holder).await.map_err(to_py_err)?;
+            let thread = storage
+                .open_database(&database_id, &database_id, &holder)
+                .await
+                .map_err(to_py_err)?;
             Ok(PyThread { inner: thread })
         })
     }
@@ -306,7 +314,7 @@ impl PyStorage {
 /// The answer streams (plan 6) over `/v1/streams`.
 #[pyclass(name = "Streams", module = "livekit.agents._core", frozen)]
 pub struct PyStreams {
-    inner: lk_agents_storage::Streams,
+    inner: Streams,
 }
 
 #[pymethods]
@@ -386,7 +394,7 @@ impl PyStreams {
 /// A read position over one stream; `next()` yields `bytes`, `None` at the end.
 #[pyclass(name = "StreamReader", module = "livekit.agents._core", frozen)]
 pub struct PyStreamReader {
-    inner: Arc<tokio::sync::Mutex<lk_agents_storage::StreamReader>>,
+    inner: Arc<tokio::sync::Mutex<StreamReader>>,
 }
 
 #[pymethods]
@@ -422,7 +430,7 @@ impl PyStreamReader {
 /// fields.
 #[pyclass(name = "Threads", module = "livekit.agents._core", frozen)]
 pub struct PyThreads {
-    inner: lk_agents_storage::Storage,
+    inner: AgentDbStorage,
 }
 
 #[pymethods]

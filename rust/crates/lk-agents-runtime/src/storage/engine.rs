@@ -1,0 +1,926 @@
+//! The shared engine over one thread database, whichever backend: [`ThreadDb`] executes the
+//! core's plans on a [`SqliteConnection`], [`Thread`] is the handle a worker opens, [`Lane`] one
+//! agent's part of it, and [`Lane::open`] takes it for one [`Run`], which ends with
+//! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
+//! `exclusive: false` is the `concurrent` policy: no lease, append-only.
+
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use livekit_protocol::agent::chat_context::ChatItem;
+use lk_agents_storage::db::{
+    self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced, Plan,
+    Read, Receive, TaskPage, TaskQuery, TaskWrite,
+};
+use lk_agents_storage::lease::{LanePoll, lease_secs};
+use lk_agents_storage::run::{
+    self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunUsage,
+    RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
+};
+use lk_agents_storage::schema::{
+    EventRow, InboxRow, ItemRow, LaneRow, NO_SCHEMA, RunEnded, RunStarted, TaskData, TaskRow,
+    THREAD_SCHEMA_VERSION,
+};
+use lk_agents_storage::sql::Statement;
+use lk_agents_storage::{Fence, StorageError};
+use serde_json::{Map, Value};
+
+use super::lease::Lease;
+use super::{SqliteConnection, now_ms, shortuuid};
+
+/// How long a lease lasts and how often its holder renews it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseTiming {
+    pub ttl: Duration,
+    pub renew_interval: Duration,
+}
+
+impl LeaseTiming {
+    pub fn new(ttl: Duration, renew_interval: Duration) -> Result<Self, StorageError> {
+        if ttl.is_zero() || ttl.as_secs() >= i64::MAX as u64 {
+            return Err(StorageError::Invalid(
+                "lease_ttl must be positive and fit in signed seconds".into(),
+            ));
+        }
+        if renew_interval.is_zero() {
+            return Err(StorageError::Invalid("renew_interval must be positive".into()));
+        }
+        Ok(Self { ttl, renew_interval })
+    }
+
+    pub(crate) fn secs(&self) -> i64 {
+        lease_secs(self.ttl)
+    }
+}
+
+impl Default for LeaseTiming {
+    fn default() -> Self {
+        Self {
+            ttl: lk_agents_storage::lease::DEFAULT_LEASE_TTL,
+            renew_interval: lk_agents_storage::lease::DEFAULT_RENEW_INTERVAL,
+        }
+    }
+}
+
+/// What the engine knows of a database's schema: `None` until a probe or a write found it.
+pub type SchemaCell = Arc<Mutex<Option<i64>>>;
+
+/// One thread's database over one connection.
+#[derive(Clone)]
+pub struct ThreadDb {
+    conn: Arc<dyn SqliteConnection>,
+    thread_id: Arc<str>,
+    pub(crate) timing: LeaseTiming,
+    schema: SchemaCell,
+}
+
+impl ThreadDb {
+    /// Over an open connection; `schema` is what is known of its schema, probed when unknown.
+    pub async fn new(
+        conn: Arc<dyn SqliteConnection>,
+        thread_id: &str,
+        timing: LeaseTiming,
+        schema: SchemaCell,
+    ) -> Result<Self, StorageError> {
+        let db = Self { conn, thread_id: thread_id.into(), timing, schema };
+        if db.schema_missing() {
+            let found = db.probe_schema().await?;
+            *db.schema.lock().expect("schema") = found;
+        }
+        Ok(db)
+    }
+
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    /// Done with the database: the backend releases or parks the connection.
+    pub async fn close(&self) {
+        self.conn.close().await;
+    }
+
+    pub fn lane(&self, name: &str) -> LaneDb {
+        LaneDb { db: self.clone(), name: name.to_owned() }
+    }
+
+    pub(crate) fn conn(&self) -> &Arc<dyn SqliteConnection> {
+        &self.conn
+    }
+
+    fn schema_missing(&self) -> bool {
+        self.schema.lock().expect("schema").is_none()
+    }
+
+    fn schema_applied(&self) {
+        *self.schema.lock().expect("schema") = Some(THREAD_SCHEMA_VERSION);
+    }
+
+    /// The version the database holds; `None` before any SDK wrote it.
+    async fn probe_schema(&self) -> Result<Option<i64>, StorageError> {
+        match self.conn.query(db::schema_version()).await {
+            Ok(rows) => db::decode_schema_version(&rows),
+            Err(StorageError::Server { message, .. }) if message.contains(NO_SCHEMA) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Asks the database again whether the schema is there: another worker may have created it
+    /// since this connection found none. True when present now.
+    async fn refresh_schema(&self) -> Result<bool, StorageError> {
+        if !self.schema_missing() {
+            return Ok(true);
+        }
+        match self.probe_schema().await? {
+            Some(_) => {
+                self.schema_applied();
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// The DDL to prepend to a write when the database has none yet.
+    fn bootstrap(&self) -> Vec<Statement> {
+        if self.schema_missing() { db::bootstrap() } else { Vec::new() }
+    }
+
+    /// Applies the DDL when the schema is missing.
+    async fn ensure_schema(&self) -> Result<(), StorageError> {
+        if self.refresh_schema().await? {
+            return Ok(());
+        }
+        match self.conn.batch(db::bootstrap()).await {
+            Ok(_) => {}
+            Err(e) if lost_schema_race(&e) => {}
+            Err(e) => return Err(e),
+        }
+        self.schema_applied();
+        Ok(())
+    }
+
+    /// One read; a database with no schema holds nothing.
+    pub(crate) async fn read<T>(&self, read: Read<T>) -> Result<Vec<T>, StorageError> {
+        if !self.refresh_schema().await? {
+            return Ok(Vec::new());
+        }
+        let rows = self.conn.query(read.statement.clone()).await?;
+        read.decode(&rows)
+    }
+
+    /// One plan's batch and its decoding.
+    pub(crate) async fn execute<D: Decode>(&self, plan: Plan<D>) -> Result<D::Output, StorageError> {
+        let out = self.conn.batch(plan.statements).await?;
+        plan.decoder.decode(&out)
+    }
+
+    /// One write statement; how many rows it changed.
+    pub(crate) async fn exec(&self, statement: Statement) -> Result<i64, StorageError> {
+        let out = self.conn.batch(vec![statement]).await?;
+        Ok(out.at(0)?.rows_affected())
+    }
+
+    /// The journal, every lane, after the event `after_id`.
+    pub async fn events(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
+        self.read(db::events(after_id, limit)).await
+    }
+
+    /// One task, whichever lane it is on.
+    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        Ok(self.read(db::thread_task(task_id)).await?.into_iter().next())
+    }
+
+    /// One page of the thread's tasks, last updated first, as A2A `tasks/list` answers it.
+    pub async fn list_tasks(&self, q: &TaskQuery) -> Result<TaskPage, StorageError> {
+        if !self.refresh_schema().await? {
+            return Ok(TaskPage::default());
+        }
+        self.execute(db::list_tasks(q)?).await
+    }
+
+    pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {
+        self.read(db::lanes()).await
+    }
+}
+
+/// A batch that lost the race against another creator's DDL: the schema exists now.
+fn lost_schema_race(e: &StorageError) -> bool {
+    e.to_string().contains("already exists")
+}
+
+/// A thread's database scoped to one lane: every statement of the lane.
+#[derive(Clone)]
+pub struct LaneDb {
+    db: ThreadDb,
+    name: String,
+}
+
+impl LaneDb {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Takes the lease and loads the lane, one atomic batch, the DDL riding along on a fresh
+    /// database; a batch that loses the race to another creator's DDL is retried without it.
+    async fn acquire(&self, req: &Acquire<'_>) -> Result<AcquireOutcome, StorageError> {
+        let outcome = match self.db.execute(db::acquire(req, self.db.bootstrap())).await {
+            Err(e) if lost_schema_race(&e) => {
+                self.db.schema_applied();
+                self.db.execute(db::acquire(req, Vec::new())).await
+            }
+            out => out,
+        }?;
+        self.db.schema_applied();
+        Ok(outcome)
+    }
+
+    /// The rest of a history whose first page an acquire loaded full. Under the lease nothing
+    /// but this run deletes or reorders it.
+    async fn rest_of_history(&self, items: &mut Vec<ItemRow>) -> Result<(), StorageError> {
+        let mut page = items.len();
+        while page as i64 == db::HISTORY_PAGE {
+            let more = self.db.read(db::history_page(&self.name, items.len() as i64)).await?;
+            page = more.len();
+            items.extend(more);
+        }
+        Ok(())
+    }
+
+    /// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the
+    /// lease attempt.
+    pub async fn receive(
+        &self,
+        holder: &str,
+        task_id: &str,
+        message: &a2a::Message,
+        data: &TaskData,
+    ) -> Result<(Receive, Option<Lease>), StorageError> {
+        self.db.ensure_schema().await?;
+        let token = shortuuid("lease_");
+        let plan =
+            db::receive(&self.name, holder, &token, self.db.timing.secs(), task_id, message, data);
+        let received = self.db.execute(plan).await?;
+        let lease = match received {
+            Receive::Received(Some(version)) => Some(Lease::new(
+                self.db.clone(),
+                Fence { lane: self.name.clone(), holder: holder.into(), token, version },
+            )),
+            _ => None,
+        };
+        Ok((received, lease))
+    }
+
+    /// A turn's `submitted` row, before the lease is tried; `false` when its task or message id
+    /// already had one.
+    pub async fn submit(&self, task: &TaskWrite) -> Result<bool, StorageError> {
+        self.db.ensure_schema().await?;
+        Ok(self.db.exec(db::submit(&self.name, task)).await? > 0)
+    }
+
+    /// The `concurrent` policy's append-only write: no lease, no fence, no version bump.
+    pub async fn append(&self, commit: &Commit) -> Result<Committed, StorageError> {
+        self.db.ensure_schema().await?;
+        self.db.execute(db::commit(&self.name, commit, None, Vec::new())?).await
+    }
+
+    /// Records a worker waiting under `interrupt`; `false` when the lease is not held, in which
+    /// case the caller acquires instead.
+    pub async fn set_waiter(&self, holder: &str) -> Result<bool, StorageError> {
+        self.db.ensure_schema().await?;
+        Ok(self.db.exec(db::set_waiter(&self.name, holder)).await? > 0)
+    }
+
+    /// A turn's checkpoint, one batch: the lane's waiter and the task's status.
+    pub async fn checkpoint(
+        &self,
+        task_id: &str,
+    ) -> Result<(Option<String>, Option<TaskState>), StorageError> {
+        self.db.execute(db::checkpoint(&self.name, task_id)).await
+    }
+
+    /// Takes a `submitted` or `working` row to `working`. The status it had (`working` means a
+    /// dead holder had it), `None` when the row is terminal or missing.
+    pub async fn pickup(&self, task_id: &str) -> Result<Option<TaskState>, StorageError> {
+        self.db.execute(db::pickup(&self.name, task_id)).await
+    }
+
+    /// A `working` row whose holder died ends `failed` with the given status message.
+    pub async fn fail_orphan(
+        &self,
+        task_id: &str,
+        status_message: &a2a::Message,
+    ) -> Result<bool, StorageError> {
+        Ok(self.db.exec(db::fail_orphan(&self.name, task_id, status_message)).await? > 0)
+    }
+
+    /// The whole history; how another lane reads it.
+    pub async fn history(&self) -> Result<Vec<ItemRow>, StorageError> {
+        self.db.read(db::history(&self.name)).await
+    }
+
+    pub async fn info(&self) -> Result<Option<LaneRow>, StorageError> {
+        Ok(self.db.read(db::lane_info(&self.name)).await?.into_iter().next())
+    }
+
+    /// The newest task rows, of one status when given.
+    pub async fn tasks(
+        &self,
+        status: Option<TaskState>,
+        limit: i64,
+    ) -> Result<Vec<TaskRow>, StorageError> {
+        self.db.read(db::tasks(&self.name, status, limit)).await
+    }
+
+    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        Ok(self.db.read(db::task(&self.name, task_id)).await?.into_iter().next())
+    }
+
+    /// The task an A2A `messageId` created.
+    pub async fn task_for_message(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        Ok(self.db.read(db::task_for_message(&self.name, message_id)).await?.into_iter().next())
+    }
+
+    /// The inbox rows in `id` order: every one, or only those above `drained_id`.
+    pub async fn inbox(&self, pending: bool) -> Result<Vec<InboxRow>, StorageError> {
+        self.db.read(db::inbox(&self.name, pending)).await
+    }
+
+    /// The lane's journal after the event `after_id`.
+    pub async fn events(&self, after_id: i64) -> Result<Vec<EventRow>, StorageError> {
+        self.db.read(db::lane_events(&self.name, after_id)).await
+    }
+}
+
+/// How [`Lane::open`] takes the lane.
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    /// Idempotency key: a `run_id` that already committed yields a closed run.
+    pub run_id: String,
+    /// The A2A task this run serves.
+    pub task_id: String,
+    /// `false` is the `concurrent` policy: no lease, append-only commit.
+    pub exclusive: bool,
+    /// Wait for a lease another holder has; `false` fails with [`StorageError::LeaseHeld`].
+    pub wait: bool,
+    /// Record this worker as the lane's `waiter` while it waits, so the holder yields.
+    pub interrupt: bool,
+    /// The request's channel, for the `run_started` event.
+    pub channel: Option<String>,
+    pub wait_timeout: Duration,
+    /// The turn's `submitted` row, written in the acquire batch (`Run::submitted` tells whether
+    /// it was new); `None` for a run with no row or one submitted earlier.
+    pub submit: Option<TaskWrite>,
+    /// Take `task_id`'s row to `working` in the acquire batch (`Run::picked_up`).
+    pub pickup: bool,
+}
+
+impl RunOptions {
+    pub fn new(run_id: impl Into<String>, task_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            exclusive: true,
+            wait: true,
+            interrupt: false,
+            channel: None,
+            wait_timeout: LEASE_WAIT_TIMEOUT,
+            submit: None,
+            pickup: false,
+        }
+    }
+}
+
+/// The thread a worker opened: its database, shared by every lane. Cheap to clone.
+#[derive(Clone)]
+pub struct Thread {
+    db: ThreadDb,
+    holder: Arc<str>,
+}
+
+impl Thread {
+    /// Over an open database. Leases carry this handle as their holder, so a second request of the
+    /// same worker on a lane waits like any other worker's.
+    pub fn new(db: ThreadDb, holder: &str) -> Self {
+        Self { db, holder: format!("{holder}/{}", shortuuid("")).into() }
+    }
+
+    /// The thread id.
+    pub fn id(&self) -> &str {
+        self.db.thread_id()
+    }
+
+    /// `<worker holder>/<handle>`: what this handle's leases and waiter marks carry.
+    pub fn holder(&self) -> &str {
+        &self.holder
+    }
+
+    pub fn lane(&self, agent: &str) -> Lane {
+        Lane { holder: self.holder.clone(), db: self.db.lane(agent) }
+    }
+
+    /// The journal, every lane, after the event `after_id`.
+    pub async fn events(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
+        self.db.events(after_id, limit).await
+    }
+
+    /// One task, whichever lane it is on.
+    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        self.db.task(task_id).await
+    }
+
+    /// One page of every lane's tasks, last updated first (A2A `tasks/list`).
+    pub async fn list_tasks(&self, q: &TaskQuery) -> Result<TaskPage, StorageError> {
+        self.db.list_tasks(q).await
+    }
+
+    pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {
+        self.db.lanes().await
+    }
+
+    pub async fn close(&self) {
+        self.db.close().await;
+    }
+}
+
+/// One registered agent's part of a thread.
+#[derive(Clone)]
+pub struct Lane {
+    holder: Arc<str>,
+    db: LaneDb,
+}
+
+impl Lane {
+    pub fn name(&self) -> &str {
+        self.db.name()
+    }
+
+    pub fn holder(&self) -> &str {
+        &self.holder
+    }
+
+    pub fn db(&self) -> &LaneDb {
+        &self.db
+    }
+
+    /// The whole history; how another lane reads it.
+    pub async fn history(&self) -> Result<Vec<ItemRow>, StorageError> {
+        self.db.history().await
+    }
+
+    pub async fn info(&self) -> Result<Option<LaneRow>, StorageError> {
+        self.db.info().await
+    }
+
+    pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        self.db.task(task_id).await
+    }
+
+    /// The newest task rows, of one state when given.
+    pub async fn tasks(
+        &self,
+        status: Option<TaskState>,
+        limit: i64,
+    ) -> Result<Vec<TaskRow>, StorageError> {
+        self.db.tasks(status, limit).await
+    }
+
+    /// The last `limit` runs, newest first; the `submitted` insert before a lease is
+    /// bookkeeping, not a turn.
+    pub async fn runs(&self, limit: usize) -> Result<Vec<RunSummary>, StorageError> {
+        let rows = self.db.events(0).await?;
+        let mut runs: Vec<RunSummary> = RunSummary::from_events(&rows)
+            .into_iter()
+            .filter(|r| r.channel.as_deref() != Some(SUBMIT_CHANNEL))
+            .collect();
+        let keep = runs.len().saturating_sub(limit);
+        runs.drain(..keep);
+        runs.reverse();
+        Ok(runs)
+    }
+
+    /// `tasks/cancel`: the row `canceled` with `metadata` merged in; a running turn yields at its
+    /// next checkpoint. `None` when the task is not the lane's.
+    pub async fn cancel_task(
+        &self,
+        task_id: &str,
+        metadata: Map<String, Value>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        let Some(row) = self.db.task(task_id).await? else { return Ok(None) };
+        let mut data = row.data;
+        data.metadata.extend(metadata);
+        let now = now_ms();
+        let commit = Commit {
+            run_id: format!("cancel_{task_id}_{}", shortuuid("")),
+            tasks: vec![TaskWrite {
+                task_id: row.task_id,
+                status: TaskState::Canceled,
+                message_id: row.message_id,
+                name: row.name,
+                data,
+                ask: row.internal,
+            }],
+            events: vec![EventWrite::run_started(
+                now,
+                &RunStarted {
+                    task_id: Some(task_id.to_owned()),
+                    channel: Some("cancel".into()),
+                    ..RunStarted::default()
+                },
+            )],
+            run_ended: EventWrite::run_ended(
+                now,
+                &RunEnded { outcome: RunOutcome::Completed, reason: None },
+            ),
+            read_task: Some(task_id.to_owned()),
+            ..Commit::default()
+        };
+        Ok(self.db.append(&commit).await?.task)
+    }
+
+    /// Takes the lane and loads it. The run commits with [`Run::commit`] and ends by error with
+    /// [`Run::abandon`]; a run dropped without either stops renewing and lets its lease lapse,
+    /// which the next acquire sees as a `run_started` without a `run_ended`.
+    pub async fn open(&self, opts: RunOptions) -> Result<Run, StorageError> {
+        let (lease, closed, state, items, tasks, submitted, picked_up) = match opts.exclusive {
+            true => {
+                let mut acquired = self.acquire(&opts).await?;
+                self.db.rest_of_history(&mut acquired.items).await?;
+                let lease = Lease::new(self.db.db.clone(), acquired.fence.clone());
+                if !acquired.already_committed {
+                    lease.keep_alive();
+                }
+                let a = *acquired;
+                let tasks = Tasks::loaded(self.db.clone(), a.tasks);
+                (Some(lease), a.already_committed, a.lane.state, a.items, tasks, a.submitted, a.picked_up)
+            }
+            false => {
+                let items = self.db.history().await?;
+                (None, false, None, items, Tasks::new(self.db.clone()), None, false)
+            }
+        };
+        Ok(Run {
+            db: self.db.clone(),
+            lease,
+            holder: self.holder.to_string(),
+            run_id: opts.run_id,
+            task_id: opts.task_id,
+            channel: opts.channel,
+            closed,
+            loaded: items.iter().map(|i| (i.id.clone(), i.payload.clone())).collect(),
+            history: items,
+            loaded_state: state.clone(),
+            state,
+            events: EventLog::default(),
+            tasks,
+            submitted,
+            picked_up,
+            usage: RunUsage::default(),
+            outcome: RunOutcome::Completed,
+            reason: None,
+            finished: false,
+        })
+    }
+
+    /// The acquire, polled with backoff while another holder has the lane, as the lane's `waiter`
+    /// under `interrupt`.
+    async fn acquire(&self, opts: &RunOptions) -> Result<Box<Acquired>, StorageError> {
+        let epoch = tokio::time::Instant::now();
+        let mut poll = LanePoll::new(epoch.elapsed(), opts.wait_timeout);
+        let mut submit = opts.submit.as_ref();
+        let mut submitted = None;
+        let mut marked = false;
+        loop {
+            let token = shortuuid("lease_");
+            let req = Acquire {
+                lane: self.name(),
+                holder: &self.holder,
+                token: &token,
+                lease_secs: self.db.db.timing.secs(),
+                wait_ms: LEASE_WAIT_TIMEOUT.as_millis() as i64,
+                run_id: &opts.run_id,
+                task_id: &opts.task_id,
+                run_started: EventWrite::run_started(
+                    now_ms(),
+                    &RunStarted {
+                        task_id: Some(opts.task_id.clone()),
+                        stream_id: Some(opts.task_id.clone()),
+                        channel: opts.channel.clone(),
+                        exclusive: None,
+                    },
+                ),
+                submit,
+                pickup: opts.pickup,
+                tasks_limit: LOOKUP_LIMIT,
+            };
+            match self.db.acquire(&req).await? {
+                AcquireOutcome::Acquired(mut a) => {
+                    // the first attempt's insert decides; a retry's insert of the same row is no
+                    // duplicate
+                    a.submitted = submitted.or(a.submitted);
+                    return Ok(a);
+                }
+                AcquireOutcome::Held { submitted: s } => {
+                    submitted = submitted.or(s);
+                    submit = None;
+                }
+            }
+            if !opts.wait {
+                let name = self.name();
+                return Err(StorageError::LeaseHeld(format!("lane {name} is held by another run")));
+            }
+            if opts.interrupt && !marked {
+                marked = self.db.set_waiter(&self.holder).await?;
+                if marked {
+                    log::debug!(target: "livekit.agents", lane = self.name(), holder = &*self.holder; "waiting for the lane as its waiter");
+                }
+            }
+            let Some(at) = poll.next(epoch.elapsed()) else {
+                return Err(StorageError::LeaseTimeout(format!(
+                    "lane {} was not released within {}s",
+                    self.name(),
+                    opts.wait_timeout.as_secs_f64()
+                )));
+            };
+            tokio::time::sleep_until(epoch + at).await;
+        }
+    }
+}
+
+/// What this run appends to the lane's journal, stamped as recorded.
+#[derive(Default)]
+pub struct EventLog {
+    new: Vec<EventWrite>,
+}
+
+impl EventLog {
+    pub fn append(&mut self, r#type: &str, payload: Value) {
+        self.new.push(EventWrite { ts_ms: now_ms(), r#type: r#type.to_owned(), payload });
+    }
+}
+
+/// What [`Run::commit`] does besides writing the run.
+#[derive(Debug, Clone, Default)]
+pub struct CommitOptions {
+    /// Extend the lease instead of releasing it: the runner continues with pending inbox rows.
+    pub keep_lease: bool,
+    /// The last inbox row a drain consumed.
+    pub drained_id: Option<i64>,
+    /// The task the turn answers, read back with the commit.
+    pub answer_task: Option<String>,
+}
+
+/// Everything a run reads and writes, committed together.
+pub struct Run {
+    db: LaneDb,
+    /// The lease the run holds; `None` under the `concurrent` policy, which takes none.
+    lease: Option<Lease>,
+    pub holder: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub channel: Option<String>,
+    /// A `run_id` that already committed: the run writes nothing and answers nothing twice.
+    pub closed: bool,
+    /// The whole history, loaded; append as the model and the tools speak, delete by removing.
+    pub history: Vec<ItemRow>,
+    /// What was loaded, by id, in order.
+    loaded: Vec<(String, ChatItem)>,
+    /// The state snapshot as loaded, `None` for a fresh lane; the caller can replace it
+    /// explicitly, and the commit writes it when it differs from what was loaded.
+    pub state: Option<Value>,
+    loaded_state: Option<Value>,
+    pub events: EventLog,
+    pub tasks: Tasks,
+    /// Whether the acquire's `submit` inserted its row; `Some(false)` is a retried `messageId`.
+    pub submitted: Option<bool>,
+    /// Whether the acquire's `pickup` took the row to `working`.
+    pub picked_up: bool,
+    pub usage: RunUsage,
+    pub outcome: RunOutcome,
+    pub reason: Option<String>,
+    finished: bool,
+}
+
+impl Run {
+    pub fn lane(&self) -> &str {
+        self.db.name()
+    }
+
+    pub fn lease(&self) -> Option<&Lease> {
+        self.lease.as_ref()
+    }
+
+    /// The version loaded: the commit's fence; `0` for a run that took no lease.
+    pub fn version(&self) -> i64 {
+        self.lease.as_ref().map_or(0, |l| l.fence().version)
+    }
+
+    /// The run's writes, as the core composes them.
+    pub fn writes(&self, opts: CommitOptions) -> Commit {
+        run::run_commit(RunWrites {
+            run_id: &self.run_id,
+            task_id: &self.task_id,
+            channel: self.channel.as_deref(),
+            exclusive: self.lease.is_some(),
+            history: &self.history,
+            loaded: &self.loaded,
+            state: self.state.as_ref(),
+            loaded_state: self.loaded_state.as_ref(),
+            events: &self.events.new,
+            tasks: self.tasks.writes(),
+            usage: self.usage,
+            outcome: self.outcome,
+            reason: self.reason.as_deref(),
+            now_ms: now_ms(),
+            drained_id: opts.drained_id,
+            answer_task: opts.answer_task,
+        })
+    }
+
+    fn finish(&mut self) -> Result<(), StorageError> {
+        if self.finished {
+            return Err(StorageError::Invalid(format!("run {} already ended", self.run_id)));
+        }
+        self.finished = true;
+        if let Some(lease) = &self.lease {
+            lease.stop();
+        }
+        Ok(())
+    }
+
+    /// Leaving normally: one fenced write of everything the run holds. A closed run releases the
+    /// lease and writes nothing. `VersionConflict` means the run outlived its lease.
+    pub async fn commit(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
+        self.finish()?;
+        let version = self.version();
+        match &self.lease {
+            Some(lease) if self.closed => {
+                lease.release(None).await?;
+                Ok(Committed { version, task: None })
+            }
+            Some(lease) => {
+                let keep = opts.keep_lease.then(|| self.db.db.timing.secs());
+                let commit = self.writes(opts);
+                let fenced = Fenced { fence: lease.fence(), keep };
+                self.db.db.execute(db::commit(self.db.name(), &commit, Some(fenced), Vec::new())?).await
+            }
+            None => self.db.append(&self.writes(opts)).await,
+        }
+    }
+
+    /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing
+    /// else. A `run_ended` that could not be written is logged.
+    pub async fn abandon(
+        &mut self,
+        outcome: RunOutcome,
+        reason: impl Into<String>,
+    ) -> Result<(), StorageError> {
+        self.finish()?;
+        let Some(lease) = &self.lease else { return Ok(()) };
+        if self.closed {
+            return lease.release(None).await;
+        }
+        let ended =
+            EventWrite::run_ended(now_ms(), &RunEnded { outcome, reason: Some(reason.into()) });
+        if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
+            log::warn!(target: "livekit.agents", lane = self.db.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
+        }
+        Ok(())
+    }
+}
+
+/// The lane's task rows as this run writes them.
+pub struct Tasks {
+    lane: LaneDb,
+    /// In write order.
+    writes: Vec<TaskWrite>,
+    /// The lane's newest rows as the acquire loaded them, newest first: what the run's lookups
+    /// read instead of the database. Complete when shorter than [`LOOKUP_LIMIT`].
+    loaded: Option<Vec<TaskRow>>,
+}
+
+impl Tasks {
+    pub fn new(lane: LaneDb) -> Self {
+        Self { lane, writes: Vec::new(), loaded: None }
+    }
+
+    /// Over the rows an acquire loaded, newest first.
+    pub fn loaded(lane: LaneDb, loaded: Vec<TaskRow>) -> Self {
+        Self { lane, writes: Vec::new(), loaded: Some(loaded) }
+    }
+
+    /// The loaded rows, when they are the whole lane.
+    fn snapshot(&self) -> Option<&[TaskRow]> {
+        self.loaded.as_deref().filter(|rows| rows.len() < LOOKUP_LIMIT as usize)
+    }
+
+    /// The lane's newest rows, `limit` of them, as of the acquire.
+    pub async fn recent(&self, limit: i64) -> Result<Vec<TaskRow>, StorageError> {
+        if let Some(rows) = self.loaded.as_deref() {
+            return Ok(rows.iter().take(limit as usize).cloned().collect());
+        }
+        self.lane.tasks(None, limit).await
+    }
+
+    /// The `working` rows, oldest first: a dead holder's, as of the acquire.
+    pub async fn working(&self) -> Result<Vec<TaskRow>, StorageError> {
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .rev()
+                .filter(|r| r.status == TaskState::Working)
+                .cloned()
+                .collect());
+        }
+        let working = self.lane.tasks(Some(TaskState::Working), LOOKUP_LIMIT).await?;
+        Ok(working.into_iter().rev().collect())
+    }
+
+    pub fn lane(&self) -> &LaneDb {
+        &self.lane
+    }
+
+    /// The pending writes, in the order they were first made.
+    pub fn writes(&self) -> &[TaskWrite] {
+        &self.writes
+    }
+
+    /// The first loaded row that matches, else, when the loaded rows are not the whole lane, the
+    /// stored one `read` finds.
+    async fn find(
+        &self,
+        matches: impl Fn(&TaskRow) -> bool,
+        read: impl std::future::Future<Output = Result<Option<TaskRow>, StorageError>>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        match self.loaded.as_deref().and_then(|rows| rows.iter().find(|r| matches(r))) {
+            Some(r) => Ok(Some(r.clone())),
+            None if self.snapshot().is_some() => Ok(None),
+            None => read.await,
+        }
+    }
+
+    /// The task of an A2A `messageId`: a pending write first, then the lane's rows.
+    pub async fn by_message_id(&self, message_id: &str) -> Result<Option<TaskRow>, StorageError> {
+        if let Some(w) = self.writes.iter().find(|w| w.message_id.as_deref() == Some(message_id)) {
+            return Ok(Some(w.row(self.lane.name())));
+        }
+        let read = self.lane.task_for_message(message_id);
+        self.find(|r| r.message_id.as_deref() == Some(message_id), read).await
+    }
+
+    /// The newest `input-required` row holding a conversation tool's pending call.
+    pub async fn pending_ask(&self) -> Result<Option<TaskRow>, StorageError> {
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .find(|r| r.status == TaskState::InputRequired && r.internal.is_some())
+                .cloned());
+        }
+        Ok(self
+            .lane
+            .tasks(Some(TaskState::InputRequired), PENDING_ASK_LIMIT)
+            .await?
+            .into_iter()
+            .find(|r| r.internal.is_some()))
+    }
+
+    /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.
+    pub async fn write(
+        &mut self,
+        task_id: &str,
+        status: TaskState,
+        patch: TaskPatch,
+    ) -> Result<&TaskWrite, StorageError> {
+        let base = match self.writes.iter().find(|w| w.task_id == task_id) {
+            Some(w) => Some(w.clone()),
+            None => self
+                .find(|r| r.task_id == task_id, self.lane.task(task_id))
+                .await?
+                .map(TaskWrite::from),
+        };
+        let write = run::merge_write(task_id, base.as_ref(), status, patch)?;
+        match self.writes.iter().position(|w| w.task_id == task_id) {
+            Some(i) => {
+                self.writes[i] = write;
+                Ok(&self.writes[i])
+            }
+            None => {
+                self.writes.push(write);
+                Ok(self.writes.last().expect("just pushed"))
+            }
+        }
+    }
+
+    /// `input-required`: the question is the status message, `ask` the pending transition.
+    pub async fn wait(
+        &mut self,
+        task_id: &str,
+        question: &str,
+        opts: WaitOptions,
+    ) -> Result<(), StorageError> {
+        let patch = run::wait_patch(task_id, question, opts, shortuuid("msg_"));
+        self.write(task_id, TaskState::InputRequired, patch).await?;
+        Ok(())
+    }
+}

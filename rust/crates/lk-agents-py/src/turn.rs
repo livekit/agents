@@ -1,4 +1,5 @@
-//! The turn surface of `_core`: `lk_agents_storage::run` and `lk_agents_a2a` as Python sees them.
+//! The turn surface of `_core`: `lk_agents_runtime::storage` and `lk_agents_runtime::a2a` as Python
+//! sees them.
 //! `Thread` is one open thread (`Storage.open`); `Thread.open_run` takes a lane for a `Run` the host
 //! drives itself (the voice lane); `Turn(thread, lane, host, options)` is one text door's turns,
 //! and `turn.run(message)` takes one A2A message through its policy. The host is the door's
@@ -6,15 +7,15 @@
 
 use std::sync::Arc;
 
-use lk_agents_a2a::{Turn, TurnHost, TurnOptions};
+use lk_agents_a2a::{TurnHost, TurnOptions};
+use lk_agents_runtime::a2a::Turn;
+use lk_agents_runtime::storage::{CommitOptions, Run, RunOptions, Thread};
 use lk_agents_abi::python::{
     HostProxy, check_pid, pyo3_async_runtimes, value_from_py, value_to_py,
 };
 use lk_agents_abi::{Clock, RealClock};
 use lk_agents_storage::db::TaskQuery;
-use lk_agents_storage::run::{
-    CommitOptions, ItemRow, Run, RunOptions, RunOutcome, TaskState, Thread,
-};
+use lk_agents_storage::run::{ItemRow, RunOutcome, TaskState};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -40,12 +41,6 @@ impl PyThread {
     #[getter]
     fn holder(&self) -> String {
         self.inner.holder().to_owned()
-    }
-
-    /// The durable commit sequence last observed on the connection.
-    #[getter]
-    fn tip(&self) -> i64 {
-        self.inner.tip()
     }
 
     /// Every lane as a `LaneRow`. Awaitable.
@@ -212,7 +207,8 @@ impl PyThread {
 
     /// Ends the database connection; every later call raises `StorageUnavailable`.
     fn close(&self) {
-        self.inner.close();
+        let thread = self.inner.clone();
+        pyo3_async_runtimes::tokio::get_runtime().spawn(async move { thread.close().await });
     }
 }
 

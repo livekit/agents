@@ -18,123 +18,31 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use livekit_api::access_token::{AccessToken, AgentGrants};
 pub use livekit_protocol::agent_db::wire;
 use prost::Message as _;
-use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
 use wire as pb;
 
-use crate::StorageError;
+use lk_agents_storage::StorageError;
+use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 
-/// One SQLite storage class, as a bind parameter or a cell.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SqlValue {
-    Null,
-    Int(i64),
-    Double(f64),
-    Text(String),
-    Blob(Vec<u8>),
+/// A bound value as the wire carries it.
+fn to_wire(v: &SqlValue) -> wire::Value {
+    use wire::value::Value as V;
+    let value = match v {
+        SqlValue::Null => V::NullValue(true),
+        SqlValue::Int(i) => V::IntValue(*i),
+        SqlValue::Double(d) => V::DoubleValue(*d),
+        SqlValue::Text(s) => V::TextValue(s.clone()),
+        SqlValue::Blob(b) => V::BlobValue(b.clone()),
+    };
+    wire::Value { value: Some(value) }
 }
 
-impl SqlValue {
-    /// A JSON column's bind value: its text, for `jsonb(..)`.
-    pub fn json<T: Serialize + ?Sized>(v: &T) -> SqlValue {
-        SqlValue::Text(serde_json::to_string(v).expect("a JSON-shaped value"))
-    }
-
-    /// `NULL` for `None`, else [`SqlValue::json`].
-    pub fn opt_json<T: Serialize>(v: Option<&T>) -> SqlValue {
-        v.map_or(SqlValue::Null, SqlValue::json)
-    }
-
-    pub fn to_wire(&self) -> wire::Value {
-        use wire::value::Value as V;
-        let value = match self {
-            SqlValue::Null => V::NullValue(true),
-            SqlValue::Int(i) => V::IntValue(*i),
-            SqlValue::Double(d) => V::DoubleValue(*d),
-            SqlValue::Text(s) => V::TextValue(s.clone()),
-            SqlValue::Blob(b) => V::BlobValue(b.clone()),
-        };
-        wire::Value { value: Some(value) }
-    }
-
-    pub fn as_i64(&self) -> Option<i64> {
-        match self {
-            SqlValue::Int(i) => Some(*i),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            SqlValue::Text(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn is_null(&self) -> bool {
-        matches!(self, SqlValue::Null)
-    }
-}
-
-impl From<&str> for SqlValue {
-    fn from(s: &str) -> Self {
-        SqlValue::Text(s.to_owned())
-    }
-}
-
-impl From<String> for SqlValue {
-    fn from(s: String) -> Self {
-        SqlValue::Text(s)
-    }
-}
-
-impl From<i64> for SqlValue {
-    fn from(i: i64) -> Self {
-        SqlValue::Int(i)
-    }
-}
-
-impl From<bool> for SqlValue {
-    fn from(b: bool) -> Self {
-        SqlValue::Int(i64::from(b))
-    }
-}
-
-impl From<f64> for SqlValue {
-    fn from(d: f64) -> Self {
-        SqlValue::Double(d)
-    }
-}
-
-impl From<Vec<u8>> for SqlValue {
-    fn from(b: Vec<u8>) -> Self {
-        SqlValue::Blob(b)
-    }
-}
-
-impl<T: Into<SqlValue>> From<Option<T>> for SqlValue {
-    fn from(v: Option<T>) -> Self {
-        v.map_or(SqlValue::Null, Into::into)
-    }
-}
-
-pub type Row = Vec<SqlValue>;
-
-/// The first cell of the first row: a `RETURNING version`, a `COUNT(*)`, a single column read.
-pub fn first_cell(rows: &[Row]) -> Option<&SqlValue> {
-    rows.first().and_then(|row| row.first())
-}
-
-/// A statement with positional parameters.
-pub fn statement(sql: &str, params: Vec<SqlValue>) -> wire::Statement {
-    wire::Statement {
-        sql: sql.to_owned(),
-        params: params.iter().map(SqlValue::to_wire).collect(),
-        lang: 0,
-    }
+/// A statement as the wire carries it.
+pub fn statement(s: &Statement) -> wire::Statement {
+    wire::Statement { sql: s.sql.to_string(), params: s.params.iter().map(to_wire).collect(), lang: 0 }
 }
 
 /// A batch's rows. Values are typed per row: walk `types` and take the next entry from the
@@ -315,36 +223,6 @@ pub struct ExecResult {
     pub tip: i64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum StatementResult {
-    Rows(Vec<Row>),
-    Exec { rows_affected: i64, last_insert_id: i64 },
-}
-
-impl StatementResult {
-    /// The rows of a statement that returned some; empty for one that did not.
-    pub fn rows(&self) -> &[Row] {
-        match self {
-            StatementResult::Rows(r) => r,
-            StatementResult::Exec { .. } => &[],
-        }
-    }
-
-    pub fn rows_affected(&self) -> i64 {
-        match self {
-            StatementResult::Rows(_) => 0,
-            StatementResult::Exec { rows_affected, .. } => *rows_affected,
-        }
-    }
-}
-
-/// A `Batch`'s answer: one result per statement, in order, and the tip the batch committed at.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BatchResult {
-    pub results: Vec<StatementResult>,
-    pub tip: i64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Connecting,
@@ -418,7 +296,7 @@ struct Socket {
 impl Conn {
     /// Dials, says `Hello`, and starts the supervisor.
     pub async fn dial(opts: Options, minter: TokenMinter) -> Result<Conn, WsdbError> {
-        crate::install_tls_provider();
+        super::install_tls_provider();
         let (phase, _) = watch::channel(Phase::Connecting);
         let inner = Arc::new(Inner {
             opts,
@@ -760,8 +638,8 @@ impl Conn {
     }
 
     /// One write statement; returns once durable.
-    pub async fn exec(&self, sql: &str, params: Vec<SqlValue>) -> Result<ExecResult, WsdbError> {
-        let stmt = statement(sql, params);
+    pub async fn exec(&self, s: &Statement) -> Result<ExecResult, WsdbError> {
+        let stmt = statement(s);
         resend(|| self.exec_once(stmt.clone())).await
     }
 
@@ -784,8 +662,8 @@ impl Conn {
     }
 
     /// A query's rows, all of them: one credit back per batch consumed.
-    pub async fn query_all(&self, sql: &str, params: Vec<SqlValue>) -> Result<Vec<Row>, WsdbError> {
-        let stmt = statement(sql, params);
+    pub async fn query_all(&self, s: &Statement) -> Result<Vec<Row>, WsdbError> {
+        let stmt = statement(s);
         resend(|| self.query_once(stmt.clone())).await
     }
 
@@ -817,7 +695,8 @@ impl Conn {
     }
 
     /// Statements applied atomically, in order, each answered in order.
-    pub async fn batch(&self, statements: Vec<pb::Statement>) -> Result<BatchResult, WsdbError> {
+    pub async fn batch(&self, statements: &[Statement]) -> Result<BatchResult, WsdbError> {
+        let statements: Vec<pb::Statement> = statements.iter().map(statement).collect();
         resend(|| self.batch_once(statements.clone())).await
     }
 
@@ -880,7 +759,8 @@ impl Conn {
                             })
                             .collect();
                         req.answered = true;
-                        return Ok(BatchResult { results, tip: d.tip });
+                        self.observe_tip(d.tip);
+                        return Ok(BatchResult { results });
                     }
                     other => {
                         return Err(WsdbError::Protocol(format!(
@@ -891,7 +771,6 @@ impl Conn {
             }
         }
         .await?;
-        self.observe_tip(r.tip);
         Ok(r)
     }
 }
@@ -926,7 +805,7 @@ pub const TOKEN_TTL: Duration = Duration::from_secs(3600);
 #[derive(Clone)]
 pub struct TokenMinter {
     api_key: String,
-    pub(crate) api_secret: String,
+    api_secret: String,
 }
 
 impl std::fmt::Debug for TokenMinter {
@@ -951,6 +830,10 @@ impl TokenMinter {
 
     pub fn api_key(&self) -> &str {
         &self.api_key
+    }
+
+    pub fn api_secret(&self) -> &str {
+        &self.api_secret
     }
 
     /// A fresh token: [`TOKEN_TTL`] long, with the `agent.databaseAdmin` grant.
@@ -1133,6 +1016,10 @@ pub(crate) mod tests {
         }
     }
 
+    fn st(sql: &'static str, params: Vec<SqlValue>) -> Statement {
+        Statement { sql: sql.into(), params }
+    }
+
     fn minter() -> TokenMinter {
         TokenMinter::new("devkey", "secret").unwrap()
     }
@@ -1158,12 +1045,12 @@ pub(crate) mod tests {
     async fn exec_query_and_credits() {
         let (url, log) = serve(script, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
-        let r = conn.exec("INSERT", vec!["v".into()]).await.unwrap();
+        let r = conn.exec(&st("INSERT", vec!["v".into()])).await.unwrap();
         assert_eq!((r.rows_affected, r.last_insert_id, r.tip), (1, 9, 8));
-        let err = conn.exec("boom", vec![]).await.err().unwrap();
+        let err = conn.exec(&st("boom", vec![])).await.err().unwrap();
         assert!(matches!(err, WsdbError::Server { code, .. } if code == "exec"));
         // `retry` applied nothing: sent three times, then the error
-        let err = conn.exec("busy", vec![]).await.err().unwrap();
+        let err = conn.exec(&st("busy", vec![])).await.err().unwrap();
         assert!(matches!(err, WsdbError::Server { code, .. } if code == "retry"));
         let busy = |log: &Served| {
             log.lock()
@@ -1174,7 +1061,7 @@ pub(crate) mod tests {
         };
         assert_eq!(busy(&log), 3);
 
-        let rows = conn.query_all("SELECT", vec![]).await.unwrap();
+        let rows = conn.query_all(&st("SELECT", vec![])).await.unwrap();
         assert_eq!(
             rows,
             vec![vec![SqlValue::Int(1), "a".into()], vec![SqlValue::Int(2), SqlValue::Null]]
@@ -1201,9 +1088,8 @@ pub(crate) mod tests {
     async fn a_batch_answers_per_statement_and_an_empty_returning_is_rows() {
         let (url, _) = serve(script, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
-        let stmts = (0..4).map(|_| statement("S", vec![])).collect();
-        let out = conn.batch(stmts).await.unwrap();
-        assert_eq!(out.tip, 9);
+        let stmts: Vec<Statement> = (0..4).map(|_| st("S", vec![])).collect();
+        let out = conn.batch(&stmts).await.unwrap();
         assert_eq!(conn.tip(), 9);
         assert_eq!(out.results[0], StatementResult::Exec { rows_affected: 2, last_insert_id: 0 });
         assert_eq!(out.results[1].rows(), &[vec![SqlValue::Int(3)]]);
@@ -1217,9 +1103,9 @@ pub(crate) mod tests {
         let (url, log) = serve(script, true).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         // The fake drops the socket on this exec: the request fails and the client redials.
-        let err = conn.exec("drop", vec![]).await.err().unwrap();
+        let err = conn.exec(&st("drop", vec![])).await.err().unwrap();
         assert!(matches!(err, WsdbError::Disconnected), "{err}");
-        let r = conn.exec("INSERT", vec![]).await.unwrap();
+        let r = conn.exec(&st("INSERT", vec![])).await.unwrap();
         assert_eq!(r.rows_affected, 1);
         let hellos = log
             .lock()
@@ -1229,7 +1115,7 @@ pub(crate) mod tests {
             .count();
         assert_eq!(hellos, 2, "one Hello per dial: the first and the redial");
         conn.close();
-        assert!(matches!(conn.exec("INSERT", vec![]).await, Err(WsdbError::Closed)));
+        assert!(matches!(conn.exec(&st("INSERT", vec![])).await, Err(WsdbError::Closed)));
     }
 
     fn hellos(log: &Served) -> usize {
@@ -1261,7 +1147,7 @@ pub(crate) mod tests {
         let conn = dial(&url, "DB_1").await.unwrap();
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert!(hellos(&log) >= 2, "redialed past the read deadline");
-        assert_eq!(conn.exec("INSERT", vec![]).await.unwrap().rows_affected, 1);
+        assert_eq!(conn.exec(&st("INSERT", vec![])).await.unwrap().rows_affected, 1);
         conn.close();
     }
 
@@ -1283,8 +1169,8 @@ pub(crate) mod tests {
         }
         let (url, log) = serve(refuses_again, true).await;
         let conn = dial(&url, "DB_1").await.unwrap();
-        assert!(matches!(conn.exec("drop", vec![]).await, Err(WsdbError::Disconnected)));
-        let err = conn.exec("INSERT", vec![]).await.err().unwrap();
+        assert!(matches!(conn.exec(&st("drop", vec![])).await, Err(WsdbError::Disconnected)));
+        let err = conn.exec(&st("INSERT", vec![])).await.err().unwrap();
         assert!(matches!(&err, WsdbError::Server { code, .. } if code == "not_found"), "{err}");
         assert_eq!(hellos(&log), 2, "no redial after a final refusal");
     }
@@ -1294,8 +1180,8 @@ pub(crate) mod tests {
         let (url, _) = serve(script, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let big = SqlValue::Text("x".repeat(MAX_FRAME + 1));
-        assert!(matches!(conn.exec("INSERT", vec![big]).await, Err(WsdbError::TooLarge(_))));
-        assert_eq!(conn.exec("INSERT", vec![]).await.unwrap().rows_affected, 1, "still open");
+        assert!(matches!(conn.exec(&st("INSERT", vec![big])).await, Err(WsdbError::TooLarge(_))));
+        assert_eq!(conn.exec(&st("INSERT", vec![])).await.unwrap().rows_affected, 1, "still open");
         conn.close();
     }
 

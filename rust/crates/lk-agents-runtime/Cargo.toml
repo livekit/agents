@@ -20,14 +20,33 @@ log.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 bytes = "1"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 pyo3 = { workspace = true, optional = true }
+# Thread storage and the A2A door: the cores' plans executed against AgentDB and local SQLite.
+lk-agents-storage = { path = "../lk-agents-storage" }
+lk-agents-a2a = { path = "../lk-agents-a2a" }
+livekit-protocol.workspace = true
+pbjson-types.workspace = true
+prost.workspace = true
+a2a.workspace = true
+serde.workspace = true
+# Threads and databases through public-api-server, the one way to agentstore.
+livekit-api.workspace = true
+# The AgentDB data plane: the same WebSocket and TLS set as `lk-agents-worker` and
+# `lk-agents-inference`, one crypto provider (`ring`).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+url = "2"
+# Lease tokens, task, message and artifact ids: six random bytes as hex.
+rand = "0.9"
+# `SQLiteStorage`: one file per thread, executed on its own connection thread.
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 
 [features]
 # The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
-python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python"]
+python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python", "lk-agents-a2a/python"]

@@ -7,7 +7,7 @@ use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::conn::SqlValue;
+use crate::sql::SqlValue;
 use crate::run::{RunOutcome, TaskState};
 use crate::sql::{FromCell, json_cell, statement};
 
@@ -477,7 +477,7 @@ statement! {
     /// Fails a `working` row whose holder died.
     FailOrphan<'a> { lane: &'a str, task_id: &'a str, status_message: SqlValue } => r#"
 UPDATE tasks
-SET status = 'failed', data = jsonb_set(data, '$.statusMessage', jsonb(:status_message)),
+SET status = 'failed', data = jsonb_set(data, '$.status_message', jsonb(:status_message)),
   updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
 WHERE lane = :lane AND task_id = :task_id AND status = 'working'
 "#
@@ -504,7 +504,7 @@ statement! {
 }
 
 /// The error [`SelectSchemaVersion`] answers on a database no SDK wrote yet.
-pub(crate) const NO_SCHEMA: &str = "no such table: schema_version";
+pub const NO_SCHEMA: &str = "no such table: schema_version";
 
 statement! {
     /// `schema_version`'s one row, written with the DDL.
@@ -827,8 +827,8 @@ WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) OR
 mod tests {
     use super::*;
     use crate::StorageError;
-    use crate::conn::Row;
-    use crate::sql::Statement;
+    use crate::sql::Row;
+    use crate::sql::Bind;
 
     #[test]
     fn a_row_decodes_and_a_bad_cell_names_its_column() {

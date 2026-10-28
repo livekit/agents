@@ -58,7 +58,7 @@ pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             pub const SELECT: &'static str = #select;
 
             /// The record of a row read with [`Self::SELECT`].
-            pub fn from_row(row: &crate::conn::Row) -> Result<Self, crate::StorageError> {
+            pub fn from_row(row: &crate::sql::Row) -> Result<Self, crate::StorageError> {
                 let cells = crate::sql::Cells::new(row, Self::COLUMNS)?;
                 Ok(Self { #(#reads),* })
             }

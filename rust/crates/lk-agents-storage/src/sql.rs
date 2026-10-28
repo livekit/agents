@@ -1,13 +1,169 @@
-//! The SQL machinery: typed row reads ([`FromCell`], [`Cells`]), the [`Statement`] trait and its
-//! `statement!` macro, and the compile-time checks of statements and records.
+//! The backend-neutral SQL vocabulary: bound values ([`SqlValue`]), executable [`Statement`]s and
+//! their results, typed row reads ([`FromCell`], [`Cells`]), the [`Bind`] trait with its
+//! `statement!` macro, and the compile-time checks of statements and records. Both backends
+//! execute these as they are; neither's wire or driver types appear here.
 
+use std::borrow::Cow;
+
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::StorageError;
-use crate::conn::{Row, SqlValue};
 
 mod script;
-pub(crate) use script::schema_statements;
+pub use script::schema_statements;
+
+/// One SQLite storage class, as a bind parameter or a cell.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SqlValue {
+    Null,
+    Int(i64),
+    Double(f64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+impl SqlValue {
+    /// A JSON column's bind value: its text, for `jsonb(..)`.
+    pub fn json<T: Serialize + ?Sized>(v: &T) -> SqlValue {
+        SqlValue::Text(serde_json::to_string(v).expect("a JSON-shaped value"))
+    }
+
+    /// `NULL` for `None`, else [`SqlValue::json`].
+    pub fn opt_json<T: Serialize>(v: Option<&T>) -> SqlValue {
+        v.map_or(SqlValue::Null, SqlValue::json)
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            SqlValue::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            SqlValue::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        matches!(self, SqlValue::Null)
+    }
+}
+
+impl From<&str> for SqlValue {
+    fn from(s: &str) -> Self {
+        SqlValue::Text(s.to_owned())
+    }
+}
+
+impl From<String> for SqlValue {
+    fn from(s: String) -> Self {
+        SqlValue::Text(s)
+    }
+}
+
+impl From<i64> for SqlValue {
+    fn from(i: i64) -> Self {
+        SqlValue::Int(i)
+    }
+}
+
+impl From<bool> for SqlValue {
+    fn from(b: bool) -> Self {
+        SqlValue::Int(i64::from(b))
+    }
+}
+
+impl From<f64> for SqlValue {
+    fn from(d: f64) -> Self {
+        SqlValue::Double(d)
+    }
+}
+
+impl From<Vec<u8>> for SqlValue {
+    fn from(b: Vec<u8>) -> Self {
+        SqlValue::Blob(b)
+    }
+}
+
+impl<T: Into<SqlValue>> From<Option<T>> for SqlValue {
+    fn from(v: Option<T>) -> Self {
+        v.map_or(SqlValue::Null, Into::into)
+    }
+}
+
+pub type Row = Vec<SqlValue>;
+
+/// The first cell of the first row: a `RETURNING version`, a `COUNT(*)`, a single column read.
+pub fn first_cell(rows: &[Row]) -> Option<&SqlValue> {
+    rows.first().and_then(|row| row.first())
+}
+
+/// One executable statement: SQL with positional `?N` parameters and the values they bind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Statement {
+    pub sql: Cow<'static, str>,
+    pub params: Vec<SqlValue>,
+}
+
+impl Statement {
+    /// A statement that binds nothing: DDL.
+    pub fn raw(sql: &'static str) -> Self {
+        Self { sql: Cow::Borrowed(sql), params: Vec::new() }
+    }
+}
+
+/// One statement's answer in a batch: the rows it returned, or the rows it changed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatementResult {
+    Rows(Vec<Row>),
+    Exec { rows_affected: i64, last_insert_id: i64 },
+}
+
+impl StatementResult {
+    /// The rows of a statement that returned some; empty for one that did not.
+    pub fn rows(&self) -> &[Row] {
+        match self {
+            StatementResult::Rows(r) => r,
+            StatementResult::Exec { .. } => &[],
+        }
+    }
+
+    pub fn rows_affected(&self) -> i64 {
+        match self {
+            StatementResult::Rows(_) => 0,
+            StatementResult::Exec { rows_affected, .. } => *rows_affected,
+        }
+    }
+
+    /// The first cell as an integer: a `RETURNING version`, a `COUNT(*)`.
+    pub fn first_int(&self) -> Option<i64> {
+        first_cell(self.rows()).and_then(SqlValue::as_i64)
+    }
+}
+
+/// An atomic batch's answer: one result per statement, in order. Its existence means the batch
+/// committed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchResult {
+    pub results: Vec<StatementResult>,
+}
+
+impl BatchResult {
+    /// The result of the statement at `i`; a missing one is a malformed answer, never a
+    /// zero-row success.
+    pub fn at(&self, i: usize) -> Result<&StatementResult, StorageError> {
+        self.results.get(i).ok_or_else(|| {
+            StorageError::Protocol(format!(
+                "a batch answered {} results, statement {i} has none",
+                self.results.len()
+            ))
+        })
+    }
+}
 
 /// Typed reads of one row's cells, positional, each failure naming the column.
 pub struct Cells<'a> {
@@ -64,7 +220,7 @@ impl FromCell for Value {
 macro_rules! json_cell {
     ($($t:ty),*) => {$(
         impl $crate::sql::FromCell for $t {
-            fn from_cell(cell: &$crate::conn::SqlValue) -> Result<Self, String> {
+            fn from_cell(cell: &$crate::sql::SqlValue) -> Result<Self, String> {
                 serde_json::from_value(<serde_json::Value as $crate::sql::FromCell>::from_cell(cell)?).map_err(|e| format!("JSON: {e}"))
             }
         }
@@ -129,19 +285,16 @@ const fn at(d: &[u8], i: usize, pat: &[u8]) -> bool {
     true
 }
 
-/// One statement: its SQL, with `:field` placeholders, and the values it binds, as fields.
-pub(crate) trait Statement {
+/// A declared statement: its SQL, with `:field` placeholders, and the values it binds, as fields.
+pub(crate) trait Bind {
     /// As written, with `:field` placeholders.
     const SQL: &'static str;
     /// The fields, in the order their values are sent.
     const FIELDS: &'static [&'static str];
     /// As sent: each `:field` as `?N`.
     fn sql() -> &'static str;
-    fn params(self) -> Vec<SqlValue>;
-}
-
-pub(crate) fn wire<S: Statement>(s: S) -> crate::conn::wire::Statement {
-    crate::conn::statement(S::sql(), s.params())
+    /// The executable statement with this declaration's values.
+    fn bind(self) -> Statement;
 }
 
 /// [`Statement::SQL`] with each `:field` as `?N`, `N` the field's position in `fields`.
@@ -220,7 +373,7 @@ macro_rules! statement {
             concat!(stringify!($name), ": every :placeholder must be a field and every field used"),
         );
 
-        impl$(<$lt>)? $crate::sql::Statement for $name$(<$lt>)? {
+        impl$(<$lt>)? $crate::sql::Bind for $name$(<$lt>)? {
             const SQL: &'static str = $sql;
             const FIELDS: &'static [&'static str] = &[$(stringify!($field)),*];
             fn sql() -> &'static str {
@@ -228,8 +381,11 @@ macro_rules! statement {
                     std::sync::LazyLock::new(|| $crate::sql::numbered(<$name>::SQL, <$name>::FIELDS));
                 &SENT
             }
-            fn params(self) -> Vec<$crate::conn::SqlValue> {
-                vec![$(self.$field.into()),*]
+            fn bind(self) -> $crate::sql::Statement {
+                $crate::sql::Statement {
+                    sql: std::borrow::Cow::Borrowed(<Self as $crate::sql::Bind>::sql()),
+                    params: vec![$(self.$field.into()),*],
+                }
             }
         }
     };

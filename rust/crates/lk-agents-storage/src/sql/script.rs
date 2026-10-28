@@ -1,6 +1,6 @@
 //! Split the protocol's table/index DDL into statements for an atomic connection batch.
 
-pub(crate) fn schema_statements(schema: &str) -> impl Iterator<Item = &str> {
+pub fn schema_statements(schema: &str) -> impl Iterator<Item = &str> {
     let bytes = schema.as_bytes();
     let (mut start, mut i) = (0, 0);
     let mut quote = None;

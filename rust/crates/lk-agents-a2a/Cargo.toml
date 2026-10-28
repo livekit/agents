@@ -5,9 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# The A2A text door's turn engine: one incoming A2A message through its
-# policy, run on a lane of `lk-agents-storage`. Host-neutral: `lk-agents-py/src/turn.rs` is the
-# Python face.
+# The A2A text door's synchronous core: the records the host and the wire read, the door's
+# policies, and a turn's decisions. `lk-agents-runtime::a2a` runs the turns.
 
 [lib]
 # The `///` docs on the records are the generated pydantic models' docstrings; no Rust doctests.
@@ -28,14 +27,8 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 log.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
-# `TurnHost` is an object-safe async trait: the host (Python through `_core`, Node) runs the handler.
-async-trait.workspace = true
 
 [features]
 # The proxy and records' pyo3 conversions. Enabled by `lk-agents-py` only.
 python = ["dep:pyo3", "lk-agents-abi/python"]
 
-[dev-dependencies]
-async-trait.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }

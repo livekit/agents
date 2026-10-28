@@ -1363,7 +1363,6 @@ name = "lk-agents-a2a"
 version = "0.1.0"
 dependencies = [
  "a2a-lf",
- "async-trait",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-host-derive",
@@ -1373,7 +1372,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "tokio",
 ]
 
 [[package]]
@@ -1536,35 +1534,22 @@ dependencies = [
 name = "lk-agents-runtime"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "livekit-token",
- "lk-agents-abi",
- "lk-agents-core",
- "lk-agents-inference",
- "log",
- "pyo3",
- "reqwest 0.13.4",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "lk-agents-storage"
-version = "0.1.0"
-dependencies = [
  "a2a-lf",
  "async-trait",
  "bytes",
  "futures-util",
  "livekit-api",
  "livekit-protocol",
- "lk-agents-host-derive",
+ "livekit-token",
+ "lk-agents-a2a",
+ "lk-agents-abi",
+ "lk-agents-core",
+ "lk-agents-inference",
+ "lk-agents-storage",
  "log",
  "pbjson-types",
  "prost",
+ "pyo3",
  "rand 0.9.5",
  "reqwest 0.13.4",
  "rusqlite",
@@ -1575,6 +1560,20 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "url",
+]
+
+[[package]]
+name = "lk-agents-storage"
+version = "0.1.0"
+dependencies = [
+ "a2a-lf",
+ "livekit-protocol",
+ "lk-agents-host-derive",
+ "pbjson-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
