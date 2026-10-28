@@ -64,7 +64,9 @@ class _ResponsesWebsocket:
         self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
-        self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
+        self._timeout = (
+            timeout if timeout is not None else DEFAULT_API_CONNECT_OPTIONS.connect_timeout
+        )
         url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
         if url.scheme in ("http", "https"):
             url = url.with_scheme("ws" if url.scheme == "http" else "wss")
