@@ -151,7 +151,7 @@ impl Driver {
             {
                 // The wire carries a string; a streamed `say` is refused by name.
                 let SayText::Text(text) = text else {
-                    out.trace(CoreStep::PortFailure(SAY_SHAPE_REFUSED_ON_REALTIME));
+                    out.trace(SpeechStep::SayRefused { why: SAY_SHAPE_REFUSED_ON_REALTIME });
                     self.fail_waiter(
                         call,
                         SpeechKind::Say,

@@ -159,8 +159,8 @@ pub enum SpeechStep {
         speech: SpeechId,
         reason: crate::agent_activity::scheduling::Rejected,
     },
-    /// A `say()` refused before any speech existed, as the reference raises at
-    /// `AgentActivity.say`; no `SpeechCreated` is emitted.
+    /// A `say()` the driver refused before asking any model or voice for it, as the reference
+    /// raises at `AgentActivity.say`.
     SayRefused {
         why: &'static str,
     },
