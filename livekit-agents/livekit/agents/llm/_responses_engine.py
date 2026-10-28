@@ -246,7 +246,7 @@ class ResponsesLLMStream(llm.LLMStream):
         self._message_phases: dict[str, str | None] = {}
         self._second_message_started = False
         self._dropped_item_ids: list[str] = []
-        self._hosted_continuations = 0
+        self._hosted_continuation = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
@@ -478,24 +478,27 @@ class ResponsesLLMStream(llm.LLMStream):
         return chunk
 
     def _handle_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        """Record a message item's phase; whether it is spoken is decided at its first text."""
         if isinstance(event.item, ResponseOutputMessage):
             self._message_phases[event.item.id] = event.item.phase
 
     def _drop_item(self, item_id: str) -> None:
+        """Mark an output item as an alternate answer that is not sent to the caller."""
         self._second_message_started = True
         if item_id not in self._dropped_item_ids:
             self._dropped_item_ids.append(item_id)
 
     def _handle_output_items_done(self, event: ResponseOutputItemDoneEvent) -> llm.ChatChunk | None:
         chunk = None
-        if self._text_owner is not None and event.item.type not in (
-            "message",
-            "function_call",
-            "reasoning",
+        if (
+            self._text_owner is not None
+            and not self._second_message_started
+            and event.item.type not in ("message", "function_call", "reasoning")
         ):
-            # the reply continues after a server-side tool, so the next message is
-            # the answer rather than an alternate
-            self._hosted_continuations += 1
+            # the reply continues after server-side tools, so the next message is
+            # the answer rather than an alternate; several calls in a row still
+            # admit only that one message
+            self._hosted_continuation = True
         if event.item.type == "function_call":
             if self._second_message_started:
                 self._drop_item(event.item.call_id)
@@ -544,8 +547,8 @@ class ResponsesLLMStream(llm.LLMStream):
             # owner's phase may arrive on its output_item.done, so read it here
             if event.item_id in self._dropped_item_ids:
                 return None
-            if self._hosted_continuations > 0:
-                self._hosted_continuations -= 1
+            if self._hosted_continuation:
+                self._hosted_continuation = False
             elif self._message_phases.get(self._text_owner) != "commentary":
                 self._drop_item(event.item_id)
                 return None
