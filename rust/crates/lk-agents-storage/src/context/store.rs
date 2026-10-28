@@ -1,4 +1,5 @@
-//! Runtime-supplied field stores: snapshot staging in a turn, fenced direct saves outside one.
+//! A lane's context field store as the host uses it: snapshot staging in a turn, fenced direct
+//! saves outside one.
 
 use std::sync::{Arc, Mutex};
 
@@ -6,15 +7,14 @@ use lk_agents_abi::storage::context::{
     ContextActivation as HostContextActivation, ContextField, ContextScope, ContextScopeWrite,
     ContextValues,
 };
-use lk_agents_storage::StorageError;
-use lk_agents_storage::context::ContextActivation as Activation;
-use lk_agents_storage::run::RunOutcome;
 use serde_json::Value;
 
-use super::{CommitOptions, RunOptions, Storage, shortuuid};
+use super::ContextActivation as Activation;
+use crate::run::RunOutcome;
+use crate::{CommitOptions, RunOptions, Storage, StorageError, shortuuid};
 
 #[derive(Clone)]
-pub struct ContextActivation {
+pub struct ContextStore {
     activation: Arc<Mutex<Activation>>,
     direct: Option<DirectStore>,
     operation: Arc<tokio::sync::Mutex<()>>,
@@ -73,7 +73,7 @@ impl DirectStore {
     }
 }
 
-impl ContextActivation {
+impl ContextStore {
     pub(crate) async fn lock_managed(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.operation.clone().lock_owned().await
     }
@@ -119,7 +119,7 @@ impl ContextActivation {
     }
 }
 
-impl HostContextActivation for ContextActivation {
+impl HostContextActivation for ContextStore {
     fn new(
         scopes: Vec<ContextScope>,
         routing_state: Option<Value>,

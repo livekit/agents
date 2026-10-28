@@ -12,6 +12,7 @@ use crate::StorageError;
 use crate::db::STATE_LIMIT;
 
 pub mod db;
+pub mod store;
 
 /// One activation's mutable scope state. Runtime owns serialization between callers.
 pub struct ContextActivation {

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::context::ContextActivation as _;
@@ -11,16 +12,15 @@ use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as HostVoiceStore,
 };
 use lk_agents_abi::{ChatContent, ChatItem, Role};
-use lk_agents_storage::run::{ItemRow, RunOutcome};
 
-use super::context::ContextActivation;
-use super::{CommitOptions, Lease, Run, RunOptions, Storage, Thread, shortuuid};
+use crate::context::store::ContextStore;
+use crate::{CommitOptions, Lease, Run, RunOptions, Storage, Thread, shortuuid};
 
 pub struct VoiceStore {
     backend: Arc<dyn Storage>,
     thread_id: String,
     lane: String,
-    activation: ContextActivation,
+    activation: ContextStore,
     initial: Option<Vec<ChatItem>>,
     state: tokio::sync::Mutex<State>,
     lease: Mutex<Option<Lease>>,
@@ -78,7 +78,7 @@ impl VoiceStore {
             .collect();
         let explicit = explicit_history.is_some();
         let activation =
-            ContextActivation::bound(backend.clone(), thread_id.clone(), lane.clone()).await?;
+            ContextStore::bound(backend.clone(), thread_id.clone(), lane.clone()).await?;
         Ok(Self {
             backend,
             thread_id,
@@ -134,25 +134,26 @@ impl VoiceStore {
             }
         };
         let prepared = (|| {
-            let merged = if state.explicit && run.version() == state.version {
-                local
-            } else {
-                let mut stored = run
-                    .history
-                    .iter()
-                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Unavailable))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
-                let (mut instructions, pending): (Vec<_>, Vec<_>) =
-                    local.into_iter().partition(|item| !conversational(item));
-                stored.extend(
-                    pending.into_iter().filter(|item| {
+            let merged =
+                if state.explicit && run.version() == state.version {
+                    local
+                } else {
+                    let mut stored = run
+                        .history
+                        .iter()
+                        .map(|row| {
+                            decode_chat_item(row.payload.clone()).map_err(StorageError::Unavailable)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
+                    let (mut instructions, pending): (Vec<_>, Vec<_>) =
+                        local.into_iter().partition(|item| !conversational(item));
+                    stored.extend(pending.into_iter().filter(|item| {
                         !state.known.contains(item.id()) && !ids.contains(item.id())
-                    }),
-                );
-                instructions.extend(stored);
-                instructions
-            };
+                    }));
+                    instructions.extend(stored);
+                    instructions
+                };
             self.activation.begin_managed(
                 run.context_scopes.clone(),
                 run.state.clone(),
@@ -347,11 +348,11 @@ impl VoiceStorage for VoiceStore {
 }
 
 impl HostVoiceStore for VoiceStore {
-    type ContextActivation = ContextActivation;
+    type ContextActivation = ContextStore;
     fn initial_history(&self) -> Option<Vec<ChatItem>> {
         self.initial.clone()
     }
-    fn activation(&self) -> ContextActivation {
+    fn activation(&self) -> ContextStore {
         self.activation.clone()
     }
 

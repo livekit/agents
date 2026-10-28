@@ -90,7 +90,7 @@ impl generated::Implementations for Selected {
     type ProviderAttempts = lk_agents_runtime::cores::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
-    type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
+    type VoiceStore = lk_agents_runtime::storage::VoiceStore;
     type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime<
         lk_agents_runtime::process::Process,
     >;
@@ -100,7 +100,7 @@ impl generated::Implementations for Selected {
     type Reply = lk_agents_runtime::net::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
-    type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
+    type ContextActivation = lk_agents_runtime::storage::ContextStore;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type JudgeRunner =
         lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;

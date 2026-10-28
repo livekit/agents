@@ -1,17 +1,16 @@
 //! Observed voice lease loss stops admission and abandons staged fields/history.
 
-
 use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
 use lk_agents_abi::storage::voice::{VoiceStorage as _, VoiceStore as _};
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
-use lk_agents_runtime::storage::SqliteConnection;
-use lk_agents_runtime::storage::context::ContextActivation;
-use lk_agents_runtime::storage::sqlite::FileConnection;
-use lk_agents_runtime::storage::voice::VoiceStore;
+use lk_agents_storage::SqliteConnection;
+use lk_agents_storage::context::store::ContextStore;
+use lk_agents_storage::sqlite::FileConnection;
+use lk_agents_storage::testing::Backend;
+use lk_agents_storage::voice::VoiceStore;
 use lk_agents_storage::{StorageError, sql::Statement};
 use serde_json::json;
 use std::time::Duration;
-use lk_agents_storage::testing::Backend;
 
 #[tokio::test]
 async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() {
@@ -61,7 +60,7 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     let thread = fixture.thread("reader").await;
     assert!(thread.lane("desk").db().history().await.unwrap().is_empty());
     let restored =
-        ContextActivation::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
+        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
             .await
             .unwrap();
     assert!(

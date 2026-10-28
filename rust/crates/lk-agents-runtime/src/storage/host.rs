@@ -205,8 +205,8 @@ async fn local_tasks(
 impl HostStorageClass for HostStorage {
     type Thread = Thread;
     type Streams = Arc<QueuedStreams>;
-    type ContextActivation = super::context::ContextActivation;
-    type VoiceStore = super::voice::VoiceStore;
+    type ContextActivation = super::ContextStore;
+    type VoiceStore = super::VoiceStore;
 
     async fn _core_voice_store(
         &self,
@@ -214,7 +214,7 @@ impl HostStorageClass for HostStorage {
         lane: String,
         initial_history: Option<Vec<lk_agents_abi::ChatItem>>,
     ) -> Result<Self::VoiceStore, StorageError> {
-        super::voice::VoiceStore::bound(
+        super::VoiceStore::bound(
             self.shared_storage().await?.clone(),
             thread_id,
             lane,
@@ -431,12 +431,7 @@ impl HostStorageClass for HostStorage {
         thread_id: String,
         lane: String,
     ) -> Result<Self::ContextActivation, StorageError> {
-        super::context::ContextActivation::bound(
-            self.backend().await?.shared_storage(),
-            thread_id,
-            lane,
-        )
-        .await
+        super::ContextStore::bound(self.backend().await?.shared_storage(), thread_id, lane).await
     }
 
     async fn streams(&self) -> Result<Arc<QueuedStreams>, StorageError> {

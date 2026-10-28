@@ -7,6 +7,7 @@
 //! * [`engine`]: the shared [`Thread`], [`Lane`] and [`Run`] handles over a connection.
 //! * [`lease`]: a held lease, its renewal on the core's schedule, and its loss.
 //! * [`streams`]: the response streams a task's subscribers read, on either backend.
+//! * [`context`], [`voice`]: the host's context field stores and a call's lane turns.
 //! * [`sql`], [`schema`], [`db`], [`run`]: the SQL vocabulary, the thread tables, each lane
 //!   operation's statements and decoding, and the run's records and commit.
 
@@ -21,6 +22,7 @@ pub mod schema;
 pub mod sql;
 pub mod sqlite;
 pub mod streams;
+pub mod voice;
 #[cfg(feature = "testing")]
 pub mod testing;
 

@@ -1,11 +1,10 @@
-//! Persisted context scopes through the real shared storage runtime on both backends.
-
+//! Persisted context scopes through the real storage on both backends.
 
 use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
-use lk_agents_runtime::storage::context::ContextActivation;
 use lk_agents_storage::StorageError;
-use serde_json::{Value, json};
+use lk_agents_storage::context::store::ContextStore;
 use lk_agents_storage::testing::Backend;
+use serde_json::{Value, json};
 
 fn field(name: &str, value: Value) -> ContextField {
     ContextField { name: name.into(), schema: json!({"type": "string"}), value }
@@ -14,11 +13,11 @@ fn field(name: &str, value: Value) -> ContextField {
 async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let first =
-        ContextActivation::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
+        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
             .await
             .unwrap();
     let stale =
-        ContextActivation::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
+        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
             .await
             .unwrap();
     let fields = vec![field("draft", json!("first"))];
@@ -31,7 +30,7 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
     first.close();
 
     let restored =
-        ContextActivation::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
+        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
             .await
             .unwrap();
     let loaded = restored
@@ -66,7 +65,7 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
 async fn several_context_declarations_share_one_direct_scope(backend: Backend) {
     let fixture = backend.fixture(None).await;
     let store =
-        ContextActivation::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
+        ContextStore::bound(fixture.storage.clone(), fixture.thread_id.clone(), "desk".into())
             .await
             .unwrap();
     let draft = vec![field("draft", json!("booking"))];
