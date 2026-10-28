@@ -429,7 +429,8 @@ impl Socket {
                         .chain(policy)
                         .min();
                     // The runtime's biased order: the deadline, the close, the socket, the
-                    // commands, the context work.
+                    // commands, the context work: retired histories go to a cleanup worker,
+                    // a context page continues only once the machine can take it.
                     if deadline.is_some_and(|at| at <= now) {
                         let effects = st.connection.tick(m);
                         if ends_attempt(&effects) {
@@ -456,7 +457,10 @@ impl Socket {
                     } else if let Some(cmd) = st.commands.pop_front() {
                         let step = st.machine.command(m, cmd);
                         self.stepped(st, generation, step);
-                    } else if st.machine.context_work_pending() {
+                    } else if let Some(retired) = st.machine.take_context_retirement() {
+                        // an admitted cleanup worker reclaims the retired history
+                        drop(retired);
+                    } else if st.machine.context_continuation_ready() {
                         let step = st.machine.continue_context(m);
                         self.stepped(st, generation, step);
                     } else {
