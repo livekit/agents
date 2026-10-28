@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -120,7 +118,6 @@ async def _discard(_key: str, _value: Any) -> None:
 @dataclass
 class Bank:
     publish: Publish = _discard
-    lookup_seconds: float = 1.5
     attempts: list[dict[str, Any]] = field(default_factory=list)
     state: AuthState = "unauthenticated"
     locked_out: bool = False
@@ -138,7 +135,6 @@ class Bank:
         self.attempts.append(attempt)
         await self.publish("attempts", self.attempts)
         await self._set_state("authenticating")
-        await asyncio.sleep(self.lookup_seconds)
         verified = claimed.last_four == VERIFIED_CARD
         attempt["authenticated"] = verified
         await self.publish("attempts", self.attempts)
@@ -163,7 +159,6 @@ class Bank:
         alert.checks.append(None)
         await self._publish_alert()
         await self._set_state("authenticating")
-        await asyncio.sleep(self.lookup_seconds)
         alert.checks[-1] = True
         await self._publish_alert()
         await self._verify_holder(name)
@@ -246,7 +241,7 @@ class Bank:
 
 def card_digits(text: str) -> str:
     """The card's last four digits as the backend model gave them, like "1111" or "11 11"."""
-    digits = re.sub(r"\D", "", text)
+    digits = "".join(c for c in text if c.isdigit())
     if len(digits) != 4:
         raise BankError(f"Ask for the card's last four digits, got {text!r}.")
     return digits
