@@ -35,12 +35,7 @@ import numpy as np
 import pytest
 
 from livekit import api, rtc
-
-pytestmark = pytest.mark.plugin("livekit")
-
-_core = pytest.importorskip("livekit.agents._core", reason="needs livekit-agents-next")
-
-from livekit.agents import (  # noqa: E402
+from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     Agent,
     AgentServer,
@@ -52,7 +47,9 @@ from livekit.agents import (  # noqa: E402
     stt,
     tts,
 )
-from livekit.agents.utils import shortuuid  # noqa: E402
+from livekit.agents.utils import shortuuid
+
+pytestmark = pytest.mark.plugin("livekit")
 
 logger = logging.getLogger("it.agent")
 

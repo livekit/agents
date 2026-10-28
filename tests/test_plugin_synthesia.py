@@ -844,19 +844,17 @@ class TestAvatarSession:
 
     @pytest.fixture
     def instant_join(self, monkeypatch):
-        async def _ok(**kwargs):
+        async def _ok(self, room):
             return None
 
-        monkeypatch.setattr("livekit.agents.utils.wait_for_participant", _ok)
-        monkeypatch.setattr("livekit.agents.utils.wait_for_track_publication", _ok)
+        monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", _ok)
 
     @pytest.fixture
     def hanging_join(self, monkeypatch):
-        async def _never(**kwargs):
+        async def _never(self, room):
             await asyncio.Event().wait()
 
-        monkeypatch.setattr("livekit.agents.utils.wait_for_participant", _never)
-        monkeypatch.setattr("livekit.agents.utils.wait_for_track_publication", _never)
+        monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", _never)
 
     def _session(self, avatar=None, **kwargs):
         return synthesia.AvatarSession(
@@ -1539,11 +1537,10 @@ class TestUsageExample:
         monkeypatch.setenv("LIVEKIT_API_KEY", "lk_key")
         monkeypatch.setenv("LIVEKIT_API_SECRET", "lk_secret")
 
-        async def _joined(**kwargs):
+        async def _joined(self, room):
             return None
 
-        monkeypatch.setattr("livekit.agents.utils.wait_for_participant", _joined)
-        monkeypatch.setattr("livekit.agents.utils.wait_for_track_publication", _joined)
+        monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", _joined)
 
         # start() reads the publish-on-behalf identity from the job context rather
         # than the room, since the room may not have finished connecting yet.

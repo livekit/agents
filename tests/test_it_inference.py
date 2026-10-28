@@ -13,12 +13,8 @@ import time
 
 import pytest
 
-pytestmark = pytest.mark.plugin("inference")
-
-_core = pytest.importorskip("livekit.agents._core", reason="needs livekit-agents-next")
-
-from livekit import rtc  # noqa: E402
-from livekit.agents import (  # noqa: E402
+from livekit import rtc
+from livekit.agents import (
     APIConnectOptions,
     APIError,
     function_tool,
@@ -26,6 +22,8 @@ from livekit.agents import (  # noqa: E402
     llm,
     stt,
 )
+
+pytestmark = pytest.mark.plugin("inference")
 
 if not (
     (os.environ.get("LIVEKIT_INFERENCE_API_KEY") and os.environ.get("LIVEKIT_INFERENCE_API_SECRET"))
@@ -136,7 +134,7 @@ async def test_bad_credentials_fail_fast(leg: str) -> None:
     """Guards a rejected API key hanging a call or retrying forever: the client must raise an
     APIError within its connect timeout."""
     creds = {"api_key": "it-not-a-key", "api_secret": "it-not-a-secret"}
-    conn = APIConnectOptions(max_retry=0, timeout=10)
+    conn = APIConnectOptions(max_retry=0)
     started = time.monotonic()
     with pytest.raises(APIError):
         async with asyncio.timeout(30):

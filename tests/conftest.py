@@ -11,11 +11,7 @@ from typing import NamedTuple
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
-
-try:  # the reference package
-    from livekit.agents.cli.log import NOISY_LOGGERS
-except ImportError:  # livekit-agents-next: the CLI is one module
-    from livekit.agents.cli import NOISY_LOGGERS
+from livekit.agents.cli import NOISY_LOGGERS
 
 from . import concurrency
 from .storage_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
