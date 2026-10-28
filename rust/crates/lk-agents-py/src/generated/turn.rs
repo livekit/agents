@@ -60,7 +60,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "EotDetector._core_push_audio", move |py| {
+        self.notifier.notify_lossy(context, "EotDetector._core_push_audio", move |py| {
             let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
             Ok((host.bind(py).getattr("_core_push_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
         });

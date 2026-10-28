@@ -173,6 +173,13 @@ impl Resolver<'_> {
                 ProxyRet { ok, refusal: None, err: None }
             }
         };
+        let lossy = match voc::find(&entries, "notify") {
+            Some(notify) => {
+                voc::only(&at, &notify.nested, &["lossy"])?;
+                voc::find(&notify.nested, "lossy").is_some()
+            }
+            None => false,
+        };
         let wrap = match voc::find(&entries, "bind") {
             Some(bind) => {
                 voc::only(&at, &bind.nested, &["wrap"])?;
@@ -204,6 +211,7 @@ impl Resolver<'_> {
             wrap,
             consumes,
             lends,
+            lossy,
         })
     }
 

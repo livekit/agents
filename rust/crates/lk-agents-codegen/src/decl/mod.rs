@@ -159,6 +159,8 @@ pub struct ProxyMethod {
     pub consumes: bool,
     /// `read_once` returning `&T`: lends the value the proxy read.
     pub lends: bool,
+    /// `notify(lossy)`: a frame of a stream, dropped while the host loop is far behind.
+    pub lossy: bool,
 }
 
 /// How the core calls the host: declared, then checked against the signature.

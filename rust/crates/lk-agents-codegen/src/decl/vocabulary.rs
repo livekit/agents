@@ -7,7 +7,7 @@
 //! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind`; `view = "module.Class"`: the proxy calls that class's instance over the host object (a host class without the `_core_*` surface) |
 //! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`, or returning nothing (a close: its failure is logged) (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
 //! | proxy method | `call` | a `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL, never awaiting (a read the host answers at once); a failure is the declared error |
-//! | proxy method | `notify` | a `fn(&self, ..)` returning nothing: scheduled on the host, not awaited; a failure is logged |
+//! | proxy method | `notify` | a `fn(&self, ..)` returning nothing: scheduled on the host, not awaited, delivered in call order and never dropped; a failure is logged. `notify(lossy)`: a frame of a stream, dropped (and logged) while the host loop is far behind |
 //! | proxy method | `read_once` | a `fn(&self) -> T`: read when the proxy is taken from the host (a failure refuses the object), then answered from that value; `-> &T` lends it |
 //! | proxy method | `bind` | a `fn(&self, x: &X) -> Option<Arc<dyn Self>>`: a copy of the proxy passing `x` after the arguments of every awaited call; no host call |
 //! | proxy method | (none, with a default body) | native only: the proxy keeps the default (what only a native implementation answers) |

@@ -192,7 +192,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let head = format!("        let host = ::std::sync::Arc::clone(&self.host);\n{moved}{context}");
     match m.kind {
         ProxyCall::Notify => Ok(format!(
-            "    {sig} {{\n{head}        self.notifier.notify(context, \"{label}\", move |py| {{\n            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n            Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n        }});\n    }}\n",
+            "    {sig} {{\n{head}        self.notifier.{}(context, \"{label}\", move |py| {{\n            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n            Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n        }});\n    }}\n",
+            if m.lossy { "notify_lossy" } else { "notify" },
             args.len(),
             args.join(", "),
             m.name

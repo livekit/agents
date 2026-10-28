@@ -199,7 +199,7 @@ where
     started.settled().await
 }
 
-/// Notifications waiting for the host loop past which a new one is dropped (and logged).
+/// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).
 pub const NOTIFY_QUEUE: usize = 256;
 
 /// Builds a notification's callable and arguments, on the loop.
@@ -231,22 +231,38 @@ impl Notifier {
         Notifier(Arc::new(Notices { context, queue: Mutex::default() }))
     }
 
-    /// Queues `call` to run in a copy of `context`; `label` names it in the log line a failure,
-    /// or a full queue, writes.
+    /// Queues `call` to run in a copy of `context`; `label` names it in the log line a failure
+    /// writes. Never dropped: a control notification (a flush, a clear, a session event) lost to a
+    /// slow loop is a wrong outcome, and the queue only grows while the host loop stalls.
     pub fn notify<F>(&self, context: HostRef, label: &'static str, call: F)
     where
         F: for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
             + Send
             + 'static,
     {
+        self.queue(context, label, false, Box::new(call));
+    }
+
+    /// [`notify`](Self::notify) for a stream of frames: dropped (and logged) once
+    /// [`NOTIFY_QUEUE`] notifications are waiting for the host loop.
+    pub fn notify_lossy<F>(&self, context: HostRef, label: &'static str, call: F)
+    where
+        F: for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+            + Send
+            + 'static,
+    {
+        self.queue(context, label, true, Box::new(call));
+    }
+
+    fn queue(&self, context: HostRef, label: &'static str, lossy: bool, call: Notice) {
         let schedule = {
             let mut queue = self.0.queue.lock().unwrap_or_else(|p| p.into_inner());
-            if queue.entries.len() >= NOTIFY_QUEUE {
+            if lossy && queue.entries.len() >= NOTIFY_QUEUE {
                 drop(queue);
                 log::warn!(target: "livekit.agents", "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
                 return;
             }
-            queue.entries.push_back((context, label, Box::new(call)));
+            queue.entries.push_back((context, label, call));
             !std::mem::replace(&mut queue.scheduled, true)
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py)) {
@@ -489,5 +505,57 @@ async def blocking():
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         panic!("the notifications did not all reach the host");
+    }
+
+    // Catches: a control notification (a flush, a clear, a session event) dropped because the
+    // host loop fell behind; only a lossy one (a stream's frame) may be.
+    #[tokio::test]
+    async fn a_notification_behind_a_stalled_loop_is_delivered_and_a_lossy_one_dropped() {
+        Python::initialize();
+        let (globals, context) = Python::attach(|py| {
+            let g = globals(py);
+            py.run(c"import time\nseen = []\ndef stall(i):\n    time.sleep(0.3)\ndef note(i):\n    seen.append(i)\n", Some(&g), None)
+                .unwrap();
+            let c = captured(&g, "captured");
+            (g.unbind(), c)
+        });
+        let notifier = Notifier::new(context.clone());
+        fn call(
+            g: Py<PyDict>,
+            name: &'static str,
+            i: i64,
+        ) -> impl for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+        + Send
+        + 'static {
+            move |py| Ok((g.bind(py).get_item(name)?.expect("defined"), PyTuple::new(py, [i])?))
+        }
+        let send = |name: &'static str, i: i64, lossy: bool| {
+            let g = Python::attach(|py| globals.clone_ref(py));
+            match lossy {
+                false => notifier.notify(context.clone(), "note", call(g, name, i)),
+                true => notifier.notify_lossy(context.clone(), "note", call(g, name, i)),
+            }
+        };
+        send("stall", 0, false);
+        let total = NOTIFY_QUEUE as i64 * 2;
+        for i in 0..total {
+            send("note", i, false);
+        }
+        for i in 0..total {
+            send("note", total + i, true);
+        }
+        // The lossy ones arrived while every control one still waited: all dropped.
+        let seen = || -> Vec<i64> {
+            Python::attach(|py| globals.bind(py).get_item("seen").unwrap().unwrap().extract().unwrap())
+        };
+        for _ in 0..300 {
+            if seen().len() >= total as usize {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                assert_eq!(seen(), (0..total).collect::<Vec<_>>(), "every control notification, in order");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the control notifications did not all reach the host");
     }
 }

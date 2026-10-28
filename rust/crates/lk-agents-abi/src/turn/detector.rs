@@ -49,7 +49,7 @@ pub trait EotDetector: Send + Sync + 'static {
     }
 
     /// One frame of the user's audio. Fire-and-forget, gated as the STT leg is.
-    #[host(notify, name = "_core_push_audio")]
+    #[host(notify(lossy), name = "_core_push_audio")]
     fn push_audio(&self, frame: crate::AudioFrame);
 
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
