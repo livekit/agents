@@ -771,7 +771,7 @@ class BackgroundAudioPlayer:
     async def start(
         self,
         room: Any,
-        rand: Any,
+        draw: float,
         *,
         ambient: list[Sound],
         choose: bool,
@@ -780,7 +780,7 @@ class BackgroundAudioPlayer:
     def play(
         self,
         sounds: list[Sound],
-        rand: Any,
+        draw: float,
         *,
         looping: bool = False,
         ambient: bool = False,
@@ -789,7 +789,7 @@ class BackgroundAudioPlayer:
     def on_agent_state(
         self,
         sounds: list[Sound],
-        rand: Any,
+        draw: float,
         thinking: bool,
         *,
         choose: bool = True,

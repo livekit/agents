@@ -51,7 +51,7 @@ pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
 pub use nodes::FakeNodes;
 pub use output::{
     FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
-    FakeTextOutput, FakeVideoInput, Half, room_camera,
+    FakeTextOutput, FakeVideoInput, HALF, room_camera,
 };
 pub use realtime::{FakeRealtime, FallbackRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;

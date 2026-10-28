@@ -87,12 +87,6 @@ class _FrameStream:
         self._core_cancel_pending()
 
 
-class _Random:
-    @staticmethod
-    def _core_draw() -> float:
-        return random.random()
-
-
 def _sounds(
     source: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None],
 ) -> tuple[list[_core.Sound], bool]:
@@ -186,7 +180,9 @@ class BackgroundAudioPlayer:
             awaited or stopped manually.
         """  # noqa: E501
         sounds, choose = _sounds(audio)
-        return PlayHandle(_state=self._player.play(sounds, _Random, looping=loop, choose=choose))
+        return PlayHandle(
+            _state=self._player.play(sounds, random.random(), looping=loop, choose=choose)
+        )
 
     async def start(
         self,
@@ -222,7 +218,7 @@ class BackgroundAudioPlayer:
         ambient, choose = self._ambient
         sid = await self._player.start(
             room,
-            _Random,
+            random.random(),
             ambient=ambient,
             choose=choose,
             source=_name(_SOURCES, options.source, "unknown"),
@@ -244,7 +240,9 @@ class BackgroundAudioPlayer:
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         sounds, choose = self._thinking
-        self._player.on_agent_state(sounds, _Random, ev.new_state == "thinking", choose=choose)
+        self._player.on_agent_state(
+            sounds, random.random(), ev.new_state == "thinking", choose=choose
+        )
 
 
 class PlayHandle:

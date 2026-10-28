@@ -730,11 +730,5 @@ impl lk_agents_voice::background_audio::FrameStream for FakeSoundStream {
     }
 }
 
-/// `random.random` for the background player: always the middle, so a seed picks one sound.
-pub struct Half;
-
-impl lk_agents_voice::background_audio::RandomDraw for Half {
-    fn draw(&self) -> f64 {
-        0.5
-    }
-}
+/// `random.random()` for the background player: always the middle, so a seed picks one sound.
+pub const HALF: f64 = 0.5;

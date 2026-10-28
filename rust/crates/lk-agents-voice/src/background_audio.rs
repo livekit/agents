@@ -64,27 +64,26 @@ pub struct AudioConfig {
     pub fade_out: f64,
 }
 
-/// `_select_sound_from_list`: pick one config by probability, or none. `rand` supplies the draws in
-/// order; the silence roll happens only when the probabilities sum below one.
-pub fn select_sound(sounds: &[AudioConfig], rand: &mut dyn FnMut() -> f64) -> Option<usize> {
+/// `_select_sound_from_list`: pick one config by probability, or none, from one uniform `draw` in
+/// `[0, 1)` the host supplies. Probabilities summing below one leave the rest to silence.
+pub fn select_sound(sounds: &[AudioConfig], draw: f64) -> Option<usize> {
     let total: f64 = sounds.iter().map(|s| s.probability).sum();
     if total <= 0.0 {
         return None;
     }
-    // A total below 1.0 is a chance of silence, by design.
-    if total < 1.0 && rand() > total {
+    // A total below 1.0 is a chance of silence, by design: the draw lands past every sound.
+    if total < 1.0 && draw > total {
         return None;
     }
 
     let normalize_factor = if total <= 1.0 { 1.0 } else { total };
-    let r = rand() * total.min(1.0);
     let mut cumulative = 0.0;
     for (i, sound) in sounds.iter().enumerate() {
         if sound.probability <= 0.0 {
             continue;
         }
         cumulative += sound.probability / normalize_factor;
-        if r <= cumulative {
+        if draw <= cumulative {
             return Some(i);
         }
     }
@@ -256,13 +255,6 @@ impl Sound {
     }
 }
 
-/// Uniform draws in `[0, 1)` for [`select_sound`]: the host's `random.random`, so a seeded host
-/// run picks what the reference picks, one draw at a time.
-#[lk_agents_abi::host(proxy(live))]
-pub trait RandomDraw: Send + Sync {
-    fn draw(&self) -> f64;
-}
-
 /// Completion and stop notification owned by voice, shared with the caller's handle
 /// (`PlayHandle`'s two write-once futures).
 pub struct PlaybackHandle {
@@ -419,7 +411,7 @@ impl BackgroundAudioPlayer {
     pub async fn start_for_host(
         self: &Arc<Self>,
         room: Arc<dyn crate::agent_session::SessionRoom>,
-        rand: Arc<dyn RandomDraw>,
+        draw: f64,
         ambient: Vec<Sound>,
         choose: bool,
         source: Option<TrackSource>,
@@ -463,7 +455,7 @@ impl BackgroundAudioPlayer {
             this.started.store(true, Ordering::Release);
             if !ambient.is_empty() {
                 // Open and started: `play` cannot refuse.
-                let _ = this.play(ambient, choose, false, true, &mut || rand.draw());
+                let _ = this.play(ambient, choose, false, true, draw);
             }
             Ok(publication.sid().clone())
         })
@@ -471,25 +463,25 @@ impl BackgroundAudioPlayer {
         .map_err(|err| RtcError::host(err.to_string()))?
     }
 
-    /// [`play`](Self::play), drawing from the host's `random.random`.
+    /// [`play`](Self::play), choosing by the host's `draw` (`random.random()`).
     #[host(method(name = "play", kw_only = "looping", defaults(looping = false, ambient = false, choose = true)))]
     pub fn play_for_host(
         &self,
         sounds: Vec<Sound>,
-        rand: Arc<dyn RandomDraw>,
+        draw: f64,
         looping: bool,
         ambient: bool,
         choose: bool,
     ) -> Result<Arc<PlaybackHandle>, PlaybackError> {
-        self.play(sounds, choose, looping, ambient, &mut || rand.draw())
+        self.play(sounds, choose, looping, ambient, draw)
     }
 
-    /// [`on_agent_state`](Self::on_agent_state), drawing from the host's `random.random`.
+    /// [`on_agent_state`](Self::on_agent_state), choosing by the host's `draw` (`random.random()`).
     #[host(method(name = "on_agent_state", kw_only = "choose", defaults(choose = true)))]
     pub fn on_agent_state_for_host(
         &self,
         sounds: Vec<Sound>,
-        rand: Arc<dyn RandomDraw>,
+        draw: f64,
         thinking: bool,
         choose: bool,
     ) -> Result<(), PlaybackError> {
@@ -506,7 +498,7 @@ impl BackgroundAudioPlayer {
         let mut handle = self.thinking.lock().unwrap();
         match (thinking, handle.as_ref()) {
             (true, Some(h)) if !h.done() => {}
-            (true, _) => *handle = Some(self.play(sounds, choose, false, false, &mut || rand.draw())?),
+            (true, _) => *handle = Some(self.play(sounds, choose, false, false, draw)?),
             (false, Some(h)) => {
                 h.stop();
             }
@@ -521,7 +513,7 @@ impl BackgroundAudioPlayer {
         choose: bool,
         looping: bool,
         ambient: bool,
-        rand: &mut dyn FnMut() -> f64,
+        draw: f64,
     ) -> Result<Arc<PlaybackHandle>, PlaybackError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(PlaybackError::Closed);
@@ -531,7 +523,7 @@ impl BackgroundAudioPlayer {
         }
         let configs: Vec<_> = sounds.iter().map(|sound| sound.config.clone()).collect();
         let index =
-            if choose { select_sound(&configs, rand) } else { (!sounds.is_empty()).then_some(0) };
+            if choose { select_sound(&configs, draw) } else { (!sounds.is_empty()).then_some(0) };
         let Some(index) = index else {
             return Ok(PlaybackHandle::already_done());
         };

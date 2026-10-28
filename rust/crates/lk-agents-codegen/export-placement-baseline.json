@@ -356,7 +356,6 @@
   "host|rust/crates/lk-agents-voice/src/background_audio.rs|impl  for Sound::for_host::arg path|host (required)",
   "host|rust/crates/lk-agents-voice/src/background_audio.rs|impl  for Sound::for_host|host (new (defaults (volume = 1.0 , probability = 1.0 , fade_in = 0.0 , fade_out = 0.0)))",
   "host|rust/crates/lk-agents-voice/src/background_audio.rs|impl  for Sound|lk_agents_abi :: host (object)",
-  "host|rust/crates/lk-agents-voice/src/background_audio.rs|trait RandomDraw|lk_agents_abi :: host (proxy (live))",
   "host|rust/crates/lk-agents-voice/src/filler_scheduler.rs|enum FillerError|lk_agents_abi :: host (error (kind = \"ValueError\"))",
   "host|rust/crates/lk-agents-voice/src/generation/mod.rs|const INSTRUCTIONS_MESSAGE_ID|lk_agents_abi :: host (export (pid = false , name = \"instructions_message_id\"))",
   "host|rust/crates/lk-agents-voice/src/generation/mod.rs|fn instructions_positions|lk_agents_abi :: host (export (name = \"remove_instructions\" , pid = false))",

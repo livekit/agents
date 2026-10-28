@@ -1,14 +1,6 @@
 use super::*;
 use crate::agent_session::FixedRoom;
 
-struct Half;
-
-impl RandomDraw for Half {
-    fn draw(&self) -> f64 {
-        0.5
-    }
-}
-
 fn file(path: &str, probability: f64) -> Sound {
     Sound::for_host(Some(path.to_owned()), None, 1.0, probability, 0.0, 0.0)
 }
@@ -40,7 +32,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_rtc::FakeRoom>)
         time: crate::agent_session::time::Timebase::from_virtual(clock),
     };
     let player = Arc::new(BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200));
-    player.start_for_host(Arc::new(fixed), Arc::new(Half), Vec::new(), true, None).await.unwrap();
+    player.start_for_host(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();
     (player, room)
 }
 
@@ -51,24 +43,24 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_rtc::FakeRoom>)
 async fn play_refuses_what_cannot_play() {
     let idle = BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200);
     assert!(matches!(
-        idle.play_for_host(vec![file("a.ogg", 1.0)], Arc::new(Half), false, false, true),
+        idle.play_for_host(vec![file("a.ogg", 1.0)], 0.5, false, false, true),
         Err(PlaybackError::NotStarted)
     ));
 
     let (player, _room) = started().await;
     let stream = Sound::for_host(None, Some(Arc::new(Frames(Mutex::new(1)))), 1.0, 1.0, 0.0, 0.0);
-    let looping = player.play_for_host(vec![stream], Arc::new(Half), true, false, true);
+    let looping = player.play_for_host(vec![stream], 0.5, true, false, true);
     assert!(matches!(looping, Err(PlaybackError::LoopingStream(_))));
     assert!(LoopingStreamError.to_string().contains("loop=False"));
     // The draw picked silence: the handle is born done.
     let silent =
-        player.play_for_host(vec![file("a.ogg", 0.0)], Arc::new(Half), false, false, true).unwrap();
+        player.play_for_host(vec![file("a.ogg", 0.0)], 0.5, false, false, true).unwrap();
     assert!(silent.done());
 
     player.close().await;
     assert!(player.closed());
     assert!(matches!(
-        player.play(vec![file("a.ogg", 1.0)], false, false, false, &mut || 0.5),
+        player.play(vec![file("a.ogg", 1.0)], false, false, false, 0.5),
         Err(PlaybackError::Closed)
     ));
 }

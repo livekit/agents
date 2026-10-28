@@ -36,7 +36,7 @@ impl Run {
             {
                 let thinking = *new == lk_agents_abi::voice::events::AgentState::Thinking;
                 let sound = fakes::FakeSoundStream::sound(5);
-                let _ = player.on_agent_state_for_host(vec![sound], Arc::new(fakes::Half), thinking, true);
+                let _ = player.on_agent_state_for_host(vec![sound], fakes::HALF, thinking, true);
             }
             self.record.record_host(at, seen);
         }
