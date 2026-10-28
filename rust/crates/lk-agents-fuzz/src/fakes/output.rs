@@ -248,15 +248,17 @@ impl Playout {
         Some((segment, position))
     }
 
-    /// The speaker began emitting this segment. True when the segment is outstanding and had not
-    /// started yet; a second start, or one for a segment already gone, is refused.
+    /// The speaker began emitting this segment. True when the segment is the oldest outstanding
+    /// one and nothing else is playing: a real sink plays its queue in order, one segment at a
+    /// time. A second start, a start out of order, or one for a segment gone is refused.
     pub(super) fn started(&self, segment: u32, at: Ts) -> bool {
         {
             let mut state = self.state.lock().unwrap();
-            let outstanding = state.open == Some(segment) || state.flushed.contains_key(&segment);
-            if !outstanding || !state.started.insert(segment) {
+            let oldest = state.flushed.keys().copied().chain(state.open).min();
+            if oldest != Some(segment) || !state.started.is_empty() {
                 return false;
             }
+            state.started.insert(segment);
         }
         self.tracker.playback_started(at);
         true
