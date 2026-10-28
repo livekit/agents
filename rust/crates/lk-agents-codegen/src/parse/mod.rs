@@ -278,7 +278,6 @@ fn bare_target(host: Host, kind: Kind, module: &str, name: &str, path: Option<St
         order: Vec::new(),
         typed_dict_from: None,
         from_items: false,
-        with_bases: false,
     }
 }
 
@@ -808,7 +807,6 @@ fn targets(
                 typed_dict_from: str_arg(attrs, outer, "typed_dict_from")?
                     .or_else(|| grouped.and_then(|g| g.typed_dict_from.clone())),
                 from_items: flag(attrs, outer, "from_items"),
-                with_bases: flag(attrs, outer, "with_bases"),
             });
         }
     }

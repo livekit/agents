@@ -82,7 +82,7 @@ pub struct ChoiceDelta {
 
 // What `LLMStream.collect()` gathers. Host only: the reference has no class docstring.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "CollectedResponse", with_bases)]
+#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "CollectedResponse")]
 pub struct CollectedResponse {
     #[python(default = "\"\"")]
     pub text: String,

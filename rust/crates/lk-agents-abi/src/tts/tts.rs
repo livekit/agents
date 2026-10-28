@@ -20,13 +20,7 @@ use crate::{ApiConnectOptions, AudioFrame};
 // `TTSCapabilities` (`tts/tts.py`). The payload `FallbackTts`'s `capabilities` getter builds by
 // name is generated too, since a forgotten key would silently take the reference's default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    module = "tts",
-    path = "livekit.agents.tts",
-    name = "TTSCapabilities",
-    with_bases
-)]
+#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "TTSCapabilities")]
 // Both directions.
 #[binding(emit, extract)]
 pub struct TtsCapabilities {
@@ -40,7 +34,7 @@ pub struct TtsCapabilities {
 
 /// What the expressive markup pipeline can do with a given voice.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "MarkupInfo", with_bases)]
+#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "MarkupInfo")]
 pub struct MarkupInfo {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// ``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op
@@ -52,13 +46,7 @@ pub struct MarkupInfo {
 // `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`). Not what
 // `Agent.tts_node` yields (a bare frame). The reference has no class docstring.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    dataclass,
-    module = "tts",
-    path = "livekit.agents.tts",
-    name = "SynthesizedAudio",
-    with_bases
-)]
+#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "SynthesizedAudio")]
 // Read by hand (below): the two fields are the frame's `userdata`.
 #[host(handwritten(extract))]
 #[binding(emit)]

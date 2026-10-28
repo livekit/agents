@@ -170,8 +170,6 @@ const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const PYTHON_CORE: &str = "livekit/agents";
 /// The names `dir(_core)` returns, which the registration test of `lk-agents-py` reads.
 const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/core_names.json";
-/// The package whose plugin base classes stay hand-written: the reference the copy is held to.
-const REFERENCE_PACKAGE: &str = "livekit-agents";
 
 fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -284,31 +282,17 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let models = records::python(&declared)?;
     let bases = bases::emit(&decls, &exposed, &declared)?;
     let with_bases = python::emit_with(&decls, &bases, &constants)?;
-    let reference: Vec<ir::Decl> = decls
-        .iter()
-        .filter(|d| !d.target(ir::Host::Python).is_some_and(|t| t.with_bases))
-        .cloned()
-        .collect();
-    let records = python::emit_with(&reference, &[], &constants)?;
     let stub = stub::emit(&decls, &exposed)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter().chain(&stub))?;
     o.add(PathBuf::from(CORE_NAMES), &core_names.text);
     let forward = forward::emit(&decls, &exposed, &declared)?;
     for package in python_packages {
         let python_root = Path::new(package).join(PYTHON_GENERATED);
-        // The reference's own code still imports modules nothing generates any more.
-        if *package != REFERENCE_PACKAGE {
-            o.dirs.push(python_root.clone());
-        }
-        // The reference keeps its hand-written base classes. Every package gets the forwarding
-        // modules: the records name them (`.language`), the reference's included.
-        let python = if *package == REFERENCE_PACKAGE { &records } else { &with_bases };
-        // The declared classes are the successor's: the reference keeps its own `_core`. A module
-        // holding both legacy and declared models is one file, in both packages: a legacy model
-        // there may name a declared one.
-        let successor = *package != REFERENCE_PACKAGE;
+        o.dirs.push(python_root.clone());
+        // A module holding both legacy and declared models is one file: a legacy model there may
+        // name a declared one.
         let legacy: Vec<&python::Out> =
-            python.iter().chain(stub.iter().map(|s| &s.out)).chain(&forward).collect();
+            with_bases.iter().chain(stub.iter().map(|s| &s.out)).chain(&forward).collect();
         for out in &legacy {
             let text = match models.iter().find(|m| m.path == out.path) {
                 Some(m) => records::merge(&out.text, &m.text)
@@ -317,15 +301,11 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
             };
             o.add(python_root.join(&out.path), &text);
         }
-        if successor {
-            let merged = |m: &&python::Out| legacy.iter().any(|l| l.path == m.path);
-            for out in
-                class_stubs.iter().map(|s| &s.out).chain(models.iter().filter(|m| !merged(m)))
-            {
-                o.add(python_root.join(&out.path), &out.text);
-            }
-            o.add(Path::new(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text);
+        let merged = |m: &&python::Out| legacy.iter().any(|l| l.path == m.path);
+        for out in class_stubs.iter().map(|s| &s.out).chain(models.iter().filter(|m| !merged(m))) {
+            o.add(python_root.join(&out.path), &out.text);
         }
+        o.add(Path::new(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text);
         o.add(python_root.join("__init__.py"), INIT);
     }
     Ok(o)

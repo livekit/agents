@@ -220,9 +220,6 @@ pub struct Target {
     pub typed_dict_from: Option<String>,
     /// `#[binding(from_items)]`: the binding reads it as a dict, so a host hands it `asdict(..)`.
     pub from_items: bool,
-    /// `#[python(with_bases)]`: a record of a module holding generated base classes, written only
-    /// where they are (not into the reference package, whose classes are hand-written).
-    pub with_bases: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
