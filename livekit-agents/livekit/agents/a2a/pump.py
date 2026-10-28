@@ -260,6 +260,11 @@ class WireHost(Generic[S]):
         elif record.status in TERMINAL_TASK_STATES:
             start(self._pump.close(record.id))
 
+    async def cancel(self, task_id: str) -> None:
+        """Rust calls it under ``live`` while holding the lane, for a canceled task whose work
+        runs."""
+        await self._host.cancel(task_id)
+
     async def background(self, wait: float) -> Background:
         """Rust calls it under ``live`` between turns, to learn what runs and what is ready."""
         return await self._host.background(wait)

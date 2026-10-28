@@ -151,8 +151,15 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
 
 - A resent `messageId` returns the task the first send created; nothing
   runs twice.
-- `tasks/cancel` on a running turn ends it `canceled`; the turn yields at its
-  next boundary and a running tool finishes.
+- `tasks/cancel` on a running task is a request, answered at once with the
+  task as it is: its holder, on any worker, stops the task's tools at their
+  next wait point outside `ctx.uninterruptible()`, work in the background
+  too, and ends it `canceled` on its stream with a status that says what ran
+  ("stopped after: …"). A task that runs nothing, one that waits on a
+  question or for the lane, goes `canceled` at once.
+- A message that interrupts stops the reply also while it streams, and only
+  a `CANCELLABLE` tool; the task ends `canceled` with what was shown as its
+  answer, or stays `working` while work of it runs in the background.
 - A tool's `InputRequired` ends the turn `input-required` with the question
   as the reply. The next message in the thread answers it; see
   [human-in-the-loop.md](human-in-the-loop.md).

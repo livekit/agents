@@ -55,7 +55,7 @@ so on.
 | a message with `taskId`                        | continues that task while it is not terminal; see "Answering a task" |
 | `GetTask`, `tasks/get`                         | the task, with `historyLength` |
 | `ListTasks`, `tasks/list`                      | every task of the thread named by `contextId`, by last update, filtered by `status`, paged by `pageSize` and `pageToken` |
-| `CancelTask`, `tasks/cancel`                   | `canceled` if not terminal, else `TaskNotCancelableError`; a running turn stops at its next safe point |
+| `CancelTask`, `tasks/cancel`                   | `canceled` if not terminal, else `TaskNotCancelableError`; a running task is answered as it is, and ends `canceled` on its stream once its tools stopped |
 | `SubscribeToTask`, `tasks/resubscribe`         | the current `Task`, then the task's stream from its start, followed live while the task runs; from any worker |
 
 `GetTask`, `CancelTask` and `SubscribeToTask` find the thread from

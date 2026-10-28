@@ -702,7 +702,6 @@ async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
 
 
 @pytest.mark.rule("R6")
-@pytest.mark.xfail(strict=True, reason="R6: the turn sees an interrupt only before a model call")
 async def test_a_message_stops_the_reply_while_it_streams(door: Callable[..., Door]) -> None:
     held = asyncio.Event()
     desk = await bookings(
@@ -758,21 +757,7 @@ async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
 
 
 @pytest.mark.rule("R7", "B27")
-@pytest.mark.parametrize(
-    "cancellable",
-    [
-        pytest.param(
-            False,
-            marks=pytest.mark.xfail(
-                strict=True, reason="B27: an interrupt right after the acquire is not seen"
-            ),
-        ),
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(strict=True, reason="R7: an interrupt waits for every tool"),
-        ),
-    ],
-)
+@pytest.mark.parametrize("cancellable", [False, True])
 async def test_an_interrupt_stops_only_a_cancellable_tool(
     door: Callable[..., Door], cancellable: bool
 ) -> None:
@@ -795,7 +780,6 @@ async def test_an_interrupt_stops_only_a_cancellable_tool(
 
 
 @pytest.mark.rule("R7")
-@pytest.mark.xfail(strict=True, reason="R7: an interrupted task ends canceled, its work dropped")
 async def test_an_interrupted_task_waits_for_its_work_in_the_background(
     door: Callable[..., Door],
 ) -> None:
@@ -825,7 +809,6 @@ async def test_an_interrupted_task_waits_for_its_work_in_the_background(
 
 
 @pytest.mark.rule("R12", "B27")
-@pytest.mark.xfail(strict=True, reason="R12: a cancel writes canceled at once and stops no tool")
 async def test_a_cancel_stops_the_running_tool_after_its_protected_step(
     door: Callable[..., Door],
 ) -> None:
@@ -862,7 +845,6 @@ async def test_a_cancel_stops_the_running_tool_after_its_protected_step(
 
 
 @pytest.mark.rule("R12")
-@pytest.mark.xfail(strict=True, reason="R12: a cancel leaves work in the background running")
 async def test_a_cancel_stops_work_in_the_background(door: Callable[..., Door]) -> None:
     desk = await bookings(door, *BOOK_MONDAY)
     first = desk.send("book monday")

@@ -227,6 +227,15 @@ class Thread:
         finally:
             db.close()
 
+    async def request_cancel(self, record: TaskRecord, request: dict[str, JsonValue]) -> bool:
+        """``tasks/cancel`` on a running task: ``request`` for its holder, off the wire; ``False``
+        when the task no longer runs."""
+        db = await self._storage.open(self._id)
+        try:
+            return bool(await db.request_cancel(record.lane, record.id, request))
+        finally:
+            db.close()
+
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
         """One page of the session's journal (docs/journal.md), every lane, in order; pass the
         last ``id`` to read the next."""

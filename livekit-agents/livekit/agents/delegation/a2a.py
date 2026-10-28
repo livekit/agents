@@ -122,7 +122,6 @@ class A2ADelegate(Delegate, Toolset):
         self._httpx_client = httpx_client
         self._conn_options = conn_options
         self._client: AgentClient | None = None
-        self._cancels: set[asyncio.Future[None]] = set()
         self._tool_name = name
         self._announce = announce
         self._tool: FunctionTool | None = None
@@ -259,21 +258,19 @@ class A2ADelegate(Delegate, Toolset):
             self._build_tool(client)
         offers = client.offers_extension
 
-        try:
-            update, text = await _answer(
-                reply,
-                progress,
-                say or progress,
-                lambda: client.resubscribe(reply.task_id, thread_id=reply.thread_id or None),
-                self._conn_options,
-            )
-        except asyncio.CancelledError:
-            self._cancel_in_background(reply.task_id, reply.thread_id)
-            raise
+        # a caller that stops waiting leaves the expert's task running: it ends on its own
+        update, text = await _answer(
+            reply,
+            progress,
+            say or progress,
+            lambda: client.resubscribe(reply.task_id, thread_id=reply.thread_id or None),
+            self._conn_options,
+        )
 
         if update.state == "failed":
             raise DelegationFailed(text or "the delegation failed")
-        asked = update.state == "input-required"
+        # with no text there is no question: the task gives an empty answer
+        asked = update.state == "input-required" and bool(text)
 
         return DelegationResult(
             output=text,
@@ -340,14 +337,6 @@ class A2ADelegate(Delegate, Toolset):
             ),
         )
 
-    def _cancel_in_background(self, task_id: str, context_id: str) -> None:
-        """The caller gave up (a barge-in, a closed call): tell the expert why, off the turn."""
-        if not task_id:
-            return
-
-        cancel = self.cancel(task_id, context_id=context_id, reason="caller-canceled")
-        self._cancels.add(asyncio.ensure_future(cancel))
-
     async def cancel(self, task_id: str, *, context_id: str = "", reason: str = "") -> None:
         """Ask the expert to stop a task of ``context_id``; best-effort, a running tool
         finishes."""
@@ -363,10 +352,6 @@ class A2ADelegate(Delegate, Toolset):
             )
 
     async def aclose(self) -> None:
-        if self._cancels:
-            await asyncio.gather(*self._cancels, return_exceptions=True)
-            self._cancels.clear()
-
         if self._client is not None:
             await self._client.aclose()
             self._client = None

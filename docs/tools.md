@@ -174,6 +174,10 @@ with `duplicate_scope=` for a call made while the same tool is still running
 (`"allow"`, `"reject"`, `"replace"`, or `"confirm"`, which asks the model to
 call again to confirm). See [voice.md](voice.md).
 
+In text a client's `tasks/cancel` stops any running tool at its next wait
+point; `with ctx.uninterruptible():` marks a step it does not cut in half,
+such as a payment in an outside system, and the tool stops after it.
+
 A tool whose result is a question for the person returns
 `InputRequired(question)`: the agent facing the person asks it in its own
 words, or exactly as written with `verbatim=True`, and the person's next

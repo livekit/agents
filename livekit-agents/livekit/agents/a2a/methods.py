@@ -60,7 +60,15 @@ from .codec import (
     task_to_pb,
     to_stream_response,
 )
-from .extension import CALLER_LANE, KIND, KIND_DELEGATION, REASON, Extensions, pb, to_json
+from .extension import (
+    CALLER_LANE,
+    KIND,
+    KIND_DELEGATION,
+    REASON,
+    Extensions,
+    pb,
+    to_json,
+)
 from .pump import ResponsePump, WireHost, start, tail
 
 if TYPE_CHECKING:
@@ -531,8 +539,8 @@ class A2AService(Generic[S]):
         return response
 
     async def cancel_task(self, params: Params, call: CallContext) -> pb.Task:
-        """``tasks/cancel``: the row goes ``canceled`` now; a running turn yields at its next
-        boundary and writes nothing over it (plan 5.5)."""
+        """``tasks/cancel``: a task that runs nothing goes ``canceled`` now; a running one is
+        answered as it is, and ends ``canceled`` on its stream once its holder stopped its tools."""
         thread_id = await self._context_for_tasks(params, call, flag="write")
         task_id = str(params.get("id") or "")
         record = await self._find_task(thread_id, task_id)
@@ -545,7 +553,11 @@ class A2AService(Generic[S]):
         reason = metadata_from_wire(params.get("metadata")).get(REASON)
         if reason is not None:
             metadata[REASON] = reason
-        await Thread(self._storage, thread_id, agent_name=record.lane).cancel(record, metadata)
+        thread = Thread(self._storage, thread_id, agent_name=record.lane)
+        request: dict[str, JsonValue] = {"reason": reason} if reason is not None else {}
+        # a running task's holder, on any worker, sees the request at its next check
+        if record.status != "working" or not await thread.request_cancel(record, request):
+            await thread.cancel(record, metadata)
 
         logger.info(
             "a client canceled a task",

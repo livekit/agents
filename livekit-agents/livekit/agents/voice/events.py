@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import time
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
@@ -84,8 +84,10 @@ class RunContext(Generic[Deps_T, State_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
-        # the tool's own task, run by its executor
+        # the tool's own task, which a stop cancels outside `uninterruptible()`
         self._work: asyncio.Future[Any] | None = None
+        self._protected = 0
+        self._stop_pending = False
         # set by the first update(): whether anything voices its output, and what the step
         # that answers it may call
         self._suppress_reply = False
@@ -94,6 +96,25 @@ class RunContext(Generic[Deps_T, State_T]):
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
         self._run_state = session._global_run_state if session is not None else None
+
+    @contextmanager
+    def uninterruptible(self) -> Iterator[None]:
+        """In text, a step that a cancel or an interrupt does not cut in half: the tool stops at
+        its first wait point after it, so work done in an outside system is finished."""
+        self._protected += 1
+        try:
+            yield
+        finally:
+            self._protected -= 1
+            if self._protected == 0 and self._stop_pending:
+                # at the next wait point: a tool that returns right after the step keeps its result
+                asyncio.get_running_loop().call_soon(self._stop)
+
+    def _stop(self) -> None:
+        """The tool stops now, or once its protected step ended."""
+        self._stop_pending = True
+        if self._protected == 0 and self._work is not None and not self._work.done():
+            self._work.cancel()
 
     @property
     def session(self) -> LiveSession[Any]:

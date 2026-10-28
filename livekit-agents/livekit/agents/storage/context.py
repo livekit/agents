@@ -216,6 +216,7 @@ class TurnHost(Generic[S]):
                 and r.status not in TERMINAL_TASK_STATES
             ),
             tools=self._tools if ctx.live else None,
+            canceled=lambda: boundary.client_canceled,
         )
         progress: list[ChatItem] = []
         if ctx.batch and all(m.metadata.get("livekit/kind") == "delivery" for m in ctx.batch):
@@ -256,6 +257,7 @@ class TurnHost(Generic[S]):
             )
         finally:
             reset_run_hooks(token)
+            hooks.close()
 
         handled_output = self._output(context, output, results)
         handled_output.new_items[:0] = [item_to_payload(item) for item in progress]
@@ -275,6 +277,11 @@ class TurnHost(Generic[S]):
 
     async def on_end(self, record: TaskRecord, output: JsonValue) -> None:
         """Rust calls it under ``live`` after each commit; a host with no stream does nothing."""
+
+    async def cancel(self, task_id: str) -> None:
+        """Rust calls it under ``live`` while holding the lane, for a canceled task whose work
+        runs: the work stops."""
+        self._tools.stop_task(task_id)
 
     async def background(self, wait: float) -> Background:
         """Rust calls it under ``live`` between turns: what runs on, and the tasks a turn with no

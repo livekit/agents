@@ -19,8 +19,16 @@ import contextvars
 import inspect
 import json
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Container, Sequence
-from dataclasses import dataclass
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Container,
+    Sequence,
+)
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -58,6 +66,7 @@ from ..llm.tool_context import (
     Rejected,
     StopResponse,
     ToolError,
+    ToolFlag,
     ToolResult,
     Transition,
     Working,
@@ -99,6 +108,8 @@ Run_T = TypeVar("Run_T")
 DEFAULT_MAX_STEPS = 12
 FINAL_RESULT_TOOL = "final_result"
 _RETRY_PROMPT = "Validation failed, fix the output and try again: {reason}"
+WATCH_INTERVAL = 0.25
+"""How often a streaming reply or a running tool polls the boundary, in seconds."""
 _FINAL_RESULT_PROMPT = (
     f"You have not provided the final output yet. Call `{FINAL_RESULT_TOOL}` with it; "
     "a plain text response alone is not enough."
@@ -109,8 +120,8 @@ _FINAL_RESULT_PROMPT = (
 class RunHooks:
     """What a door installs around the ``agent.run()`` calls made inside its turn.
 
-    ``boundary`` is awaited before each model call; ``True`` makes the run yield there with what
-    ran so far and no reply (the ``interrupt`` policy of plan 3.3.4). ``on_result`` receives every
+    ``boundary`` is checked before each model call and watched while a reply streams or a tool
+    runs; ``True`` makes the run yield, and ``canceled`` says a client canceled the task. ``on_result`` receives every
     result, so the door can commit what the run added without the handler forwarding it;
     ``on_item`` each item as the run adds it, so a run that raises still commits what it ran.
     ``on_update`` receives a tool's ``ctx.update(text)``: the door forwards it as progress, a
@@ -149,6 +160,35 @@ class RunHooks:
     open_tasks: frozenset[str] = frozenset()
     tools: TextTools | None = None
     delivery: Sequence[ToolExecutionOutput] = ()
+    canceled: Callable[[], bool] | None = None
+    _watcher: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+
+    async def tripped(self) -> None:
+        """Returns once ``boundary`` trips, polled every ``WATCH_INTERVAL`` by one watcher per turn."""
+        if self._watcher is None:
+            boundary = self.boundary
+            assert boundary is not None
+
+            async def watch() -> None:
+                while not await boundary():
+                    await asyncio.sleep(WATCH_INTERVAL)
+
+            self._watcher = asyncio.ensure_future(watch())
+        await asyncio.wait({self._watcher})
+        self._watcher.result()
+
+    def close(self) -> None:
+        """The turn ended: its watcher stops."""
+        if self._watcher is not None:
+            self._watcher.cancel()
+
+
+class _ReplyInterrupted(Exception):
+    """The boundary tripped while the model's reply streamed: what was shown."""
+
+    def __init__(self, shown: str) -> None:
+        super().__init__("the reply was interrupted")
+        self.shown = shown
 
 
 class TextTools:
@@ -179,7 +219,8 @@ class TextTools:
         self._end(task.ctx, ToolError(error))
 
     async def stop(self, task: _RunningTask) -> None:
-        await utils.aio.cancel_and_wait(task.exe_task)
+        task.ctx._stop()
+        await asyncio.wait({task.exe_task})
 
     async def arguments(
         self, tool: FunctionTool | RawFunctionTool, raw: dict[str, Any], ctx: RunContext[Any, Any]
@@ -246,6 +287,12 @@ class TextTools:
         out = make_tool_output(fnc_call=final_call, output=output, exception=None)
         self._queue.append((task_id, out, False))
         self._ended.set()
+
+    def stop_task(self, task_id: str) -> None:
+        """A client canceled ``task_id``: all its calls stop, cancellable or not."""
+        for call_id, owner in self._released.items():
+            if owner == task_id and (task := self.executor._running_tasks.get(call_id)):
+                task.ctx._stop()
 
     def owed(self) -> list[str]:
         """The tasks whose work runs on, or whose queue waits."""
@@ -755,12 +802,18 @@ class AgentRun(Generic[Run_T]):
                     # as on a call: told last, next to what it is about, and not recorded
                     request.add_message(role="system", content=[hint])
                     hint = None
-                text, calls, usage = await self._infer(
-                    request,
-                    tool_ctx,
-                    on_token=on_token,
-                    tool_choice=tool_choice,
-                )
+                try:
+                    text, calls, usage = await self._infer(
+                        request,
+                        tool_ctx,
+                        on_token=on_token,
+                        tool_choice=tool_choice,
+                    )
+                except _ReplyInterrupted as e:
+                    # what was shown stays in the history, cut off, even when it was nothing, so
+                    # the model can tell the person was not told; it is also the turn's answer
+                    record(ChatMessage(role="assistant", content=[e.shown], interrupted=True))
+                    return finish(e.shown or None, interrupted=True)
                 self._usage._add_completion(usage)
                 if tool_choice == "none" and calls:
                     logger.debug(
@@ -768,6 +821,13 @@ class AgentRun(Generic[Run_T]):
                         extra={"functions": [c.name for c in calls], "runId": self._id},
                     )
                     calls = []
+                if delivery and not text and not calls:
+                    # the answer carries the results, also when the model said nothing
+                    text = "\n\n".join(
+                        queued.fnc_call_out.output
+                        for queued in delivery
+                        if queued.fnc_call.call_id.endswith("_final")
+                    )
             tool_choice = NOT_GIVEN
 
             if text:
@@ -946,7 +1006,8 @@ class AgentRun(Generic[Run_T]):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> tuple[str, list[FunctionCall], CompletionUsage | None]:
         """One model request through the agent's ``llm_node``: text, calls and usage; each text
-        delta reaches ``on_token`` as it arrives."""
+        delta reaches ``on_token`` as it arrives. While it streams the run's boundary is polled,
+        and a trip stops the reply with ``_ReplyInterrupted``."""
         node = self._agent.llm_node(
             chat_ctx, tool_ctx.flatten(), ModelSettings(tool_choice=tool_choice)
         )
@@ -964,35 +1025,62 @@ class AgentRun(Generic[Run_T]):
         calls: list[FunctionCall] = []
         usage: CompletionUsage | None = None
         generation_id = utils.shortuuid("item_")
-        async for chunk in node:
-            if isinstance(chunk, str):
-                text_parts.append(chunk)
-                if on_token is not None and chunk:
-                    await on_token(chunk)
-                continue
-            if not isinstance(chunk, ChatChunk):
-                continue
-            if chunk.usage is not None:
-                usage = chunk.usage
-            if chunk.delta is None:
-                continue
-            if chunk.delta.content:
-                text_parts.append(chunk.delta.content)
-                if on_token is not None:
-                    await on_token(chunk.delta.content)
-            for tool_call in chunk.delta.tool_calls:
-                if tool_call.type != "function":
+        stream = node
+
+        async def read() -> None:
+            nonlocal usage
+            async for chunk in stream:
+                if isinstance(chunk, str):
+                    text_parts.append(chunk)
+                    if on_token is not None and chunk:
+                        await on_token(chunk)
                     continue
-                calls.append(
-                    FunctionCall(
-                        id=f"{generation_id}/fnc_{len(calls)}",
-                        call_id=tool_call.call_id,
-                        name=tool_call.name,
-                        arguments=tool_call.arguments,
-                        extra=tool_call.extra or {},
+                if not isinstance(chunk, ChatChunk):
+                    continue
+                if chunk.usage is not None:
+                    usage = chunk.usage
+                if chunk.delta is None:
+                    continue
+                if chunk.delta.content:
+                    text_parts.append(chunk.delta.content)
+                    if on_token is not None:
+                        await on_token(chunk.delta.content)
+                for tool_call in chunk.delta.tool_calls:
+                    if tool_call.type != "function":
+                        continue
+                    calls.append(
+                        FunctionCall(
+                            id=f"{generation_id}/fnc_{len(calls)}",
+                            call_id=tool_call.call_id,
+                            name=tool_call.name,
+                            arguments=tool_call.arguments,
+                            extra=tool_call.extra or {},
+                        )
                     )
-                )
-        return "".join(text_parts), calls, usage
+
+        hooks = None if self._nested else _run_hooks.get()
+        boundary = hooks.boundary if hooks is not None else None
+        if boundary is None or on_token is None:
+            # a reply nobody sees as it streams is not stopped halfway
+            await read()
+            return "".join(text_parts), calls, usage
+
+        assert hooks is not None
+        reading, watching = asyncio.ensure_future(read()), asyncio.ensure_future(hooks.tripped())
+        try:
+            await asyncio.wait({reading, watching}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            await utils.aio.cancel_and_wait(watching)
+            if not reading.done():
+                await utils.aio.cancel_and_wait(reading)
+                if isinstance(stream, AsyncGenerator):
+                    await stream.aclose()
+        if not reading.cancelled():
+            reading.result()
+            return "".join(text_parts), calls, usage
+        if not watching.cancelled() and (error := watching.exception()) is not None:
+            raise error  # the boundary's own failure, not a trip
+        raise _ReplyInterrupted("".join(text_parts))
 
     async def _push(
         self,
@@ -1049,10 +1137,14 @@ class AgentRun(Generic[Run_T]):
         except ValueError as e:
             error = ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}")
             return make_tool_output(fnc_call=fnc_call, output=None, exception=error)
+        hooks = None if self._nested else _run_hooks.get()
         run_ctx = RunContext[Any, Any](function_call=fnc_call, run=self)
         run_ctx._answer_ref = answer_ref
         executor = self._tools.executor
         executor.set_tool_options(self._tool_options())
+        watching = None
+        if hooks is not None and hooks.boundary is not None:
+            watching = asyncio.ensure_future(self._watch(tool, run_ctx, hooks))
         try:
             output = await executor.execute(tool=tool, run_ctx=run_ctx, raw_arguments=raw)
             work = run_ctx._work
@@ -1076,6 +1168,9 @@ class AgentRun(Generic[Run_T]):
             if run_ctx._work is not None and fnc_call.call_id not in self._background_calls:
                 run_ctx._work.cancel()
             raise
+        finally:
+            if watching is not None:
+                await utils.aio.cancel_and_wait(watching)
 
         if (
             fnc_call.call_id not in self._background_calls
@@ -1087,6 +1182,17 @@ class AgentRun(Generic[Run_T]):
         out = make_tool_output(fnc_call=fnc_call, output=output, exception=None)
         out.reply_tool_choice = run_ctx._reply_tool_choice
         return out
+
+    async def _watch(
+        self, tool: FunctionTool | RawFunctionTool, run_ctx: RunContext[Any, Any], hooks: RunHooks
+    ) -> None:
+        """While a tool runs in the turn: a client's cancel stops it, an interrupt only a
+        ``CANCELLABLE`` one, at its next wait point outside ``ctx.uninterruptible()``."""
+        await hooks.tripped()
+        if (hooks.canceled is not None and hooks.canceled()) or ToolFlag.CANCELLABLE in (
+            tool.info.flags
+        ):
+            run_ctx._stop()
 
     def _tool_options(self) -> AsyncToolOptions:
         """The agent's templates for its tools' progress and duplicates, as on a call."""

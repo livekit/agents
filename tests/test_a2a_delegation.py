@@ -610,7 +610,6 @@ async def test_the_answer_is_the_artifact_that_ended_last() -> None:
 
 
 @pytest.mark.rule("R25")
-@pytest.mark.xfail(strict=True, reason="R25: a task with no text answers no text")
 async def test_an_expert_never_answers_with_its_progress(
     expert: Callable[..., A2ADelegate],
 ) -> None:
@@ -650,7 +649,6 @@ async def test_an_expert_never_answers_with_its_progress(
 
 
 @pytest.mark.rule("R14")
-@pytest.mark.xfail(strict=True, reason="R14: a canceled caller waits for the expert's answer")
 async def test_a_caller_that_gives_up_leaves_the_experts_task_running(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]
 ) -> None:
@@ -676,10 +674,11 @@ async def test_a_caller_that_gives_up_leaves_the_experts_task_running(
     await asyncio.wait_for(entered.wait(), 20)
 
     # the person gives up: the front desk's task stops, the expert's runs on
-    def by_whom(task: dict[str, Any]) -> str | None:
-        return metadata_from_wire(task["history"][0].get("metadata")).get(KIND)
-
-    tasks = {by_whom(t): t["id"] for t in await desk.list_tasks(thread)}
+    listed = await rpc(desk.http, "tasks/list", {"contextId": thread, "historyLength": 1})
+    tasks = {
+        metadata_from_wire(t["history"][0].get("metadata")).get(KIND): t["id"]
+        for t in listed.json()["result"]["tasks"]
+    }
     await desk.cancel(tasks[None], thread)
     stopped = await asyncio.wait_for(asked, 20)
     assert stopped.state == "canceled"
