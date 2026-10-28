@@ -48,11 +48,11 @@ pub mod codecs;
 pub mod host;
 #[cfg(feature = "media-images")]
 pub mod images;
+pub mod loop_watchdog;
 pub mod mcp;
 pub mod process;
 pub mod recording;
 pub mod storage;
-pub mod telemetry;
 
 pub use lk_agents_worker::cli_signals as worker_cli;
 

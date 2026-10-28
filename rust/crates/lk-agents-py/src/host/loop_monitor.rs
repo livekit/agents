@@ -13,7 +13,7 @@ use lk_agents_abi::telemetry::loop_monitor::{
 };
 use lk_agents_abi::{HostRef, errors::HostError};
 use lk_agents_runtime::cores::{LoopMonitorOptions, LoopMonitorPolicy};
-use lk_agents_runtime::telemetry::watchdog::{LoopMonitorClock, LoopWatchdog};
+use lk_agents_runtime::loop_watchdog::{LoopMonitorClock, LoopWatchdog};
 use pyo3::prelude::*;
 use pyo3::types::{PyCFunction, PyDict};
 use serde_json::{Map, Value};
