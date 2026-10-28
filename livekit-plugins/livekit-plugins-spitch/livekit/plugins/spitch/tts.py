@@ -10,6 +10,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -75,12 +76,23 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        spitch_stream = self._client.speech.with_streaming_response.generate(
+        if self._conn_options.total_timeout is not None:
+            raise APIError(
+                "Spitch SDK cannot enforce total_timeout across framework attempts", retryable=False
+            )
+        spitch_stream = self._client.with_options(
+            max_retries=0
+        ).speech.with_streaming_response.generate(
             text=self.input_text,
             language=self._opts.language.language,
             voice=self._opts.voice,  # type: ignore
             format="mp3",
-            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+            timeout=httpx.Timeout(
+                connect=self._conn_options.connect_timeout,
+                read=self._conn_options.read_timeout,
+                write=self._conn_options.write_timeout,
+                pool=self._conn_options.pool_timeout,
+            ),
         )
 
         request_id = str(uuid.uuid4().hex)[:12]

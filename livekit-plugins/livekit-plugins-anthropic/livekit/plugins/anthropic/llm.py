@@ -22,7 +22,7 @@ from typing import Any, Literal, cast
 import httpx2 as httpx
 
 import anthropic
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
@@ -160,6 +160,20 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
+        if conn_options.total_timeout is not None:
+            raise APIError(
+                "Anthropic SDK cannot enforce total_timeout across framework attempts",
+                retryable=False,
+            )
+        client = self._client.with_options(
+            max_retries=0,
+            timeout=httpx.Timeout(
+                connect=conn_options.connect_timeout,
+                read=conn_options.read_timeout,
+                write=conn_options.write_timeout,
+                pool=conn_options.pool_timeout,
+            ),
+        )
         extra = {}
 
         if is_given(extra_kwargs):
@@ -261,20 +275,18 @@ class LLM(llm.LLM):
             anthropic.types.RawMessageStreamEvent
         ]:
             if beta_flag:
-                stream = await self._client.beta.messages.create(
+                stream = await client.beta.messages.create(
                     betas=[beta_flag],
                     messages=messages,  # type: ignore[arg-type]
                     model=self._opts.model,
                     stream=True,
-                    timeout=conn_options.timeout,
                     **extra,
                 )
             else:
-                stream = await self._client.messages.create(
+                stream = await client.messages.create(
                     messages=messages,
                     model=self._opts.model,
                     stream=True,
-                    timeout=conn_options.timeout,
                     **extra,
                 )
             return cast(anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent], stream)
