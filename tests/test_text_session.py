@@ -299,11 +299,14 @@ async def test_default_depth_runs_eight_frames_and_refuses_the_ninth() -> None:
     assert refusal.is_error and "max_depth=8" in refusal.output
 
 
-async def test_event_inspection_does_not_merge_unpresented_child_text() -> None:
+@pytest.mark.parametrize("view", ["events", "text", "result"])
+async def test_stream_views_merge_only_delivered_child_dialogue(
+    view: Literal["events", "text", "result"],
+) -> None:
     child = Agent(
         name="booking",
         instructions="Book",
-        llm=Script(Reply("Private question"), call("final_result", {"reference": "R"}, "final")),
+        llm=Script(Reply("Which date?"), call("final_result", {"reference": "R"}, "final")),
         output_type=Booking,
     )
     parent = Agent(
@@ -313,17 +316,25 @@ async def test_event_inspection_does_not_merge_unpresented_child_text() -> None:
         tools=[child.as_tool(tool_name="book", merge_chat_history=True)],
     )
     async with TextSession(agent=parent).run_stream("Book") as stream:
-        events = [event async for event in stream.stream_events()]
+        if view == "events":
+            events = [event async for event in stream.stream_events()]
+            assert (
+                "".join(event.delta for event in events if event.type == "text_delta")
+                == "Which date?"
+            )
+        elif view == "text":
+            assert "".join([text async for text in stream.stream_text(delta=True)]) == "Which date?"
         first = await stream.result()
-    text = next(event for event in events if event.type == "text_delta")
-    assert text.agent_name == "booking" and text.frame_id == first.state.active_frame_id.value
-    assert text.invocation_id and all(
-        a.sequence < b.sequence for a, b in zip(events, events[1:], strict=False)
-    )
+    if view == "events":
+        text = next(event for event in events if event.type == "text_delta")
+        assert text.agent_name == "booking" and text.frame_id == first.state.active_frame_id.value
+        assert text.invocation_id and all(
+            a.sequence < b.sequence for a, b in zip(events, events[1:], strict=False)
+        )
     second = await TextSession(agent=parent).run("Friday", state=restore(first.state))
     root = history(second.state.frames[second.state.root_frame_id])
-    assert not any(
-        item.type == "message" and item.text_content == "Private question" for item in root
+    assert sum(item.type == "message" and item.text_content == "Which date?" for item in root) == (
+        view != "result"
     )
     assert any(item.type == "message" and item.text_content == "Friday" for item in root)
 

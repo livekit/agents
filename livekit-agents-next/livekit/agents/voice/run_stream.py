@@ -178,9 +178,6 @@ class RunStream(Generic[ResultT]):
                 if event.message_id != message_id:
                     message_id, text = event.message_id, ""
                 text += event.delta
-                self._presented[event.message_id] = (
-                    self._presented.get(event.message_id, "") + event.delta
-                )
                 yield event.delta if delta else text
         finally:
             await events.aclose()
@@ -191,6 +188,10 @@ class RunStream(Generic[ResultT]):
                 event = await self._next()
                 if event is None:
                     break
+                if event.type == "text_delta":
+                    self._presented[event.message_id] = (
+                        self._presented.get(event.message_id, "") + event.delta
+                    )
                 yield event
             self._outcome()  # a failure raises through iteration
         finally:
