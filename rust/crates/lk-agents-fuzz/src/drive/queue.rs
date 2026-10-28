@@ -15,10 +15,9 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use fastrand::Rng;
 use lk_agents_abi::{BoxFuture, resources::ResourceId};
-use lk_agents_voice::agent_session::{
-    Event, Input,
-    objects::{Access, races},
-};
+use lk_agents_voice::agent_session::{Event, Input};
+
+use super::objects::{Access, accesses, races};
 
 /// How the next step is chosen, drawn per seed and carried by the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -35,7 +34,7 @@ pub enum Policy {
     BasicPos,
     /// Partial-order sampling (Algorithm 4 with POS*'s read relaxation): BasicPOS, and after each
     /// step every pending head racing with it draws a new priority. Racing is per object touched
-    /// ([`Event::accesses`]), not per process: one core handles every event, but two events of
+    /// ([`accesses`]), not per process: one core handles every event, but two events of
     /// different speeches, or a data-plane command and a speech's tool start, touch nothing in
     /// common. The task pool's steps are unknown, so the pool races with every event.
     FullPos,
@@ -173,7 +172,7 @@ impl Queue {
         let arrival = self.arrivals;
         self.arrivals += 1;
         let priority = self.draw();
-        let (source, accesses) = (Source::of(&event), event.accesses());
+        let (source, accesses) = (Source::of(&event), accesses(&event));
         if let Some(proc) = self.reporter.and_then(|id| self.procs.get_mut(&id)) {
             let theirs = proc.accesses.get_or_insert_with(Vec::new);
             theirs.extend(accesses.iter().copied());
@@ -335,11 +334,11 @@ impl Queue {
         if self.delivered != swap.at {
             return i;
         }
-        let picked = self.pending[i].event.accesses();
+        let picked = self.pending[i].accesses.clone();
         let others: Vec<(usize, bool)> = heads
             .iter()
             .filter(|&&j| j != i)
-            .map(|&j| (j, races(&picked, &self.pending[j].event.accesses())))
+            .map(|&j| (j, races(&picked, &self.pending[j].accesses)))
             .collect();
         PROBE.with_borrow_mut(|p| {
             p.heads = others.len();

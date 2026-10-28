@@ -2,7 +2,7 @@
 //!
 //! `cargo test --release -p lk-agents-fuzz --test pos -- --ignored --nocapture commutation`
 //!
-//! - `commutation`: the conflict relation (`Event::accesses`) against the session itself. A
+//! - `commutation`: the conflict relation (`drive::objects::accesses`) against the session itself. A
 //!   campaign seed's case is replayed twice with a pair of pending events delivered back to back,
 //!   once in each order: a pair declared independent that leaves a different session (the
 //!   journal its two steps wrote, or the whole run's journal and findings) is a false
