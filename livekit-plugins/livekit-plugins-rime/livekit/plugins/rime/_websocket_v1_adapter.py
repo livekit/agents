@@ -104,7 +104,7 @@ class WebSocketV1Adapter:
     def _new_pool(self) -> _Pool:
         websocket_v1_url = self._websocket_v1_url
 
-        async def _connect(timeout: float) -> _websocket_v1.Connection:
+        async def _connect(timeout: float | None) -> _websocket_v1.Connection:
             return await _websocket_v1.connect(
                 self._ensure_session(),
                 websocket_url=websocket_v1_url,
@@ -174,6 +174,12 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
+        if conn_options.total_timeout is not None:
+            raise APIError(
+                "rime streaming requires total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         self._sample_rate = tts_instance.sample_rate
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
@@ -231,7 +237,9 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             language=self._options.language,
         )
 
-        connection = await self._pool.get(timeout=self._conn_options.timeout)
+        connection = await self._pool.get(
+            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
+        )
         reusable = False
         try:
             result = await _websocket_v1.run_context(
@@ -241,7 +249,8 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
                 sample_rate=self._sample_rate,
                 input_events=input_events,
                 output_emitter=output_emitter,
-                timeout=self._conn_options.timeout,
+                read_timeout=self._conn_options.read_timeout,
+                write_timeout=self._conn_options.write_timeout,
                 mark_started=self.mark_started,
             )
             reusable = result.reusable

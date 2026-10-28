@@ -63,8 +63,6 @@ from .models import (
     supports_time_scale_factor,
 )
 
-CODA_MODEL_TIMEOUT = 60 * 4
-MIST_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
 RIME_WS_BASE_URL = "wss://users-ws.rime.ai"
 NUM_CHANNELS = 1
@@ -100,12 +98,6 @@ class _MistOptions:
     reduce_latency: NotGivenOr[bool] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
-
-
-def _timeout_for_model(model: TTSModels | str) -> int:
-    if model == MODEL_CODA:
-        return CODA_MODEL_TIMEOUT
-    return MIST_MODEL_TIMEOUT
 
 
 def _default_sample_rate(model: TTSModels | str) -> int:
@@ -379,8 +371,6 @@ class TTS(tts.TTS):
             else None
         )
 
-        self._total_timeout = _timeout_for_model(resolved_model)
-
         self._streams: weakref.WeakSet[tts.SynthesizeStream] = weakref.WeakSet()
         self._legacy_websocket_adapter: LegacyWebSocketAdapter | None = None
         if self._use_websocket and self._websocket_v1_adapter is None:
@@ -566,7 +556,6 @@ class TTS(tts.TTS):
                 websocket_url, model_changed=effective_model != self._opts.model
             )
             self._opts.model = effective_model
-            self._total_timeout = _timeout_for_model(effective_model)
             if effective_model == MODEL_CODA and self._opts.coda_options is None:
                 self._opts.coda_options = _CodaOptions()
             elif is_mist_model(effective_model) and self._opts.mist_options is None:
@@ -575,7 +564,6 @@ class TTS(tts.TTS):
             self._base_url = base_url
         if is_given(model):
             self._opts.model = model
-            self._total_timeout = _timeout_for_model(model)
 
             if model == MODEL_CODA and self._opts.coda_options is None:
                 self._opts.coda_options = _CodaOptions()
@@ -633,11 +621,11 @@ class ChunkedStream(tts.ChunkedStream):
         self._sample_rate = tts.sample_rate
         self._opts = copy.deepcopy(tts._opts)
         self._base_url = tts._base_url
-        self._total_timeout = tts._total_timeout
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         payload: dict[str, object] = {
             "speaker": self._opts.speaker,
             "text": self._input_text,
@@ -660,9 +648,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=aiohttp.ClientTimeout(
-                    total=self._total_timeout, sock_connect=self._conn_options.timeout
-                ),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 

@@ -312,7 +312,7 @@ async def connect(
     websocket_url: str,
     api_key: str,
     protocol: WebSocketProtocol,
-    timeout: float,
+    timeout: float | None,
     allow_custom_endpoint: bool = False,
 ) -> Connection:
     """Open a v1 socket and consume its one connection-level ready event."""
@@ -376,7 +376,8 @@ async def run_context(
     sample_rate: int,
     input_events: AsyncIterable[str],
     output_emitter: tts.AudioEmitter,
-    timeout: float,
+    read_timeout: float | None,
+    write_timeout: float | None,
     mark_started: Callable[[], None],
 ) -> RunResult:
     """Run one LiveKit output turn as one Rime synthesis context."""
@@ -392,7 +393,7 @@ async def run_context(
     async def _write(payload: str, value: object) -> None:
         try:
             await asyncio.wait_for(
-                _send_envelope(connection, context_id, payload, value), timeout=timeout
+                _send_envelope(connection, context_id, payload, value), timeout=write_timeout
             )
         except asyncio.TimeoutError:
             raise APITimeoutError("Timed out writing to the Rime v1 WebSocket") from None
@@ -487,7 +488,7 @@ async def run_context(
         if input_complete.is_set():
             return
         try:
-            await asyncio.wait_for(server_started.wait(), timeout=timeout)
+            await asyncio.wait_for(server_started.wait(), timeout=read_timeout)
         except asyncio.TimeoutError:
             raise APITimeoutError("Timed out waiting for the Rime v1 started event") from None
 
@@ -502,7 +503,7 @@ async def run_context(
             if terminal_received.is_set():
                 return
             try:
-                await asyncio.wait_for(server_activity.wait(), timeout=timeout)
+                await asyncio.wait_for(server_activity.wait(), timeout=read_timeout)
             except asyncio.TimeoutError:
                 raise APITimeoutError("Timed out waiting for a Rime v1 event after end") from None
 
@@ -531,7 +532,9 @@ async def run_context(
             reusable = await _cancel_and_drain(
                 connection,
                 context_id=context_id,
-                timeout=min(timeout, CANCEL_TIMEOUT),
+                timeout=CANCEL_TIMEOUT
+                if read_timeout is None
+                else min(read_timeout, CANCEL_TIMEOUT),
             )
         raise _ContextCancelled(reusable=reusable) from None
     finally:

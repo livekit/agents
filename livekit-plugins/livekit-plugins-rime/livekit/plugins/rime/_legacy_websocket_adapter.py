@@ -70,7 +70,7 @@ class LegacyWebSocketAdapter:
     def _new_pool(self) -> _Pool:
         websocket_url = self._websocket_url
 
-        async def _connect(timeout: float) -> aiohttp.ClientWebSocketResponse:
+        async def _connect(timeout: float | None) -> aiohttp.ClientWebSocketResponse:
             return await self._connect(websocket_url=websocket_url, timeout=timeout)
 
         return utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -81,7 +81,7 @@ class LegacyWebSocketAdapter:
         )
 
     async def _connect(
-        self, *, websocket_url: str, timeout: float
+        self, *, websocket_url: str, timeout: float | None
     ) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(
@@ -153,6 +153,12 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
+        if conn_options.write_timeout is not None or conn_options.total_timeout is not None:
+            raise APIError(
+                "rime streaming requires write_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
         )
@@ -205,7 +211,9 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
             if empty_input:
                 return
             while True:
-                message = await websocket.receive(timeout=self._conn_options.timeout)
+                message = await asyncio.wait_for(
+                    websocket.receive(), self._conn_options.read_timeout
+                )
                 if message.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -240,7 +248,10 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     raise APIError("Rime WebSocket request failed")
 
         try:
-            async with self._pool.connection(timeout=self._conn_options.timeout) as websocket:
+            async with self._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as websocket:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_send_task(websocket)),
