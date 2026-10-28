@@ -607,7 +607,7 @@ def agents(call: Call) -> tuple[Any, Any]:
         @function_tool
         async def to_billing(self, ctx: RunContext) -> None:
             """Transfer the caller to billing."""
-            ctx.session.update_agent(Billing())
+            ctx.live_session.update_agent(Billing())
 
     return FrontDesk, Billing
 
