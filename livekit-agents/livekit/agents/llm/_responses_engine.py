@@ -99,7 +99,11 @@ class ResponsesWebsocket:
         await self._pool.aclose()
 
     async def generate_response(
-        self, msg: dict, *, receive_timeout: float | None = None
+        self,
+        msg: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
     ) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
@@ -123,7 +127,9 @@ class ResponsesWebsocket:
         except TypeError as e:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
-        ws = await self._acquire_and_send(data)
+        ws = await self._acquire_and_send(
+            data, self._timeout if connect_timeout is None else connect_timeout
+        )
         completed = False
         try:
             while True:
@@ -169,11 +175,13 @@ class ResponsesWebsocket:
             else:
                 self._pool.remove(ws)
 
-    async def _acquire_and_send(self, data: str) -> aiohttp.ClientWebSocketResponse:
+    async def _acquire_and_send(
+        self, data: str, connect_timeout: float
+    ) -> aiohttp.ClientWebSocketResponse:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
-            ws = await self._pool.get(timeout=self._timeout)
+            ws = await self._pool.get(timeout=connect_timeout)
             reused = self._pool.last_connection_reused
             try:
                 await ws.send_str(data)
@@ -286,7 +294,12 @@ class ResponsesLLMStream(llm.LLMStream):
                     **self._extra_kwargs,
                 }
                 async for raw_event in self._llm._ws.generate_response(
-                    payload, receive_timeout=self._conn_options.timeout
+                    payload,
+                    # conn_options.timeout also bounds the gap between events, as
+                    # httpx's read timeout does on the REST path; raise it for
+                    # models that go quiet longer while reasoning or using tools
+                    receive_timeout=self._conn_options.timeout,
+                    connect_timeout=self._conn_options.timeout,
                 ):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)

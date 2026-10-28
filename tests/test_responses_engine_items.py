@@ -164,7 +164,11 @@ class _ReplayResponsesWS:
         self._frames = frames
 
     def generate_response(  # noqa: ANN201
-        self, payload: dict, *, receive_timeout: float | None = None
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
     ):
         frames = self._frames
 

@@ -253,6 +253,53 @@ async def test_ws_per_call_inference_class_warns(caplog: pytest.LogCaptureFixtur
     await llm_model.aclose()
 
 
+async def test_ws_dial_uses_request_connect_timeout() -> None:
+    llm_model = _make_llm()
+    ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
+    timeouts: list[float] = []
+
+    async def _connect(timeout: float) -> _ScriptedWs:
+        timeouts.append(timeout)
+        return ws
+
+    _transport(llm_model)._pool._connect_cb = _connect  # type: ignore[assignment]
+
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=1.5)
+    )
+    async for _ in stream:
+        pass
+    await stream.aclose()
+
+    assert timeouts == [1.5]
+    await llm_model.aclose()
+
+
+async def test_ws_dial_sends_constructor_extra_headers() -> None:
+    llm_model = _make_llm(extra_kwargs={"extra_headers": {"X-Deployment": "blue"}})
+    session = _dial_session(llm_model)
+
+    await _transport(llm_model)._create_ws(1.0)
+
+    assert session.dials[0].headers["X-Deployment"] == "blue"
+    assert session.dials[0].headers["Authorization"].startswith("Bearer ")
+    await llm_model.aclose()
+
+
+async def test_ws_per_call_extra_headers_warns(caplog: pytest.LogCaptureFixture) -> None:
+    llm_model = _make_llm()
+
+    with caplog.at_level(logging.WARNING):
+        stream = llm_model.chat(
+            chat_ctx=_ctx(), extra_kwargs={"extra_headers": {"X-Deployment": "blue"}}
+        )
+    await stream.aclose()
+
+    records = [r for r in caplog.records if "extra_headers cannot change" in r.getMessage()]
+    assert len(records) == 1
+    await llm_model.aclose()
+
+
 async def test_gateway_tool_not_allowed_is_400() -> None:
     llm_model = _make_llm()
     _use_connection(llm_model, _ScriptedWs([_CONNECTED, _TOOL_NOT_ALLOWED]))

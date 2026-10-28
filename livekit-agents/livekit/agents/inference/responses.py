@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -150,6 +151,7 @@ class LLM(llm.LLM):
                 api_secret=self._opts.api_secret,
                 provider=self._opts.provider,
                 inference_class=self._opts.inference_class,
+                extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
                 timeout=None,
             )
         else:
@@ -227,7 +229,14 @@ class LLM(llm.LLM):
             extra["extra_headers"] = headers
             self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         else:
+            # headers ride on the upgrade, so only the LLM's own extra_headers reach the
+            # gateway; the payload must not carry them
             extra.pop("extra_headers", None)
+            if is_given(extra_kwargs) and "extra_headers" in extra_kwargs:
+                logger.warning(
+                    "extra_headers cannot change per request over WebSocket; "
+                    "using the LLM's extra_kwargs headers"
+                )
             if is_given(inference_class) and inference_class != self._opts.inference_class:
                 logger.warning(
                     "inference_class cannot change per request over WebSocket; "
@@ -278,6 +287,7 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
         api_secret: str,
         provider: str | None,
         inference_class: InferenceClass | None,
+        extra_headers: Callable[[], dict[str, str]],
         timeout: float | None,
     ) -> None:
         super().__init__(
@@ -291,10 +301,12 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
         self._lk_api_secret = api_secret
         self._provider = provider
         self._inference_class = inference_class
+        self._extra_headers = extra_headers
 
     async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         token = create_access_token(self._lk_api_key, self._lk_api_secret)
         headers = {
+            **self._extra_headers(),
             **get_inference_headers(inference_class=self._inference_class),
             "Authorization": f"Bearer {token}",
         }
