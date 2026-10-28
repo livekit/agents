@@ -20,7 +20,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
     ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
         crate::process::workers()
             .map_err(|error| LlmAlgorithmError(error.to_string()))?
-            .try_spawn(crate::media_workers::MediaWorkerClass::Formatting, move || {
+            .try_spawn(lk_agents_media::workers::MediaWorkerClass::Formatting, move || {
                 provider_format::host::to_provider_format(
                     &format,
                     items,

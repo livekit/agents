@@ -432,7 +432,7 @@ impl PreparedTranscript for TranscriptBuilder {
                 })?;
         let workers = crate::process::workers().map_err(upload_error)?;
         let permit = workers
-            .try_admit(crate::media_workers::MediaWorkerClass::Formatting)
+            .try_admit(lk_agents_media::workers::MediaWorkerClass::Formatting)
             .map_err(upload_error)?;
         let (bytes, events) = {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());

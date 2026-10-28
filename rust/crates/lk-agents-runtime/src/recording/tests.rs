@@ -4,23 +4,20 @@ use std::sync::{Mutex, mpsc as sync_mpsc};
 use lk_agents_media::recorder::{EncodeError, PCM_ENCODER_TRAILER};
 
 use super::*;
-use crate::media_workers::{MediaWorkerLimits, MediaWorkers};
+use lk_agents_media::workers::{MediaWorkerLimits, MediaWorkers};
 
 fn workers(total: usize) -> MediaWorkers {
-    MediaWorkers::new(
-        tokio::runtime::Handle::current(),
-        MediaWorkerLimits {
-            total,
-            decoders: 1,
-            recordings: 1,
-            images: 1,
-            formatting: 1,
-            eot_models: 1,
-            vad_models: 1,
-            uploads: 1,
-                worker_io: 1,
-        },
-    )
+    MediaWorkers::new(MediaWorkerLimits {
+        total,
+        decoders: 1,
+        recordings: 1,
+        images: 1,
+        formatting: 1,
+        eot_models: 1,
+        vad_models: 1,
+        uploads: 1,
+        worker_io: 1,
+    })
     .unwrap()
 }
 

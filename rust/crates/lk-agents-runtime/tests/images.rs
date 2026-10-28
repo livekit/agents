@@ -4,7 +4,7 @@
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
 use lk_agents_abi::utils::video::VideoFrame;
 use lk_agents_abi::{ChatMessage, Role};
-use lk_agents_runtime::media_workers::MediaWorkerClass;
+use lk_agents_media::workers::MediaWorkerClass;
 
 #[tokio::test]
 async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
@@ -29,11 +29,7 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
 
 #[tokio::test]
 async fn oversized_pixels_are_refused_before_buffer_conversion_or_encoding() {
-    let workers = lk_agents_runtime::media_workers::MediaWorkers::new(
-        tokio::runtime::Handle::current(),
-        Default::default(),
-    )
-    .unwrap();
+    let workers = lk_agents_media::workers::MediaWorkers::new(Default::default()).unwrap();
     let result = lk_agents_runtime::images::prepare(
         &workers,
         ImageInput::Frame(VideoFrame {

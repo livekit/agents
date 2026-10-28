@@ -712,7 +712,7 @@ impl Pump {
                         let created_at = self.clock.wall();
                         decoding = Some(Box::pin(async move {
                             let workers = crate::process::workers().map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-                            let worker = workers.try_spawn(crate::media_workers::MediaWorkerClass::Decoder, move || {
+                            let worker = workers.try_spawn(lk_agents_media::workers::MediaWorkerClass::Decoder, move || {
                                 wire::decode_text(&text, &shape, created_at)
                             }).map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
                             worker.await.map_err(|error| ApiError::new(format!("realtime decoder worker failed: {error}")).with_retryable(false))?

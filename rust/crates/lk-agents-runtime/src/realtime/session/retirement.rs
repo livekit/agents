@@ -39,7 +39,7 @@ pub(super) async fn run(
     label: String,
     events: super::super::queue::Delivery,
     settled: watch::Sender<bool>,
-    workers: Result<crate::media_workers::MediaWorkers, crate::process::ProcessError>,
+    workers: Result<lk_agents_media::workers::MediaWorkers, crate::process::ProcessError>,
 ) {
     let mut retained = None;
     loop {
@@ -110,11 +110,11 @@ pub(super) async fn run(
                 return;
             }
         };
-        let permit = match workers.try_admit(crate::media_workers::MediaWorkerClass::Formatting) {
+        let permit = match workers.try_admit(lk_agents_media::workers::MediaWorkerClass::Formatting) {
             Ok(permit) => permit,
             Err(_) => {
                 // Do not move a destructor-bearing owner into a closure until admission succeeds.
-                workers.wait_for_capacity(crate::media_workers::MediaWorkerClass::Formatting).await;
+                workers.wait_for_capacity(lk_agents_media::workers::MediaWorkerClass::Formatting).await;
                 retained = Some(shared);
                 continue;
             }

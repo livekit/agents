@@ -11,7 +11,7 @@ use lk_agents_inference::vad::{VadModelFactory, VadRuntime, VadRuntimeStream};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::media_workers::{MediaWorker, MediaWorkerClass};
+use lk_agents_media::workers::{MediaWorker, MediaWorkerClass};
 
 // At a 10 ms input cadence the item ceiling admits 2.56 s of pending audio. The byte ceiling
 // also bounds oversized producers; one full second of 48 kHz stereo fits a single push.
@@ -156,7 +156,7 @@ fn open(
     let input_state = state.clone();
     let cancelled = CancellationToken::new();
     let stop = cancelled.clone();
-    let runtime = workers.runtime_handle();
+    let runtime = crate::process::caller_handle().map_err(|error| failed(error.to_string()))?;
     // Only bounded channel descriptors precede admission; refusal constructs no model and
     // retains no queued audio. The same worker owns the recurrent state until settlement.
     let worker = workers

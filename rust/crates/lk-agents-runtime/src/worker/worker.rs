@@ -155,7 +155,7 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     cfg: RuntimeConfig,
     state: WorkerState,
     host: Arc<P>,
-    pub(super) workers: crate::media_workers::MediaWorkers,
+    pub(super) workers: lk_agents_media::workers::MediaWorkers,
     clock: C,
     default_load: DefaultLoadCalc,
     cpu: Option<CpuMonitor>,
@@ -468,7 +468,7 @@ impl PendingWrite {
 enum Completion {
     Input(WorkerStateInput),
     Load(Option<f32>),
-    CpuSample(Result<(CpuMonitor, Option<f32>), tokio::task::JoinError>),
+    CpuSample(Result<(CpuMonitor, Option<f32>), lk_agents_media::workers::WorkerPanicked>),
     Done,
     EndpointDone(u64),
 }
@@ -479,7 +479,7 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
     pub fn new(
         options: crate::worker::WorkerOptions,
         host: P,
-        workers: crate::media_workers::MediaWorkers,
+        workers: lk_agents_media::workers::MediaWorkers,
     ) -> (Self, WorkerHandle) {
         let (config, connection, transport) = options.resolve();
         Self::with_components(
@@ -501,7 +501,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         state: WorkerState,
         host: P,
         clock: C,
-        workers: crate::media_workers::MediaWorkers,
+        workers: lk_agents_media::workers::MediaWorkers,
     ) -> (Self, WorkerHandle) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());

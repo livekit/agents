@@ -13,7 +13,7 @@ use lk_agents_abi::recorder::AudioRecorder;
 use lk_agents_media::recorder::{OggOpusEncoder, PcmFrame, Recorder, SegmentPlacer};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
-use crate::media_workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 
 /// Limits are supplied by the runtime's media budget, rather than selected by an audio callback.
 #[derive(Debug, Clone, Copy)]
@@ -173,7 +173,8 @@ impl SessionRecorder {
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
-        let runtime = workers.runtime_handle();
+        let runtime = crate::process::caller_handle()
+            .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
         let recorder = Self { tx, shared: shared.clone(), runtime: runtime.clone() };
         let worker_shared = shared.clone();
         let worker = workers

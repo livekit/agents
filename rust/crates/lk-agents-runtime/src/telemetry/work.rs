@@ -61,7 +61,7 @@ pub(super) struct Work {
 pub struct WorkPermit {
     work: Arc<Work>,
     key: String,
-    shared_class: Option<crate::media_workers::MediaWorkerPermit>,
+    shared_class: Option<lk_agents_media::workers::MediaWorkerPermit>,
 }
 
 impl WorkPermit {
@@ -312,7 +312,7 @@ pub fn try_admit_upload(retained_bytes: usize) -> Option<WorkPermit> {
     }
     let shared_class = crate::process::workers()
         .ok()
-        .and_then(|workers| workers.try_admit(crate::media_workers::MediaWorkerClass::Upload).ok());
+        .and_then(|workers| workers.try_admit(lk_agents_media::workers::MediaWorkerClass::Upload).ok());
     let Some(shared_class) = shared_class else {
         work.state.lock().unwrap_or_else(|p| p.into_inner()).dropped += 1;
         return None;

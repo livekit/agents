@@ -106,9 +106,9 @@ pub(super) async fn run(
         let class = if batch.iter().any(|effect| matches!(effect,
             Outgoing::ItemCreate { item: lk_agents_abi::ChatItem::Message(message), .. }
                 if message.content.iter().any(|content| matches!(content, lk_agents_abi::ChatContent::Image(_))))) {
-            crate::media_workers::MediaWorkerClass::Image
+            lk_agents_media::workers::MediaWorkerClass::Image
         } else {
-            crate::media_workers::MediaWorkerClass::Decoder
+            lk_agents_media::workers::MediaWorkerClass::Decoder
         };
         let prepared = workers
             .try_spawn(class, move || {

@@ -375,7 +375,7 @@ fn report_input_facts_refuse_oversize_before_item_conversion_and_poison_partial_
 
 #[tokio::test]
 async fn a_stalled_upload_reserves_the_shared_worker_class_until_transport_settles() {
-    use crate::media_workers::{MediaWorkerClass, MediaWorkerError, MediaWorkerLimits};
+    use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerError, MediaWorkerLimits};
     use tokio_util::task::AbortOnDropHandle;
 
     let _serial = UPLOAD_TESTS.lock().await;

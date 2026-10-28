@@ -71,7 +71,7 @@ type Outcome = watch::Sender<Option<Result<(), String>>>;
 #[derive(Clone)]
 pub(crate) struct ServerRuntime<H: ServerHost> {
     host: H,
-    workers: Option<crate::media_workers::MediaWorkers>,
+    workers: Option<lk_agents_media::workers::MediaWorkers>,
     control: watch::Sender<Control>,
     receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
     snapshot: watch::Sender<ServerSnapshot>,
@@ -81,7 +81,7 @@ pub(crate) struct ServerRuntime<H: ServerHost> {
 }
 
 impl<H: ServerHost> ServerRuntime<H> {
-    pub(crate) fn new(host: H, workers: Option<crate::media_workers::MediaWorkers>) -> Self {
+    pub(crate) fn new(host: H, workers: Option<lk_agents_media::workers::MediaWorkers>) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
@@ -579,7 +579,7 @@ async fn pending_worker(
 
 #[derive(Default)]
 struct Resources {
-    setup: Option<crate::media_workers::MediaWorker<Result<(Option<String>, Option<f32>), String>>>,
+    setup: Option<lk_agents_media::workers::MediaWorker<Result<(Option<String>, Option<f32>), String>>>,
     worker: Option<WorkerHandle>,
     connection: Option<tokio::task::JoinHandle<Result<(), String>>>,
     load: Option<tokio::task::JoinHandle<Result<(), String>>>,

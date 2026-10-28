@@ -8,7 +8,7 @@ use lk_agents_media::images::{
     EncodeOptions, ImageFormat, ResizeOptions, ResizeStrategy, RgbaFrame,
 };
 
-use crate::media_workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 
 const MAX_PIXELS: u64 = 4096 * 4096;
 pub(crate) const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;

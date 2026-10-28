@@ -24,6 +24,7 @@ pub mod resample;
 pub mod soxr;
 pub mod stream_buffer;
 pub mod wav;
+pub mod workers;
 
 pub use decoder::Decoder;
 pub use error::{CodecError, Result};

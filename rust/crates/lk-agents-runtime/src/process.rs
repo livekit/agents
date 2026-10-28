@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
+use lk_agents_media::workers::{MediaWorkerError, MediaWorkerLimits, MediaWorkers};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProcessError {
@@ -20,7 +21,7 @@ pub enum ProcessError {
 struct Started {
     pid: u32,
     runtime: tokio::runtime::Runtime,
-    workers: crate::media_workers::MediaWorkers,
+    workers: MediaWorkers,
 }
 
 static RUNTIME: Mutex<Option<Started>> = Mutex::new(None);
@@ -30,8 +31,13 @@ pub fn handle() -> Result<tokio::runtime::Handle, ProcessError> {
     with_started(|started| started.runtime.handle().clone())
 }
 
+/// The runtime the caller is on, else the process runtime: where a native worker's async side runs.
+pub fn caller_handle() -> Result<tokio::runtime::Handle, ProcessError> {
+    tokio::runtime::Handle::try_current().or_else(|_| handle())
+}
+
 /// The process-owned native admission pool. Clones share the same class and total capacity.
-pub fn workers() -> Result<crate::media_workers::MediaWorkers, ProcessError> {
+pub fn workers() -> Result<MediaWorkers, ProcessError> {
     with_started(|started| started.workers.clone())
 }
 
@@ -49,11 +55,8 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .enable_all()
         .build()
         .map_err(|e| ProcessError::Start(e.to_string()))?;
-    let workers = crate::media_workers::MediaWorkers::new(
-        runtime.handle().clone(),
-        crate::media_workers::MediaWorkerLimits::default(),
-    )
-    .map_err(|error| ProcessError::Start(error.to_string()))?;
+    let workers = MediaWorkers::new(MediaWorkerLimits::default())
+        .map_err(|error| ProcessError::Start(error.to_string()))?;
     let started = slot.insert(Started { pid, runtime, workers });
     Ok(read(started))
 }
@@ -77,4 +80,15 @@ pub fn host_clock() -> Arc<dyn Clock> {
 #[cfg(not(feature = "python"))]
 pub fn host_clock() -> Arc<dyn Clock> {
     Arc::new(lk_agents_abi::RealClock::new())
+}
+
+lk_agents_abi::inventory::submit! {
+    lk_agents_abi::utils::workers::WorkerService {
+        try_spawn: |class, job| {
+            let workers = workers()
+                .map_err(|error| MediaWorkerError::Unavailable(error.to_string()))?;
+            let receipt = workers.try_spawn(class, job)?;
+            Ok(Box::pin(async move { receipt.await.map_err(|error| error.to_string()) }))
+        },
+    }
 }

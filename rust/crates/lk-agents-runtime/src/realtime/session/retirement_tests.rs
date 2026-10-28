@@ -87,12 +87,9 @@ async fn cancelling_close_keeps_the_runtime_owner_until_context_retirement_settl
 
 #[tokio::test]
 async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
-    use crate::media_workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
-    let workers = MediaWorkers::new(
-        tokio::runtime::Handle::current(),
-        MediaWorkerLimits { formatting: 1, ..Default::default() },
-    )
-    .unwrap();
+    use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
+    let workers =
+        MediaWorkers::new(MediaWorkerLimits { formatting: 1, ..Default::default() }).unwrap();
     let held = workers.try_admit(MediaWorkerClass::Formatting).unwrap();
     let (pump, shared, _) = pump();
     shared.machine.lock().await.close(pump.clock.now());
@@ -187,15 +184,12 @@ async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_
 
 #[tokio::test]
 async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure() {
-    use crate::media_workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
     use lk_agents_abi::llm::realtime::{CancelReply, Interrupt, PushAudio};
+    use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
     use lk_agents_net::transport::WsMessage;
 
-    let workers = MediaWorkers::new(
-        tokio::runtime::Handle::current(),
-        MediaWorkerLimits { formatting: 1, ..Default::default() },
-    )
-    .unwrap();
+    let workers =
+        MediaWorkers::new(MediaWorkerLimits { formatting: 1, ..Default::default() }).unwrap();
     let held = workers.try_admit(MediaWorkerClass::Formatting).unwrap();
     let (mut pump, shared, mut receiver) = pump();
     shared

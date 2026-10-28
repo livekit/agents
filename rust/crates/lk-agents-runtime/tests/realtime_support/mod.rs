@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use lk_agents_inference::realtime::RealtimeMachine;
-use lk_agents_runtime::media_workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 
 pub fn thread_cpu() -> Duration {
     let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };

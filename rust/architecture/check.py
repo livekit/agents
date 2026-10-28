@@ -18,6 +18,11 @@ CORES = {
     for name in ("core", "voice", "storage", "a2a", "media", "rtc")
 }
 PURE = CORES | {"lk-agents-abi"}
+# Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
+UNRESTRICTED = (
+    "rust/crates/lk-agents-media/src/workers.rs",
+    "rust/crates/lk-agents-media/src/workers/",
+)
 # Async I/O crates (decisions 69, 77): exempt from the purity bans; their edges are still checked.
 ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net"}
 BANNED = {
@@ -435,6 +440,12 @@ def configuration_errors(root: Path, crates: list[str]) -> list[str]:
     return errors
 
 
+def policed(path: str) -> bool:
+    """A subject-core or ABI source the Clippy policy covers."""
+    parts = Path(path).parts
+    return len(parts) > 3 and parts[2] in PURE and not path.startswith(UNRESTRICTED)
+
+
 def source_paths(root: Path) -> list[str]:
     paths = (
         git(root, "ls-files", "-c", "-o", "--exclude-standard", "-z", "--", "rust/crates/*/*.rs")
@@ -443,7 +454,7 @@ def source_paths(root: Path) -> list[str]:
     )
     result = []
     for path in paths:
-        if not path or Path(path).parts[2] not in PURE:
+        if not path or not policed(path):
             continue
         if Path(path).parts[3] in {"build.rs", "build"}:
             continue
@@ -566,7 +577,7 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
                     relative = path.resolve().relative_to(root).as_posix()
                 except ValueError:
                     relative = ""
-                if relative.startswith("rust/crates/") and Path(relative).parts[2] in PURE:
+                if relative.startswith("rust/crates/") and policed(relative):
                     candidates.append(
                         (
                             relative,

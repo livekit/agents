@@ -294,12 +294,11 @@ async fn saturated_vad_input_refuses_new_audio_and_still_accepts_close() {
 
 #[tokio::test]
 async fn vad_admission_leaves_capacity_for_image_and_recording_work() {
-    use lk_agents_runtime::media_workers::{
+    use lk_agents_media::workers::{
         MediaWorkerClass, MediaWorkerError, MediaWorkerLimits, MediaWorkers,
     };
 
-    let workers =
-        MediaWorkers::new(tokio::runtime::Handle::current(), MediaWorkerLimits::default()).unwrap();
+    let workers = MediaWorkers::new(MediaWorkerLimits::default()).unwrap();
     let models =
         (0..32).map(|_| workers.try_admit(MediaWorkerClass::VadModel).unwrap()).collect::<Vec<_>>();
     assert!(matches!(

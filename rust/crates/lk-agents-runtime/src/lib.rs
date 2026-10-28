@@ -46,7 +46,6 @@ pub mod http;
 pub mod images;
 pub mod llm;
 pub mod mcp;
-pub mod media_workers;
 pub mod process;
 pub mod realtime;
 pub mod recording;

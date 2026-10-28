@@ -13,7 +13,7 @@ use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::{AudioFormat, CodecError, Decoder};
 use tokio::sync::Notify;
 
-use crate::media_workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, MediaWorkers};
+use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, MediaWorkers};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DecoderLimits {
@@ -507,8 +507,12 @@ fn decode_pcm(
     // Ten milliseconds of source PCM bounds conversion and native resampling scratch space.
     let chunk_bytes = (source.sample_rate as usize / 100).max(1) * width;
     for chunk in bytes.chunks(chunk_bytes) {
-        let samples =
-            chunk.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect::<Vec<_>>();
+        let samples = chunk
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect::<Vec<_>>();
         let samples = remix(&samples, source.num_channels, num_channels)?;
         if let Some(resampler) = &mut resampler {
             let output = resampler
@@ -587,23 +591,20 @@ fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media_workers::MediaWorkerLimits;
+    use lk_agents_media::workers::MediaWorkerLimits;
 
     fn workers() -> MediaWorkers {
-        MediaWorkers::new(
-            tokio::runtime::Handle::current(),
-            MediaWorkerLimits {
-                total: 3,
-                decoders: 1,
-                recordings: 1,
-                images: 1,
-                formatting: 1,
-                eot_models: 1,
-                vad_models: 1,
-                uploads: 1,
-                worker_io: 1,
-            },
-        )
+        MediaWorkers::new(MediaWorkerLimits {
+            total: 3,
+            decoders: 1,
+            recordings: 1,
+            images: 1,
+            formatting: 1,
+            eot_models: 1,
+            vad_models: 1,
+            uploads: 1,
+            worker_io: 1,
+        })
         .unwrap()
     }
 
