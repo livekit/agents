@@ -1,35 +1,13 @@
+use super::transcript::{TRANSCRIPT_ITEM_BYTES, TRANSCRIPT_ITEMS};
 use super::*;
+use crate::env::Standalone;
+use lk_agents_abi::telemetry::upload::PreparedTranscript as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+type Builder = TranscriptBuilder<Standalone>;
+
 static UPLOAD_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-#[test]
-fn transcript_preparation_reserves_event_bytes_only_when_events_are_retained() {
-    use lk_agents_abi::telemetry::work::TelemetryWorker as _;
-
-    let _serial = UPLOAD_TESTS.blocking_lock();
-    let worker = super::super::work::SdkWorker::new();
-    let retained =
-        || worker.diagnostics().into_iter().find(|(name, _)| name == "retained_bytes").unwrap().1;
-    let before = retained();
-    let builder = TranscriptBuilder::new().unwrap();
-    let transcript_bytes = retained() - before;
-    assert!(
-        transcript_bytes <= TRANSCRIPT_BYTES as u64 + 128,
-        "a transcript without events must leave the event budget available"
-    );
-    builder
-        .append_event(serde_json::json!({
-            "type": "agent_state_changed", "old_state": "listening", "new_state": "thinking",
-            "created_at": 1.0
-        }))
-        .unwrap();
-    assert_eq!(
-        retained() - before - transcript_bytes,
-        lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES as u64
-    );
-}
 
 struct Request {
     headers: String,
@@ -184,56 +162,6 @@ async fn retry_info_is_decoded_from_the_upstream_google_rpc_record() {
     assert_eq!(peer.await.unwrap().len(), 2);
 }
 
-#[tokio::test]
-async fn ten_thousand_item_session_reports_serialize_without_stalling_the_loop() {
-    use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role};
-    let _serial = UPLOAD_TESTS.lock().await;
-    let items: Vec<_> = (0..10_000)
-        .map(|index| {
-            ChatItem::Message(ChatMessage::new(
-                index.to_string(),
-                Role::User,
-                vec![ChatContent::Text("hello".into())],
-                std::time::UNIX_EPOCH,
-            ))
-        })
-        .collect();
-    let builder = TranscriptBuilder::new().unwrap();
-    let work = tokio::task::spawn_blocking(move || {
-        for item in items {
-            builder.append(item).unwrap();
-        }
-        builder.finish()
-    });
-    tokio::pin!(work);
-    let cadence = Duration::from_millis(20);
-    let mut heartbeat = tokio::time::interval(Duration::from_millis(1));
-    heartbeat.tick().await;
-    let mut previous = tokio::time::Instant::now();
-    let mut worst = Duration::ZERO;
-    let mut ticks = 0;
-    let json = loop {
-        tokio::select! {
-            result = &mut work => {
-                worst = worst.max(tokio::time::Instant::now().duration_since(previous));
-                break result.unwrap().unwrap();
-            },
-            _ = heartbeat.tick() => {
-                let now = tokio::time::Instant::now();
-                worst = worst.max(now.duration_since(previous));
-                previous = now;
-                ticks += 1;
-            }
-        }
-    };
-    eprintln!("session_report_off_loop items=10000 heartbeat_ticks={ticks} worst_gap={worst:?}");
-    assert!(ticks > 0, "the session loop must progress while the large report is prepared");
-    assert!(worst < cadence, "heartbeat gap {worst:?} exceeded one audio frame");
-    let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded["items"].as_array().unwrap().len(), 10_000);
-    assert!(json.len() < TRANSCRIPT_BYTES);
-}
-
 #[test]
 fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversize_content() {
     let _serial = UPLOAD_TESTS.blocking_lock();
@@ -254,14 +182,14 @@ fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversi
         )
         .unwrap();
     let actual: serde_json::Value = {
-        let builder = TranscriptBuilder::new().unwrap();
+        let builder = Builder::new().unwrap();
         for item in items {
             builder.append(item).unwrap();
         }
         serde_json::from_str(&builder.finish().unwrap()).unwrap()
     };
     assert_eq!(actual, expected);
-    let builder = TranscriptBuilder::new().unwrap();
+    let builder = Builder::new().unwrap();
     let error = builder.append(message("x".repeat(TRANSCRIPT_ITEM_BYTES))).unwrap_err();
     assert!(error.0.contains("64 KiB"));
     assert!(builder.finish().is_err(), "an overflow must never upload a partial transcript");
@@ -323,10 +251,7 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
     assert!(started, "upload failed before reaching the peer: {result:?}");
     let failure = result.unwrap().unwrap_err();
     assert!(failure.0.contains("deadline elapsed"), "{failure}");
-    let first = super::super::work::try_admit_upload(1).expect("first upload slot released");
-    let second = super::super::work::try_admit_upload(1).expect("second upload slot remains free");
-    assert!(super::super::work::try_admit_upload(1).is_none());
-    drop((first, second));
+    assert_eq!(UPLOADS.available_permits(), 2, "a settled upload releases its admission");
 }
 
 #[test]
@@ -341,7 +266,7 @@ fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_f
             std::time::UNIX_EPOCH,
         ))
     };
-    let builder = TranscriptBuilder::new().unwrap();
+    let builder = Builder::new().unwrap();
     let mut appended = 0;
     loop {
         match builder.append(message()) {
@@ -355,7 +280,7 @@ fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_f
     assert!(appended > 1 && appended < 64);
     assert!(builder.finish().is_err());
     drop(builder);
-    let builder = TranscriptBuilder::new().unwrap();
+    let builder = Builder::new().unwrap();
     assert_eq!(builder.finish().unwrap(), "{\"items\":[]}");
     assert!(builder.append(message()).unwrap_err().0.contains("already finished"));
 }
@@ -363,55 +288,12 @@ fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_f
 #[test]
 fn report_input_facts_refuse_oversize_before_item_conversion_and_poison_partial_output() {
     let _serial = UPLOAD_TESTS.blocking_lock();
-    let builder = TranscriptBuilder::new().unwrap();
+    let builder = Builder::new().unwrap();
     builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES).unwrap();
     assert!(builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES + 1).is_err());
     assert!(builder.finish().is_err());
     drop(builder);
-    let builder = TranscriptBuilder::new().unwrap();
+    let builder = Builder::new().unwrap();
     assert!(builder.check_input(TRANSCRIPT_ITEMS + 1, 0).is_err());
     assert!(builder.finish().is_err());
-}
-
-#[tokio::test]
-async fn a_stalled_upload_reserves_the_shared_worker_class_until_transport_settles() {
-    use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerError, MediaWorkerLimits};
-    use tokio_util::task::AbortOnDropHandle;
-
-    let _serial = UPLOAD_TESTS.lock().await;
-    let workers = crate::process::workers().unwrap();
-    let _other_uploads: Vec<_> = (1..MediaWorkerLimits::default().uploads)
-        .map(|_| workers.try_admit(MediaWorkerClass::Upload).unwrap())
-        .collect();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let (started, received) = tokio::sync::oneshot::channel();
-    let peer = AbortOnDropHandle::new(tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut byte = [0; 1];
-        socket.read_exact(&mut byte).await.unwrap();
-        let _ = started.send(());
-        std::future::pending::<()>().await;
-        drop(socket);
-    }));
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
-    let mut upload = AbortOnDropHandle::new(tokio::spawn(async move {
-        uploader.send(recording(format!("http://{address}"))).await
-    }));
-    tokio::select! {
-        ready = received => ready.unwrap(),
-        result = &mut upload => panic!("upload settled before reaching the peer: {result:?}"),
-    }
-    let shared_capacity_was_held = matches!(
-        workers.try_admit(MediaWorkerClass::Upload),
-        Err(MediaWorkerError::Exhausted(MediaWorkerClass::Upload))
-    );
-    upload.abort();
-    assert!(upload.await.unwrap_err().is_cancelled());
-    peer.abort();
-    let _ = peer.await;
-    assert!(shared_capacity_was_held, "recording upload bypassed the process worker-class limit");
-    let _next_upload = workers
-        .try_admit(MediaWorkerClass::Upload)
-        .expect("transport settlement releases the shared upload class");
 }

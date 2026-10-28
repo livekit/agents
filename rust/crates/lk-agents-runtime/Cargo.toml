@@ -27,8 +27,7 @@ log.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query", "multipart"] }
-bytes = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 base64.workspace = true
 httparse = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
@@ -38,8 +37,6 @@ lk-agents-storage = { path = "../lk-agents-storage" }
 livekit-protocol.workspace = true
 pbjson-types.workspace = true
 prost.workspace = true
-# Upstream Google RPC records, matching the workspace prost.
-tonic-types = { version = "0.14", default-features = false }
 a2a.workspace = true
 serde.workspace = true
 indexmap.workspace = true
@@ -49,8 +46,6 @@ indexmap.workspace = true
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 url = "2"
-# Lease tokens, task, message and artifact ids: six random bytes as hex.
-rand = "0.9"
 # `SQLiteStorage`: one file per thread, executed on its own connection thread.
 
 postcard = { version = "1", default-features = false, features = ["alloc"] }

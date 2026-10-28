@@ -185,52 +185,6 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
     assert json.loads(artifact.read_text())["job_id"] == "report-worker"
 
 
-async def test_bounded_host_callbacks_keep_late_ownership_and_propagate_the_original_error() -> (
-    None
-):
-    import asyncio
-    import contextvars
-    import threading
-
-    from livekit.agents.telemetry._export import call_bounded, worker
-
-    entered, release = threading.Event(), threading.Event()
-    identity = contextvars.ContextVar("bounded-callback-job", default="outside")
-    identity.set("captured")
-    key = f"late-report-test:{id(release):x}"
-
-    def stalled():
-        assert identity.get() == "captured"
-        entered.set()
-        release.wait(3)
-        return "late result"
-
-    pending = asyncio.create_task(call_bounded(key, stalled, 1, 0.05))
-    try:
-        async with asyncio.timeout(3):
-            while not entered.is_set():
-                await asyncio.sleep(0)
-        with pytest.raises(TimeoutError, match="deadline"):
-            await pending
-        with pytest.raises(RuntimeError, match="admission"):
-            await call_bounded(key, lambda: "replacement", 1, 1)
-    finally:
-        release.set()
-        await worker().wait_async(key, 3)
-        if not pending.done():
-            pending.cancel()
-        await asyncio.gather(pending, return_exceptions=True)
-
-    failure = ValueError("callback error")
-
-    def fail():
-        raise failure
-
-    with pytest.raises(ValueError) as caught:
-        await call_bounded(f"failed-report-test:{id(failure):x}", fail, 1, 1)
-    assert caught.value is failure
-
-
 @pytest.mark.parametrize(
     ("creation_consent", "later_consent", "project_redaction", "content_present"),
     [(False, True, False, False), (True, False, False, True), (True, True, True, False)],

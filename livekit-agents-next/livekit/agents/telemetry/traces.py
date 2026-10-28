@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
-from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import aiohttp
@@ -192,9 +191,10 @@ async def _upload_session_report(
     http_session: aiohttp.ClientSession,
     metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
-    """Project host objects on admitted SDK work; the native runtime uploads the recording."""
+    """Project host objects off the event loop; the native client uploads the recording."""
     from .._core_view import from_core_item
-    from ._export import attribute_bytes, call_bounded, policy
+    from . import _export
+    from ._export import attribute_bytes, policy
 
     if attribute_bytes(metadata) > policy().max_record_bytes:
         raise ValueError("session report metadata exceeds the native input budget")
@@ -206,18 +206,12 @@ async def _upload_session_report(
     credential_bytes = attribute_bytes(credentials)
     if credential_bytes > policy().max_record_bytes:
         raise ValueError("session report credentials exceed the native input budget")
-    uploader = await call_bounded(
-        f"session-report-client/{id(report):x}",
-        partial(_core._core_SessionReportUpload, *credentials),
-        credential_bytes,
-        policy().upload_timeout_seconds,
-    )
+    uploader = _core._core_SessionReportUpload(*credentials)
     options = report._recording_options
     capture_content = report._capture_content
     redacted = options.redaction or telemetry_utils.redaction_enabled(metadata)
     projection = _core._core_SessionReportProjection(capture_content, options, redacted)
     transcript_allowed, audio_allowed = projection.transcript, projection.audio
-    prepared: list[str] = []
 
     builder: _core._core_PreparedTranscript | None = None
     batch_size = 1
@@ -288,7 +282,7 @@ async def _upload_session_report(
             destination.upload_gate.disabled,
         )
         if record is None:
-            worker.record_drop("dropped", 1)
+            _export.record("dropped")
         else:
             emit(record)
 
@@ -307,40 +301,18 @@ async def _upload_session_report(
             if record is not None:
                 emit(record)
 
-    def finish() -> None:
-        nonlocal builder
-        if builder is not None:
-            prepared.append(builder.finish())
-            builder = None
-
-    worker = _core._core_TelemetryWorker()
-    key = f"session-report/{report.job_id}"
-    if not worker.reserve(key, policy().report_retained_bytes):
-        return
     loop = asyncio.get_running_loop()
     deadline = loop.time() + policy().upload_timeout_seconds
-
-    async def run_preparation(callback: Callable[[], None]) -> None:
-        await call_bounded(
-            key, callback, policy().max_record_bytes, max(0.0, deadline - loop.time())
-        )
-
-    try:
+    async with asyncio.timeout_at(deadline):
         snapshot, events = await report._snapshot(projection, deadline=deadline)
-        await run_preparation(start)
+        await asyncio.to_thread(start)
         for event in events:
-            await run_preparation(partial(emit_event, event))
-            await asyncio.sleep(0)
+            await asyncio.to_thread(emit_event, event)
         if transcript_allowed:
             for index in range(0, len(report.chat_history.items), batch_size):
                 items = report.chat_history.items[index : index + batch_size]
-                await run_preparation(partial(append_batch, items))
-                await asyncio.sleep(0)
-        await run_preparation(finish)
-        transcript = prepared.pop() if transcript_allowed else None
-    finally:
-        prepared.clear()
-        worker.release(key)
+                await asyncio.to_thread(append_batch, items)
+        transcript = await asyncio.to_thread(builder.finish) if builder is not None else None
     enabled = await uploader.upload(
         observability_url,
         report.room_id,

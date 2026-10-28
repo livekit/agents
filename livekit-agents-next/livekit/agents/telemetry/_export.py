@@ -1,16 +1,17 @@
-"""Host SDK admission and accounting. Native telemetry owns capacity and cleanup work."""
+"""Framework SDK processors: per-record size admission, failure counters and bounded cleanup."""
 
 from __future__ import annotations
 
 import contextvars
 import threading
+import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from concurrent.futures import Future
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import fields, is_dataclass, replace
 from functools import cache
-from typing import TypeVar, cast
+from typing import Literal, cast
 
 from opentelemetry.sdk._logs import LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
 from opentelemetry.sdk._logs.export import (
@@ -52,16 +53,25 @@ def policy() -> _core._core_TelemetryPolicy:
     return _core._core_TelemetryPolicy(False, False, False)
 
 
-_worker: _core._core_TelemetryWorker | None = None
-_worker_lock = threading.Lock()
+Outcome = Literal["dropped", "failed", "conflicts", "incomplete_cleanup"]
+
+_outcomes: Counter[str] = Counter()
+_outcomes_lock = threading.Lock()
 
 
-def worker() -> _core._core_TelemetryWorker:
-    global _worker
-    with _worker_lock:
-        if _worker is None:
-            _worker = _core._core_TelemetryWorker()
-        return _worker
+def record(outcome: Outcome, count: int = 1) -> None:
+    """Count a refused record, a failed export, a configuration conflict or a late cleanup."""
+    with _outcomes_lock:
+        _outcomes[outcome] += count
+
+
+def diagnostics() -> dict[str, int]:
+    """Return process-wide export drops, failures and cleanup counters without exporting them."""
+    with _outcomes_lock:
+        return {
+            outcome: _outcomes[outcome]
+            for outcome in ("dropped", "failed", "conflicts", "incomplete_cleanup")
+        }
 
 
 def attribute_bytes(value: object, *, depth: int = 0) -> int:
@@ -196,33 +206,20 @@ def log_bytes(record: ReadableLogRecord | ReadWriteLogRecord) -> int:
     )
 
 
-def span_key(span: ReadableSpan) -> str:
-    context = span.context
-    if context is None:
-        return f"span:{id(span):x}"
-    return f"span:{context.trace_id:032x}:{context.span_id:016x}"
-
-
-class _ReleasingSpanExporter(SpanExporter):
-    def __init__(self, inner: SpanExporter, holds: Callable[[ReadableSpan], bool]) -> None:
+class _GuardedSpanExporter(SpanExporter):
+    def __init__(self, inner: SpanExporter) -> None:
         self.inner = inner
-        self._holds = holds
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         try:
             with export_context():
                 result = self.inner.export(spans)
             if result is SpanExportResult.FAILURE:
-                worker().record_drop("export_failed", 1)
+                record("failed")
             return result
         except Exception:
-            worker().record_drop("export_failed", 1)
+            record("failed")
             return SpanExportResult.FAILURE
-        finally:
-            for span in spans:
-                # A gate holding an undecided job's span retains this reservation itself.
-                if not self._holds(span):
-                    worker().release(span_key(span))
 
     def shutdown(self) -> None:
         with export_context():
@@ -234,11 +231,11 @@ class _ReleasingSpanExporter(SpanExporter):
 
 
 class BoundedSpanProcessor(SpanProcessor):
-    """Bound host SDK retention by records and bytes before its batch queue admits a span."""
+    """Refuse oversize spans before the SDK batch queue, which bounds the record count."""
 
-    def __init__(self, exporter: SpanExporter, *, holds: Callable[[ReadableSpan], bool]) -> None:
+    def __init__(self, exporter: SpanExporter) -> None:
         self._processor = BatchSpanProcessor(
-            _ReleasingSpanExporter(exporter, holds),
+            _GuardedSpanExporter(exporter),
             max_queue_size=policy().max_records,
             max_export_batch_size=policy().batch_items,
             schedule_delay_millis=policy().schedule_delay_millis,
@@ -246,15 +243,9 @@ class BoundedSpanProcessor(SpanProcessor):
         )
 
     def on_end(self, span: ReadableSpan) -> None:
-        charge = span_bytes(span)
-        if charge > policy().max_record_bytes:
-            worker().record_drop("oversize", 1)
+        if span_bytes(span) > policy().max_record_bytes:
+            record("dropped")
             return
-        if worker().reserve(span_key(span), charge):
-            self._processor.on_end(span)
-
-    def requeue(self, span: ReadableSpan) -> None:
-        """The gate already owns the reservation for an early span."""
         self._processor.on_end(span)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
@@ -264,54 +255,37 @@ class BoundedSpanProcessor(SpanProcessor):
         cast(Callable[[], None], self._processor.shutdown)()
 
 
-_ResultT = TypeVar("_ResultT")
-
-
-async def call_bounded(
-    key: str, callback: Callable[[], _ResultT], retained_bytes: int, timeout: float
-) -> _ResultT:
-    """Run host work on the native worker, retaining late callbacks after caller timeout."""
-    result: Future[_ResultT] = Future()
-    context = contextvars.copy_context()
-
-    def invoke() -> bool:
-        try:
-            result.set_result(context.run(callback))
-        except BaseException as error:
-            result.set_exception(error)
-            return False
-        return True
-
-    runtime = worker()
-    if not runtime.submit(key, invoke, retained_bytes):
-        raise RuntimeError("telemetry worker admission refused")
-    if not await runtime.wait_async(key, timeout):
-        raise TimeoutError("telemetry worker did not settle before its deadline")
-    if not result.done():
-        raise RuntimeError("telemetry callback settled without a result")
-    return result.result()
-
-
 def run_bounded(
     action: str, targets: list[tuple[str, Callable[[], object]]], timeout: float
 ) -> None:
-    """Wait only from job cleanup's worker thread or process exit, retaining late owners."""
-    import time
+    """Run SDK flush or shutdown callbacks concurrently, waiting at most ``timeout`` in total.
 
-    if not targets:
-        return
-    runtime = worker()
-    keys: list[str] = []
-    for name, callback in targets:
-        key = f"{action}:{name}"
-        if runtime.submit(key, callback, 0):
-            keys.append(key)
+    Application processors may block: a callback still running at the deadline keeps its daemon
+    thread and is counted as incomplete cleanup."""
+
+    def run(callback: Callable[[], object]) -> None:
+        try:
+            # SDK force_flush reports failure with False; shutdown returns None.
+            succeeded = callback() is not False
+        except Exception:
+            succeeded = False
+        if not succeeded:
+            record("failed")
+
+    threads = [
+        threading.Thread(target=run, args=(callback,), name=f"lk-{action}-{name}", daemon=True)
+        for name, callback in targets
+    ]
+    for thread in threads:
+        thread.start()
     deadline = time.monotonic() + max(0.0, timeout)
-    for key in keys:
-        runtime.wait(key, max(0.0, deadline - time.monotonic()))
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+        if thread.is_alive():
+            record("incomplete_cleanup")
 
 
-class _ReleasingLogExporter(LogRecordExporter):
+class _GuardedLogExporter(LogRecordExporter):
     def __init__(self, inner: LogRecordExporter) -> None:
         self._inner = inner
 
@@ -320,16 +294,11 @@ class _ReleasingLogExporter(LogRecordExporter):
             with export_context():
                 result = self._inner.export(batch)
             if result is LogRecordExportResult.FAILURE:
-                worker().record_drop("export_failed", 1)
+                record("failed")
             return result
         except Exception:
-            worker().record_drop("export_failed", 1)
+            record("failed")
             return LogRecordExportResult.FAILURE
-        finally:
-            for record in batch:
-                key = (record.log_record.attributes or {}).get("lk.telemetry.export_key")
-                if isinstance(key, str):
-                    worker().release(key)
 
     def shutdown(self) -> None:
         with export_context():
@@ -344,42 +313,35 @@ class BoundedLogRecordProcessor(LogRecordProcessor):
     """Admit an independent SDK log snapshot before batching it."""
 
     def __init__(self, exporter: LogRecordExporter) -> None:
-        self._sequence = 0
-        self._lock = threading.Lock()
         self._processor = BatchLogRecordProcessor(
-            _ReleasingLogExporter(exporter),
+            _GuardedLogExporter(exporter),
             max_queue_size=policy().max_records,
             max_export_batch_size=policy().batch_items,
             schedule_delay_millis=policy().schedule_delay_millis,
             export_timeout_millis=policy().export_timeout_millis,
         )
 
-    def on_emit(self, record: ReadWriteLogRecord) -> None:
+    def on_emit(self, log_record: ReadWriteLogRecord) -> None:
         from ._redaction import _source_snapshot
 
-        data = copy(record.log_record)
+        data = copy(log_record.log_record)
         # Admission examines the original object before copying; a refused body never crosses
         # into the SDK queue, and an admitted body cannot grow through a caller's mutable alias.
         if (
             attribute_bytes(data.body) > policy().max_record_bytes
             or attribute_bytes(data.attributes) > policy().max_record_bytes
         ):
-            worker().record_drop("oversize", 1)
+            record("dropped")
             return
         data.body = _source_snapshot(data.body)
         attributes = _source_snapshot(data.attributes or {})
         assert isinstance(attributes, dict)
-        with self._lock:
-            self._sequence += 1
-            key = f"log:{id(self):x}:{self._sequence}"
-        data.attributes = {**attributes, "lk.telemetry.export_key": key}
-        snapshot = replace(record, log_record=data)
-        charge = log_bytes(snapshot)
-        if charge > policy().max_record_bytes:
-            worker().record_drop("oversize", 1)
+        data.attributes = attributes
+        snapshot = replace(log_record, log_record=data)
+        if log_bytes(snapshot) > policy().max_record_bytes:
+            record("dropped")
             return
-        if worker().reserve(key, charge):
-            self._processor.on_emit(snapshot)
+        self._processor.on_emit(snapshot)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return self._processor.force_flush(timeout_millis)
@@ -411,10 +373,10 @@ class GuardedMetricExporter(MetricExporter):
             with export_context():
                 result = self._inner.export(metrics_data, timeout_millis=timeout_millis, **kwargs)
             if result is MetricExportResult.FAILURE:
-                worker().record_drop("export_failed", 1)
+                record("failed")
             return result
         except Exception:
-            worker().record_drop("export_failed", 1)
+            record("failed")
             return MetricExportResult.FAILURE
 
     def force_flush(self, timeout_millis: float = 10_000) -> bool:
@@ -424,8 +386,3 @@ class GuardedMetricExporter(MetricExporter):
     def shutdown(self, timeout_millis: float = 30_000, **kwargs: object) -> None:
         with export_context():
             self._inner.shutdown(timeout_millis=timeout_millis, **kwargs)
-
-
-def diagnostics() -> dict[str, int]:
-    """Return process-wide export drops, failures and cleanup counters without exporting them."""
-    return dict(worker().diagnostics)

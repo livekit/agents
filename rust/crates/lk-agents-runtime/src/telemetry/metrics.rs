@@ -2,6 +2,7 @@
 //! this destination boundary refuses unbounded labels before an SDK creates a new series.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
 
 const MAX_SERIES: usize = 1024;
 const MAX_LABELS: usize = 8;
@@ -9,16 +10,20 @@ const MAX_LABEL_BYTES: usize = 256;
 
 type Series = (String, BTreeMap<String, String>);
 
-#[derive(Default)]
-pub(super) struct MetricSeries {
-    series: BTreeSet<Series>,
+pub struct MetricSeries {
+    series: Mutex<BTreeSet<Series>>,
 }
 
-impl MetricSeries {
-    pub(super) fn admit(&mut self, name: &str, attributes: BTreeMap<String, String>) -> bool {
+impl lk_agents_abi::telemetry::policy::MetricSeries for MetricSeries {
+    fn new() -> Self {
+        Self { series: Mutex::new(BTreeSet::new()) }
+    }
+
+    fn admit(&self, name: String, attributes: Vec<(String, String)>) -> bool {
+        let attributes: BTreeMap<_, _> = attributes.into_iter().collect();
         let instrument = lk_agents_abi::metrics::otel::INSTRUMENTS.iter().any(|(n, _)| *n == name)
             || matches!(
-                name,
+                name.as_str(),
                 "gen_ai.invoke_agent.duration"
                     | "gen_ai.execute_tool.duration"
                     | "lk.agents.event_loop.blocked_duration"
@@ -40,14 +45,15 @@ impl MetricSeries {
         {
             return false;
         }
-        let key = (name.to_owned(), attributes);
-        if self.series.contains(&key) {
+        let mut series = self.series.lock().unwrap_or_else(|p| p.into_inner());
+        let key = (name, attributes);
+        if series.contains(&key) {
             return true;
         }
-        if self.series.len() == MAX_SERIES {
+        if series.len() == MAX_SERIES {
             return false;
         }
-        self.series.insert(key);
+        series.insert(key);
         true
     }
 }
@@ -55,33 +61,33 @@ impl MetricSeries {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::telemetry::policy::MetricSeries as _;
 
     #[test]
     fn configured_names_survive_but_identity_and_unbounded_series_are_refused() {
-        let mut metrics = MetricSeries::default();
-        let tool = "gen_ai.execute_tool.duration";
-        let attributes: BTreeMap<_, _> = [
+        let metrics = MetricSeries::new();
+        let tool = || "gen_ai.execute_tool.duration".to_owned();
+        let attributes = vec![
             ("gen_ai.operation.name".into(), "execute_tool".into()),
             ("gen_ai.tool.name".into(), "lookup".into()),
             ("gen_ai.agent.name".into(), "frontdesk".into()),
-        ]
-        .into();
-        assert!(metrics.admit(tool, attributes.clone()));
-        assert!(metrics.admit(tool, attributes));
+        ];
+        assert!(metrics.admit(tool(), attributes.clone()));
+        assert!(metrics.admit(tool(), attributes));
         for invalid in
             ["job_id", "room_id", "thread_id", "customer", "exception.message", "lk.pii.input"]
         {
-            assert!(!metrics.admit(tool, [(invalid.into(), "private".into())].into()));
+            assert!(!metrics.admit(tool(), vec![(invalid.into(), "private".into())]));
         }
         for index in 1..MAX_SERIES {
             assert!(
                 metrics.admit(
-                    tool,
-                    [("gen_ai.tool.name".into(), format!("configured-{index}"))].into()
+                    tool(),
+                    vec![("gen_ai.tool.name".into(), format!("configured-{index}"))]
                 )
             );
         }
-        assert!(!metrics.admit(tool, [("gen_ai.tool.name".into(), "one more".into())].into()));
-        assert!(!metrics.admit("arbitrary metric", BTreeMap::new()));
+        assert!(!metrics.admit(tool(), vec![("gen_ai.tool.name".into(), "one more".into())]));
+        assert!(!metrics.admit("arbitrary metric".into(), Vec::new()));
     }
 }

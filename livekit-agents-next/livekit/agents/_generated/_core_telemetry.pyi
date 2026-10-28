@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from .._core import ChatItem
-from .telemetry import LogRecordWire, ProjectedReportEvent, RecordingOptions, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
+from .telemetry import LogRecordWire, ProjectedReportEvent, RecordingOptions, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind
 
 class _core_TelemetryPolicy:
     """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""
@@ -80,6 +80,13 @@ class _core_TelemetryPolicy:
         link_count: int,
     ) -> int:
         """SDK record overhead plus field charges. Counts are supplied before traversing events/links."""
+
+class _core_MetricSeries:
+    """The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
+    and series before the host SDK creates a new one.
+    """
+    def __init__(self) -> None: ...
+    def admit(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool: ...
 
 class _core_SessionReportProjection:
     def __init__(
@@ -188,12 +195,12 @@ class _core_SessionReportUpload:
 
 class _core_PreparedTranscript:
     """Incremental report preparation. Host adapters admit one item's shape before conversion and
-    append it from admitted SDK work; no whole-history extraction crosses a binding call.
+    append it off their event loop; no whole-history extraction crosses a binding call.
     """
     def __init__(self) -> None: ...
     @property
     def input_batch_size(self) -> int:
-        """Maximum items per SDK callback before the adapter returns control to its event loop."""
+        """Maximum items per append batch before the adapter returns control to its event loop."""
     def content_policy(self) -> tuple[bool, bool]:
         """Which media parts belong to the transcript's native projection (image, audio)."""
     def check_input(self, items: int, item_bytes: int) -> None:
@@ -206,26 +213,3 @@ class _core_PreparedTranscript:
         """Append one already projected event to the same bounded recording preparation."""
     async def finish_report(self, report: SessionReportSnapshot, path: str) -> None:
         """Serialize and write a console report without converting its history back into host objects."""
-
-class _core_TelemetryWorker:
-    """Process-owned SDK work. Constructing another handle shares the same queue and worker ceiling."""
-    def __init__(self) -> None: ...
-    def submit(self, key: str, callback: object, retained_bytes: int) -> bool:
-        """Refuses overload or a duplicate live key before retaining the callback. `retained_bytes`
-        includes the immutable SDK batch captured by the callback; no producer waits for capacity.
-        """
-    def reserve(self, key: str, retained_bytes: int) -> bool:
-        """Retention admission for an SDK batch queue, independent of cleanup callback slots."""
-    def release(self, key: str) -> None: ...
-    def record_drop(self, kind: str, count: int) -> None:
-        """`kind` is one of `dropped`, `failed`, `conflict`; unknown categories are refused."""
-    def admit_metric(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool:
-        """Refuse unbounded labels/series before host SDK instrument creation."""
-    def wait(self, key: str, timeout: float) -> bool:
-        """Off-loop cleanup only. A deadline never detaches work or releases its capacity early."""
-    async def wait_async(self, key: str, timeout: float) -> bool: ...
-    def drain_observations(self) -> list[TelemetryWorkObservation]:
-        """Drain bounded lifecycle observations; timed-out work keeps its captured key and owner."""
-    @property
-    def diagnostics(self) -> list[tuple[str, int]]:
-        """Nonrecursive counters, read without exporting/logging them through this same pipeline."""

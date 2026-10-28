@@ -7,7 +7,6 @@
 #     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/records.rs
 #     rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs
-#     rust/crates/lk-agents-abi/src/telemetry/work.rs
 
 from __future__ import annotations
 
@@ -159,15 +158,3 @@ class LoopMonitorEmission:
     span: LoopMonitorSpan | None
     log: LoopMonitorLog | None
     reported: bool
-
-
-TelemetryWorkOutcome: TypeAlias = Literal["incomplete_cleanup", "failed", "settled"]
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class TelemetryWorkObservation:
-    """Runtime work identity and supplied monotonic time, without an SDK object or exception text."""
-
-    key: str
-    monotonic_ns: int
-    outcome: TelemetryWorkOutcome

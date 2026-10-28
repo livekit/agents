@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lk_agents_abi::telemetry::observation::Observation;
 
@@ -80,10 +81,53 @@ const EVENT_ITEMS: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_ITEMS;
 const EVENT_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES;
 const EVENT_RECORD_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_RECORD_BYTES;
 const EVENT_RETENTION_NS: u64 = 3600 * 1_000_000_000;
+include!(concat!(env!("OUT_DIR"), "/telemetry_event_limits.rs"));
 
-#[derive(Default)]
+/// Every session store in the process shares one retention ceiling (`budgets.json`).
+static PROCESS_EVENTS: EventQuota = EventQuota::new();
+
+/// Quotas publish no payload; in-flight reservations may conservatively refuse optional data.
+struct EventQuota {
+    items: AtomicUsize,
+    bytes: AtomicUsize,
+}
+
+impl EventQuota {
+    const fn new() -> Self {
+        Self { items: AtomicUsize::new(0), bytes: AtomicUsize::new(0) }
+    }
+
+    fn admit(&self, bytes: usize) -> bool {
+        if self
+            .items
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |items| {
+                (items < PROCESS_EVENT_ITEMS).then_some(items + 1)
+            })
+            .is_err()
+        {
+            return false;
+        }
+        if self
+            .bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
+                retained.checked_add(bytes).filter(|total| *total <= PROCESS_EVENT_BYTES)
+            })
+            .is_err()
+        {
+            self.items.fetch_sub(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    fn release(&self, items: usize, bytes: usize) {
+        self.bytes.fetch_sub(bytes, Ordering::Relaxed);
+        self.items.fetch_sub(items, Ordering::Relaxed);
+    }
+}
+
 struct RetainedEvents {
-    budget: super::work::EventBudget,
+    quota: &'static EventQuota,
     job_id: Option<String>,
     entries: VecDeque<(u64, usize)>,
     bytes: usize,
@@ -93,6 +137,18 @@ struct RetainedEvents {
 }
 
 impl RetainedEvents {
+    fn new(quota: &'static EventQuota) -> Self {
+        Self {
+            quota,
+            job_id: None,
+            entries: VecDeque::new(),
+            bytes: 0,
+            now_ns: 0,
+            dropped: 0,
+            expired: 0,
+        }
+    }
+
     fn expire(&mut self, now_ns: u64) -> usize {
         // Admission time, rather than the event's wall timestamp, orders the expiry queue.
         self.now_ns = self.now_ns.max(now_ns);
@@ -108,7 +164,7 @@ impl RetainedEvents {
             released_bytes += bytes;
             expired += 1;
         }
-        self.budget.release(expired, released_bytes);
+        self.quota.release(expired, released_bytes);
         self.expired = self.expired.saturating_add(expired as u64);
         expired
     }
@@ -118,7 +174,7 @@ impl RetainedEvents {
         if bytes > EVENT_RECORD_BYTES
             || self.entries.len() >= EVENT_ITEMS
             || bytes > EVENT_BYTES.saturating_sub(self.bytes)
-            || !self.budget.admit(bytes)
+            || !self.quota.admit(bytes)
         {
             self.dropped = self.dropped.saturating_add(1);
             return (expired, false);
@@ -131,7 +187,7 @@ impl RetainedEvents {
 
 impl Drop for RetainedEvents {
     fn drop(&mut self) {
-        self.budget.release(self.entries.len(), self.bytes);
+        self.quota.release(self.entries.len(), self.bytes);
     }
 }
 
@@ -142,7 +198,7 @@ pub struct EventRetention {
 
 impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
     fn new(capture_content: bool) -> Self {
-        Self { capture_content, retained: Mutex::new(RetainedEvents::default()) }
+        Self { capture_content, retained: Mutex::new(RetainedEvents::new(&PROCESS_EVENTS)) }
     }
 
     fn claim(&self, job_id: String) {
@@ -250,11 +306,10 @@ mod tests {
         let limits = serde_json::from_str::<Budgets>(include_str!("budgets.json"))
             .expect("native telemetry budget manifest")
             .session_events;
-        let work = super::super::work::Work::start(0);
-        let store = || {
-            let mut retained = RetainedEvents::default();
-            retained.budget = super::super::work::EventBudget::new(work.clone());
-            EventRetention { capture_content: false, retained: Mutex::new(retained) }
+        let quota: &'static EventQuota = Box::leak(Box::new(EventQuota::new()));
+        let store = || EventRetention {
+            capture_content: false,
+            retained: Mutex::new(RetainedEvents::new(quota)),
         };
         let records_per_store = limits.bytes / limits.record_bytes;
         let mut stores: Vec<_> = (0..limits.worker_bytes / limits.bytes).map(|_| store()).collect();

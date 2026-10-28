@@ -370,12 +370,6 @@ impl LoopWatchdog {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::time::{Duration, Instant};
 
-        let permit = super::work::try_admit_monitor().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                "loop monitor worker capacity exhausted",
-            )
-        })?;
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let join = std::thread::Builder::new().name(name).spawn(move || {
@@ -390,7 +384,6 @@ impl LoopWatchdog {
         let thread = join.thread().clone();
         let stopped = stop.clone();
         runtime.spawn(async move {
-            let _permit = permit;
             let mut stopping_at = None;
             let mut incomplete_cleanup = Some(incomplete_cleanup);
             while !join.is_finished() {

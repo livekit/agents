@@ -145,20 +145,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_deadline_records_incomplete_cleanup_and_keeps_the_writer_until_release() {
-        use lk_agents_abi::telemetry::work::TelemetryWorker;
-        fn incomplete_count() -> u64 {
-            lk_agents_runtime::telemetry::work::SdkWorker
-                .diagnostics()
-                .into_iter()
-                .find(|(key, _)| key == "incomplete_cleanup")
-                .unwrap()
-                .1
-        }
+    async fn a_deadline_keeps_the_writer_until_release() {
         let (output, room, clock) = fixture("runtime_avatar_deadline");
         output.capture_frame(&frame()).await.unwrap();
         room.local_participant().flow_byte_closes(false);
-        let before = incomplete_count();
         let (sent, received) = tokio::sync::oneshot::channel();
         let output = Arc::new(output);
         let closing = Arc::clone(&output);
@@ -170,7 +160,6 @@ mod tests {
         clock.advance(HOST_TEARDOWN_TIMEOUT);
         received.await.unwrap();
         assert!(!room.local_participant().byte_streams()[0].closed);
-        assert!(incomplete_count() > before);
         room.local_participant().flow_byte_closes(true);
         settle().await;
         assert!(room.local_participant().byte_streams()[0].closed);

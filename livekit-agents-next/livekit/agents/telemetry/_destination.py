@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import weakref
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import copy
@@ -30,13 +29,8 @@ from opentelemetry.util.types import AttributeValue
 from .. import _core
 from ..log import TRACE_LEVEL
 from ..types import ATTRIBUTE_REDACTION_ENABLED
-from . import _context as tracing, utils as telemetry_utils
-from ._export import (
-    attribute_bytes,
-    exporting,
-    span_key,
-    worker,
-)
+from . import _context as tracing, _export, utils as telemetry_utils
+from ._export import attribute_bytes, exporting, policy
 from ._redaction import (
     _log_snapshot,
     _redact_content,
@@ -152,11 +146,7 @@ class _GatedSpanExporter(SpanExporter):
         with self._lock:
             self._open_jobs.discard(job_id)
             held = self._pending.pop(job_id, [])
-        if not traces_enabled:
-            for span in held:
-                worker().release(span_key(span))
-            return
-        if not held:
+        if not traces_enabled or not held:
             return
         if redacted:
             held = [redact(s) for s in held]
@@ -164,22 +154,13 @@ class _GatedSpanExporter(SpanExporter):
             for s in held:
                 self._requeue(s)
         else:
-            worker().record_drop("capacity", len(held))
-            for span in held:
-                worker().release(span_key(span))
+            _export.record("dropped", len(held))
 
     def close_job(self, job_id: str) -> None:
         """The job ended; anything still held was never meant to upload."""
         with self._lock:
             self._open_jobs.discard(job_id)
-            held = self._pending.pop(job_id, [])
-        for span in held:
-            worker().release(span_key(span))
-
-    def holds(self, span: ReadableSpan) -> bool:
-        job_id = (span.attributes or {}).get("job_id")
-        with self._lock:
-            return isinstance(job_id, str) and span in self._pending.get(job_id, ())
+            self._pending.pop(job_id, None)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         selected: list[tuple[ReadableSpan, bool]] = []
@@ -214,7 +195,7 @@ class _GatedSpanExporter(SpanExporter):
                     assert isinstance(job_id, str)
                     self._pending.setdefault(job_id, []).append(span)
                 elif action == "capacity":
-                    worker().record_drop("capacity", 1)
+                    _export.record("dropped")
         exportable = [_span_snapshot(span, redacted=redacted) for span, redacted in selected]
         if not exportable:
             return SpanExportResult.FAILURE if upload_gate.disabled else SpanExportResult.SUCCESS
@@ -282,24 +263,17 @@ _LOG_RECORD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__d
 
 
 class _BufferingHandler(logging.Handler):
-    """Retain early logs only within native telemetry admission."""
+    """Retain the most recent early logs, as many as an SDK export queue holds."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._records: deque[tuple[str, logging.LogRecord]] = deque()
-        self._keys: set[str] = set()
-        self._sequence = 0
-        self._finalizer: weakref.finalize[None] | None = None
+        self._records: deque[logging.LogRecord] = deque(maxlen=policy().max_records)
 
     def emit(self, record: logging.LogRecord) -> None:
         if exporting():
             return
-        runtime = worker()
-        if (
-            attribute_bytes(record.__dict__)
-            > _core._core_TelemetryPolicy(False, False, False).max_record_bytes
-        ):
-            runtime.record_drop("oversize", 1)
+        if attribute_bytes(record.__dict__) > policy().max_record_bytes:
+            _export.record("dropped")
             return
         record = copy(record)
         captured = tracing.capture_content_enabled()
@@ -327,47 +301,26 @@ class _BufferingHandler(logging.Handler):
             identity = filter_attributes(identity)
         record.__dict__.update(identity)
         record.__dict__["lk.telemetry.capture_content"] = captured
-        if (
-            attribute_bytes(record.__dict__)
-            > _core._core_TelemetryPolicy(False, False, False).max_record_bytes
-        ):
-            runtime.record_drop("oversize", 1)
+        if attribute_bytes(record.__dict__) > policy().max_record_bytes:
+            _export.record("dropped")
             return
         snapshot = _source_snapshot(record.__dict__)
         assert isinstance(snapshot, dict)
         if isinstance(record.args, tuple):
             snapshot["args"] = tuple(cast(list[object], snapshot["args"]))
         record.__dict__ = snapshot
-        charge = attribute_bytes(record.__dict__)
-        self._sequence += 1
-        key = f"prelog:{id(self):x}:{self._sequence}"
-        if runtime.reserve(key, charge):
-            self._keys.add(key)
-            self._records.append((key, record))
-            if self._finalizer is None:
-                self._finalizer = weakref.finalize(self, _release_early_logs, runtime, self._keys)
+        if len(self._records) == self._records.maxlen:
+            _export.record("dropped")
+        self._records.append(record)
 
     @property
     def buffer(self) -> Iterator[logging.LogRecord]:
         while self._records:
-            key, record = self._records.popleft()
-            try:
-                yield record
-            finally:
-                worker().release(key)
-                self._keys.discard(key)
+            yield self._records.popleft()
 
     def close(self) -> None:
-        if self._finalizer is not None:
-            self._finalizer()
         self._records.clear()
         super().close()
-
-
-def _release_early_logs(runtime: _core._core_TelemetryWorker, keys: set[str]) -> None:
-    for key in keys:
-        runtime.release(key)
-    keys.clear()
 
 
 class _TraceLevelLoggingHandler(LoggingHandler):

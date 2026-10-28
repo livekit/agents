@@ -21,10 +21,11 @@ An existing application meter provider keeps its readers. Cloud metrics require 
 registered at provider construction; an incompatible existing provider reports a conflict.
 Cloud tracing and logs remain independently available.
 
-Framework SDK queues admit records by count and estimated bytes before batching. Native
-cleanup work retains capacity until settlement, including after timeout. Read
-`telemetry.diagnostics()` for nonrecursive drop/failure/cleanup counters.
-The native runtime's `telemetry/budgets.json` records the limits and validation workloads.
+Framework SDK queues are bounded by record count, and each record's estimated bytes are
+admitted before batching. Flush and shutdown wait a bounded time; a callback still running
+keeps its own thread and counts as incomplete cleanup. Read `telemetry.diagnostics()` for
+nonrecursive drop/failure/conflict/cleanup counters. The native runtime's
+`telemetry/budgets.json` records the session-event limits and validation workloads.
 Destination wrappers reject oversized records with an exporter failure and an observable drop.
 
 Session-report events retain at most 1,024 snapshots/1 MiB, with 64 KiB per event
@@ -35,11 +36,13 @@ Console report JSON and Cloud uploads share native projection and destination re
 Safe state/usage events remain available; withheld history/options keep explicit empty fields.
 Audio requires its explicit recording option; project redaction excludes raw audio and transcript.
 Explicit `SessionReport` objects capture the current content setting when constructed.
-Job-end report creation, metric folding and console writes run on bounded native workers.
+Job-end report creation and metric folding run off the event loop; console writes and the
+Cloud recording upload run natively, each under its own small process admission.
 `JobContext.make_session_report()` returns a synchronous detached snapshot.
 
 Run `uv run pytest tests/test_telemetry_destinations.py --unit` for destination isolation,
 capture consent and provider behavior. Run `cargo test -p lk-agents-runtime telemetry`
-from `rust/` for supplied-time policy, saturation, streaming uploads and bounded cleanup.
+and `cargo test -p lk-agents-net session_report` from `rust/` for supplied-time policy,
+event retention, streaming uploads and the transcript bounds.
 The Python-feature runtime tests additionally check actual OTel parent IDs through
 HostInvoker, including failures and cancellation.

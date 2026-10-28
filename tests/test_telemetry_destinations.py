@@ -56,7 +56,6 @@ def test_outside_job_spans_never_receive_last_job_metadata(monkeypatch):
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
     monkeypatch.setattr(cloud, "_ensure_meter_provider", lambda *_: None)
-    monkeypatch.setattr(cloud, "_admit_job", lambda _: True)
     monkeypatch.setattr(_providers, "_job_stamp_attributes", lambda: None)
     try:
         cloud.configure(room_id="last-room", job_id="last-job", observability_url="https://unused")
@@ -265,14 +264,14 @@ def test_existing_meter_provider_reports_reader_conflict_without_replacing_reade
 
 
 @pytest.mark.asyncio
-async def test_saturated_export_has_bounded_retention_and_cleanup_keeps_its_owner():
+async def test_a_stalled_exporter_bounds_the_cleanup_wait_and_reports_it():
     import asyncio
     import threading
     import time
 
     from opentelemetry.sdk.trace.export import SpanExportResult
 
-    from livekit.agents.telemetry._export import BoundedSpanProcessor, run_bounded, worker
+    from livekit.agents.telemetry._export import BoundedSpanProcessor, diagnostics, run_bounded
 
     class StalledExporter(InMemorySpanExporter):
         def __init__(self):
@@ -287,10 +286,9 @@ async def test_saturated_export_has_bounded_retention_and_cleanup_keeps_its_owne
 
     exporter = StalledExporter()
     provider = TracerProvider(shutdown_on_exit=False)
-    processor = BoundedSpanProcessor(exporter, holds=lambda _: False)
+    processor = BoundedSpanProcessor(exporter)
     provider.add_span_processor(processor)
-    runtime = worker()
-    before = dict(runtime.diagnostics)
+    before = diagnostics()
     ticks = 0
     stopped = False
 
@@ -307,38 +305,19 @@ async def test_saturated_export_has_bounded_retention_and_cleanup_keeps_its_owne
                 pass
             await asyncio.sleep(0)
         assert await asyncio.to_thread(exporter.started.wait, 1)
-        during = dict(runtime.diagnostics)
-        assert during["reserved_records"] <= 64
-        assert during["reserved_bytes"] <= 8 * 1024 * 1024
-        assert during["dropped"] > before["dropped"]
         deadline = 0.02
         started = time.monotonic()
         await asyncio.to_thread(
             run_bounded, "flush", [("saturation-test", processor.force_flush)], deadline
         )
         assert time.monotonic() - started < deadline + 0.2
-        after = dict(runtime.diagnostics)
-        assert after["pending"] > before["pending"]
-        assert after["incomplete_cleanup"] == before["incomplete_cleanup"] + 1
-        incomplete = next(
-            event
-            for event in runtime.drain_observations()
-            if event.key == "flush:saturation-test" and event.outcome == "incomplete_cleanup"
-        )
+        assert diagnostics()["incomplete_cleanup"] == before["incomplete_cleanup"] + 1
         assert ticks > 1
     finally:
         stopped = True
         await beat
         exporter.release.set()
-        assert await runtime.wait_async("flush:saturation-test", 1)
         await asyncio.to_thread(provider.shutdown)
-    assert dict(runtime.diagnostics)["reserved_records"] == before["reserved_records"]
-    settled = next(
-        event
-        for event in runtime.drain_observations()
-        if event.key == "flush:saturation-test" and event.outcome == "settled"
-    )
-    assert settled.monotonic_ns >= incomplete.monotonic_ns
 
 
 def test_redaction_covers_links_resources_and_instrumentation_scope(monkeypatch):
@@ -445,51 +424,42 @@ def test_mutating_registration_metadata_cannot_reattribute_later_spans():
 
 
 def test_broken_exporter_reports_once_without_recursive_logging(caplog):
-    from livekit.agents.telemetry._export import BoundedSpanProcessor, worker
+    from livekit.agents.telemetry._export import BoundedSpanProcessor, diagnostics
 
     class BrokenExporter(InMemorySpanExporter):
         def export(self, spans):
             raise RuntimeError("broken SDK destination")
 
-    runtime = worker()
-    before = dict(runtime.diagnostics)
+    before = diagnostics()
     provider = TracerProvider(shutdown_on_exit=False)
-    processor = BoundedSpanProcessor(BrokenExporter(), holds=lambda _: False)
+    processor = BoundedSpanProcessor(BrokenExporter())
     provider.add_span_processor(processor)
     try:
         with provider.get_tracer("tool").start_as_current_span("lookup"):
             pass
         assert processor.force_flush(1000)
-        after = dict(runtime.diagnostics)
-        assert after["failed"] == before["failed"] + 1
-        assert after["reserved_records"] == before["reserved_records"]
+        assert diagnostics()["failed"] == before["failed"] + 1
         assert not [record for record in caplog.records if "exporting" in record.getMessage()]
     finally:
         provider.shutdown()
 
 
-def test_preinitialization_logs_release_their_bounded_admission_on_replay():
+def test_preinitialization_logs_keep_the_most_recent_bounded_window_for_replay():
     import logging
 
-    from livekit.agents.telemetry._export import worker
+    from livekit.agents.telemetry._export import diagnostics, policy
 
-    runtime = worker()
-    before = dict(runtime.diagnostics)
+    before = diagnostics()
     handler = _destination._BufferingHandler()
     try:
         for index in range(256):
             handler.handle(
-                logging.LogRecord(
-                    "application", logging.INFO, __file__, 1, f"log-{index}", (), None
-                )
+                logging.LogRecord("application", logging.INFO, __file__, index, "log", (), None)
             )
-        during = dict(runtime.diagnostics)
-        assert during["reserved_records"] <= 64
-        assert during["reserved_bytes"] <= 8 * 1024 * 1024
-        assert during["dropped"] > before["dropped"]
-        replayed = list(handler.buffer)
-        assert replayed
-        assert dict(runtime.diagnostics)["reserved_records"] == before["reserved_records"]
+        assert diagnostics()["dropped"] == before["dropped"] + 256 - policy().max_records
+        replayed = [record.lineno for record in handler.buffer]
+        assert replayed == list(range(256 - policy().max_records, 256))
+        assert list(handler.buffer) == []
     finally:
         handler.close()
 
@@ -576,7 +546,7 @@ def test_native_metric_admission_preserves_names_and_bounds_process_cardinality(
         spec = importlib.util.spec_from_file_location('_core', sys.argv[1])
         native = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(native)
-        runtime = native._core_TelemetryWorker()
+        series = native._core_MetricSeries()
         reader = InMemoryMetricReader()
         provider = MeterProvider(metric_readers=[reader], shutdown_on_exit=False)
         histogram = provider.get_meter('application').create_histogram('gen_ai.execute_tool.duration')
@@ -587,19 +557,19 @@ def test_native_metric_admission_preserves_names_and_bounds_process_cardinality(
             'model_name': 'configured-model',
             'model_provider': 'configured-provider',
         }
-        assert runtime.admit_metric('gen_ai.execute_tool.duration', list(configured.items()))
+        assert series.admit('gen_ai.execute_tool.duration', list(configured.items()))
         histogram.record(0.125, attributes=configured)
         for key in ('room_id', 'job_id', 'customer', 'exception.message'):
-            assert not runtime.admit_metric('gen_ai.execute_tool.duration', [(key, 'private')])
+            assert not series.admit('gen_ai.execute_tool.duration', [(key, 'private')])
         accepted = 1
         for index in range(1100):
             attributes = {'gen_ai.tool.name': f'tool-{index}'}
-            if runtime.admit_metric('gen_ai.execute_tool.duration', list(attributes.items())):
+            if series.admit('gen_ai.execute_tool.duration', list(attributes.items())):
                 accepted += 1
                 histogram.record(0.125, attributes=attributes)
         assert accepted == 1024
         # Once saturated, existing configured series still record.
-        assert runtime.admit_metric('gen_ai.execute_tool.duration', list(configured.items()))
+        assert series.admit('gen_ai.execute_tool.duration', list(configured.items()))
         histogram.record(0.125, attributes=configured)
         data = reader.get_metrics_data()
         points = [
@@ -609,7 +579,6 @@ def test_native_metric_admission_preserves_names_and_bounds_process_cardinality(
         ]
         assert len(points) == 1024
         assert any(dict(point.attributes) == configured and point.count == 2 for point in points)
-        assert dict(runtime.diagnostics)['dropped'] >= 81
         provider.shutdown()
     """)
     subprocess.run([sys.executable, "-c", program, _core.__file__], check=True, timeout=10)
@@ -627,7 +596,6 @@ def test_configuration_conflicts_are_reported_outside_the_manager_lock(monkeypat
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
-    monkeypatch.setattr(cloud, "_admit_job", lambda _: True)
     provider = MeterProvider(metric_readers=[InMemoryMetricReader()], shutdown_on_exit=False)
     if conflict == "endpoint":
         cloud._observability_url = "https://original"
@@ -719,7 +687,7 @@ def test_sdk_failure_logs_do_not_reenter_the_framework_destination():
     from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
     from opentelemetry.sdk.trace.export import SpanExportResult
 
-    from livekit.agents.telemetry._export import BoundedSpanProcessor, worker
+    from livekit.agents.telemetry._export import BoundedSpanProcessor, diagnostics
 
     class LoggingFailureExporter(InMemorySpanExporter):
         def export(self, spans):
@@ -740,14 +708,14 @@ def test_sdk_failure_logs_do_not_reenter_the_framework_destination():
     logging.getLogger().addHandler(cloud_handler)
     logging.getLogger().addHandler(application_handler)
     provider = TracerProvider(shutdown_on_exit=False)
-    processor = BoundedSpanProcessor(LoggingFailureExporter(), holds=lambda _: False)
+    processor = BoundedSpanProcessor(LoggingFailureExporter())
     provider.add_span_processor(processor)
-    before = dict(worker().diagnostics)["failed"]
+    before = diagnostics()["failed"]
     try:
         with provider.get_tracer("tool").start_as_current_span("lookup"):
             pass
         assert processor.force_flush(1000)
-        assert dict(worker().diagnostics)["failed"] == before + 1
+        assert diagnostics()["failed"] == before + 1
         assert application == ["SDK export failed"]
         assert cloud.get_finished_logs() == ()
     finally:
@@ -780,7 +748,6 @@ def test_local_framework_meter_preserves_global_and_adopts_a_later_application_p
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
-    monkeypatch.setattr(cloud, "_admit_job", lambda _: True)
     monkeypatch.setattr(
         _providers, "OTLPMetricExporter", lambda **_: ConsoleMetricExporter(out=io.StringIO())
     )
@@ -833,7 +800,7 @@ def test_local_framework_meter_preserves_global_and_adopts_a_later_application_p
 
 
 def test_oversized_metadata_is_refused_before_freezing_or_traversing_values(monkeypatch):
-    from livekit.agents.telemetry._export import worker
+    from livekit.agents.telemetry._export import diagnostics
 
     class OversizedList(list):
         def __len__(self):
@@ -847,8 +814,7 @@ def test_oversized_metadata_is_refused_before_freezing_or_traversing_values(monk
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
     monkeypatch.setattr(cloud, "_ensure_meter_provider", lambda *_: None)
-    runtime = worker()
-    before = dict(runtime.diagnostics)
+    before = diagnostics()
     try:
         state = cloud.configure(
             job_id="oversize-job",
@@ -859,7 +825,7 @@ def test_oversized_metadata_is_refused_before_freezing_or_traversing_values(monk
         )
         assert dict(state.attributes) == {"job_id": "oversize-job", "room_id": "oversize-room"}
         assert "oversize-job" not in cloud._export_jobs
-        assert dict(runtime.diagnostics)["dropped"] == before["dropped"] + 1
+        assert diagnostics()["dropped"] == before["dropped"] + 1
     finally:
         cloud.discard("oversize-job")
         cloud.shutdown_at_exit()
@@ -980,18 +946,9 @@ def test_automatic_provider_adoption_reports_legacy_pii_conflict_outside_lock(mo
         provider.shutdown()
 
 
-@pytest.mark.asyncio
-async def test_an_unsuccessful_sdk_flush_is_observed_without_failing_the_session():
-    from livekit.agents.telemetry._export import worker
+def test_an_unsuccessful_sdk_flush_is_observed_without_failing_the_session():
+    from livekit.agents.telemetry._export import diagnostics, run_bounded
 
-    runtime = worker()
-    before = dict(runtime.diagnostics)["failed"]
-    assert runtime.submit("unsuccessful-flush", lambda: False, 0)
-    assert await runtime.wait_async("unsuccessful-flush", 1)
-    assert dict(runtime.diagnostics)["failed"] >= before + 1
-    failures = [
-        event
-        for event in runtime.drain_observations()
-        if event.key == "unsuccessful-flush" and event.outcome == "failed"
-    ]
-    assert len(failures) == 1
+    before = diagnostics()["failed"]
+    run_bounded("flush", [("unsuccessful", lambda: False)], 1)
+    assert diagnostics()["failed"] == before + 1

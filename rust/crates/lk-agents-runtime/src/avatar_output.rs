@@ -49,7 +49,6 @@ async fn close_observed(
         .await
         .unwrap_or(Closed::TimedOut);
     if outcome != Closed::Clean && !incomplete.swap(true, Ordering::AcqRel) {
-        crate::telemetry::work::record_incomplete_cleanup();
         log::error!("avatar output cleanup did not settle cleanly: {outcome:?}");
     }
 }

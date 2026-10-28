@@ -23,7 +23,8 @@ from opentelemetry.util.types import AnyValue, AttributeValue
 
 from .. import _core
 from ..types import ATTRIBUTE_REDACTION_ENABLED
-from ._export import log_bytes, policy as admission_policy, span_bytes, worker
+from . import _export
+from ._export import log_bytes, policy as admission_policy, span_bytes
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import Event
@@ -149,7 +150,7 @@ class RedactingLogExporter(LogRecordExporter):
         refused = False
         for record in batch:
             if log_bytes(record) > admission_policy().max_record_bytes:
-                worker().record_drop("oversize", 1)
+                _export.record("dropped")
                 refused = True
             else:
                 snapshots.append(_log_snapshot(record, allow_pii=self._allow_pii))
@@ -232,7 +233,7 @@ class RedactingSpanExporter(SpanExporter):
         refused = False
         for span in spans:
             if span_bytes(span) > admission_policy().max_record_bytes:
-                worker().record_drop("oversize", 1)
+                _export.record("dropped")
                 refused = True
             else:
                 snapshots.append(

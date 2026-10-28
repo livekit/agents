@@ -39,7 +39,7 @@ from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, Se
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry._destination import _BufferingHandler, _JobTelemetry
-from .telemetry._export import attribute_bytes, call_bounded, policy
+from .telemetry._export import attribute_bytes, policy
 from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
     _cloud_log_handler,
@@ -300,12 +300,6 @@ class JobContext:
         loop = asyncio.get_running_loop()
         preparation_deadline = loop.time() + policy().upload_timeout_seconds
 
-        def remaining() -> float:
-            duration = preparation_deadline - loop.time()
-            if duration <= 0:
-                raise TimeoutError("session report preparation deadline exceeded")
-            return duration
-
         def prepare_report() -> SessionReport:
             from .llm import ChatContext
 
@@ -316,12 +310,8 @@ class JobContext:
             )
 
         try:
-            report = await call_bounded(
-                f"session-report:{self.job.id}:{id(session):x}",
-                prepare_report,
-                policy().report_retained_bytes,
-                remaining(),
-            )
+            async with asyncio.timeout_at(preparation_deadline):
+                report = await asyncio.to_thread(prepare_report)
         except Exception:
             logger.exception("failed to prepare the session report")
             return
@@ -330,62 +320,41 @@ class JobContext:
         from .voice.remote_session import ConsoleCall
 
         try:
-            for message in report.chat_history.messages():
-                await call_bounded(
-                    f"report-metrics/{id(report):x}",
-                    functools.partial(flush_turn_metrics, ChatContext(items=[message])),
-                    policy().max_record_bytes,
-                    remaining(),
-                )
-                await asyncio.sleep(0)
+            async with asyncio.timeout_at(preparation_deadline):
+                for message in report.chat_history.messages():
+                    await asyncio.to_thread(flush_turn_metrics, ChatContext(items=[message]))
         except Exception:
             logger.exception("failed to record session metrics")
 
         if ConsoleCall.record and loop.time() < preparation_deadline:
-            worker = _core._core_TelemetryWorker()
-            key = f"console-report/{id(report):x}"
-            reserved = worker.reserve(key, policy().report_retained_bytes)
             try:
-                if not reserved:
-                    raise RuntimeError("console report preparation exceeds native admission")
-                projection = _core._core_SessionReportProjection(
-                    report._capture_content, report._recording_options, self._redaction_enabled
-                )
-                builder = await call_bounded(key, _core._core_PreparedTranscript, 0, remaining())
-                if projection.transcript:
-                    from .telemetry.traces import _append_transcript_item
-
-                    builder.check_input(len(report.chat_history.items), 0)
-                    for item in report.chat_history.items:
-                        await call_bounded(
-                            key,
-                            functools.partial(
-                                _append_transcript_item,
-                                builder,
-                                item,
-                                len(report.chat_history.items),
-                            ),
-                            policy().max_record_bytes,
-                            remaining(),
-                        )
-                        await asyncio.sleep(0)
-                snapshot, _ = await report._snapshot(
-                    projection,
-                    deadline=preparation_deadline,
-                    event_sink=builder.append_event,
-                )
-                path = Path(
-                    "console-recordings",
-                    f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
-                    "session_report.json",
-                )
                 async with asyncio.timeout_at(preparation_deadline):
+                    projection = _core._core_SessionReportProjection(
+                        report._capture_content, report._recording_options, self._redaction_enabled
+                    )
+                    builder = _core._core_PreparedTranscript()
+                    if projection.transcript:
+                        from .telemetry.traces import _append_transcript_item
+
+                        items = report.chat_history.items
+                        builder.check_input(len(items), 0)
+                        for item in items:
+                            await asyncio.to_thread(
+                                _append_transcript_item, builder, item, len(items)
+                            )
+                    snapshot, _ = await report._snapshot(
+                        projection,
+                        deadline=preparation_deadline,
+                        event_sink=builder.append_event,
+                    )
+                    path = Path(
+                        "console-recordings",
+                        f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
+                        "session_report.json",
+                    )
                     await builder.finish_report(snapshot, str(path))
             except Exception:
                 logger.exception("failed to save session report")
-            finally:
-                if reserved:
-                    worker.release(key)
 
         has_evals = self._tagger.has_evals()
         obs_url = self._run.observability_url
@@ -1067,15 +1036,7 @@ class SessionReport:
             deadline if deadline is not None else loop.time() + policy().upload_timeout_seconds
         )
 
-        def remaining() -> float:
-            assert deadline is not None
-            duration = deadline - loop.time()
-            if duration <= 0:
-                raise TimeoutError("session report preparation deadline exceeded")
-            return duration
-
         event_limit = projection.event_limit(len(self.events))
-        key = f"report-snapshot/{id(self):x}"
 
         def metadata() -> SessionReportSnapshot:
             if (
@@ -1111,7 +1072,8 @@ class SessionReport:
                 )
             )
 
-        snapshot = await call_bounded(key, metadata, policy().max_record_bytes, remaining())
+        async with asyncio.timeout_at(deadline):
+            snapshot = await asyncio.to_thread(metadata)
         events: list[ProjectedReportEvent] = []
         omitted = len(self.events) - event_limit
         retained_bytes = 2
@@ -1136,14 +1098,9 @@ class SessionReport:
                 events.append(projected)
             retained_bytes += projected.retained_bytes
 
-        for event in self.events[:event_limit]:
-            await call_bounded(
-                key,
-                functools.partial(append_event, event),
-                policy().max_record_bytes,
-                remaining(),
-            )
-            await asyncio.sleep(0)
+        async with asyncio.timeout_at(deadline):
+            for event in self.events[:event_limit]:
+                await asyncio.to_thread(append_event, event)
         return replace(snapshot, omitted_events=omitted), events
 
     def to_dict(self) -> dict:

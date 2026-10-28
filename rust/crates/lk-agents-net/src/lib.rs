@@ -5,6 +5,7 @@
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
+//! - [`session_report`]: the LiveKit Cloud session report's transcript and recording upload.
 //! - [`env`]: what the hosting process lends a client (decision 88).
 //! - [`task`]: owned tasks with correlated cancellation and one observed outcome.
 //! - [`sse`]: event-stream framing over response bytes.
@@ -17,6 +18,7 @@ pub mod a2a_client;
 pub mod attempts;
 pub mod env;
 pub mod http;
+pub mod session_report;
 pub mod source;
 pub mod sse;
 pub mod task;

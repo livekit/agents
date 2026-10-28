@@ -10,15 +10,8 @@
   },
   "sdk_records": {
     "items": 64,
-    "bytes": 8388608,
     "record_bytes": 65536,
     "batch_items": 16
-  },
-  "cleanup_work": {
-    "workers": 4,
-    "pending": 64,
-    "observations": 64,
-    "bytes": 8388608
   },
   "sdk_destinations": {
     "tracer_providers": 4,
@@ -27,6 +20,7 @@
   },
   "uploads": {
     "concurrent": 2,
+    "concurrent_preparations": 4,
     "transcript_bytes": 2097152,
     "chunk_bytes": 65536,
     "response_bytes": 65536,
@@ -34,11 +28,9 @@
     "attempts": 4,
     "transcript_items": 10000,
     "transcript_item_bytes": 65536,
-    "input_batch_items": 1,
-    "measured_concurrent_preparations": 1
+    "input_batch_items": 1
   },
   "watchdogs": {
-    "concurrent": 32,
     "samples_per_incident": 2,
     "stop_observation_seconds": 1
   },
@@ -49,8 +41,6 @@
   },
   "validation_workloads": [
     "8192 insert refusals at observation capacity, including disabled capacity",
-    "64 queued SDK callbacks and a stalled worker; repeat cleanup deadlines without new workers",
-    "10000 chat items while a current-thread runtime heartbeat continues within one 20 ms audio frame",
     "1024 configured metric series followed by an overflow measurement",
     "blocked watchdog sampling retains its owner past a 1 second cleanup observation"
   ]

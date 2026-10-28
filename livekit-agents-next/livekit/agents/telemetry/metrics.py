@@ -10,7 +10,7 @@ from opentelemetry import metrics as metrics_api
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
 from .. import _core, utils
-from ._export import worker
+from . import _export
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
@@ -140,8 +140,14 @@ def _adopt_meter_provider(provider: metrics_api.MeterProvider) -> None:
     _counter.cache_clear()
 
 
+@functools.cache
+def _series() -> _core._core_MetricSeries:
+    return _core._core_MetricSeries()
+
+
 def _record(name: str, kind: str, value: float, attributes: dict[str, str]) -> None:
-    if not worker().admit_metric(name, list(attributes.items())):
+    if not _series().admit(name, list(attributes.items())):
+        _export.record("dropped")
         return
     if kind == "counter":
         _counter(name).add(value, attributes=attributes)

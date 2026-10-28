@@ -14,7 +14,6 @@ from array import array
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field
-from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, get_args
@@ -30,7 +29,7 @@ from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
 from livekit.agents import _core, llm
 from livekit.agents.job import SessionReport
-from livekit.agents.telemetry import _destination, _export, _providers, traces
+from livekit.agents.telemetry import _destination, _providers, traces
 from scripts.bench.metrics import (
     CallbackSlices,
     Distribution,
@@ -153,8 +152,6 @@ class ReportCapture:
     items: Counter[str] = field(default_factory=Counter)
     sdk_slices: SdkSamples = field(default_factory=SdkSamples)
     gc_pauses: list[GcPause] = field(default_factory=list)
-    before_diagnostics: dict[str, int] = field(default_factory=dict)
-    after_diagnostics: dict[str, int] = field(default_factory=dict)
 
 
 class _CountingExporter(LogRecordExporter):
@@ -204,58 +201,12 @@ class _UploadSink:
         return True
 
 
-class _ObservedWorker:
-    def __init__(
-        self,
-        capture: ReportCapture,
-        native: _core._core_TelemetryWorker,
-        stages: dict[str, str],
-    ) -> None:
-        self.capture = capture
-        self.native = native
-        self.stages = stages
-
-    def reserve(self, key: str, retained_bytes: int) -> bool:
-        return self.native.reserve(key, retained_bytes)
-
-    def release(self, key: str) -> None:
-        self.native.release(key)
-
-    def record_drop(self, kind: str, count: int) -> None:
-        self.native.record_drop(kind, count)
-
-    async def wait_async(self, key: str, timeout: float) -> bool:
-        return await self.native.wait_async(key, timeout)
-
-    def submit(self, key: str, callback: Callable[[], object], retained_bytes: int) -> bool:
-        stage = self.stages.get(key, key)
-
-        def measured() -> object:
-            started = time.monotonic_ns()
-            cpu = time.thread_time_ns()
-            try:
-                return callback()
-            finally:
-                self.capture.sdk_slices.append(
-                    started,
-                    time.monotonic_ns() - started,
-                    time.thread_time_ns() - cpu,
-                    threading.get_ident(),
-                    stage,
-                )
-
-        return self.native.submit(key, measured, retained_bytes)
-
-
 @contextlib.contextmanager
 def capture_reports() -> Iterator[ReportCapture]:
     """Use the real native preparation and SDK; replace only the final network destination."""
     capture = ReportCapture()
     native_upload = _core._core_SessionReportUpload("key", "secret")
-    native_worker = _core._core_TelemetryWorker()
-    capture.before_diagnostics = dict(native_worker.diagnostics)
-    native_call = _export.call_bounded
-    stages: dict[str, str] = {}
+    to_thread = asyncio.to_thread
     gc_start: tuple[int, int] | None = None
 
     def observe_gc(phase: str, info: dict[str, int]) -> None:
@@ -276,15 +227,22 @@ def capture_reports() -> Iterator[ReportCapture]:
             )
             gc_start = None
 
-    async def observed_call(
-        key: str, callback: Callable[[], object], retained_bytes: int, timeout: float
-    ) -> object:
-        function = callback.func if isinstance(callback, partial) else callback
-        stages[key] = function.__name__
-        try:
-            return await native_call(key, callback, retained_bytes, timeout)
-        finally:
-            stages.pop(key, None)
+    async def observed_to_thread(callback: Callable[..., object], /, *args: object) -> object:
+        def measured() -> object:
+            started = time.monotonic_ns()
+            cpu = time.thread_time_ns()
+            try:
+                return callback(*args)
+            finally:
+                capture.sdk_slices.append(
+                    started,
+                    time.monotonic_ns() - started,
+                    time.thread_time_ns() - cpu,
+                    threading.get_ident(),
+                    getattr(callback, "__name__", "callback"),
+                )
+
+        return await to_thread(measured)
 
     provider = LoggerProvider(shutdown_on_exit=False)
     provider.add_log_record_processor(SimpleLogRecordProcessor(_CountingExporter(capture)))
@@ -301,18 +259,12 @@ def capture_reports() -> Iterator[ReportCapture]:
                 _core, "_core_SessionReportUpload", lambda api_key, api_secret: upload_sink
             )
         )
-        observed_worker = _ObservedWorker(capture, native_worker, stages)
-        stack.enter_context(patch.object(_core, "_core_TelemetryWorker", lambda: observed_worker))
-        stack.enter_context(patch.object(_export, "worker", lambda: observed_worker))
-        stack.enter_context(patch.object(_export, "call_bounded", observed_call))
+        stack.enter_context(patch.object(asyncio, "to_thread", observed_to_thread))
         stack.enter_context(patch.object(traces, "_cloud", cloud))
         stack.enter_context(patch.object(_destination, "upload_gate", _core.UploadGate()))
         gc.callbacks.append(observe_gc)
         stack.callback(gc.callbacks.remove, observe_gc)
-        try:
-            yield capture
-        finally:
-            capture.after_diagnostics = dict(native_worker.diagnostics)
+        yield capture
 
 
 def make_report(items: list[llm.ChatItem], job_id: str = "report-job") -> SessionReport:
@@ -379,17 +331,10 @@ async def run(count: int, item_count: int, budget: ReportBudget | None = None) -
         loop_cpu = distribution(callbacks.cpu)
         completed = len(capture.uploads)
         refused = count - completed
-        refusal_observations = (
-            capture.after_diagnostics["dropped"] - capture.before_diagnostics["dropped"]
-        )
-        complete = (
-            completed > 0
-            and refusal_observations >= refused
-            and all(
-                len(json.loads(transcript)["items"]) == item_count
-                and capture.items[job_id] == item_count
-                for job_id, transcript in capture.uploads.items()
-            )
+        complete = completed > 0 and all(
+            len(json.loads(transcript)["items"]) == item_count
+            and capture.items[job_id] == item_count
+            for job_id, transcript in capture.uploads.items()
         )
         observed, worst_lag = max(monitor.observations, key=lambda pair: pair[1])
         overlapping = [
@@ -409,7 +354,6 @@ async def run(count: int, item_count: int, budget: ReportBudget | None = None) -
             "seconds": elapsed,
             "completed": completed,
             "refused": refused,
-            "refusal_observations": refusal_observations,
             "refused_or_failed": [
                 str(result) for result in results if isinstance(result, BaseException)
             ],

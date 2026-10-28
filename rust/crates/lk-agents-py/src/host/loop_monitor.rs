@@ -614,7 +614,7 @@ fn arm_callbacks(py: Python<'_>, inner: &Arc<Inner>) -> PyResult<()> {
             }
             previous = watchdog.now();
         },
-        lk_agents_runtime::telemetry::work::record_incomplete_cleanup,
+        || log::warn!(target: LOG, "event loop watchdog did not stop within its cleanup deadline"),
     )
     .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
     let callbacks = py.import("gc")?.getattr("callbacks")?;

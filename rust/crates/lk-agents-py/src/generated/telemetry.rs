@@ -218,6 +218,31 @@ impl _core_TelemetryPolicy {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
+type _core_MetricSeriesImpl = <crate::Selected as super::Implementations>::MetricSeries;
+
+/// The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
+/// and series before the host SDK creates a new one.
+#[pyclass(frozen, name = "_core_MetricSeries", module = "livekit.agents._core")]
+pub struct _core_MetricSeries(::std::sync::Arc<_core_MetricSeriesImpl>);
+
+#[pymethods]
+impl _core_MetricSeries {
+    #[new]
+    fn new() -> PyResult<_core_MetricSeries> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_MetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::new();
+        Ok(_core_MetricSeries(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (name, attributes))]
+    fn admit(&self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_MetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&self.0, name, attributes);
+        Ok(out)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
 type _core_SessionReportProjectionImpl = <crate::Selected as super::Implementations>::SessionReportProjection;
 
@@ -532,7 +557,7 @@ fn _extract_prepared_transcript_check_input_item_bytes(obj: &Bound<'_, PyAny>) -
 }
 
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
-/// append it from admitted SDK work; no whole-history extraction crosses a binding call.
+/// append it off their event loop; no whole-history extraction crosses a binding call.
 #[pyclass(frozen, name = "_core_PreparedTranscript", module = "livekit.agents._core")]
 pub struct _core_PreparedTranscript(::std::sync::Arc<_core_PreparedTranscriptImpl>);
 
@@ -545,7 +570,7 @@ impl _core_PreparedTranscript {
         Ok(_core_PreparedTranscript(::std::sync::Arc::new(out)))
     }
 
-    /// Maximum items per SDK callback before the adapter returns control to its event loop.
+    /// Maximum items per append batch before the adapter returns control to its event loop.
     #[getter]
     fn input_batch_size(&self) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
@@ -602,116 +627,5 @@ impl _core_PreparedTranscript {
                 .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/telemetry/work.rs.
-type _core_TelemetryWorkerImpl = <crate::Selected as super::Implementations>::TelemetryWorker;
-
-fn _extract_telemetry_worker_submit_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
-}
-
-fn _extract_telemetry_worker_reserve_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
-}
-
-fn _extract_telemetry_worker_record_drop_count(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "count")
-}
-
-fn _extract_telemetry_worker_wait_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
-}
-
-fn _extract_telemetry_worker_wait_async_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
-}
-
-/// Process-owned SDK work. Constructing another handle shares the same queue and worker ceiling.
-#[pyclass(frozen, name = "_core_TelemetryWorker", module = "livekit.agents._core")]
-pub struct _core_TelemetryWorker(::std::sync::Arc<_core_TelemetryWorkerImpl>);
-
-#[pymethods]
-impl _core_TelemetryWorker {
-    #[new]
-    fn new() -> PyResult<_core_TelemetryWorker> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::new();
-        Ok(_core_TelemetryWorker(::std::sync::Arc::new(out)))
-    }
-
-    /// Refuses overload or a duplicate live key before retaining the callback. `retained_bytes`
-    /// includes the immutable SDK batch captured by the callback; no producer waits for capacity.
-    #[pyo3(signature = (key, callback, retained_bytes))]
-    fn submit(&self, key: ::std::string::String, callback: ::lk_agents_abi::HostRef, #[pyo3(from_py_with = _extract_telemetry_worker_submit_retained_bytes)] retained_bytes: usize) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::submit(&self.0, key, callback, retained_bytes);
-        Ok(out)
-    }
-
-    /// Retention admission for an SDK batch queue, independent of cleanup callback slots.
-    #[pyo3(signature = (key, retained_bytes))]
-    fn reserve(&self, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_reserve_retained_bytes)] retained_bytes: usize) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::reserve(&self.0, key, retained_bytes);
-        Ok(out)
-    }
-
-    #[pyo3(signature = (key))]
-    fn release(&self, key: ::std::string::String) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
-        <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::release(&self.0, key);
-        Ok(())
-    }
-
-    /// `kind` is one of `dropped`, `failed`, `conflict`; unknown categories are refused.
-    #[pyo3(signature = (kind, count))]
-    fn record_drop(&self, kind: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_record_drop_count)] count: u64) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
-        <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::record_drop(&self.0, kind, count);
-        Ok(())
-    }
-
-    /// Refuse unbounded labels/series before host SDK instrument creation.
-    #[pyo3(signature = (name, attributes))]
-    fn admit_metric(&self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::admit_metric(&self.0, name, attributes);
-        Ok(out)
-    }
-
-    /// Off-loop cleanup only. A deadline never detaches work or releases its capacity early.
-    #[pyo3(signature = (key, timeout))]
-    fn wait(&self, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_wait_timeout)] timeout: f64) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::wait(&self.0, key, timeout);
-        Ok(out)
-    }
-
-    #[pyo3(signature = (key, timeout))]
-    fn wait_async<'py>(&self, py: Python<'py>, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_wait_async_timeout)] timeout: f64) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
-            let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::wait_async(&this, key, timeout)
-                .await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-        })
-    }
-
-    /// Drain bounded lifecycle observations; timed-out work keeps its captured key and owner.
-    fn drain_observations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::drain_observations(&self.0);
-        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::telemetry_work_observation_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
-    }
-
-    /// Nonrecursive counters, read without exporting/logging them through this same pipeline.
-    #[getter]
-    fn diagnostics(&self) -> PyResult<::std::vec::Vec<(::std::string::String, u64)>> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::diagnostics(&self.0);
-        Ok(out)
     }
 }

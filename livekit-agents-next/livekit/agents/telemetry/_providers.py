@@ -59,8 +59,8 @@ from ._export import (
     GuardedMetricExporter,
     attribute_bytes,
     policy,
+    record,
     run_bounded,
-    worker,
 )
 
 
@@ -212,9 +212,6 @@ class _AuthHeaderProvider:
 _TELEMETRY_SHUTDOWN_TIMEOUT = policy().shutdown_timeout_seconds
 
 
-_run_bounded = run_bounded
-
-
 def _report_configuration_conflicts(messages: Sequence[str]) -> None:
     for message in messages:
         warnings.warn(message, RuntimeWarning, stacklevel=3)
@@ -262,7 +259,6 @@ class _CloudTelemetry:
         self._export_jobs: dict[str, _JobTelemetry] = {}
         self._atexit_registered = False
         self._closed = False
-        self._admitted_jobs: set[str] = set()
         self._session: _AuthRefreshingSession | None = None
         self._observability_url: str | None = None
 
@@ -324,7 +320,7 @@ class _CloudTelemetry:
                 self._session = _AuthRefreshingSession(_AuthHeaderProvider())
             resource = Resource.create({SERVICE_NAME: "livekit-agents"})
             conflict = self._ensure_trace_pipeline(resource, self._observability_url)
-            if self._admit_job(job_id) and self._span_gate is not None:
+            if self._span_gate is not None:
                 self._span_gate.open_job(job_id)
             if not self._atexit_registered:
                 self._atexit_registered = True
@@ -334,21 +330,11 @@ class _CloudTelemetry:
         _install_pii_redaction(selected_provider)
         _report_configuration_conflicts([conflict] if conflict else [])
 
-    def _admit_job(self, job_id: str) -> bool:
-        if job_id in self._admitted_jobs:
-            return True
-        if worker().reserve(f"job:{job_id}", policy().max_record_bytes):
-            self._admitted_jobs.add(job_id)
-            return True
-        return False
-
     def discard(self, job_id: str) -> None:
         """A job ended without ever registering: drop whatever the gate held for it."""
         with self._lock:
             for _, gate in self._span_pipelines.values():
                 gate.close_job(job_id)
-            self._admitted_jobs.discard(job_id)
-        worker().release(f"job:{job_id}")
 
     def configure(
         self,
@@ -388,7 +374,7 @@ class _CloudTelemetry:
             metadata_valid = False
             session_metadata = dict(base_metadata)
         if not metadata_valid:
-            worker().record_drop("oversize", 1)
+            record("dropped")
 
         conflicts: list[str] = []
         with self._lock:
@@ -430,7 +416,7 @@ class _CloudTelemetry:
                 traces_enabled=enable_traces and metadata_valid,
                 logs_enabled=enable_logs and metadata_valid,
             )
-            if metadata_valid and self._admit_job(job_id):
+            if metadata_valid:
                 self._export_jobs[job_id] = state
             gates = [gate for _, gate in self._span_pipelines.values()]
             registered = job_id in self._export_jobs
@@ -487,7 +473,7 @@ class _CloudTelemetry:
             return None
 
         if len(self._span_batch_processors) >= policy().max_providers:
-            worker().record_drop("conflict", 1)
+            record("conflicts")
             return (
                 "Cloud tracing is limited to four provider registrations per process; "
                 "the newly selected application provider remains active."
@@ -500,11 +486,9 @@ class _CloudTelemetry:
         )
         self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
         self._span_metadata_processor = _install_metadata(provider)
-        self._span_batch_processor = BoundedSpanProcessor(
-            self._span_gate, holds=self._span_gate.holds
-        )
+        self._span_batch_processor = BoundedSpanProcessor(self._span_gate)
         self._span_batch_processors.append(self._span_batch_processor)
-        self._span_gate._requeue = self._span_batch_processor.requeue
+        self._span_gate._requeue = self._span_batch_processor.on_end
         self._span_pipelines[provider] = (self._span_batch_processor, self._span_gate)
         if provider is not self._owned_trace_provider:
             self._exit_targets.append(
@@ -622,12 +606,10 @@ class _CloudTelemetry:
                 )
 
         # flush before unregistering, so the job's remaining telemetry is exported
-        _run_bounded("flush", flush_targets, timeout)
+        run_bounded("flush", flush_targets, timeout)
 
         with self._lock:
             self._export_jobs.pop(job_id, None)
-            self._admitted_jobs.discard(job_id)
-            worker().release(f"job:{job_id}")
             for _, gate in self._span_pipelines.values():
                 gate.close_job(job_id)
             if self._export_jobs:
@@ -661,7 +643,7 @@ class _CloudTelemetry:
         if handler is not None:
             logging.getLogger().removeHandler(handler)
 
-        _run_bounded("shutdown", targets, timeout)
+        run_bounded("shutdown", targets, timeout)
 
 
 _cloud = _CloudTelemetry()

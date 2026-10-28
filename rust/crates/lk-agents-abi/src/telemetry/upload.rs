@@ -1,18 +1,4 @@
-//! Session recording uploads. The runtime owns credentials, files, attempts and transport.
-
-/// The immutable input of one recording upload; no host objects or file contents are retained.
-#[derive(Debug, Clone)]
-pub struct RecordingUpload {
-    pub base_url: String,
-    pub room_id: String,
-    pub job_id: String,
-    pub simulated: bool,
-    pub redaction_enabled: bool,
-    pub start_time_millis: i64,
-    pub transcript: Option<String>,
-    pub audio_path: Option<String>,
-    pub disabled: bool,
-}
+//! The Cloud session report. `lk-agents-net` owns its credentials, files, attempts and transport.
 
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, thiserror::Error)]
@@ -59,13 +45,13 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
 }
 
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
-/// append it from admitted SDK work; no whole-history extraction crosses a binding call.
+/// append it off their event loop; no whole-history extraction crosses a binding call.
 #[crate::host(class(name = "_core_PreparedTranscript"))]
 pub trait PreparedTranscript: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new() -> Result<Self, UploadError>;
 
-    /// Maximum items per SDK callback before the adapter returns control to its event loop.
+    /// Maximum items per append batch before the adapter returns control to its event loop.
     #[host(getter)]
     fn input_batch_size(&self) -> usize;
 

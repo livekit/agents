@@ -2068,30 +2068,6 @@ pub mod telemetry {
     pub fn loop_monitor_emission_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorEmission) -> PyResult<Bound<'py, PyAny>> {
         ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
     }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/work.rs.
-
-    pub fn telemetry_work_outcome_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::work::TelemetryWorkOutcome) -> PyResult<Bound<'py, PyAny>> {
-            let value = match value {
-                ::lk_agents_abi::telemetry::work::TelemetryWorkOutcome::IncompleteCleanup => "incomplete_cleanup",
-                ::lk_agents_abi::telemetry::work::TelemetryWorkOutcome::Failed => "failed",
-                ::lk_agents_abi::telemetry::work::TelemetryWorkOutcome::Settled => "settled",
-            };
-            Ok(::pyo3::types::PyString::new(py, value).into_any())
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/work.rs.
-    static TELEMETRY_WORK_OBSERVATION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn telemetry_work_observation_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::work::TelemetryWorkObservation) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::telemetry::work::TelemetryWorkObservation { key, monotonic_ns, outcome } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("key", ::pyo3::IntoPyObjectExt::into_bound_py_any(key, py)?)?;
-            kwargs.set_item("monotonic_ns", ::pyo3::IntoPyObjectExt::into_bound_py_any(monotonic_ns, py)?)?;
-            kwargs.set_item("outcome", crate::generated::records::telemetry::telemetry_work_outcome_to_py(py, outcome)?)?;
-            crate::host::construct(TELEMETRY_WORK_OBSERVATION.import(py, "livekit.agents._generated.telemetry", "TelemetryWorkObservation")?.as_any(), (), Some(&kwargs))
-    }
 }
 
 pub mod text_session {

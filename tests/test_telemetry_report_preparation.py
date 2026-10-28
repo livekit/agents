@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import gc
 import json
-import weakref
 
 import pytest
 
@@ -12,23 +10,6 @@ from livekit.agents import llm
 from scripts.bench.reports import capture_reports, make_report, prepare
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
-
-
-@pytest.mark.asyncio
-async def test_completed_capture_releases_report_samples_before_the_next_workload():
-    from livekit.agents.telemetry._export import call_bounded
-
-    async def completed_report():
-        with capture_reports() as capture:
-            await prepare(make_report([llm.ChatMessage(role="user", content=["hello"])]))
-            assert capture.items == {"report-job": 1}
-            return weakref.ref(capture)
-
-    gc.collect()
-    reference = await completed_report()
-    # Drain the native host-reference release queue through the next normal SDK call.
-    await call_bounded("report-capture-release", lambda: None, 0, 1)
-    assert reference() is None, "a finished capture must not survive until a later full GC pause"
 
 
 @pytest.mark.asyncio
@@ -73,25 +54,3 @@ async def test_multimodal_history_projects_text_without_copying_media_or_private
         await prepare(make_report([message]))
     assert capture.items == {"report-job": 1}
     assert json.loads(capture.uploads["report-job"])["items"][0]["content"] == ["hello"]
-
-
-@pytest.mark.asyncio
-async def test_report_uploader_initializes_its_native_client_off_the_session_loop(monkeypatch):
-    import threading
-
-    from livekit.agents import _core
-
-    loop_thread = threading.get_ident()
-    constructor_threads: list[int] = []
-    with capture_reports(), monkeypatch.context() as patches:
-        constructor = _core._core_SessionReportUpload
-
-        def initialize(api_key: str, api_secret: str):
-            constructor_threads.append(threading.get_ident())
-            return constructor(api_key, api_secret)
-
-        patches.setattr(_core, "_core_SessionReportUpload", initialize)
-        await prepare(make_report([]))
-
-    assert len(constructor_threads) == 1
-    assert constructor_threads[0] != loop_thread

@@ -159,3 +159,14 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
         link_count: usize,
     ) -> usize;
 }
+
+/// The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
+/// and series before the host SDK creates a new one.
+#[crate::host(class(name = "_core_MetricSeries"))]
+pub trait MetricSeries: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
+
+    #[host(call)]
+    fn admit(&self, name: String, attributes: Vec<(String, String)>) -> bool;
+}

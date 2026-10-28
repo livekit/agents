@@ -6,8 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 # The shared async transport (decision 77): owned tasks, server-sent events, HTTPS with phase
-# deadlines, the WebSocket seam and its tungstenite implementation, LiveKit token signing and the
-# delegation A2A client (decision 85). Used by inference, storage backends, the worker and runtime.
+# deadlines, the WebSocket seam and its tungstenite implementation, LiveKit token signing, the
+# delegation A2A client (decision 85) and the Cloud session report upload (decision 87). Used by
+# inference, storage backends, the worker and runtime.
 [lib]
 doctest = false
 
@@ -16,15 +17,15 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 livekit-token.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
-serde_json = { workspace = true, features = ["preserve_order"] }
-tokio = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # TLS crypto provider: `ring` only (reqwest/tungstenite use `rustls-no-provider`-style builds).
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 log.workspace = true
 # HTTPS with phase deadlines (`http`), shared by the gateway clients and the A2A client.
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "multipart"] }
 bytes = "1"
 url = "2"
 serde.workspace = true
@@ -32,6 +33,12 @@ serde.workspace = true
 # (`lk_agents_core::a2a`, sans-IO; this edge is pending owner approval).
 a2a.workspace = true
 lk-agents-core = { path = "../lk-agents-core" }
+# The Cloud session report upload: its protobuf header, Google RPC retry records and jitter.
+livekit-protocol.workspace = true
+prost.workspace = true
+pbjson-types.workspace = true
+tonic-types = { version = "0.14", default-features = false }
+rand = "0.9"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }
