@@ -23,7 +23,12 @@ impl Rule for InterruptionHasCause {
         id: "interruption_has_cause",
         guarantee: "A journalled interruption's cause matches an input that permits it: for Host, an interrupt the case issued; for OutputReplaced, a sink swap.",
         examples: &[host_interrupt_then_journal, sink_swap_then_journal, own_close_then_journal],
-        counterexamples: &[host_cause_without_host_call, closing_cause_without_close],
+        counterexamples: &[
+            host_cause_without_host_call,
+            closing_cause_without_close,
+            replaced_cause_without_swap,
+            swap_is_not_a_host_interrupt,
+        ],
         probe: None,
     };
 
@@ -158,6 +163,33 @@ fn sink_swap_then_journal() -> Recording {
 }
 
 /// The journal blames the host, but the host never interrupted anything.
+/// The cut names an output swap no input made.
+fn replaced_cause_without_swap() -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    Authored::new()
+        .sent(Input::Interrupt { force: false, wait: false })
+        .journal(Step::Interrupt(Interrupted {
+            speech: SpeechId(3),
+            cause: InterruptCause::OutputReplaced,
+            force: true,
+        }))
+        .done()
+}
+
+/// A swap is no host interrupt: journalled as `Host`, it would read as the effect of an earlier
+/// interrupt call (which `refused_interrupt_is_no_interruption` then flags).
+fn swap_is_not_a_host_interrupt() -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    Authored::new()
+        .sent(Input::SetAudioOutput { attach: false })
+        .journal(Step::Interrupt(Interrupted {
+            speech: SpeechId(3),
+            cause: InterruptCause::Host,
+            force: true,
+        }))
+        .done()
+}
+
 fn host_cause_without_host_call() -> Recording {
     use lk_agents_voice::agent_activity::scheduling::SpeechId;
     Authored::new()
