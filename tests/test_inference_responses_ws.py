@@ -57,10 +57,10 @@ _TEXT_FRAMES = [
         "response": {**_RESPONSE, "status": "completed", "usage": _USAGE},
     },
 ]
-_TOOL_NOT_ALLOWED = {
+_INVALID_EVENT = {
     "type": "gateway.error",
-    "code": "tool_not_allowed",
-    "message": 'tools[0].type "mcp" is not allowed',
+    "code": "invalid_event",
+    "message": "unsupported event type",
 }
 
 
@@ -335,20 +335,6 @@ async def test_ws_per_call_extra_headers_warns(caplog: pytest.LogCaptureFixture)
     await llm_model.aclose()
 
 
-async def test_gateway_tool_not_allowed_is_400() -> None:
-    llm_model = _make_llm()
-    _use_connection(llm_model, _ScriptedWs([_CONNECTED, _TOOL_NOT_ALLOWED]))
-
-    with pytest.raises(APIStatusError) as exc_info:
-        await _drain(llm_model)
-
-    assert _TOOL_NOT_ALLOWED["message"] in exc_info.value.message
-    assert "tool_not_allowed" in exc_info.value.message
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.retryable is False
-    await llm_model.aclose()
-
-
 async def test_gateway_upstream_connect_failed_is_retryable_502() -> None:
     llm_model = _make_llm()
     upstream_failed = {
@@ -423,7 +409,7 @@ async def test_ws_receive_timeout_raises_api_timeout() -> None:
 async def test_gateway_error_socket_leaves_pool() -> None:
     llm_model = _make_llm()
     transport = _transport(llm_model)
-    ws = _ScriptedWs([_CONNECTED, _TOOL_NOT_ALLOWED])
+    ws = _ScriptedWs([_CONNECTED, _INVALID_EVENT])
     _use_connection(llm_model, ws)
 
     # the stream stops reading at the error and drops the generator; close it the same way
