@@ -1211,12 +1211,7 @@ class VoiceTask(Generic[Output_T]):
         return self._agent
 
     async def run(self) -> Output_T:
-        binding = _BindingContextVar.get(None)
-        if not isinstance(binding, _VoiceBinding):
-            raise RuntimeError(
-                "VoiceTask.run() needs a live VoiceSession: await it inside a tool of the agent "
-                "holding the call"
-            )
+        binding = _live_binding("VoiceTask.run()")
         session, agent = binding.session, self._agent
         reply = session._running.run_voice_task(
             **session._frame(agent),
@@ -1248,6 +1243,17 @@ class _DynamicInstructions:
             function_call=None, session=self._session, speech_handle=SpeechHandle._of(speech)
         )
         return await self._agent._render_dynamic_instructions(ctx)
+
+
+def _live_binding(operation: str) -> _VoiceBinding:
+    """The live session interaction the current hook or tool runs in; raises outside one."""
+    binding = _BindingContextVar.get(None)
+    if not isinstance(binding, _VoiceBinding):
+        raise RuntimeError(
+            f"{operation} needs a live VoiceSession: await it inside a tool of the agent "
+            "holding the call"
+        )
+    return binding
 
 
 def _origin() -> str | None:

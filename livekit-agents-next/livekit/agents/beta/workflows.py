@@ -33,7 +33,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from ..voice import room_io
 from ..voice.agent import Agent
-from ..voice.agent_session import VoiceSession, VoiceTask
+from ..voice.agent_session import VoiceSession, VoiceTask, _live_binding
 from ..voice.background_audio import (
     AudioConfig,
     AudioSource,
@@ -266,8 +266,10 @@ class WarmTransfer:
         self._agent = _briefing_agent(self._transfer, tools=tools, llm=llm)
         self._briefing_audio = _given(stt=stt, vad=vad, tts=tts, turn_handling=turn_handling)
 
-    async def run(self, session: VoiceSession) -> WarmTransferResult:
-        """Dial and bridge a human participant during this live operation."""
+    async def run(self) -> WarmTransferResult:
+        """Dial and bridge a human participant. Await it inside a tool of the agent holding the
+        call; the session is the one that tool runs in."""
+        session = _live_binding("WarmTransfer.run()").session
         job_ctx = get_job_context()
         identity = await self._transfer.run(_TransferHost(self, session, job_ctx), job_ctx.room)
         return WarmTransferResult(human_agent_identity=identity)
