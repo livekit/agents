@@ -47,31 +47,31 @@ impl TtsProxy {
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         let capabilities = {
-            let v = obj.call_method0("_core_capabilities")?;
+            let v = crate::host::read(obj, "_core_capabilities")?;
             v.extract::<::lk_agents_abi::TtsCapabilities>()?
         };
         let id = {
-            let v = obj.call_method0("_core_id")?;
+            let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
         let sample_rate = {
-            let v = obj.call_method0("_core_sample_rate")?;
+            let v = crate::host::read(obj, "_core_sample_rate")?;
             ::lk_agents_abi::python::number_from_py::<u32>(&v, "Tts._core_sample_rate")?
         };
         let num_channels = {
-            let v = obj.call_method0("_core_num_channels")?;
+            let v = crate::host::read(obj, "_core_num_channels")?;
             ::lk_agents_abi::python::number_from_py::<u16>(&v, "Tts._core_num_channels")?
         };
         let markup_provider = {
-            let v = obj.call_method0("_core_markup_provider")?;
+            let v = crate::host::read(obj, "_core_markup_provider")?;
             v.extract::<::std::string::String>()?
         };
         let lowers_markup = {
-            let v = obj.call_method0("_core_lowers_markup")?;
+            let v = crate::host::read(obj, "_core_lowers_markup")?;
             v.extract::<bool>()?
         };
         Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
@@ -159,7 +159,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(py.import("livekit.agents.types")?.getattr("APIConnectOptions")?.call((), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
                 }
                 Ok((host.bind(py).getattr("_core_synthesize")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -188,7 +188,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(py.import("livekit.agents.types")?.getattr("APIConnectOptions")?.call((), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
                 }
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));

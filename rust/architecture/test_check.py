@@ -11,6 +11,7 @@ from unittest.mock import patch
 from check import (
     check_history,
     dependency_violations,
+    host_call_violations,
     length_violations,
     path_violations,
     pyo3_violations,
@@ -309,6 +310,37 @@ class PathContracts(unittest.TestCase):
             )
 
 
+class HostCallContracts(unittest.TestCase):
+    """Every Rust-to-host call goes through HostInvoker's Python entry."""
+
+    def test_a_host_call_outside_the_entry_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                # A generated proxy calling the host object itself, bypassing the entry.
+                "rust/crates/lk-agents-py/src/generated/llm.rs": 'use ::pyo3::prelude::*;\nfn f(o: &Bound<\'_, PyAny>) { o.call_method1("chat", ()); }\n',
+                "rust/crates/lk-agents-py/src/turn.rs": 'use pyo3::prelude::*;\nfn f(l: &Bound<\'_, PyAny>) { l.call_method1("call_soon_threadsafe", ()); }\n',
+                "rust/crates/lk-agents-runtime/src/bridge.rs": "use pyo3_async_runtimes::tokio::future_into_py;\n",
+                # The entry, a generated call through it, a test harness, a generator, plain Rust.
+                "rust/crates/lk-agents-py/src/host/mod.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); }\n",
+                "rust/crates/lk-agents-py/src/generated/stt.rs": "use ::pyo3::prelude::*;\nfn f() { crate::host::future_into_py(py, fut); }\n",
+                "rust/crates/lk-agents-py/tests/agent_host.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call1(()); }\n",
+                "rust/crates/lk-agents-codegen/src/proxy.rs": '"::pyo3 o.call_method1("\n',
+                "rust/crates/lk-agents-voice/src/lib.rs": "fn f(c: &C) { c.call(1); }\n",
+            }
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            self.assertEqual(
+                host_call_violations(root, list(files)),
+                {
+                    "host-call:rust/crates/lk-agents-py/src/generated/llm.rs",
+                    "host-call:rust/crates/lk-agents-py/src/turn.rs",
+                    "host-call:rust/crates/lk-agents-runtime/src/bridge.rs",
+                },
+            )
+
+
 class Pyo3Contracts(unittest.TestCase):
     """Decision 74: pyo3 is the extension crate's alone."""
 
@@ -319,7 +351,7 @@ class Pyo3Contracts(unittest.TestCase):
                 "rust/crates/lk-agents-runtime/src/host.rs": "use pyo3::prelude::*;\n",
                 "rust/crates/lk-agents-abi/src/python/generated/llm.rs": "//! GENERATED\npyo3::Python::attach(|_| ());\n",
                 "rust/crates/lk-agents-py/src/lib.rs": "use pyo3::prelude::*;\n",
-                "rust/crates/lk-agents-codegen/src/proxy.rs": "\"::pyo3::Python::attach\"\n",
+                "rust/crates/lk-agents-codegen/src/proxy.rs": '"::pyo3::Python::attach"\n',
                 "rust/crates/lk-agents-voice/src/lib.rs": "pub fn plain() {}\n",
             }
             for path, text in files.items():

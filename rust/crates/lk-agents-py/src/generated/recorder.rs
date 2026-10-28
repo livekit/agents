@@ -51,7 +51,7 @@ impl SessionRecorder {
     fn ready<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::ready(&this, )
                 .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -83,7 +83,7 @@ impl SessionRecorder {
     fn flush<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_session_recorder_flush_now)] now: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::flush(&this, now)
                 .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::recorder::recording_summary_to_py(py, out)?, py))
@@ -94,7 +94,7 @@ impl SessionRecorder {
     fn finish<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_session_recorder_finish_now)] now: ::std::option::Option<f64>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::finish(&this, now)
                 .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

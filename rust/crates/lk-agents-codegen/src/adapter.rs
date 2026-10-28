@@ -261,13 +261,13 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 }
             };
             s.push_str(&format!(
-                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
+                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::host::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
                 item.replace("{}", "out").replace("{py}", "py")
             ));
         }
         MethodKind::AsyncFunction => {
             s.push_str(&format!(
-                "pub fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}    ::lk_agents_abi::python::future_into_py(py, async move {{\n        let out = {call}({}).await{err};\n        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n    }})\n}}\n",
+                "pub fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}    crate::host::future_into_py(py, async move {{\n        let out = {call}({}).await{err};\n        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n    }})\n}}\n",
                 ["py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", "out").replace("{py}", "py")
@@ -275,7 +275,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         }
         MethodKind::Await => {
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        ::lk_agents_abi::python::future_into_py(py, async move {{\n            let out = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::host::future_into_py(py, async move {{\n            let out = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", "out").replace("{py}", "py")

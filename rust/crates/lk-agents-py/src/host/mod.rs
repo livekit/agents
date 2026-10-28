@@ -240,6 +240,33 @@ impl HostEntry for Entry {
     }
 }
 
+/// `class(*args, **kwargs)` in place, under the GIL the caller holds: a framework model, a view
+/// over a host object, an enum member. What generated conversions build host values with.
+pub fn construct<'py, A>(
+    class: &Bound<'py, PyAny>,
+    args: A,
+    kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
+) -> PyResult<Bound<'py, PyAny>>
+where
+    A: pyo3::call::PyCallArgs<'py>,
+{
+    class.call(args, kwargs)
+}
+
+/// `obj.name()` in place: a host object's framework accessor, read once when its proxy is taken.
+pub fn read<'py>(obj: &Bound<'py, PyAny>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+    obj.call_method0(name)
+}
+
+/// A Rust future as the awaitable a `_core` coroutine method returns.
+pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
+{
+    lk_agents_abi::python::future_into_py(py, fut)
+}
+
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).
 pub const NOTIFY_QUEUE: usize = 256;
 

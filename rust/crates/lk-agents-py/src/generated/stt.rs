@@ -43,15 +43,15 @@ impl SttProxy {
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         let capabilities = {
-            let v = obj.call_method0("_core_capabilities")?;
+            let v = crate::host::read(obj, "_core_capabilities")?;
             v.extract::<::lk_agents_abi::SttCapabilities>()?
         };
         let id = {
-            let v = obj.call_method0("_core_id")?;
+            let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
         Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, capabilities, id, conn: None })
@@ -133,7 +133,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(buffer_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(py.import("livekit.agents.types")?.getattr("APIConnectOptions")?.call((), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
                 }
                 Ok((host.bind(py).getattr("_core_recognize")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -161,7 +161,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time_offset_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
-                    args.push(py.import("livekit.agents.types")?.getattr("APIConnectOptions")?.call((), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
+                    args.push(crate::host::construct(&py.import("livekit.agents.types")?.getattr("APIConnectOptions")?, (), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
                 }
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));

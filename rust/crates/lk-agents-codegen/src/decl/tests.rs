@@ -441,7 +441,7 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
-        "let v = obj.call_method0(\"_core_label\")?;",
+        "let v = crate::host::read(obj, \"_core_label\")?;",
         "context: crate::host::capture_context(obj.py())?",
         "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
         "\"Callbacks.count\", &self.context, &[], ::std::boxed::Box::new(move |py| {",
@@ -849,7 +849,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     assert!(
         llm.contains(
             "fn conn(&self) -> &::lk_agents_abi::llm::chat::Conn {\n        &self.conn\n    }"
-        ) && llm.contains("obj.call_method0(\"conn\")"),
+        ) && llm.contains("crate::host::read(obj, \"conn\")"),
         "{llm}"
     );
     let err = refuse_proxy("#[host(call)] fn state(&self) -> Chunk;");
@@ -873,7 +873,7 @@ fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
-        "let view = obj.py().import(\"livekit.agents.view\")?.getattr(\"_Sink\")?.call1((obj,))?;\n        let obj = &view;",
+        "let view = crate::host::construct(&obj.py().import(\"livekit.agents.view\")?.getattr(\"_Sink\")?, (obj,), None)?;\n        let obj = &view;",
         "<::lk_agents_abi::llm::class::Tracker as ::lk_agents_abi::python::ArcClass>::shared(&v)",
         "fn tracker(&self) -> &::std::sync::Arc<::lk_agents_abi::llm::class::Tracker> {",
     ] {

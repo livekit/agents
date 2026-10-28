@@ -41,15 +41,15 @@ impl VadProxy {
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         let capabilities = {
-            let v = obj.call_method0("_core_capabilities")?;
+            let v = crate::host::read(obj, "_core_capabilities")?;
             v.extract::<::lk_agents_abi::VadCapabilities>()?
         };
         let id = {
-            let v = obj.call_method0("_core_id")?;
+            let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
         Ok(VadProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, capabilities, id })

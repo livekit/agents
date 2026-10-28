@@ -24,7 +24,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     let mut inits = vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()];
     let mut reads = match &p.view {
         Some((module, class)) => format!(
-            "        let view = obj.py().import({module:?})?.getattr({class:?})?.call1((obj,))?;\n        let obj = &view;\n"
+            "        let view = crate::host::construct(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
         ),
         None => String::new(),
     };
@@ -52,7 +52,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         fields.push(format!("    {}: {},\n", m.rust_name, m.ret.ok.rust()));
         let read = from_object("v", &m.ret.ok, &format!("\"{}.{}\"", p.rust_name, m.name), &at)?;
         reads.push_str(&format!(
-            "        let {} = {{\n            let v = obj.call_method0({:?})?;\n            {read}?\n        }};\n",
+            "        let {} = {{\n            let v = crate::host::read(obj, {:?})?;\n            {read}?\n        }};\n",
             m.rust_name, m.name
         ));
         inits.push(m.rust_name.clone());
@@ -352,7 +352,7 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{v})?.into_any()"),
         // A host class the framework does not generate: built from the record's fields.
         Ty::Record(Record { host: HostForm::External { module, name }, .. }) => format!(
-            "py.import({module:?})?.getattr({name:?})?.call((), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"
+            "crate::host::construct(&py.import({module:?})?.getattr({name:?})?, (), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"
         ),
         // The host object a declared proxy was taken from.
         Ty::Proxy { declared: Some((family, name)), boxed: false, .. } => {

@@ -368,8 +368,8 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
             let emit = if r.emit {
                 let (pattern, sets) = struct_emits(fields)?;
                 format!(
-                    "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {class_py}.call((), Some(&kwargs))\n",
-                    class_py = class_ref(&module, &r.name)
+                    "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {}\n",
+                    construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)", as_trait)
                 )
             } else {
                 String::new()
@@ -388,11 +388,11 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
                     v.rust_name
                 ));
                 let call = if sets.is_empty() {
-                    format!("{}.call0()", class_ref(&module, &v.name))
+                    construct(&class_ref(&module, &v.name), "()", "None", as_trait)
                 } else {
                     format!(
-                        "{{\n                let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}                {}.call((), Some(&kwargs))\n            }}",
-                        class_ref(&module, &v.name)
+                        "{{\n                let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}                {}\n            }}",
+                        construct(&class_ref(&module, &v.name), "()", "Some(&kwargs)", as_trait)
                     )
                 };
                 emit.push_str(&format!("            Self::{}{arm} => {call},\n", v.rust_name));
@@ -420,7 +420,10 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
             let value = match r.enumeration {
                 true => {
                     classes.push(r.name.clone());
-                    format!("{}.call1((value,))?", class_ref(&module, &r.name))
+                    format!(
+                        "{}?",
+                        construct(&class_ref(&module, &r.name), "(value,)", "None", as_trait)
+                    )
                 }
                 false => "::pyo3::types::PyString::new(py, value).into_any()".to_owned(),
             };
@@ -502,6 +505,17 @@ fn class_ref(module: &str, class: &str) -> String {
             "{}.get_or_try_init(py, || -> PyResult<_> {{ Ok(py.import({module:?})?.getattr({owner:?})?.getattr({name:?})?.cast_into::<::pyo3::types::PyType>()?.unbind()) }})?.bind(py)",
             cell(class)
         ),
+    }
+}
+
+/// `class(*args, **kwargs)`: a model built in place. The registration shell's conversions build
+/// it through HostInvoker's Python entry; an in-place ABI conversion (`IN_PLACE`) still calls it.
+fn construct(class: &str, args: &str, kwargs: &str, as_trait: bool) -> String {
+    match as_trait {
+        true if (args, kwargs) == ("()", "None") => format!("{class}.call0()"),
+        true if kwargs == "None" => format!("{class}.call1({args})"),
+        true => format!("{class}.call({args}, {kwargs})"),
+        false => format!("crate::host::construct({class}.as_any(), {args}, {kwargs})"),
     }
 }
 

@@ -57,7 +57,7 @@ impl DataStreamAudioOutput {
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::aclose(&this, )
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -602,7 +602,7 @@ impl PlaybackListenerProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let view = obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?.call1((obj,))?;
+        let view = crate::host::construct(&obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?, (obj,), None)?;
         let obj = &view;
         Ok(PlaybackListenerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
     }
@@ -673,10 +673,10 @@ impl AudioInputProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let view = obj.py().import("livekit.agents._core_view")?.getattr("_AudioInput")?.call1((obj,))?;
+        let view = crate::host::construct(&obj.py().import("livekit.agents._core_view")?.getattr("_AudioInput")?, (obj,), None)?;
         let obj = &view;
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         Ok(AudioInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label })
@@ -759,10 +759,10 @@ impl VideoInputProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let view = obj.py().import("livekit.agents._core_view")?.getattr("_VideoInput")?.call1((obj,))?;
+        let view = crate::host::construct(&obj.py().import("livekit.agents._core_view")?.getattr("_VideoInput")?, (obj,), None)?;
         let obj = &view;
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         Ok(VideoInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label })
@@ -848,22 +848,22 @@ impl AudioOutputProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let view = obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?.call1((obj,))?;
+        let view = crate::host::construct(&obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?, (obj,), None)?;
         let obj = &view;
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         let tracker = {
-            let v = obj.call_method0("_core_tracker")?;
+            let v = crate::host::read(obj, "_core_tracker")?;
             <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&v)?
         };
         let capabilities = {
-            let v = obj.call_method0("_core_capabilities")?;
+            let v = crate::host::read(obj, "_core_capabilities")?;
             v.extract::<::lk_agents_abi::voice::io::AudioOutputCapabilities>().map_err(::pyo3::PyErr::from)?
         };
         let sample_rate = {
-            let v = obj.call_method0("_core_sample_rate")?;
+            let v = crate::host::read(obj, "_core_sample_rate")?;
             if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&v, "AudioOutput._core_sample_rate")).map(Some) }?
         };
         Ok(AudioOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, tracker, capabilities, sample_rate })
@@ -991,10 +991,10 @@ impl TextOutputProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let view = obj.py().import("livekit.agents._core_view")?.getattr("_TextOutput")?.call1((obj,))?;
+        let view = crate::host::construct(&obj.py().import("livekit.agents._core_view")?.getattr("_TextOutput")?, (obj,), None)?;
         let obj = &view;
         let label = {
-            let v = obj.call_method0("_core_label")?;
+            let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         Ok(TextOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label })

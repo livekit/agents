@@ -115,6 +115,33 @@ GENERATORS = {"lk-agents-codegen", "lk-agents-bindgen", "lk-agents-host-derive"}
 PYO3 = re.compile(r"\bpyo3")
 
 
+# Calling into host code (rust-core.md "HostInvoker"): only HostInvoker's Python entry calls a host
+# callable, enters a context or awaits a coroutine. Every other pyo3 file doing so is an identity.
+HOST_ENTRY = "rust/crates/lk-agents-py/src/host/"
+HOST_CALL = re.compile(
+    r"\.call(?:0|1|_method|_method0|_method1)?\(|call_soon_threadsafe|run_coroutine_threadsafe"
+    r"|\binto_future\(|(?<!host::)future_into_py"
+)
+
+
+def host_call_violations(root: Path, paths: list[str]) -> set[str]:
+    """Every tracked Rust file naming pyo3 (generated output included) that calls into host code
+    outside HostInvoker's Python entry; the generators write such calls as text and are exempt, as
+    are a crate's integration tests, which set up the interpreter they drive."""
+    violations = set()
+    for path in paths:
+        parts = Path(path).parts
+        if parts[:2] != ("rust", "crates") or len(parts) < 4 or parts[2] in GENERATORS:
+            continue
+        # The entry itself, and integration tests driving a live interpreter.
+        if path.startswith(HOST_ENTRY) or parts[3] == "tests":
+            continue
+        text = (root / path).read_text()
+        if PYO3.search(text) and HOST_CALL.search(text):
+            violations.add(f"host-call:{path}")
+    return violations
+
+
 def pyo3_violations(metadata: dict, root: Path, paths: list[str]) -> set[str]:
     """A pyo3-family dependency of any other workspace crate (every feature), and every tracked
     Rust file of another crate naming pyo3, generated output included."""
@@ -285,6 +312,7 @@ def check_boundaries() -> int:
         ("lengths", length_violations(root, paths)),
         ("paths", path_violations(root, paths)),
         ("pyo3", pyo3_violations(metadata, root, paths)),
+        ("host-calls", host_call_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

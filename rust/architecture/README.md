@@ -21,6 +21,10 @@ the workspace Rust flags.
   workspace crate, or another crate's tracked Rust file naming pyo3 (generated output included),
   is an identity of the shrink-only `pyo3-baseline.json`. The generator crates, which write the
   extension's code as text, are exempt.
+- Every Rust-to-host call goes through HostInvoker: a file naming pyo3 that calls into host code
+  (`call*`, `call_soon_threadsafe`, `into_future`, `future_into_py`) outside the Python entry
+  `lk-agents-py/src/host/` is an identity of the shrink-only `host-calls-baseline.json`; generated
+  code calls through the entry. Generators and integration tests are exempt.
 - Git-tracked handwritten Rust files have a 1,250-line limit. Generated markers
   must appear on the first line. Existing oversized files have individual
   shrinking ceilings.

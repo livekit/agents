@@ -91,7 +91,7 @@ impl InferenceAvatar {
     fn create<'py>(&self, py: Python<'py>, room_name: ::std::string::String, room_sid: ::std::string::String, livekit_url: ::std::option::Option<::std::string::String>, agent_identity: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::create(&this, room_name, room_sid, livekit_url, agent_identity, headers)
                 .await.map_err(|e: ::lk_agents_abi::inference::avatar_session::AvatarError| <::lk_agents_abi::inference::avatar_session::AvatarError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -105,7 +105,7 @@ impl InferenceAvatar {
     fn aclose<'py>(&self, py: Python<'py>, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::aclose(&this, headers)
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

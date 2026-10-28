@@ -512,7 +512,7 @@ impl _core_SessionReportUpload {
     fn upload<'py>(&self, py: Python<'py>, base_url: ::std::string::String, room_id: ::std::string::String, job_id: ::std::string::String, simulated: bool, redaction_enabled: bool, #[pyo3(from_py_with = _extract_session_report_upload_upload_start_time_millis)] start_time_millis: i64, transcript: ::std::option::Option<::std::string::String>, audio_path: ::std::option::Option<::std::string::String>, disabled: bool) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_SessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::upload(&this, base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled)
                 .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -597,7 +597,7 @@ impl _core_PreparedTranscript {
         ::lk_agents_abi::python::check_pid()?;
         let report = crate::generated::records::telemetry::session_report_snapshot_from_py(&report)?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_PreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish_report(&this, report, path)
                 .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -693,7 +693,7 @@ impl _core_TelemetryWorker {
     fn wait_async<'py>(&self, py: Python<'py>, key: ::std::string::String, #[pyo3(from_py_with = _extract_telemetry_worker_wait_async_timeout)] timeout: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::wait_async(&this, key, timeout)
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

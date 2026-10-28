@@ -225,7 +225,7 @@ impl SessionPortProxy {
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let framework_info = {
-            let v = obj.call_method0("_core_framework_info")?;
+            let v = crate::host::read(obj, "_core_framework_info")?;
             (|| -> ::pyo3::PyResult<_> { let tuple = v.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_framework_info"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?,)) })()?
         };
         Ok(SessionPortProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, framework_info })

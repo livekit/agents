@@ -37,7 +37,7 @@ impl _core_JudgeRunner {
         ::lk_agents_abi::python::check_pid()?;
         let judges = judges.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::evals::judge_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
                 .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::evals::judge_outcome_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
@@ -49,7 +49,7 @@ impl _core_JudgeRunner {
     fn judge_intent<'py>(&self, py: Python<'py>, intent: ::std::string::String, message: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
                 .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::evals::intent_judgment_to_py(py, out)?, py))

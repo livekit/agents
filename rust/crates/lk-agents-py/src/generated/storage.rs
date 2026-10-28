@@ -48,7 +48,7 @@ impl Storage {
     fn _core_voice_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String, initial_history: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_voice_store(&this, thread_id, lane, initial_history)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::storage::_core_VoiceStore(::std::sync::Arc::new(out)), py))
@@ -72,7 +72,7 @@ impl Storage {
         let config = crate::generated::records::a2a_door::door_config_from_py(&config)?;
         let host = super::a2a::TurnHostProxy::from_host(&host)?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_a2a_door(&this, config, host)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::_core_A2ADoor(::std::sync::Arc::new(out)), py))
@@ -94,7 +94,7 @@ impl Storage {
         ::lk_agents_abi::python::check_pid()?;
         let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::create_thread(&this, scope, attributes, idle_ttl_seconds)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_info_to_py(py, out)?, py))
@@ -106,7 +106,7 @@ impl Storage {
     fn get_thread<'py>(&self, py: Python<'py>, thread_id: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::get_thread(&this, thread_id)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_info_to_py(py, out)?, py))
@@ -118,7 +118,7 @@ impl Storage {
     fn list_threads<'py>(&self, py: Python<'py>, scope: ::std::string::String, before: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_list_threads_limit)] limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::list_threads(&this, scope, before, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_page_to_py(py, out)?, py))
@@ -132,7 +132,7 @@ impl Storage {
         ::lk_agents_abi::python::check_pid()?;
         let attributes = attributes.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "attributes")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("attributes", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::update_thread(&this, thread_id, attributes, idle_ttl_seconds)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_info_to_py(py, out)?, py))
@@ -144,7 +144,7 @@ impl Storage {
     fn delete_thread<'py>(&self, py: Python<'py>, thread_id: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::delete_thread(&this, thread_id)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -156,7 +156,7 @@ impl Storage {
     fn get_thread_items<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, agent: ::std::option::Option<::std::string::String>, after: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_get_thread_items_limit)] limit: ::std::option::Option<u32>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::get_thread_items(&this, thread_id, agent, after, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_item_page_to_py(py, out)?, py))
@@ -169,7 +169,7 @@ impl Storage {
         ::lk_agents_abi::python::check_pid()?;
         let status = status.map(|v| crate::generated::records::storage_class::task_state_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::get_thread_tasks(&this, thread_id, status)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::thread_task_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
@@ -181,7 +181,7 @@ impl Storage {
     fn open<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, holder: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::open(&this, thread_id, holder)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::handles::Thread::from(out), py))
@@ -193,7 +193,7 @@ impl Storage {
     fn _core_context_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_context_store(&this, thread_id, lane)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::storage::_core_ContextActivation(::std::sync::Arc::new(out)), py))
@@ -204,7 +204,7 @@ impl Storage {
     fn streams<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::streams(&this, )
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::handles::Streams::from(out), py))
@@ -215,7 +215,7 @@ impl Storage {
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::aclose(&this, )
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -252,7 +252,7 @@ impl _core_ContextActivation {
         ::lk_agents_abi::python::check_pid()?;
         let fields = fields.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_field_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::load(&this, scope_id, identity, fields)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_context::context_values_to_py(py, out)?, py))
@@ -265,7 +265,7 @@ impl _core_ContextActivation {
         ::lk_agents_abi::python::check_pid()?;
         let fields = fields.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_field_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::save(&this, scope_id, identity, revision, fields)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_context::context_values_to_py(py, out)?, py))
@@ -320,7 +320,7 @@ impl _core_VoiceStore {
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        ::lk_agents_abi::python::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = <_core_VoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::aclose(&this, )
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

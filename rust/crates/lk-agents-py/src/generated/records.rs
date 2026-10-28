@@ -27,17 +27,17 @@ pub mod _retry {
 
     pub fn _core__retry_decision_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::types::retry::RetryDecision) -> PyResult<Bound<'py, PyAny>> {
             match value {
-                ::lk_agents_abi::types::retry::RetryDecision::Stop => _CORE__RETRY_DECISION_STOP.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionStop")?.call0(),
-                ::lk_agents_abi::types::retry::RetryDecision::Raise => _CORE__RETRY_DECISION_RAISE.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRaise")?.call0(),
+                ::lk_agents_abi::types::retry::RetryDecision::Stop => crate::host::construct(_CORE__RETRY_DECISION_STOP.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionStop")?.as_any(), (), None),
+                ::lk_agents_abi::types::retry::RetryDecision::Raise => crate::host::construct(_CORE__RETRY_DECISION_RAISE.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRaise")?.as_any(), (), None),
                 ::lk_agents_abi::types::retry::RetryDecision::Exhausted(message) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    _CORE__RETRY_DECISION_EXHAUSTED.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionExhausted")?.call((), Some(&kwargs))
+                    crate::host::construct(_CORE__RETRY_DECISION_EXHAUSTED.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionExhausted")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::types::retry::RetryDecision::Retry(delay) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay, py)?)?;
-                    _CORE__RETRY_DECISION_RETRY.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRetry")?.call((), Some(&kwargs))
+                    crate::host::construct(_CORE__RETRY_DECISION_RETRY.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRetry")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -78,7 +78,7 @@ pub mod a2a_auth {
             kwargs.set_item("write", ::pyo3::IntoPyObjectExt::into_bound_py_any(write, py)?)?;
             kwargs.set_item("read", ::pyo3::IntoPyObjectExt::into_bound_py_any(read, py)?)?;
             kwargs.set_item("delete", ::pyo3::IntoPyObjectExt::into_bound_py_any(delete, py)?)?;
-            AUTH_GRANT.import(py, "livekit.agents._generated.a2a_auth", "AuthGrant")?.call((), Some(&kwargs))
+            crate::host::construct(AUTH_GRANT.import(py, "livekit.agents._generated.a2a_auth", "AuthGrant")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/auth.rs.
@@ -151,7 +151,7 @@ pub mod a2a_auth {
             kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
             kwargs.set_item("claims", ::lk_agents_abi::python::extra_to_py(py, &claims)?.into_any())?;
             kwargs.set_item("endpoint_call", ::pyo3::IntoPyObjectExt::into_bound_py_any(endpoint_call, py)?)?;
-            AUTH_PRINCIPAL.import(py, "livekit.agents._generated.a2a_auth", "AuthPrincipal")?.call((), Some(&kwargs))
+            crate::host::construct(AUTH_PRINCIPAL.import(py, "livekit.agents._generated.a2a_auth", "AuthPrincipal")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -182,7 +182,7 @@ pub mod a2a_card {
             kwargs.set_item("description", ::pyo3::IntoPyObjectExt::into_bound_py_any(description, py)?)?;
             kwargs.set_item("version", ::pyo3::IntoPyObjectExt::into_bound_py_any(version, py)?)?;
             kwargs.set_item("url", ::pyo3::IntoPyObjectExt::into_bound_py_any(url, py)?)?;
-            ENDPOINT_DESCRIPTOR.import(py, "livekit.agents._generated.a2a_card", "EndpointDescriptor")?.call((), Some(&kwargs))
+            crate::host::construct(ENDPOINT_DESCRIPTOR.import(py, "livekit.agents._generated.a2a_card", "EndpointDescriptor")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -257,7 +257,7 @@ pub mod a2a_client {
             kwargs.set_item("description", match description { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("parts", ::pyo3::types::PyList::new(py, parts.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("metadata", ::lk_agents_abi::python::extra_to_py(py, &metadata)?.into_any())?;
-            ARTIFACT.import(py, "livekit.agents._generated.a2a_client", "Artifact")?.call((), Some(&kwargs))
+            crate::host::construct(ARTIFACT.import(py, "livekit.agents._generated.a2a_client", "Artifact")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
@@ -288,7 +288,7 @@ pub mod a2a_client {
             kwargs.set_item("context_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(context_id, py)?)?;
             kwargs.set_item("metadata", ::lk_agents_abi::python::extra_to_py(py, &metadata)?.into_any())?;
             kwargs.set_item("artifacts", ::pyo3::types::PyList::new(py, artifacts.into_iter().map(|x| PyResult::Ok(crate::generated::records::a2a_client::artifact_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            TASK_UPDATE.import(py, "livekit.agents._generated.a2a_client", "TaskUpdate")?.call((), Some(&kwargs))
+            crate::host::construct(TASK_UPDATE.import(py, "livekit.agents._generated.a2a_client", "TaskUpdate")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
@@ -303,7 +303,7 @@ pub mod a2a_client {
             kwargs.set_item("extensions", ::pyo3::types::PyList::new(py, extensions.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("input_schema", ::lk_agents_abi::python::extra_to_py(py, &input_schema)?.into_any())?;
             kwargs.set_item("structured_input", ::pyo3::IntoPyObjectExt::into_bound_py_any(structured_input, py)?)?;
-            AGENT_CARD.import(py, "livekit.agents._generated.a2a_client", "AgentCard")?.call((), Some(&kwargs))
+            crate::host::construct(AGENT_CARD.import(py, "livekit.agents._generated.a2a_client", "AgentCard")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -334,7 +334,7 @@ pub mod a2a_door {
             kwargs.set_item("holder", ::pyo3::IntoPyObjectExt::into_bound_py_any(holder, py)?)?;
             kwargs.set_item("endpoint", crate::generated::records::a2a_card::endpoint_descriptor_to_py(py, endpoint)?)?;
             kwargs.set_item("options", crate::generated::records::storage_options::turn_options_to_py(py, options)?)?;
-            DOOR_CONFIG.import(py, "livekit.agents._generated.a2a_door", "DoorConfig")?.call((), Some(&kwargs))
+            crate::host::construct(DOOR_CONFIG.import(py, "livekit.agents._generated.a2a_door", "DoorConfig")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
@@ -347,7 +347,7 @@ pub mod a2a_door {
             kwargs.set_item("json", ::pyo3::IntoPyObjectExt::into_bound_py_any(json, py)?)?;
             kwargs.set_item("sse", ::pyo3::IntoPyObjectExt::into_bound_py_any(sse, py)?)?;
             kwargs.set_item("is_error", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_error, py)?)?;
-            DOOR_FRAME.import(py, "livekit.agents._generated.a2a_door", "DoorFrame")?.call((), Some(&kwargs))
+            crate::host::construct(DOOR_FRAME.import(py, "livekit.agents._generated.a2a_door", "DoorFrame")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -368,11 +368,11 @@ pub mod a2a_remote {
 
     pub fn remote_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::remote::RemoteEvent) -> PyResult<Bound<'py, PyAny>> {
             match value {
-                ::lk_agents_abi::a2a::remote::RemoteEvent::Pending => REMOTE_EVENT_PENDING.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventPending")?.call0(),
+                ::lk_agents_abi::a2a::remote::RemoteEvent::Pending => crate::host::construct(REMOTE_EVENT_PENDING.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventPending")?.as_any(), (), None),
                 ::lk_agents_abi::a2a::remote::RemoteEvent::Progress { text } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
-                    REMOTE_EVENT_PROGRESS.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventProgress")?.call((), Some(&kwargs))
+                    crate::host::construct(REMOTE_EVENT_PROGRESS.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventProgress")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::a2a::remote::RemoteEvent::InputRequired { question, request_id, verbatim, verbatim_full, outcome } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
@@ -381,18 +381,18 @@ pub mod a2a_remote {
                     kwargs.set_item("verbatim", match verbatim { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
                     kwargs.set_item("verbatim_full", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim_full, py)?)?;
                     kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
-                    REMOTE_EVENT_INPUT_REQUIRED.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventInputRequired")?.call((), Some(&kwargs))
+                    crate::host::construct(REMOTE_EVENT_INPUT_REQUIRED.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventInputRequired")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::a2a::remote::RemoteEvent::Outcome { outcome } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
-                    REMOTE_EVENT_OUTCOME.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventOutcome")?.call((), Some(&kwargs))
+                    crate::host::construct(REMOTE_EVENT_OUTCOME.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventOutcome")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::a2a::remote::RemoteEvent::Follow { task_id, thread_id } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("task_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(task_id, py)?)?;
                     kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
-                    REMOTE_EVENT_FOLLOW.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventFollow")?.call((), Some(&kwargs))
+                    crate::host::construct(REMOTE_EVENT_FOLLOW.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventFollow")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -418,7 +418,7 @@ pub mod agent_run {
             kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("function_call", match function_call { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("approval", match approval { None => py.None().into_bound(py), Some(x) => crate::generated::records::tool_report::approval_to_py(py, x)? })?;
-            INVOCATION.import(py, "livekit.agents._generated.agent_run", "Invocation")?.call((), Some(&kwargs))
+            crate::host::construct(INVOCATION.import(py, "livekit.agents._generated.agent_run", "Invocation")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent.rs.
@@ -481,12 +481,12 @@ pub mod agent_run {
                 ::lk_agents_abi::agent::OutputCandidate::Text(text) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
-                    OUTPUT_CANDIDATE_TEXT.import(py, "livekit.agents._generated.agent_run", "OutputCandidateText")?.call((), Some(&kwargs))
+                    crate::host::construct(OUTPUT_CANDIDATE_TEXT.import(py, "livekit.agents._generated.agent_run", "OutputCandidateText")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::OutputCandidate::Value(value) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
-                    OUTPUT_CANDIDATE_VALUE.import(py, "livekit.agents._generated.agent_run", "OutputCandidateValue")?.call((), Some(&kwargs))
+                    crate::host::construct(OUTPUT_CANDIDATE_VALUE.import(py, "livekit.agents._generated.agent_run", "OutputCandidateValue")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -662,7 +662,7 @@ pub mod agent_run {
             kwargs.set_item("all_messages", ::pyo3::types::PyList::new(py, all_messages.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("usage", crate::generated::records::agent_run::run_usage_to_py(py, usage)?)?;
             kwargs.set_item("verbatim", match verbatim { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            RUN_RESULT.import(py, "livekit.agents._generated.agent_run", "RunResult")?.call((), Some(&kwargs))
+            crate::host::construct(RUN_RESULT.import(py, "livekit.agents._generated.agent_run", "RunResult")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
@@ -676,14 +676,14 @@ pub mod agent_run {
                 ::lk_agents_abi::agent::run::RunOutcome::Completed { output } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("output", crate::generated::records::agent_run::output_to_py(py, output)?)?;
-                    RUN_OUTCOME_COMPLETED.import(py, "livekit.agents._generated.agent_run", "RunOutcomeCompleted")?.call((), Some(&kwargs))
+                    crate::host::construct(RUN_OUTCOME_COMPLETED.import(py, "livekit.agents._generated.agent_run", "RunOutcomeCompleted")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::RunOutcome::InputRequired { question, verbatim, answer_tool } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
                     kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
                     kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    RUN_OUTCOME_INPUT_REQUIRED.import(py, "livekit.agents._generated.agent_run", "RunOutcomeInputRequired")?.call((), Some(&kwargs))
+                    crate::host::construct(RUN_OUTCOME_INPUT_REQUIRED.import(py, "livekit.agents._generated.agent_run", "RunOutcomeInputRequired")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -701,10 +701,10 @@ pub mod agent_run {
                 ::lk_agents_abi::agent::run::Output::Text(text) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
-                    OUTPUT_TEXT.import(py, "livekit.agents._generated.agent_run", "OutputText")?.call((), Some(&kwargs))
+                    crate::host::construct(OUTPUT_TEXT.import(py, "livekit.agents._generated.agent_run", "OutputText")?.as_any(), (), Some(&kwargs))
                 },
-                ::lk_agents_abi::agent::run::Output::Validated(_) => OUTPUT_VALIDATED.import(py, "livekit.agents._generated.agent_run", "OutputValidated")?.call0(),
-                ::lk_agents_abi::agent::run::Output::Nothing => OUTPUT_NOTHING.import(py, "livekit.agents._generated.agent_run", "OutputNothing")?.call0(),
+                ::lk_agents_abi::agent::run::Output::Validated(_) => crate::host::construct(OUTPUT_VALIDATED.import(py, "livekit.agents._generated.agent_run", "OutputValidated")?.as_any(), (), None),
+                ::lk_agents_abi::agent::run::Output::Nothing => crate::host::construct(OUTPUT_NOTHING.import(py, "livekit.agents._generated.agent_run", "OutputNothing")?.as_any(), (), None),
             }
     }
 
@@ -719,7 +719,7 @@ pub mod agent_run {
             kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
             kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
             kwargs.set_item("tool_calls", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_calls, py)?)?;
-            RUN_USAGE.import(py, "livekit.agents._generated.agent_run", "RunUsage")?.call((), Some(&kwargs))
+            crate::host::construct(RUN_USAGE.import(py, "livekit.agents._generated.agent_run", "RunUsage")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
@@ -746,20 +746,20 @@ pub mod agent_run {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(message_id, py)?)?;
                     kwargs.set_item("delta", ::pyo3::IntoPyObjectExt::into_bound_py_any(delta, py)?)?;
-                    STREAM_EVENT_TEXT_DELTA.import(py, "livekit.agents._generated.agent_run", "StreamEventTextDelta")?.call((), Some(&kwargs))
+                    crate::host::construct(STREAM_EVENT_TEXT_DELTA.import(py, "livekit.agents._generated.agent_run", "StreamEventTextDelta")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::StreamEvent::TextEnd { message_id, interrupted } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(message_id, py)?)?;
                     kwargs.set_item("interrupted", ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted, py)?)?;
-                    STREAM_EVENT_TEXT_END.import(py, "livekit.agents._generated.agent_run", "StreamEventTextEnd")?.call((), Some(&kwargs))
+                    crate::host::construct(STREAM_EVENT_TEXT_END.import(py, "livekit.agents._generated.agent_run", "StreamEventTextEnd")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::StreamEvent::ToolCall { call_id, tool_name, arguments } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
                     kwargs.set_item("tool_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_name, py)?)?;
                     kwargs.set_item("arguments", ::lk_agents_abi::python::value_to_py(py, &arguments)?)?;
-                    STREAM_EVENT_TOOL_CALL.import(py, "livekit.agents._generated.agent_run", "StreamEventToolCall")?.call((), Some(&kwargs))
+                    crate::host::construct(STREAM_EVENT_TOOL_CALL.import(py, "livekit.agents._generated.agent_run", "StreamEventToolCall")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::StreamEvent::ToolResult { call_id, tool_name, status, output } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
@@ -767,14 +767,14 @@ pub mod agent_run {
                     kwargs.set_item("tool_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_name, py)?)?;
                     kwargs.set_item("status", crate::generated::records::agent_run::tool_result_status_to_py(py, status)?)?;
                     kwargs.set_item("output", ::pyo3::IntoPyObjectExt::into_bound_py_any(output, py)?)?;
-                    STREAM_EVENT_TOOL_RESULT.import(py, "livekit.agents._generated.agent_run", "StreamEventToolResult")?.call((), Some(&kwargs))
+                    crate::host::construct(STREAM_EVENT_TOOL_RESULT.import(py, "livekit.agents._generated.agent_run", "StreamEventToolResult")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::StreamEvent::Progress { call_id, tool_name, message } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
                     kwargs.set_item("tool_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_name, py)?)?;
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    STREAM_EVENT_PROGRESS.import(py, "livekit.agents._generated.agent_run", "StreamEventProgress")?.call((), Some(&kwargs))
+                    crate::host::construct(STREAM_EVENT_PROGRESS.import(py, "livekit.agents._generated.agent_run", "StreamEventProgress")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -821,7 +821,7 @@ pub mod agent_run {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("result", crate::generated::records::agent_run::run_result_to_py(py, result)?)?;
             kwargs.set_item("output", match output { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            RUN_SETTLED.import(py, "livekit.agents._generated.agent_run", "RunSettled")?.call((), Some(&kwargs))
+            crate::host::construct(RUN_SETTLED.import(py, "livekit.agents._generated.agent_run", "RunSettled")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
@@ -839,22 +839,22 @@ pub mod agent_run {
                 ::lk_agents_abi::agent::run::RunUpdate::Stream(event) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("event", crate::generated::records::agent_run::stream_event_to_py(py, event)?)?;
-                    RUN_UPDATE_STREAM.import(py, "livekit.agents._generated.agent_run", "RunUpdateStream")?.call((), Some(&kwargs))
+                    crate::host::construct(RUN_UPDATE_STREAM.import(py, "livekit.agents._generated.agent_run", "RunUpdateStream")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::RunUpdate::IncompleteCleanup(pending) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("pending", ::pyo3::types::PyList::new(py, pending.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-                    RUN_UPDATE_INCOMPLETE_CLEANUP.import(py, "livekit.agents._generated.agent_run", "RunUpdateIncompleteCleanup")?.call((), Some(&kwargs))
+                    crate::host::construct(RUN_UPDATE_INCOMPLETE_CLEANUP.import(py, "livekit.agents._generated.agent_run", "RunUpdateIncompleteCleanup")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::RunUpdate::Finished(settled) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("settled", crate::generated::records::agent_run::run_settled_to_py(py, settled)?)?;
-                    RUN_UPDATE_FINISHED.import(py, "livekit.agents._generated.agent_run", "RunUpdateFinished")?.call((), Some(&kwargs))
+                    crate::host::construct(RUN_UPDATE_FINISHED.import(py, "livekit.agents._generated.agent_run", "RunUpdateFinished")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::RunUpdate::Failed(error) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
-                    RUN_UPDATE_FAILED.import(py, "livekit.agents._generated.agent_run", "RunUpdateFailed")?.call((), Some(&kwargs))
+                    crate::host::construct(RUN_UPDATE_FAILED.import(py, "livekit.agents._generated.agent_run", "RunUpdateFailed")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -885,7 +885,7 @@ pub mod evals {
             kwargs.set_item("verdict", ::pyo3::IntoPyObjectExt::into_bound_py_any(verdict, py)?)?;
             kwargs.set_item("reasoning", ::pyo3::IntoPyObjectExt::into_bound_py_any(reasoning, py)?)?;
             kwargs.set_item("instructions", ::pyo3::IntoPyObjectExt::into_bound_py_any(instructions, py)?)?;
-            JUDGMENT.import(py, "livekit.agents._generated.evals", "Judgment")?.call((), Some(&kwargs))
+            crate::host::construct(JUDGMENT.import(py, "livekit.agents._generated.evals", "Judgment")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/evals.rs.
@@ -917,13 +917,13 @@ pub mod evals {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
                     kwargs.set_item("judgment", crate::generated::records::evals::judgment_to_py(py, judgment)?)?;
-                    JUDGE_OUTCOME_JUDGED.import(py, "livekit.agents._generated.evals", "JudgeOutcomeJudged")?.call((), Some(&kwargs))
+                    crate::host::construct(JUDGE_OUTCOME_JUDGED.import(py, "livekit.agents._generated.evals", "JudgeOutcomeJudged")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::evals::JudgeOutcome::Failed { name, error } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
                     kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
-                    JUDGE_OUTCOME_FAILED.import(py, "livekit.agents._generated.evals", "JudgeOutcomeFailed")?.call((), Some(&kwargs))
+                    crate::host::construct(JUDGE_OUTCOME_FAILED.import(py, "livekit.agents._generated.evals", "JudgeOutcomeFailed")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -938,7 +938,7 @@ pub mod evals {
             kwargs.set_item("success", ::pyo3::IntoPyObjectExt::into_bound_py_any(success, py)?)?;
             kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
             kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            INTENT_JUDGMENT.import(py, "livekit.agents._generated.evals", "IntentJudgment")?.call((), Some(&kwargs))
+            crate::host::construct(INTENT_JUDGMENT.import(py, "livekit.agents._generated.evals", "IntentJudgment")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/evals.rs.
@@ -953,7 +953,7 @@ pub mod evals {
             kwargs.set_item("any_passed", ::pyo3::IntoPyObjectExt::into_bound_py_any(any_passed, py)?)?;
             kwargs.set_item("majority_passed", ::pyo3::IntoPyObjectExt::into_bound_py_any(majority_passed, py)?)?;
             kwargs.set_item("none_failed", ::pyo3::IntoPyObjectExt::into_bound_py_any(none_failed, py)?)?;
-            EVALUATION_SCORE.import(py, "livekit.agents._generated.evals", "EvaluationScore")?.call((), Some(&kwargs))
+            crate::host::construct(EVALUATION_SCORE.import(py, "livekit.agents._generated.evals", "EvaluationScore")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -970,7 +970,7 @@ pub mod llm_fallback {
             kwargs.set_item("index", ::pyo3::IntoPyObjectExt::into_bound_py_any(index, py)?)?;
             kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
             kwargs.set_item("available", ::pyo3::IntoPyObjectExt::into_bound_py_any(available, py)?)?;
-            AVAILABILITY_CHANGED.import(py, "livekit.agents._generated.llm_fallback", "AvailabilityChanged")?.call((), Some(&kwargs))
+            crate::host::construct(AVAILABILITY_CHANGED.import(py, "livekit.agents._generated.llm_fallback", "AvailabilityChanged")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1002,7 +1002,7 @@ pub mod mcp_session {
             kwargs.set_item("child_exit_code", match child_exit_code { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("child_exit_signal", match child_exit_signal { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("child_reaped", ::pyo3::IntoPyObjectExt::into_bound_py_any(child_reaped, py)?)?;
-            MCP_CLEANUP.import(py, "livekit.agents._generated.mcp_session", "McpCleanup")?.call((), Some(&kwargs))
+            crate::host::construct(MCP_CLEANUP.import(py, "livekit.agents._generated.mcp_session", "McpCleanup")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
@@ -1013,7 +1013,7 @@ pub mod mcp_session {
             let ::lk_agents_abi::llm::mcp::McpInvocation { host_context } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("host_context", match host_context { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            MCP_INVOCATION.import(py, "livekit.agents._generated.mcp_session", "McpInvocation")?.call((), Some(&kwargs))
+            crate::host::construct(MCP_INVOCATION.import(py, "livekit.agents._generated.mcp_session", "McpInvocation")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1038,7 +1038,7 @@ pub mod realtime_options {
             let ::lk_agents_abi::llm::realtime_native::RealtimeJsonOption { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
-            REALTIME_JSON_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeJsonOption")?.call((), Some(&kwargs))
+            crate::host::construct(REALTIME_JSON_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeJsonOption")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
@@ -1059,7 +1059,7 @@ pub mod realtime_options {
             let ::lk_agents_abi::llm::realtime_native::RealtimeToolChoice { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", match value { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            REALTIME_TOOL_CHOICE.import(py, "livekit.agents._generated.realtime_options", "RealtimeToolChoice")?.call((), Some(&kwargs))
+            crate::host::construct(REALTIME_TOOL_CHOICE.import(py, "livekit.agents._generated.realtime_options", "RealtimeToolChoice")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
@@ -1080,7 +1080,7 @@ pub mod realtime_options {
             let ::lk_agents_abi::llm::realtime_native::RealtimeDurationOption { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", match value { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            REALTIME_DURATION_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeDurationOption")?.call((), Some(&kwargs))
+            crate::host::construct(REALTIME_DURATION_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeDurationOption")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
@@ -1121,7 +1121,7 @@ pub mod realtime_options {
             kwargs.set_item("max_session_duration", match max_session_duration { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_duration_option_to_py(py, x)? })?;
             kwargs.set_item("voice", match voice { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("max_response_output_tokens", match max_response_output_tokens { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
-            REALTIME_OPTIONS.import(py, "livekit.agents._generated.realtime_options", "RealtimeOptions")?.call((), Some(&kwargs))
+            crate::host::construct(REALTIME_OPTIONS.import(py, "livekit.agents._generated.realtime_options", "RealtimeOptions")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
@@ -1170,7 +1170,7 @@ pub mod realtime_options {
             kwargs.set_item("inference_provider", match inference_provider { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("inference_class", match inference_class { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("label", match label { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            NATIVE_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "NativeRealtimeConfig")?.call((), Some(&kwargs))
+            crate::host::construct(NATIVE_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "NativeRealtimeConfig")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1189,7 +1189,7 @@ pub mod recorder {
             kwargs.set_item("last_flushed", match last_flushed { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("dropped_input_samples", ::pyo3::IntoPyObjectExt::into_bound_py_any(dropped_input_samples, py)?)?;
             kwargs.set_item("dropped_output_samples", ::pyo3::IntoPyObjectExt::into_bound_py_any(dropped_output_samples, py)?)?;
-            RECORDING_SUMMARY.import(py, "livekit.agents._generated.recorder", "RecordingSummary")?.call((), Some(&kwargs))
+            crate::host::construct(RECORDING_SUMMARY.import(py, "livekit.agents._generated.recorder", "RecordingSummary")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1211,7 +1211,7 @@ pub mod storage_class {
             kwargs.set_item("expires_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(expires_at, py)?)?;
             kwargs.set_item("idle_ttl_seconds", ::pyo3::IntoPyObjectExt::into_bound_py_any(idle_ttl_seconds, py)?)?;
             kwargs.set_item("database_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(database_id, py)?)?;
-            THREAD_INFO.import(py, "livekit.agents._generated.storage_class", "ThreadInfo")?.call((), Some(&kwargs))
+            crate::host::construct(THREAD_INFO.import(py, "livekit.agents._generated.storage_class", "ThreadInfo")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
@@ -1223,7 +1223,7 @@ pub mod storage_class {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("threads", ::pyo3::types::PyList::new(py, threads.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::thread_info_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("before", ::pyo3::IntoPyObjectExt::into_bound_py_any(before, py)?)?;
-            THREAD_PAGE.import(py, "livekit.agents._generated.storage_class", "ThreadPage")?.call((), Some(&kwargs))
+            crate::host::construct(THREAD_PAGE.import(py, "livekit.agents._generated.storage_class", "ThreadPage")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
@@ -1237,7 +1237,7 @@ pub mod storage_class {
             kwargs.set_item("seq", ::pyo3::IntoPyObjectExt::into_bound_py_any(seq, py)?)?;
             kwargs.set_item("message_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(message_id, py)?)?;
             kwargs.set_item("item", ::lk_agents_abi::python::value_to_py(py, &item)?)?;
-            THREAD_ITEM.import(py, "livekit.agents._generated.storage_class", "ThreadItem")?.call((), Some(&kwargs))
+            crate::host::construct(THREAD_ITEM.import(py, "livekit.agents._generated.storage_class", "ThreadItem")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
@@ -1249,7 +1249,7 @@ pub mod storage_class {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("items", ::pyo3::types::PyList::new(py, items.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::thread_item_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("after", ::pyo3::IntoPyObjectExt::into_bound_py_any(after, py)?)?;
-            THREAD_ITEM_PAGE.import(py, "livekit.agents._generated.storage_class", "ThreadItemPage")?.call((), Some(&kwargs))
+            crate::host::construct(THREAD_ITEM_PAGE.import(py, "livekit.agents._generated.storage_class", "ThreadItemPage")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
@@ -1264,7 +1264,7 @@ pub mod storage_class {
             kwargs.set_item("name", match name { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("status", crate::generated::records::storage_class::task_state_to_py(py, status)?)?;
             kwargs.set_item("updated_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(updated_at, py)?)?;
-            THREAD_TASK.import(py, "livekit.agents._generated.storage_class", "ThreadTask")?.call((), Some(&kwargs))
+            crate::host::construct(THREAD_TASK.import(py, "livekit.agents._generated.storage_class", "ThreadTask")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1307,7 +1307,7 @@ pub mod storage_class {
             kwargs.set_item("tool", match tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("call_id", match call_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            ASK.import(py, "livekit.agents._generated.storage_class", "Ask")?.call((), Some(&kwargs))
+            crate::host::construct(ASK.import(py, "livekit.agents._generated.storage_class", "Ask")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1319,7 +1319,7 @@ pub mod storage_class {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("stream_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(stream_id, py)?)?;
             kwargs.set_item("expires_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(expires_at, py)?)?;
-            STREAM_INFO.import(py, "livekit.agents._generated.storage_class", "StreamInfo")?.call((), Some(&kwargs))
+            crate::host::construct(STREAM_INFO.import(py, "livekit.agents._generated.storage_class", "StreamInfo")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1331,7 +1331,7 @@ pub mod storage_class {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("ask", match ask { None => py.None().into_bound(py), Some(x) => crate::generated::records::storage_class::ask_to_py(py, x)? })?;
             kwargs.set_item("streams", ::pyo3::types::PyList::new(py, streams.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::stream_info_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            TASK_INTERNAL.import(py, "livekit.agents._generated.storage_class", "TaskInternal")?.call((), Some(&kwargs))
+            crate::host::construct(TASK_INTERNAL.import(py, "livekit.agents._generated.storage_class", "TaskInternal")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1356,7 +1356,7 @@ pub mod storage_class {
             kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
             kwargs.set_item("message_id", match message_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("payload", ::lk_agents_abi::python::value_to_py(py, &payload)?)?;
-            ITEM_ROW.import(py, "livekit.agents._generated.storage_class", "ItemRow")?.call((), Some(&kwargs))
+            crate::host::construct(ITEM_ROW.import(py, "livekit.agents._generated.storage_class", "ItemRow")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1370,7 +1370,7 @@ pub mod storage_class {
             kwargs.set_item("artifacts", match artifacts { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
             kwargs.set_item("metadata", ::lk_agents_abi::python::extra_to_py(py, &metadata)?.into_any())?;
             kwargs.set_item("status_message", match status_message { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
-            TASK_DATA.import(py, "livekit.agents._generated.storage_class", "TaskData")?.call((), Some(&kwargs))
+            crate::host::construct(TASK_DATA.import(py, "livekit.agents._generated.storage_class", "TaskData")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1389,7 +1389,7 @@ pub mod storage_class {
             kwargs.set_item("updated_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(updated_at, py)?)?;
             kwargs.set_item("data", crate::generated::records::storage_class::task_data_to_py(py, data)?)?;
             kwargs.set_item("internal", match internal { None => py.None().into_bound(py), Some(x) => crate::generated::records::storage_class::task_internal_to_py(py, x)? })?;
-            TASK_RECORD.import(py, "livekit.agents._generated.storage_class", "TaskRecord")?.call((), Some(&kwargs))
+            crate::host::construct(TASK_RECORD.import(py, "livekit.agents._generated.storage_class", "TaskRecord")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1403,7 +1403,7 @@ pub mod storage_class {
             kwargs.set_item("next_page_token", ::pyo3::IntoPyObjectExt::into_bound_py_any(next_page_token, py)?)?;
             kwargs.set_item("page_size", ::pyo3::IntoPyObjectExt::into_bound_py_any(page_size, py)?)?;
             kwargs.set_item("total_size", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_size, py)?)?;
-            TASK_PAGE.import(py, "livekit.agents._generated.storage_class", "TaskPage")?.call((), Some(&kwargs))
+            crate::host::construct(TASK_PAGE.import(py, "livekit.agents._generated.storage_class", "TaskPage")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1420,7 +1420,7 @@ pub mod storage_class {
             kwargs.set_item("lease_until", ::pyo3::IntoPyObjectExt::into_bound_py_any(lease_until, py)?)?;
             kwargs.set_item("waiter", match waiter { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("drained_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(drained_id, py)?)?;
-            LANE_ROW.import(py, "livekit.agents._generated.storage_class", "LaneRow")?.call((), Some(&kwargs))
+            crate::host::construct(LANE_ROW.import(py, "livekit.agents._generated.storage_class", "LaneRow")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1436,7 +1436,7 @@ pub mod storage_class {
             kwargs.set_item("run_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(run_id, py)?)?;
             kwargs.set_item("type", ::pyo3::IntoPyObjectExt::into_bound_py_any(r#type, py)?)?;
             kwargs.set_item("payload", ::lk_agents_abi::python::value_to_py(py, &payload)?)?;
-            EVENT_ROW.import(py, "livekit.agents._generated.storage_class", "EventRow")?.call((), Some(&kwargs))
+            crate::host::construct(EVENT_ROW.import(py, "livekit.agents._generated.storage_class", "EventRow")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1452,7 +1452,7 @@ pub mod storage_class {
             kwargs.set_item("message_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(message_id, py)?)?;
             kwargs.set_item("message", ::lk_agents_abi::python::value_to_py(py, &message)?)?;
             kwargs.set_item("received_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(received_at, py)?)?;
-            INBOX_ROW.import(py, "livekit.agents._generated.storage_class", "InboxRow")?.call((), Some(&kwargs))
+            crate::host::construct(INBOX_ROW.import(py, "livekit.agents._generated.storage_class", "InboxRow")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
@@ -1479,7 +1479,7 @@ pub mod storage_class {
             kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
             kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
             kwargs.set_item("tool_calls", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_calls, py)?)?;
-            RUN_USAGE.import(py, "livekit.agents._generated.storage_class", "RunUsage")?.call((), Some(&kwargs))
+            crate::host::construct(RUN_USAGE.import(py, "livekit.agents._generated.storage_class", "RunUsage")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1508,7 +1508,7 @@ pub mod storage_context {
             kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
             kwargs.set_item("schema", ::lk_agents_abi::python::value_to_py(py, &schema)?)?;
             kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
-            CONTEXT_FIELD.import(py, "livekit.agents._generated.storage_context", "ContextField")?.call((), Some(&kwargs))
+            crate::host::construct(CONTEXT_FIELD.import(py, "livekit.agents._generated.storage_context", "ContextField")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
@@ -1531,7 +1531,7 @@ pub mod storage_context {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
             kwargs.set_item("fields", ::pyo3::types::PyList::new(py, fields.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            CONTEXT_MANIFEST.import(py, "livekit.agents._generated.storage_context", "ContextManifest")?.call((), Some(&kwargs))
+            crate::host::construct(CONTEXT_MANIFEST.import(py, "livekit.agents._generated.storage_context", "ContextManifest")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
@@ -1560,7 +1560,7 @@ pub mod storage_context {
             kwargs.set_item("fields", ::lk_agents_abi::python::extra_to_py(py, &fields)?.into_any())?;
             kwargs.set_item("contracts", ::lk_agents_abi::python::extra_to_py(py, &contracts)?.into_any())?;
             kwargs.set_item("manifests", ::pyo3::types::PyList::new(py, manifests.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_context::context_manifest_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            CONTEXT_SCOPE.import(py, "livekit.agents._generated.storage_context", "ContextScope")?.call((), Some(&kwargs))
+            crate::host::construct(CONTEXT_SCOPE.import(py, "livekit.agents._generated.storage_context", "ContextScope")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
@@ -1583,7 +1583,7 @@ pub mod storage_context {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("expected_revision", ::pyo3::IntoPyObjectExt::into_bound_py_any(expected_revision, py)?)?;
             kwargs.set_item("scope", crate::generated::records::storage_context::context_scope_to_py(py, scope)?)?;
-            CONTEXT_SCOPE_WRITE.import(py, "livekit.agents._generated.storage_context", "ContextScopeWrite")?.call((), Some(&kwargs))
+            crate::host::construct(CONTEXT_SCOPE_WRITE.import(py, "livekit.agents._generated.storage_context", "ContextScopeWrite")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
@@ -1606,7 +1606,7 @@ pub mod storage_context {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("revision", ::pyo3::IntoPyObjectExt::into_bound_py_any(revision, py)?)?;
             kwargs.set_item("fields", ::lk_agents_abi::python::extra_to_py(py, &fields)?.into_any())?;
-            CONTEXT_VALUES.import(py, "livekit.agents._generated.storage_context", "ContextValues")?.call((), Some(&kwargs))
+            crate::host::construct(CONTEXT_VALUES.import(py, "livekit.agents._generated.storage_context", "ContextValues")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1635,7 +1635,7 @@ pub mod storage_options {
             kwargs.set_item("policy", crate::generated::records::storage_options::policy_spec_to_py(py, policy)?)?;
             kwargs.set_item("debounce", crate::generated::records::storage_options::debounce_spec_to_py(py, debounce)?)?;
             kwargs.set_item("wait_timeout", match wait_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x.as_secs_f64(), py)? })?;
-            TURN_OPTIONS.import(py, "livekit.agents._generated.storage_options", "TurnOptions")?.call((), Some(&kwargs))
+            crate::host::construct(TURN_OPTIONS.import(py, "livekit.agents._generated.storage_options", "TurnOptions")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/options.rs.
@@ -1733,7 +1733,7 @@ pub mod storage_turn {
             kwargs.set_item("tasks", ::pyo3::types::PyList::new(py, tasks.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::task_record_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("caller_history", match caller_history { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
             kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            TURN_CONTEXT.import(py, "livekit.agents._generated.storage_turn", "TurnContext")?.call((), Some(&kwargs))
+            crate::host::construct(TURN_CONTEXT.import(py, "livekit.agents._generated.storage_turn", "TurnContext")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
@@ -1803,7 +1803,7 @@ pub mod storage_turn {
             kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
             kwargs.set_item("answered_by", ::pyo3::IntoPyObjectExt::into_bound_py_any(answered_by, py)?)?;
             kwargs.set_item("run_id", match run_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            TURN_RESULT.import(py, "livekit.agents._generated.storage_turn", "TurnResult")?.call((), Some(&kwargs))
+            crate::host::construct(TURN_RESULT.import(py, "livekit.agents._generated.storage_turn", "TurnResult")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
@@ -2005,7 +2005,7 @@ pub mod telemetry {
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
             kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
             kwargs.set_item("sdk_version", ::pyo3::IntoPyObjectExt::into_bound_py_any(sdk_version, py)?)?;
-            SESSION_REPORT_SNAPSHOT.import(py, "livekit.agents._generated.telemetry", "SessionReportSnapshot")?.call((), Some(&kwargs))
+            crate::host::construct(SESSION_REPORT_SNAPSHOT.import(py, "livekit.agents._generated.telemetry", "SessionReportSnapshot")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
@@ -2030,7 +2030,7 @@ pub mod telemetry {
             kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
             kwargs.set_item("content", ::pyo3::IntoPyObjectExt::into_bound_py_any(content, py)?)?;
             kwargs.set_item("retained_bytes", ::pyo3::IntoPyObjectExt::into_bound_py_any(retained_bytes, py)?)?;
-            PROJECTED_REPORT_EVENT.import(py, "livekit.agents._generated.telemetry", "ProjectedReportEvent")?.call((), Some(&kwargs))
+            crate::host::construct(PROJECTED_REPORT_EVENT.import(py, "livekit.agents._generated.telemetry", "ProjectedReportEvent")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/records.rs.
@@ -2090,7 +2090,7 @@ pub mod telemetry {
             kwargs.set_item("key", ::pyo3::IntoPyObjectExt::into_bound_py_any(key, py)?)?;
             kwargs.set_item("monotonic_ns", ::pyo3::IntoPyObjectExt::into_bound_py_any(monotonic_ns, py)?)?;
             kwargs.set_item("outcome", crate::generated::records::telemetry::telemetry_work_outcome_to_py(py, outcome)?)?;
-            TELEMETRY_WORK_OBSERVATION.import(py, "livekit.agents._generated.telemetry", "TelemetryWorkObservation")?.call((), Some(&kwargs))
+            crate::host::construct(TELEMETRY_WORK_OBSERVATION.import(py, "livekit.agents._generated.telemetry", "TelemetryWorkObservation")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -2115,7 +2115,7 @@ pub mod text_session {
             let ::lk_agents_abi::text_session::FrameId { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)?)?;
-            FRAME_ID.import(py, "livekit.agents._generated.text_session", "FrameId")?.call((), Some(&kwargs))
+            crate::host::construct(FRAME_ID.import(py, "livekit.agents._generated.text_session", "FrameId")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2138,7 +2138,7 @@ pub mod text_session {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("frame_id", crate::generated::records::text_session::frame_id_to_py(py, frame_id)?)?;
             kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
-            PARENT_CALL.import(py, "livekit.agents._generated.text_session", "ParentCall")?.call((), Some(&kwargs))
+            crate::host::construct(PARENT_CALL.import(py, "livekit.agents._generated.text_session", "ParentCall")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2165,12 +2165,12 @@ pub mod text_session {
 
     pub fn child_call_status_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::text_session::ChildCallStatus) -> PyResult<Bound<'py, PyAny>> {
             match value {
-                ::lk_agents_abi::text_session::ChildCallStatus::Approval => CHILD_CALL_STATUS_APPROVAL.import(py, "livekit.agents._generated.text_session", "ChildCallStatusApproval")?.call0(),
-                ::lk_agents_abi::text_session::ChildCallStatus::Ready => CHILD_CALL_STATUS_READY.import(py, "livekit.agents._generated.text_session", "ChildCallStatusReady")?.call0(),
+                ::lk_agents_abi::text_session::ChildCallStatus::Approval => crate::host::construct(CHILD_CALL_STATUS_APPROVAL.import(py, "livekit.agents._generated.text_session", "ChildCallStatusApproval")?.as_any(), (), None),
+                ::lk_agents_abi::text_session::ChildCallStatus::Ready => crate::host::construct(CHILD_CALL_STATUS_READY.import(py, "livekit.agents._generated.text_session", "ChildCallStatusReady")?.as_any(), (), None),
                 ::lk_agents_abi::text_session::ChildCallStatus::Running { frame_id } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("frame_id", crate::generated::records::text_session::frame_id_to_py(py, frame_id)?)?;
-                    CHILD_CALL_STATUS_RUNNING.import(py, "livekit.agents._generated.text_session", "ChildCallStatusRunning")?.call((), Some(&kwargs))
+                    crate::host::construct(CHILD_CALL_STATUS_RUNNING.import(py, "livekit.agents._generated.text_session", "ChildCallStatusRunning")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -2207,7 +2207,7 @@ pub mod text_session {
             kwargs.set_item("validated_arguments", ::lk_agents_abi::python::value_to_py(py, &validated_arguments)?)?;
             kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
             kwargs.set_item("status", crate::generated::records::text_session::child_call_status_to_py(py, status)?)?;
-            PENDING_CHILD_CALL.import(py, "livekit.agents._generated.text_session", "PendingChildCall")?.call((), Some(&kwargs))
+            crate::host::construct(PENDING_CHILD_CALL.import(py, "livekit.agents._generated.text_session", "PendingChildCall")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2250,7 +2250,7 @@ pub mod text_session {
             kwargs.set_item("starting_history_ids", ::pyo3::types::PyFrozenSet::new(py, starting_history_ids.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("transferred_message_ids", ::pyo3::types::PyFrozenSet::new(py, transferred_message_ids.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("merge_chat_history", ::pyo3::IntoPyObjectExt::into_bound_py_any(merge_chat_history, py)?)?;
-            SESSION_FRAME.import(py, "livekit.agents._generated.text_session", "SessionFrame")?.call((), Some(&kwargs))
+            crate::host::construct(SESSION_FRAME.import(py, "livekit.agents._generated.text_session", "SessionFrame")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2283,7 +2283,7 @@ pub mod text_session {
             kwargs.set_item("ancestors", ::pyo3::types::PyList::new(py, ancestors.into_iter().map(|x| PyResult::Ok(crate::generated::records::text_session::frame_id_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("frames", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in frames { d.set_item(crate::generated::records::text_session::frame_id_to_py(py, k)?, crate::generated::records::text_session::session_frame_to_py(py, x)?)?; } d.into_any() })?;
             kwargs.set_item("next_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(next_id, py)?)?;
-            TEXT_SESSION_STATE.import(py, "livekit.agents._generated.text_session", "TextSessionState")?.call((), Some(&kwargs))
+            crate::host::construct(TEXT_SESSION_STATE.import(py, "livekit.agents._generated.text_session", "TextSessionState")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2329,7 +2329,7 @@ pub mod text_session {
             kwargs.set_item("chat_history", crate::generated::records::text_session::chat_history_to_py(py, chat_history)?)?;
             kwargs.set_item("merge_chat_history", ::pyo3::IntoPyObjectExt::into_bound_py_any(merge_chat_history, py)?)?;
             kwargs.set_item("context_scope", match context_scope { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            LOCAL_AGENT_TOOL.import(py, "livekit.agents._generated.text_session", "LocalAgentTool")?.call((), Some(&kwargs))
+            crate::host::construct(LOCAL_AGENT_TOOL.import(py, "livekit.agents._generated.text_session", "LocalAgentTool")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2353,34 +2353,34 @@ pub mod text_session {
                 ::lk_agents_abi::text_session::RoutingError::MaxDepth { max_depth } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("max_depth", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_depth, py)?)?;
-                    ROUTING_ERROR_MAX_DEPTH.import(py, "livekit.agents._generated.text_session", "RoutingErrorMaxDepth")?.call((), Some(&kwargs))
+                    crate::host::construct(ROUTING_ERROR_MAX_DEPTH.import(py, "livekit.agents._generated.text_session", "RoutingErrorMaxDepth")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::RoutingError::UnknownAgent(message) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    ROUTING_ERROR_UNKNOWN_AGENT.import(py, "livekit.agents._generated.text_session", "RoutingErrorUnknownAgent")?.call((), Some(&kwargs))
+                    crate::host::construct(ROUTING_ERROR_UNKNOWN_AGENT.import(py, "livekit.agents._generated.text_session", "RoutingErrorUnknownAgent")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::RoutingError::UnknownScope(message) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    ROUTING_ERROR_UNKNOWN_SCOPE.import(py, "livekit.agents._generated.text_session", "RoutingErrorUnknownScope")?.call((), Some(&kwargs))
+                    crate::host::construct(ROUTING_ERROR_UNKNOWN_SCOPE.import(py, "livekit.agents._generated.text_session", "RoutingErrorUnknownScope")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::RoutingError::UnknownTool(message) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    ROUTING_ERROR_UNKNOWN_TOOL.import(py, "livekit.agents._generated.text_session", "RoutingErrorUnknownTool")?.call((), Some(&kwargs))
+                    crate::host::construct(ROUTING_ERROR_UNKNOWN_TOOL.import(py, "livekit.agents._generated.text_session", "RoutingErrorUnknownTool")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::RoutingError::MissingOutputType(message) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    ROUTING_ERROR_MISSING_OUTPUT_TYPE.import(py, "livekit.agents._generated.text_session", "RoutingErrorMissingOutputType")?.call((), Some(&kwargs))
+                    crate::host::construct(ROUTING_ERROR_MISSING_OUTPUT_TYPE.import(py, "livekit.agents._generated.text_session", "RoutingErrorMissingOutputType")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::RoutingError::InvalidState(message) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
-                    ROUTING_ERROR_INVALID_STATE.import(py, "livekit.agents._generated.text_session", "RoutingErrorInvalidState")?.call((), Some(&kwargs))
+                    crate::host::construct(ROUTING_ERROR_INVALID_STATE.import(py, "livekit.agents._generated.text_session", "RoutingErrorInvalidState")?.as_any(), (), Some(&kwargs))
                 },
-                ::lk_agents_abi::text_session::RoutingError::MissingAcceptedOutput => ROUTING_ERROR_MISSING_ACCEPTED_OUTPUT.import(py, "livekit.agents._generated.text_session", "RoutingErrorMissingAcceptedOutput")?.call0(),
+                ::lk_agents_abi::text_session::RoutingError::MissingAcceptedOutput => crate::host::construct(ROUTING_ERROR_MISSING_ACCEPTED_OUTPUT.import(py, "livekit.agents._generated.text_session", "RoutingErrorMissingAcceptedOutput")?.as_any(), (), None),
             }
     }
 
@@ -2393,7 +2393,7 @@ pub mod text_session {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("result", crate::generated::records::agent_run::run_result_to_py(py, result)?)?;
             kwargs.set_item("state", crate::generated::records::text_session::text_session_state_to_py(py, state)?)?;
-            TEXT_SESSION_TURN.import(py, "livekit.agents._generated.text_session", "TextSessionTurn")?.call((), Some(&kwargs))
+            crate::host::construct(TEXT_SESSION_TURN.import(py, "livekit.agents._generated.text_session", "TextSessionTurn")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2407,12 +2407,12 @@ pub mod text_session {
                 ::lk_agents_abi::text_session::TextSessionError::Routing(error) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("error", crate::generated::records::text_session::routing_error_to_py(py, error)?)?;
-                    TEXT_SESSION_ERROR_ROUTING.import(py, "livekit.agents._generated.text_session", "TextSessionErrorRouting")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_ERROR_ROUTING.import(py, "livekit.agents._generated.text_session", "TextSessionErrorRouting")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::TextSessionError::Run(error) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
-                    TEXT_SESSION_ERROR_RUN.import(py, "livekit.agents._generated.text_session", "TextSessionErrorRun")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_ERROR_RUN.import(py, "livekit.agents._generated.text_session", "TextSessionErrorRun")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -2469,7 +2469,7 @@ pub mod text_session {
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("turn", crate::generated::records::text_session::text_session_turn_to_py(py, turn)?)?;
             kwargs.set_item("output", match output { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            TEXT_SESSION_SETTLED.import(py, "livekit.agents._generated.text_session", "TextSessionSettled")?.call((), Some(&kwargs))
+            crate::host::construct(TEXT_SESSION_SETTLED.import(py, "livekit.agents._generated.text_session", "TextSessionSettled")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
@@ -2495,34 +2495,34 @@ pub mod text_session {
                     kwargs.set_item("agent_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_name, py)?)?;
                     kwargs.set_item("invocation_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?)?;
                     kwargs.set_item("event", crate::generated::records::agent_run::stream_event_to_py(py, event)?)?;
-                    TEXT_SESSION_UPDATE_STREAM.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateStream")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_UPDATE_STREAM.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateStream")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::TextSessionUpdate::InvocationSettled { invocation_id, usage } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("invocation_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?)?;
                     kwargs.set_item("usage", crate::generated::records::agent_run::run_usage_to_py(py, usage)?)?;
-                    TEXT_SESSION_UPDATE_INVOCATION_SETTLED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateInvocationSettled")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_UPDATE_INVOCATION_SETTLED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateInvocationSettled")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::TextSessionUpdate::Parked { invocation_id, usage } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("invocation_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?)?;
                     kwargs.set_item("usage", crate::generated::records::agent_run::run_usage_to_py(py, usage)?)?;
-                    TEXT_SESSION_UPDATE_PARKED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateParked")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_UPDATE_PARKED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateParked")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::TextSessionUpdate::IncompleteCleanup(pending) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("pending", ::pyo3::types::PyList::new(py, pending.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-                    TEXT_SESSION_UPDATE_INCOMPLETE_CLEANUP.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateIncompleteCleanup")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_UPDATE_INCOMPLETE_CLEANUP.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateIncompleteCleanup")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::TextSessionUpdate::Finished(settled) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("settled", crate::generated::records::text_session::text_session_settled_to_py(py, settled)?)?;
-                    TEXT_SESSION_UPDATE_FINISHED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateFinished")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_UPDATE_FINISHED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateFinished")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::text_session::TextSessionUpdate::Failed(error) => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("error", crate::generated::records::text_session::text_session_error_to_py(py, error)?)?;
-                    TEXT_SESSION_UPDATE_FAILED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateFailed")?.call((), Some(&kwargs))
+                    crate::host::construct(TEXT_SESSION_UPDATE_FAILED.import(py, "livekit.agents._generated.text_session", "TextSessionUpdateFailed")?.as_any(), (), Some(&kwargs))
                 },
             }
     }
@@ -2643,16 +2643,16 @@ pub mod worker_cli {
                     kwargs.set_item("ws_url", match ws_url { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
                     kwargs.set_item("api_key", match api_key { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
                     kwargs.set_item("api_secret", match api_secret { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-                    CLI_ARGS_START.import(py, "livekit.agents._generated.worker_cli", "CliArgsStart")?.call((), Some(&kwargs))
+                    crate::host::construct(CLI_ARGS_START.import(py, "livekit.agents._generated.worker_cli", "CliArgsStart")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::worker::cli::CliArgs::Console { entrypoint, connect_addr, record } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
                     kwargs.set_item("entrypoint", match entrypoint { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
                     kwargs.set_item("connect_addr", ::pyo3::IntoPyObjectExt::into_bound_py_any(connect_addr, py)?)?;
                     kwargs.set_item("record", ::pyo3::IntoPyObjectExt::into_bound_py_any(record, py)?)?;
-                    CLI_ARGS_CONSOLE.import(py, "livekit.agents._generated.worker_cli", "CliArgsConsole")?.call((), Some(&kwargs))
+                    crate::host::construct(CLI_ARGS_CONSOLE.import(py, "livekit.agents._generated.worker_cli", "CliArgsConsole")?.as_any(), (), Some(&kwargs))
                 },
-                ::lk_agents_abi::worker::cli::CliArgs::DownloadFiles => CLI_ARGS_DOWNLOAD_FILES.import(py, "livekit.agents._generated.worker_cli", "CliArgsDownloadFiles")?.call0(),
+                ::lk_agents_abi::worker::cli::CliArgs::DownloadFiles => crate::host::construct(CLI_ARGS_DOWNLOAD_FILES.import(py, "livekit.agents._generated.worker_cli", "CliArgsDownloadFiles")?.as_any(), (), None),
             }
     }
 }
@@ -2688,7 +2688,7 @@ pub mod worker_endpoint {
             let ::lk_agents_abi::worker::endpoint::EndpointOptions { public } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("public", ::pyo3::IntoPyObjectExt::into_bound_py_any(public, py)?)?;
-            ENDPOINT_OPTIONS.import(py, "livekit.agents._generated.worker_endpoint", "EndpointOptions")?.call((), Some(&kwargs))
+            crate::host::construct(ENDPOINT_OPTIONS.import(py, "livekit.agents._generated.worker_endpoint", "EndpointOptions")?.as_any(), (), Some(&kwargs))
     }
 }
 

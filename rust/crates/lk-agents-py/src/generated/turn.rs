@@ -39,7 +39,7 @@ impl EotDetectorProxy {
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let id = {
-            let v = obj.call_method0("_core_id")?;
+            let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
         Ok(EotDetectorProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), id })

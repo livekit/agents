@@ -927,7 +927,7 @@ fn an_enum_record_crosses_as_its_str_enum_members() {
     let shell = crate::records::conversions(&decls).expect("emits").text;
     assert!(
         shell.contains("::lk_agents_abi::llm::class::CloseReason::JobShutdown => \"job_shutdown\"")
-            && shell.contains(".import(py, \"livekit.agents._generated.session\", \"CloseReason\")?.call1((value,))?")
+            && shell.contains("crate::host::construct(CLOSE_REASON.import(py, \"livekit.agents._generated.session\", \"CloseReason\")?.as_any(), (value,), None)?")
             && shell.contains("\"job_shutdown\" => Ok(::lk_agents_abi::llm::class::CloseReason::JobShutdown)"),
         "{shell}"
     );
