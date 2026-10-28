@@ -14,12 +14,15 @@ use serde_json::Value;
 
 use super::{CommitOptions, RunOptions, Storage, shortuuid};
 
+#[derive(Clone)]
 pub struct ContextActivation {
-    activation: Mutex<Activation>,
+    activation: Arc<Mutex<Activation>>,
     direct: Option<DirectStore>,
-    operation: tokio::sync::Mutex<()>,
+    operation: Arc<tokio::sync::Mutex<()>>,
+    managed: Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[derive(Clone)]
 struct DirectStore {
     storage: Arc<dyn Storage>,
     thread_id: String,
@@ -72,6 +75,35 @@ impl DirectStore {
 }
 
 impl ContextActivation {
+    pub(crate) async fn lock_managed(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.operation.clone().lock_owned().await
+    }
+
+    pub(crate) fn begin_managed(
+        &self,
+        scopes: Vec<ContextScope>,
+        routing: Option<Value>,
+        _operation: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<(), StorageError> {
+        self.activation.lock().expect("context activation").rebase(scopes, routing)?;
+        self.managed.store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn end_managed(
+        &self,
+        committed: bool,
+        _operation: tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let mut activation = self.activation.lock().expect("context activation");
+        if committed {
+            activation.acknowledge();
+        } else {
+            activation.abandon();
+        }
+        self.managed.store(false, std::sync::atomic::Ordering::Release);
+    }
+
     pub async fn bound(
         storage: Arc<dyn Storage>,
         thread_id: String,
@@ -80,9 +112,10 @@ impl ContextActivation {
         let direct = DirectStore { storage, thread_id, lane };
         let (scopes, routing) = direct.snapshot().await?;
         Ok(Self {
-            activation: Mutex::new(Activation::new(scopes, routing, false)?),
+            activation: Arc::new(Mutex::new(Activation::new(scopes, routing, false)?)),
             direct: Some(direct),
-            operation: tokio::sync::Mutex::new(()),
+            operation: Arc::new(tokio::sync::Mutex::new(())),
+            managed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 }
@@ -95,9 +128,10 @@ impl HostContextActivation for ContextActivation {
         read_only: bool,
     ) -> Result<Self, StorageError> {
         Ok(Self {
-            activation: Mutex::new(Activation::new(scopes, routing_state, read_only)?),
+            activation: Arc::new(Mutex::new(Activation::new(scopes, routing_state, read_only)?)),
             direct: None,
-            operation: tokio::sync::Mutex::new(()),
+            operation: Arc::new(tokio::sync::Mutex::new(())),
+            managed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -108,7 +142,9 @@ impl HostContextActivation for ContextActivation {
         fields: Vec<ContextField>,
     ) -> Result<ContextValues, StorageError> {
         let _operation = self.operation.lock().await;
-        if let Some(direct) = &self.direct {
+        if let Some(direct) = &self.direct
+            && !self.managed.load(std::sync::atomic::Ordering::Acquire)
+        {
             let (scopes, routing) = direct.snapshot().await?;
             self.activation.lock().expect("context activation").rebase(scopes, routing)?;
         }
@@ -128,7 +164,9 @@ impl HostContextActivation for ContextActivation {
             .lock()
             .expect("context activation")
             .save(&scope_id, &identity, revision, &fields)?;
-        if let Some(direct) = &self.direct {
+        if let Some(direct) = &self.direct
+            && !self.managed.load(std::sync::atomic::Ordering::Acquire)
+        {
             let writes = self.activation.lock().expect("context activation").writes();
             if let Err(error) = direct.commit(writes).await {
                 if !matches!(error, StorageError::Uncertain(_))

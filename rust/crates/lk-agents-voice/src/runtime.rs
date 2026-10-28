@@ -3,6 +3,7 @@
 //! The queue owner only feeds it: [`Runtime::run`] in production, the fuzzer's run in tests.
 
 mod effects;
+mod storage;
 
 use crate::agent_session::{Driver, Event, Now, Tx};
 use crate::audio::{AUDIO_IN_LEG, ChannelEnd};
@@ -16,6 +17,7 @@ use std::sync::Arc;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub struct Runtime {
     pub driver: Driver,
+    storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     pub(crate) shared: Arc<crate::agent_session::SessionShared>,
     events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
     watch: crate::agent_session::WatchHub,
@@ -70,11 +72,13 @@ impl Runtime {
         shared: Arc<crate::agent_session::SessionShared>,
         events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
         watch: crate::agent_session::WatchHub,
+        storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     ) -> Self {
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
         let (reports, queue) = queue;
         let mut runtime = Runtime {
             driver,
+            storage,
             shared,
             events,
             watch,

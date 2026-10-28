@@ -17,6 +17,7 @@ pub mod host;
 pub mod lease;
 pub mod sqlite;
 pub mod streams;
+pub mod voice;
 
 use std::sync::Arc;
 

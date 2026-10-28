@@ -265,6 +265,10 @@ pub enum Input {
     /// Forwarded from the loop so they share one arrival order.
     RoomIo(crate::room_io::RoomIoEvent),
     Gen(GenEvent),
+    StorageReloaded(Vec<lk_agents_abi::ChatItem>),
+    StorageSettled(crate::agent_activity::scheduling::SpeechId),
+    StorageAbandoned(crate::agent_activity::scheduling::SpeechId),
+    StorageLost(crate::agent_activity::scheduling::SpeechId),
     Realtime(crate::agent_activity::realtime::RealtimeWake),
     Eot(
         lk_agents_abi::turn::detector::ReqId,
@@ -539,6 +543,10 @@ impl Driver {
             }
             Some(Input::RoomIo(ev)) => self.on_room_io(now, ev, &mut out),
             Some(Input::Gen(ev)) => self.on_generation(now, ev, &mut out),
+            Some(Input::StorageReloaded(history)) => self.storage_reloaded(history, &mut out),
+            Some(Input::StorageSettled(speech)) => self.storage_settled(now, speech, &mut out),
+            Some(Input::StorageAbandoned(speech)) => self.storage_abandoned(now, speech, &mut out),
+            Some(Input::StorageLost(speech)) => self.storage_lost(now, speech, &mut out),
             Some(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
             Some(Input::Eot(req, p, thresholds)) => {
                 self.activity.audio_recognition.set_thresholds(thresholds);

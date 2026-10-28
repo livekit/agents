@@ -1,6 +1,8 @@
 //! `llm/chat_context.py` as plain data. The reference's `copy()` is shallow and the pipeline relies
 //! on the aliasing; Rust clones, so every mutation through an alias is a `DiffOp::Replace`.
 
+pub mod protocol;
+
 use std::time::SystemTime;
 
 /// JSON, not an opaque ref: the reference branches on it (`chat_context.py:814`).

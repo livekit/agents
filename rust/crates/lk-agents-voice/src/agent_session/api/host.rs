@@ -56,13 +56,12 @@ impl SessionApi {
         instructions: Option<Instructions>,
         dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
         agent: String,
-        // The first agent's `Agent`, handed back by the events that name it.
         agent_host: Option<lk_agents_abi::HostRef>,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
+        storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
         llm: Option<Arc<dyn Llm>>,
-        // The native realtime model; a plugin's `RealtimeModel` is `realtime_host`.
         realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
         realtime_host: Option<Arc<dyn lk_agents_abi::llm::realtime::HostRealtime>>,
         tts: Option<Arc<dyn Tts>>,
@@ -319,6 +318,7 @@ impl SessionApi {
                 realtime_audio: realtime_audio_output_node,
             },
             chat_ctx,
+            storage,
             hook_bound: hook_bound.map(Duration::from_secs_f64),
             capture_run: None,
             max_unrecoverable_errors,

@@ -1401,6 +1401,7 @@ dependencies = [
  "inventory",
  "lk-agents-host-derive",
  "log",
+ "pbjson-types",
  "pyo3",
  "pyo3-async-runtimes",
  "rand 0.9.5",

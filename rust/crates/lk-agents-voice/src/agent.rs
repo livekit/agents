@@ -178,9 +178,7 @@ impl SessionChatCtx {
             .collect();
         let keep = |item: &ChatItem| match item {
             ChatItem::FunctionCall(call) => tools.contains(&call.name),
-            ChatItem::FunctionCallOutput(out) if !out.name.is_empty() => {
-                tools.contains(&out.name)
-            }
+            ChatItem::FunctionCallOutput(out) if !out.name.is_empty() => tools.contains(&out.name),
             ChatItem::FunctionCallOutput(out) => valid.contains(&out.call_id),
             _ => true,
         };
@@ -269,6 +267,23 @@ impl SessionChatCtx {
             }
         };
         (entry, outcome)
+    }
+
+    /// A newly acquired transport snapshot replaces every old row, preserving database order.
+    pub(crate) fn replace_transport(&mut self, items: Vec<ChatItem>, agent: &str) {
+        self.agent = agent.to_owned();
+        self.items = items
+            .into_iter()
+            .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
+            .map(|item| Committed {
+                item,
+                source: Source::HostCtx,
+                visibility: Visibility::Both,
+                agent: agent.to_owned(),
+            })
+            .collect();
+        self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
+        self.version += 1;
     }
 
     /// `Agent.update_chat_ctx`: `agent`'s view becomes exactly `items` (the version is kept).

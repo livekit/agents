@@ -240,6 +240,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._context = context
         self._thread = thread
+        self._voice_store: Any = None
+        self._store: ContextStore | None = None
 
         self._core: _core.VoiceSession = None  # type: ignore[assignment]
         self._room: rtc.Room | _core.FakeRoom | _core.OfflineRoom | None = None
@@ -297,12 +299,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def store(self) -> ContextStore:
         """The active host's explicitly managed context store."""
-        from .agent_run import current_run_hooks
-
-        hooks = current_run_hooks()
-        if hooks is None or hooks.store is None:
-            raise RuntimeError("This session has no managed store")
-        return hooks.store
+        if self._store is None:
+            raise RuntimeError("This session has no thread storage")
+        return self._store
 
     @property
     def context(self) -> Any:
@@ -434,6 +433,26 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             hosting = hosting or plan["hosting"]
             job_ctx.init_recording(self._recording_options)
 
+        if self._thread is not None:
+            from ..storage.context_store import ContextStore
+            from ..storage.errors import StorageError
+
+            try:
+                self._voice_store = await self._thread.storage.threads._core_voice_store(
+                    self._thread.id,
+                    self._thread.agent_name,
+                    initial_history=to_core_items(chat_ctx.items) if chat_ctx is not None else None,
+                )
+                self._store = ContextStore(
+                    activation=self._voice_store.activation,
+                    scope_id=f"root:{self._thread.agent_name}",
+                )
+                saved = self._voice_store.initial_history
+                if saved is not None:
+                    self._chat_ctx = ChatContext([from_core_item(item) for item in saved])
+            except StorageError as error:
+                logger.warning("the voice lane could not be loaded", extra={"error": str(error)})
+
         hooks = _AgentHooks(self)
         frame = self._frame(agent)
         frame["tools"] = await hooks._core_setup_tools(frame["tools_host"])
@@ -458,6 +477,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent=frame["agent"],
             agent_host=frame["agent_host"],
             chat_ctx=to_core_items(self._chat_ctx.items),
+            storage=self._voice_store,
             stt=_bindings.core_leg(frame.get("stt", self._stt)),
             vad=_bindings.core_leg(frame.get("vad", self._vad)),
             llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
@@ -568,6 +588,13 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _aclose(self, reason: CloseReason) -> None:
         if self._core is not None:
             await self._core.aclose(reason=reason.value, drain=False)
+        if self._voice_store is not None:
+            from ..storage.errors import StorageError
+
+            try:
+                await self._voice_store.aclose()
+            except StorageError as error:
+                logger.warning("the voice store could not close", extra={"error": str(error)})
         if self._recording_finished is None and self._recorder is not None:
             self._recording_finished = asyncio.ensure_future(self._recorder.finish())
         if self._recording_finished is not None:
@@ -873,6 +900,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_speech_done(self, wire: dict[str, Any]) -> None:
         if (handle := self._speech_handles.pop(wire["speech_id"], None)) is not None:
             handle._mark_done()
+
+    def _on_history_reloaded(self, wire: dict[str, Any]) -> None:
+        self._chat_ctx = ChatContext([from_core_item(item) for item in wire["items"]])
 
     def _on_item_added(self, wire: dict[str, Any]) -> None:
         item = from_core_item(wire["item"])
@@ -1293,6 +1323,7 @@ class _AgentNodes:
 
 
 _HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
+    "history_reloaded": VoiceSession._on_history_reloaded,
     "speech_created": VoiceSession._on_speech_created,
     "speech_done": VoiceSession._on_speech_done,
     "conversation_item_added": VoiceSession._on_item_added,

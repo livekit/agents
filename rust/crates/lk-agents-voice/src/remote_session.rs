@@ -1,8 +1,12 @@
 pub mod console;
+pub use lk_agents_abi::llm::chat_context::protocol::{
+    encode_chat_item, encode_epoch_secs, encode_metrics, encode_role, encode_timestamp,
+};
 pub mod driver;
 pub mod room;
 
 use async_trait::async_trait;
+use lk_agents_abi::ChatItem;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::metrics::usage::{AgentSessionUsage, ModelUsage};
 use lk_agents_abi::voice::amd::AmdCategory;
@@ -10,12 +14,11 @@ use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::worker::remote_session::{
     FunctionCallRef, ToolExecutionUpdatedWire, ToolUpdateWire, WireEvent,
 };
-use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Extra, MetricsReport, Role};
 use prost::Message as _;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 /// The option keys a [`SessionState`] row's `options` carries, in the reference's order, and whether each is
 /// a record the host expands first. Only the key set is pinned: values are Python `str()` output,
@@ -708,20 +711,6 @@ pub mod proto {
     pub use pbjson_types::{Duration, Struct, Timestamp};
 }
 
-/// `encode_timestamp` (`_proto.py:47`). Pre-epoch clamps to the epoch.
-pub fn encode_timestamp(t: SystemTime) -> proto::Timestamp {
-    let d = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
-    proto::Timestamp { seconds: d.as_secs() as i64, nanos: d.subsec_nanos() as i32 }
-}
-
-pub fn encode_epoch_secs(t: f64) -> proto::Timestamp {
-    let nanos = (t * 1e9) as i128;
-    proto::Timestamp {
-        seconds: (nanos.div_euclid(1_000_000_000)) as i64,
-        nanos: (nanos.rem_euclid(1_000_000_000)) as i32,
-    }
-}
-
 /// `Duration.FromNanoseconds(int(x * 1e9))`. Unlike `Timestamp`, a proto `Duration`'s `nanos` must
 /// share the sign of `seconds`, so -0.25 s is `(0, -250_000_000)`, as Python renormalises.
 pub fn encode_duration_secs(secs: f64) -> proto::Duration {
@@ -733,112 +722,6 @@ pub fn encode_duration_secs(secs: f64) -> proto::Duration {
         n -= 1_000_000_000;
     }
     proto::Duration { seconds: s as i64, nanos: n as i32 }
-}
-
-/// `ROLES` (`_proto.py:30`). Total, so there is no default arm to get wrong.
-pub fn encode_role(role: Role) -> proto::ChatRole {
-    match role {
-        Role::Developer => proto::ChatRole::Developer,
-        Role::System => proto::ChatRole::System,
-        Role::User => proto::ChatRole::User,
-        Role::Assistant => proto::ChatRole::Assistant,
-    }
-}
-
-/// `encode_metrics` (`_proto.py:76`). Ten of fifteen fields survive.
-pub fn encode_metrics(m: &MetricsReport) -> proto::MetricsReport {
-    proto::MetricsReport {
-        started_speaking_at: m.started_speaking_at.map(encode_epoch_secs),
-        stopped_speaking_at: m.stopped_speaking_at.map(encode_epoch_secs),
-        transcription_delay: m.transcription_delay,
-        end_of_turn_delay: m.end_of_turn_delay,
-        on_user_turn_completed_delay: m.on_user_turn_completed_delay,
-        llm_node_ttft: m.llm_node_ttft,
-        tts_node_ttfb: m.tts_node_ttfb,
-        e2e_latency: m.e2e_latency,
-        llm_node_tps: m.llm_node_tps,
-        llm_node_ttfs: m.llm_node_ttfs,
-        // dropped: the proto declares none of the metadata fields.
-    }
-}
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// `{k: str(v) ...}` (`_proto.py:88`), but compact JSON rather than Python `str(dict)`. `extra` does
-/// not round-trip in either implementation.
-fn encode_extra(extra: &Extra) -> std::collections::HashMap<String, String> {
-    extra
-        .iter()
-        .map(|(k, v)| {
-            let s = match v {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            (k.clone(), s)
-        })
-        .collect()
-}
-
-/// `encode_chat_item` (`_proto.py:80`).
-pub fn encode_chat_item(item: &ChatItem) -> proto::chat_context::ChatItem {
-    use proto::chat_context::chat_item::Item;
-    let inner = match item {
-        ChatItem::Message(m) => Item::Message(encode_chat_message(m)),
-        ChatItem::FunctionCall(f) => Item::FunctionCall(proto::FunctionCall {
-            id: f.id.clone(),
-            call_id: f.call_id.clone(),
-            arguments: f.arguments.clone(),
-            name: f.name.clone(),
-            created_at: Some(encode_timestamp(f.created_at)),
-            extra: encode_extra(&f.extra),
-            // dropped: group_id
-        }),
-        ChatItem::FunctionCallOutput(f) => Item::FunctionCallOutput(proto::FunctionCallOutput {
-            id: f.id.clone(),
-            name: f.name.clone(),
-            call_id: f.call_id.clone(),
-            output: f.output.clone(),
-            is_error: f.is_error,
-            created_at: Some(encode_timestamp(f.created_at)),
-            // dropped: reply_required
-        }),
-        ChatItem::AgentHandoff(h) => Item::AgentHandoff(proto::AgentHandoff {
-            id: h.id.clone(),
-            old_agent_id: h.old_agent_id.clone(),
-            new_agent_id: h.new_agent_id.clone(),
-            created_at: Some(encode_timestamp(h.created_at)),
-        }),
-        // An empty instructions string is absent, as in the reference (proto3 would tell them apart).
-        ChatItem::AgentConfigUpdate(c) => Item::AgentConfigUpdate(proto::AgentConfigUpdate {
-            id: c.id.clone(),
-            instructions: c.instructions.clone().filter(|s| !s.is_empty()),
-            tools_added: c.tools_added.clone().unwrap_or_default(),
-            tools_removed: c.tools_removed.clone().unwrap_or_default(),
-            created_at: Some(encode_timestamp(c.created_at)),
-        }),
-    };
-    proto::chat_context::ChatItem { item: Some(inner) }
-}
-
-fn encode_chat_message(m: &ChatMessage) -> proto::ChatMessage {
-    use proto::chat_message::{ChatContent as PbContent, chat_content::Payload};
-    proto::ChatMessage {
-        id: m.id.clone(),
-        role: encode_role(m.role) as i32,
-        // Image and audio content are filtered out, not rendered.
-        content: m
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                ChatContent::Text(t) => Some(PbContent { payload: Some(Payload::Text(t.clone())) }),
-                ChatContent::Image(_) | ChatContent::Audio(_) => None,
-            })
-            .collect(),
-        interrupted: m.interrupted,
-        transcript_confidence: m.transcript_confidence,
-        extra: encode_extra(&m.extra),
-        metrics: Some(encode_metrics(&m.metrics)),
-        created_at: Some(encode_timestamp(m.created_at)),
-    }
 }
 
 /// `encode_session_usage` (`_proto.py:113`).

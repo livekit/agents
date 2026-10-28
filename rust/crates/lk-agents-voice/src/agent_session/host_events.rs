@@ -136,6 +136,9 @@ impl SessionEvent {
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
         let host_stamp = 0.0;
         match self {
+            SessionEvent::HistoryReloaded { items } => {
+                HostWire::HistoryReloaded(w::HistoryReloadedWire { items: items.clone() })
+            }
             // `alternatives[0]`'s text, speaker and language; an unnamed language is none.
             SessionEvent::UserInputTranscribed(t) => {
                 let best = t.ev.best_alternative();
@@ -253,16 +256,20 @@ impl SessionEvent {
             }),
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
             SessionEvent::RunSettled { run, outcome, speech } => {
-                let (final_output, error) = match outcome {
-                    RunOutcome::Completed { final_output } => (final_output.clone(), None),
-                    RunOutcome::Failed(RunFailure::Output(err)) => (None, Some(err.clone())),
-                    RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => (None, None),
+                let (final_output, error, run_error) = match outcome {
+                    RunOutcome::Completed { final_output } => (final_output.clone(), None, None),
+                    RunOutcome::Failed(RunFailure::Output(err)) => (None, Some(err.clone()), None),
+                    RunOutcome::Failed(RunFailure::Run(err)) => (None, None, Some(err.clone())),
+                    RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => {
+                        (None, None, None)
+                    }
                 };
                 HostWire::RunSettled(w::RunSettledWire {
                     run: run.host.clone(),
                     outcome: outcome.as_str().to_owned(),
                     final_output,
                     error,
+                    run_error,
                     speech_handle: speech.as_ref().map(crate::speech_handle::SpeechHandle::object),
                 })
             }

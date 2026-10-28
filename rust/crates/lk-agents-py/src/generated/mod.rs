@@ -44,8 +44,9 @@ pub trait Implementations: 'static {
     type NativeRealtimeModel: ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
-    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation>;
+    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
+    type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
@@ -90,6 +91,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::_core_ContextActivation>()?;
+    m.add_class::<storage::_core_VoiceStore>()?;
     m.add_class::<telemetry::_core_TelemetryPolicy>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;

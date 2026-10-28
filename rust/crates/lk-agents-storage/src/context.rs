@@ -165,6 +165,14 @@ impl ContextActivation {
         Ok(())
     }
 
+    /// Discard staged fields after an abandoned activation without claiming a durable save.
+    pub fn abandon(&mut self) {
+        self.scopes = self.committed_scopes.clone();
+        self.base_revisions =
+            self.committed_scopes.iter().map(|(id, scope)| (id.clone(), scope.revision)).collect();
+        self.writes.clear();
+    }
+
     pub fn close(&mut self) {
         self.closed = true;
     }

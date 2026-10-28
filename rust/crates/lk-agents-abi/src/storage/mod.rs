@@ -3,6 +3,7 @@
 
 pub mod context;
 mod rows;
+pub mod voice;
 
 use serde_json::{Map, Value};
 
@@ -128,6 +129,17 @@ pub trait Storage: Send + Sync + Sized + 'static {
     type Streams: Send + Sync + 'static;
     #[host(class(name = "_core_ContextActivation"))]
     type ContextActivation: Send + Sync + 'static;
+
+    #[host(class(name = "_core_VoiceStore"))]
+    type VoiceStore: Send + Sync + 'static;
+
+    #[host(await)]
+    async fn _core_voice_store(
+        &self,
+        thread_id: String,
+        lane: String,
+        #[host(kw, default = None)] initial_history: Option<Vec<crate::ChatItem>>,
+    ) -> Result<Self::VoiceStore, StorageError>;
 
     /// `directory`: threads in that local directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url` (the project's

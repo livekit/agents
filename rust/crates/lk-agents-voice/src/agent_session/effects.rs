@@ -122,6 +122,8 @@ impl Out {
             | Effect::Answer(..)
             | Effect::Host(_)
             | Effect::ChatContext(_)
+            | Effect::StorageCommit { .. }
+            | Effect::StorageAbort(_)
             | Effect::Outputs(_)
             | Effect::Tap(_)
             | Effect::LaunchHold(_)
@@ -192,6 +194,8 @@ impl Out {
                 | Effect::Answer(..)
                 | Effect::Host(_)
                 | Effect::ChatContext(_)
+                | Effect::StorageCommit { .. }
+                | Effect::StorageAbort(_)
                 | Effect::Outputs(_)
                 | Effect::Tap(_)
                 | Effect::LaunchHold(_)
@@ -247,6 +251,11 @@ pub enum Effect {
     Answer(RequestId, Answer),
     Host(HostEvent),
     ChatContext(Arc<lk_agents_abi::ChatContext>),
+    StorageAbort(SpeechId),
+    StorageCommit {
+        speech: SpeechId,
+        history: Vec<lk_agents_abi::ChatItem>,
+    },
     Outputs(crate::agent_session::Outputs),
     Tap(crate::agent_session::SystemTap),
     LaunchHold(std::collections::BTreeSet<SpeechId>),
@@ -788,6 +797,7 @@ impl Driver {
             | SessionEvent::SpeechCreated { .. }
             | SessionEvent::FunctionToolsExecuted(_)
             | SessionEvent::ToolExecutionUpdated(_)
+            | SessionEvent::HistoryReloaded { .. }
             | SessionEvent::SpeechDone { .. }
             | SessionEvent::FloorChanged { .. }
             | SessionEvent::AmdResult { .. }

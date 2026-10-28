@@ -1,5 +1,7 @@
 use super::*;
 use lk_agents_abi::worker::remote_session::{DebugMessageWire, FunctionToolsStartedWire};
+use lk_agents_abi::{Extra, Role};
+use std::time::{Duration, UNIX_EPOCH};
 
 fn at(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)

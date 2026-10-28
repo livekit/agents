@@ -20,6 +20,17 @@ pub struct Storage(::std::sync::Arc<StorageImpl>);
 
 #[pymethods]
 impl Storage {
+    #[pyo3(signature = (thread_id, lane, *, initial_history = None))]
+    fn _core_voice_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String, initial_history: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_voice_store(&this, thread_id, lane, initial_history)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::storage::_core_VoiceStore(::std::sync::Arc::new(out)), py))
+        })
+    }
+
     /// `directory`: threads in that local directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url` (the project's
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
@@ -234,5 +245,52 @@ impl _core_ContextActivation {
         ::lk_agents_abi::python::check_pid()?;
         <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::close(&self.0);
         Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/voice.rs.
+type _core_VoiceStoreImpl = <crate::Selected as super::Implementations>::VoiceStore;
+
+/// The stable context store and initial snapshot belonging to one live call's lane.
+#[pyclass(frozen, name = "_core_VoiceStore", module = "livekit.agents._core")]
+pub struct _core_VoiceStore(::std::sync::Arc<_core_VoiceStoreImpl>);
+
+#[pymethods]
+impl _core_VoiceStore {
+    /// `None` preserves the application's explicit constructor history.
+    #[getter]
+    fn initial_history(&self) -> PyResult<::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_VoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::initial_history(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn activation(&self) -> PyResult<super::storage::_core_ContextActivation> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_VoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::activation(&self.0);
+        Ok(super::storage::_core_ContextActivation(::std::sync::Arc::new(out)))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_VoiceStoreImpl as ::lk_agents_abi::storage::voice::VoiceStore>::aclose(&this, )
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::storage::voice::VoiceStorage`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(),
+        read: |obj| {
+            let this = obj.cast::<_core_VoiceStore>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::storage::voice::VoiceStorage> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
     }
 }

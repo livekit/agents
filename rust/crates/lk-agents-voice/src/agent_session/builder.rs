@@ -82,6 +82,7 @@ pub struct DriverBuilder {
     pub toolset: crate::tool_executor::Toolset,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     pub session_id: String,
+    pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
 }
@@ -177,6 +178,7 @@ impl DriverBuilder {
                 agent: self.agent.clone(),
                 chat_ctx: self.chat_ctx.clone(),
                 session_id: self.session_id.clone(),
+                storage_enabled: self.storage.is_some(),
             },
         );
         session.expressive = self.expressive.clone();
@@ -270,6 +272,7 @@ impl DriverBuilder {
             shared,
             peer.events.clone(),
             peer.watch.clone(),
+            self.storage.take(),
         );
         let effects = std::mem::take(&mut runtime.driver.outbox);
         runtime.perform_voice(effects);

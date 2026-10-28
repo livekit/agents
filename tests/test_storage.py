@@ -817,10 +817,9 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(thread_storages: 
         assert texts[:4] == ["hello", "hi there", "a text", "texted back"]
         await session.store.load_context(app)
         assert app.patient.verified == 5 and session.context is app
-        assert session._activity is not None
         seen = [
             i.text_content
-            for i in session._activity.chat_ctx.items
+            for i in session._agent_chat_ctx().items
             if i.type == "message" and i.role != "system"
         ]
         assert seen[:4] == texts[:4], "the agent's working history reads the text too"

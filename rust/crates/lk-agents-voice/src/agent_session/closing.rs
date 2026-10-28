@@ -542,6 +542,8 @@ impl Driver {
                     | Effect::Answer(..)
                     | Effect::Host(_)
                     | Effect::ChatContext(_)
+                    | Effect::StorageCommit { .. }
+                    | Effect::StorageAbort(_)
                     | Effect::Outputs(_)
                     | Effect::Tap(_)
                     | Effect::LaunchHold(_)

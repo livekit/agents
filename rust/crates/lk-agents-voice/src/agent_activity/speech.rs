@@ -676,7 +676,7 @@ impl Driver {
         // Announced, recorded and scheduled in `request`, the one place every speech passes.
         let admitted =
             self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, out);
-        if admitted && !past_edge {
+        if admitted && !past_edge && !self.session.storage.lost {
             out.machine().push(crate::agent_session::effects::Effect::SpeechStart {
                 handle: Arc::clone(&handle),
                 context: Box::new(ctx),
@@ -684,7 +684,7 @@ impl Driver {
                 tts: self.session.tts.as_ref().map(|t| t.id),
             });
         }
-        if !admitted && self.activity.speech_scheduler.contains(id) {
+        if (!admitted || self.session.storage.lost) && self.activity.speech_scheduler.contains(id) {
             self.release_speech(now, id, out);
         }
         if admitted && kind.scheduled() {
@@ -723,8 +723,12 @@ impl Driver {
             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
 
             GenEvent::Done { speech, outcome, interrupted } => {
-                self.activity.set_tools_in_flight(speech, false);
-                self.finish_reply(now, speech, *outcome, interrupted, out);
+                if self.session.storage.enabled {
+                    self.storage_settle(speech, *outcome, interrupted, out);
+                } else {
+                    self.activity.set_tools_in_flight(speech, false);
+                    self.finish_reply(now, speech, *outcome, interrupted, out);
+                }
             }
 
             // One step's words are done, before its tools run.
@@ -794,22 +798,11 @@ impl Driver {
             }
 
             GenEvent::Failed { speech, error } => {
-                self.activity.set_tools_in_flight(speech, false);
-                // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
-                if self.activity.finished.contains(&speech)
-                    && !self.activity.speech_scheduler.contains(speech)
-                {
-                    return;
+                if self.session.storage.enabled {
+                    self.storage_abandon(speech, error, out);
+                } else {
+                    self.generation_failed(now, speech, error, out);
                 }
-                out.trace(SpeechStep::ReplyFailed {
-                    speech,
-                    class: crate::trace::FailureClass::of(&error),
-                });
-                if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
-                    // Moved, not formatted: the binding releases a `ProviderError::Host`'s entry.
-                    handle.mark_done(Some(*error));
-                }
-                self.release_speech(now, speech, out);
             }
 
             GenEvent::PlaybackStarted { speech } => {
@@ -928,6 +921,31 @@ impl Driver {
         let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
         out.machine().append(eff);
         out.trace(SpeechStep::AgentStartedSpeaking { speech });
+    }
+
+    pub(crate) fn generation_failed(
+        &mut self,
+        now: Ts,
+        speech: SpeechId,
+        error: Box<lk_agents_abi::errors::ProviderError>,
+        out: &mut Out,
+    ) {
+        self.activity.set_tools_in_flight(speech, false);
+        // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
+        if self.activity.finished.contains(&speech)
+            && !self.activity.speech_scheduler.contains(speech)
+        {
+            return;
+        }
+        out.trace(SpeechStep::ReplyFailed {
+            speech,
+            class: crate::trace::FailureClass::of(&error),
+        });
+        if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
+            // Moved, not formatted: the binding releases a `ProviderError::Host`'s entry.
+            handle.mark_done(Some(*error));
+        }
+        self.release_speech(now, speech, out);
     }
 
     /// Releases the current speech and moves the state (`thinking` while tools run, else

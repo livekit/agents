@@ -919,6 +919,7 @@ class VoiceSession:
         agent: str = ...,
         agent_host: Any | None = None,
         chat_ctx: list[ChatItem] | None = None,
+        storage: Any | None = None,
         stt: Any | None = None,
         vad: Any | None = None,
         llm: Any | None = None,

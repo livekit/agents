@@ -53,6 +53,7 @@ IGNORED_EVENTS: frozenset[str] = frozenset(
 # Every kind the stream carries: each `HostWire` member's, and the records it carries beside them.
 EVENT_KINDS: frozenset[str] = frozenset(
     {
+        "history_reloaded",
         "user_input_transcribed",
         "user_started_speaking",
         "user_stopped_speaking",

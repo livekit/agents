@@ -41,6 +41,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
     type NativeRealtimeModel = lk_agents_runtime::realtime::NativeRealtime;
     type RealtimeFallbackModel = lk_agents_runtime::realtime::fallback::RealtimeFallbackModel;
     type AgentClient = lk_agents_runtime::a2a_client::AgentClient;

@@ -24,6 +24,7 @@ pub mod driver;
 pub mod effects;
 pub mod host_events;
 pub mod nodes;
+pub(crate) mod storage;
 pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
@@ -84,6 +85,7 @@ pub(crate) struct VoiceSession {
     /// The session's OTel span tree.
     pub(crate) trace: crate::telemetry::SessionTrace,
     pub(crate) approvals: Vec<lk_agents_abi::ChatItem>,
+    pub(crate) storage: storage::StorageTurns,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -103,6 +105,7 @@ pub(crate) struct SessionParts {
     pub(crate) agent: String,
     pub(crate) chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     pub(crate) session_id: String,
+    pub(crate) storage_enabled: bool,
 }
 
 impl VoiceSession {
@@ -119,6 +122,7 @@ impl VoiceSession {
             agent,
             chat_ctx: opening_items,
             session_id,
+            storage_enabled,
         } = parts;
         let mut chat_ctx = crate::agent::SessionChatCtx::new(&agent);
         if let Some(items) = opening_items {
@@ -153,6 +157,7 @@ impl VoiceSession {
             amd_skips_replies: false,
             trace: Default::default(),
             approvals: Default::default(),
+            storage: storage::StorageTurns::new(storage_enabled),
         }
     }
 

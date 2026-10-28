@@ -181,6 +181,17 @@ impl Runtime {
                     }
                 }
             }
+            E::StorageAbort(speech) => {
+                self.storage_command(lk_agents_abi::storage::voice::VoiceStorageCommand::Abort {
+                    speech: speech.0,
+                })
+            }
+            E::StorageCommit { speech, history } => {
+                self.storage_command(lk_agents_abi::storage::voice::VoiceStorageCommand::Settle {
+                    speech: speech.0,
+                    history,
+                })
+            }
             E::ChatContext(snapshot) => {
                 self.shared.chat_ctx.send_replace(snapshot);
             }
@@ -216,7 +227,28 @@ impl Runtime {
                 context.providers.tts = tts.and_then(|id| self.shared.resources.tts(id));
                 let shared = Arc::clone(&self.shared);
                 let task = Arc::clone(&handle);
+                let storage = self.storage.clone();
+                let queue = self.reports.clone();
                 let abort = self.shared.spawner.spawn_unboxed(async move {
+                    if let Some(storage) = storage {
+                        match storage.acquire(task.id().0, context.request.chat_ctx.items.clone()).await {
+                            Ok(items) => {
+                                context.request.chat_ctx.items = items.clone();
+                                let _ = queue.send(Input::StorageReloaded(items));
+                                let _ = storage.clone().dispatch(
+                                    lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss { speech: task.id().0 },
+                                    Arc::new(super::storage::StorageReporter(queue.clone())),
+                                );
+                            }
+                            Err(error) => {
+                                log::warn!(target: "livekit.agents", "the voice lane could not be acquired: {error}");
+                                if storage.lease_lost() {
+                                    let _ = queue.send(Input::StorageLost(task.id()));
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     crate::generation::pipeline_reply::pipeline_reply_task(
                         shared, task, *context, player,
                     )

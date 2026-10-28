@@ -207,6 +207,22 @@ impl HostStorageClass for HostStorage {
     type Thread = Thread;
     type Streams = Arc<QueuedStreams>;
     type ContextActivation = super::context::ContextActivation;
+    type VoiceStore = super::voice::VoiceStore;
+
+    async fn _core_voice_store(
+        &self,
+        thread_id: String,
+        lane: String,
+        initial_history: Option<Vec<lk_agents_abi::ChatItem>>,
+    ) -> Result<Self::VoiceStore, StorageError> {
+        super::voice::VoiceStore::bound(
+            self.shared_storage().await?.clone(),
+            thread_id,
+            lane,
+            initial_history,
+        )
+        .await
+    }
 
     fn new(
         directory: Option<String>,

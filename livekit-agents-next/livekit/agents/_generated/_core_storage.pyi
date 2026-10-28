@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from .._core import Streams, Thread
+from .._core import ChatItem, Streams, Thread
 from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
 from .storage_context import ContextField, ContextScope, ContextScopeWrite, ContextValues
 
@@ -13,6 +13,13 @@ class Storage:
     """Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
     directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
     """
+    async def _core_voice_store(
+        self,
+        thread_id: str,
+        lane: str,
+        *,
+        initial_history: list[ChatItem] | None = None,
+    ) -> _core_VoiceStore: ...
     def __init__(
         self,
         *,
@@ -110,3 +117,12 @@ class _core_ContextActivation:
     def acknowledge(self) -> None: ...
     def close(self) -> None:
         """End the activation, refusing subsequent loads or saves."""
+
+class _core_VoiceStore:
+    """The stable context store and initial snapshot belonging to one live call's lane."""
+    @property
+    def initial_history(self) -> list[ChatItem] | None:
+        """`None` preserves the application's explicit constructor history."""
+    @property
+    def activation(self) -> _core_ContextActivation: ...
+    async def aclose(self) -> None: ...
