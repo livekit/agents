@@ -3,6 +3,8 @@
 
 mod bridge;
 mod buffers;
+// The `#[host(record)]` conversions, written by `lk-agents-codegen`.
+mod generated;
 mod host_errors;
 #[cfg(test)]
 mod host_tests;

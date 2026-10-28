@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from pydantic import JsonValue
 
+from .._generated import agent_run as records
 from ..log import logger
 
 if TYPE_CHECKING:
@@ -192,27 +193,26 @@ class RunStream(Generic[ResultT]):
         started = self._started
         assert started is not None and started.updates is not None
         while True:
-            update = cast("dict[str, Any] | None", await started.updates.recv())
+            update = await started.updates.recv()
             if update is None:
                 # closed while pulling: the cancellation settles
                 await self._close()
                 if self._error is None and self._settled is None:
                     self._error = asyncio.CancelledError()
                 return None
-            match update["kind"]:
-                case "stream":
+            match update:
+                case records.RunUpdateStream(event=event):
                     self._sequence += 1
-                    return _event(update["event"], self._sequence, self._agent_name, started.id)
-                case "finished":
-                    self._settled = started.settle(update)
+                    return _event(event, self._sequence, self._agent_name, started.id)
+                case records.RunUpdateFinished(settled=settled):
+                    self._settled = started.settle(settled)
                     return None
-                case "failed":
-                    self._error = started.fail(update["error"])
+                case records.RunUpdateFailed(error=error):
+                    self._error = started.fail(error)
                     return None
-                case "incomplete_cleanup":
+                case records.RunUpdateIncompleteCleanup(pending=pending):
                     logger.error(
-                        "the run's cleanup missed its deadline",
-                        extra={"pending": update["pending"]},
+                        "the run's cleanup missed its deadline", extra={"pending": pending}
                     )
 
     async def _close(self) -> None:
@@ -242,48 +242,49 @@ class _Started(Generic[ResultT]):
 
     id: str
     updates: _core.AgentRunUpdates | None
-    settle: Callable[[dict[str, Any] | None], ResultT]
-    fail: Callable[[dict[str, Any]], BaseException]
+    settle: Callable[[records.RunSettled | None], ResultT]
+    fail: Callable[[records.RunError], BaseException]
 
 
-def _event(raw: dict[str, Any], sequence: int, agent_name: str, invocation_id: str) -> StreamEvent:
+def _event(
+    event: records.StreamEvent, sequence: int, agent_name: str, invocation_id: str
+) -> StreamEvent:
     common: dict[str, Any] = {
         "sequence": sequence,
         "agent_name": agent_name,
         "invocation_id": invocation_id,
     }
-    match raw["kind"]:
-        case "text_delta":
-            return TextDeltaEvent(message_id=raw["message_id"], delta=raw["delta"], **common)
-        case "text_end":
+    match event:
+        case records.StreamEventTextDelta():
+            return TextDeltaEvent(message_id=event.message_id, delta=event.delta, **common)
+        case records.StreamEventTextEnd():
             return TextEndEvent(
-                message_id=raw["message_id"], interrupted=raw["interrupted"], **common
+                message_id=event.message_id, interrupted=event.interrupted, **common
             )
-        case "tool_call":
+        case records.StreamEventToolCall():
             return ToolCallEvent(
-                call_id=raw["call_id"],
-                tool_name=raw["tool_name"],
-                arguments=raw["arguments"] or {},
+                call_id=event.call_id,
+                tool_name=event.tool_name,
+                arguments=cast("dict[str, Any]", event.arguments or {}),
                 **common,
             )
-        case "tool_result":
-            failed = raw["status"] == "failed"
+        case records.StreamEventToolResult():
+            failed = event.status == "failed"
             return ToolResultEvent(
-                call_id=raw["call_id"],
-                tool_name=raw["tool_name"],
-                outcome=raw["status"],
-                output=None if failed else raw["output"],
-                error=raw["output"] if failed else None,
+                call_id=event.call_id,
+                tool_name=event.tool_name,
+                outcome=event.status,
+                output=None if failed else event.output,
+                error=event.output if failed else None,
                 **common,
             )
-        case "progress":
+        case records.StreamEventProgress():
             return ProgressEvent(
-                message=raw["message"],
-                call_id=raw["call_id"],
-                tool_name=raw["tool_name"],
+                message=event.message,
+                call_id=event.call_id,
+                tool_name=event.tool_name,
                 **common,
             )
-    raise ValueError(f"unknown stream event {raw['kind']!r}")
 
 
 __all__ = [

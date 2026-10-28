@@ -20,6 +20,66 @@ mod tests;
 pub struct Declarations {
     pub classes: Vec<Class>,
     pub proxies: Vec<Proxy>,
+    pub records: Vec<RecordDecl>,
+}
+
+/// `#[host(record(module = "..", extract, emit))]` on a struct or enum: a schema-defined record
+/// crossing as a generated model (`_generated/<module>.py`), never a dict. Its pyo3 conversions
+/// are generated into the ABI crate (`src/python/generated/`).
+#[derive(Debug, Clone)]
+pub struct RecordDecl {
+    /// `::lk_agents_abi::agent::ValidatedOutput`.
+    pub rust: String,
+    /// The host name: the model class, the union alias or the literal alias.
+    pub name: String,
+    /// The generated Python module (`agent_run`: `_generated/agent_run.py`).
+    pub module: String,
+    /// The ABI subject: the generated Rust module it is written into.
+    pub family: String,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub extract: bool,
+    pub emit: bool,
+    pub body: RecordBody,
+}
+
+#[derive(Debug, Clone)]
+pub enum RecordBody {
+    /// A model class of these fields.
+    Struct(Vec<Field>),
+    /// A data-variant enum: one model class per variant, the class is the tag.
+    Variants(Vec<Variant>),
+    /// A unit-only enum: a `Literal` of each variant's host string.
+    Literals(Vec<(String, String)>),
+}
+
+#[derive(Debug, Clone)]
+pub struct Variant {
+    pub rust_name: String,
+    /// The model class: `<Enum><Variant>` unless `name = ".."`.
+    pub name: String,
+    pub doc: Vec<String>,
+    pub shape: VariantShape,
+}
+
+#[derive(Debug, Clone)]
+pub enum VariantShape {
+    Unit,
+    /// `Variant(T)`: one field, named by `#[host(field = "..")]`; `None` when it is `skip`ped.
+    Tuple(Option<Field>),
+    Named(Vec<Field>),
+}
+
+/// A record field. Presence is declared: an `Option<T>` field takes the explicit null, any other
+/// refuses it naming `Record.field`; `default` is what an omitted keyword gives the model, and
+/// nothing else; a `skip`ped field does not cross (emit-only records).
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub rust_name: String,
+    pub ty: Ty,
+    pub default: Option<Literal>,
+    pub skip: bool,
+    pub doc: Vec<String>,
 }
 
 /// `#[host(proxy(host = ".."))] trait X` whose methods declare their calls: the core calling a
@@ -241,6 +301,8 @@ pub enum HostForm {
     Dict,
     /// `#[host(handwritten(.., host = ".."))]`: the annotation the declaration gives.
     Annotation(String),
+    /// A `#[host(record)]`: instances of the generated model (`_generated/<module>.py`), both ways.
+    Record { module: String, name: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +311,7 @@ pub enum Int {
     U16,
     U32,
     U64,
+    Usize,
     I32,
     I64,
 }
@@ -299,6 +362,7 @@ impl Int {
             Int::U16 => "u16",
             Int::U32 => "u32",
             Int::U64 => "u64",
+            Int::Usize => "usize",
             Int::I32 => "i32",
             Int::I64 => "i64",
         }

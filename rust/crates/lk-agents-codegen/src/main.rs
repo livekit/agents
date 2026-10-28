@@ -16,6 +16,7 @@ mod parse;
 mod placement;
 mod proxy;
 mod python;
+mod records;
 mod stub;
 #[cfg(test)]
 mod tests;
@@ -270,7 +271,9 @@ fn run(check: bool) -> Result<usize, String> {
     let abi = decl::tree::Crate::read(&root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
     let declared = decl::resolve::declarations(&abi)?;
     stale += put_dir(&root.join(adapter::DIR), &adapter::emit(&declared)?, check)?;
+    stale += put_dir(&root.join(records::DIR), &records::rust(&declared)?, check)?;
     let class_stubs = class_stub::emit(&declared)?;
+    let models = records::python(&declared)?;
     let bases = bases::emit(&decls, &exposed)?;
     let with_bases = python::emit_with(&decls, &bases, &constants)?;
     let reference: Vec<ir::Decl> = decls
@@ -294,7 +297,7 @@ fn run(check: bool) -> Result<usize, String> {
         }
         // The declared classes are the successor's: the reference keeps its own `_core`.
         if package != REFERENCE_PACKAGE {
-            for out in &class_stubs {
+            for out in class_stubs.iter().chain(&models) {
                 stale += put(&python_root.join(&out.path), &out.text, check)?;
             }
         }

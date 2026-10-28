@@ -44,10 +44,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
 
 /// `from <module> import <name>` lines, sorted.
 #[derive(Default)]
-struct Imports(Vec<(String, String)>);
+pub(crate) struct Imports(Vec<(String, String)>);
 
 impl Imports {
-    fn add(&mut self, module: &str, name: &str) {
+    pub(crate) fn add(&mut self, module: &str, name: &str) {
         let entry = (module.to_owned(), name.to_owned());
         if !self.0.contains(&entry) {
             self.0.push(entry);
@@ -56,10 +56,10 @@ impl Imports {
 
     /// isort's order: the standard library, other absolute imports, relative ones; each block
     /// sorted and separated by a blank line.
-    fn render(&self, own: &[&str]) -> String {
+    pub(crate) fn render(&self, own: &[&str]) -> String {
         let block = |m: &str| match m {
             _ if m.starts_with('.') => 2,
-            "typing" | "collections.abc" | "enum" | "asyncio" => 0,
+            "typing" | "collections.abc" | "enum" | "asyncio" | "dataclasses" => 0,
             _ => 1,
         };
         let mut modules: Vec<&str> = self.0.iter().map(|(m, _)| m.as_str()).collect();
@@ -74,7 +74,17 @@ impl Imports {
                 .filter(|(mm, n)| mm == m && !(m == ".._core" && own.contains(&n.as_str())))
                 .map(|(_, n)| n.as_str())
                 .collect();
-            names.sort();
+            // ruff's order by type: CONSTANTS, then Classes, then the rest.
+            names.sort_by_key(|n| {
+                let kind = if n.chars().all(|c| c.is_uppercase() || c == '_') {
+                    0
+                } else if n.starts_with(char::is_uppercase) {
+                    1
+                } else {
+                    2
+                };
+                (kind, *n)
+            });
             if names.is_empty() {
                 continue;
             }
@@ -168,12 +178,15 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         ),
         Ty::Record(r)
             if dir == Dir::Out
-                && !matches!(r.host, HostForm::CoreClass(_) | HostForm::Annotation(_)) =>
+                && !matches!(
+                    r.host,
+                    HostForm::CoreClass(_) | HostForm::Annotation(_) | HostForm::Record { .. }
+                ) =>
         {
             "dict[str, object]".into()
         }
         Ty::Record(r) => match &r.host {
-            HostForm::Model { module, name } => {
+            HostForm::Model { module, name } | HostForm::Record { module, name } => {
                 imports.add(&format!(".{module}"), name);
                 name.clone()
             }
@@ -203,7 +216,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     }
 }
 
-fn py_literal(d: &Literal) -> String {
+pub(crate) fn py_literal(d: &Literal) -> String {
     match d {
         Literal::None => "None".into(),
         Literal::Bool(true) => "True".into(),
@@ -214,7 +227,7 @@ fn py_literal(d: &Literal) -> String {
     }
 }
 
-fn docstring(doc: &[String], indent: &str) -> String {
+pub(crate) fn docstring(doc: &[String], indent: &str) -> String {
     if doc.is_empty() {
         return String::new();
     }

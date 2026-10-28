@@ -33,6 +33,7 @@ from .._generated.events import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
+from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from ..llm import FunctionCall, FunctionCallOutput
 from ..utils import shortuuid
 from .speech_handle import SpeechHandle
@@ -286,7 +287,7 @@ class RunContext(Generic[Context_T]):
         if not self._first_update.done():
             self._first_update.set_result((rendered, raw))
             return
-        update = {"kind": "update", "text": rendered, "raw": raw}
+        update = ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=raw))
         self.session._core.tool_update(fnc_call.call_id, update)
 
 

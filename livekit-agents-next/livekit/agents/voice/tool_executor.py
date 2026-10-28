@@ -1,9 +1,10 @@
 """The session's tool runner: the core decides which call runs and what its outcome means; this
-runs the Python function and classifies what it returned or raised (``llm.utils.tool_outcome``)."""
+runs the Python function and classifies what it returned or raised (``llm.utils.tool_report``)."""
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, get_type_hints
@@ -13,9 +14,20 @@ from typing_extensions import TypedDict
 
 from .. import _core
 from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
+from .._generated.tool_report import (
+    Approval,
+    ToolOutcomeCancelled,
+    ToolOutcomeCompleted,
+    ToolOutcomeInternal,
+    ToolOutcomeInvalid,
+    ToolOutcomeModelRetry,
+    ToolOutcomeToolError,
+    ToolOutcomeUpdate,
+    ToolReport,
+)
 from ..llm import ToolContext
 from ..llm.tool_context import FunctionTool, InputRequired, ModelRetry, Tool, Toolset
-from ..llm.utils import is_context_type, prepare_function_arguments, tool_outcome
+from ..llm.utils import is_context_type, prepare_function_arguments, tool_report
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
@@ -72,7 +84,7 @@ class ToolRunner:
 
     async def _core_run(
         self, call: dict[str, Any], speech: _core.SpeechHandle, granted: bool, task: bool
-    ) -> dict[str, Any]:
+    ) -> ToolReport:
         from .._core_view import from_core_item
 
         fnc_call = from_core_item(call)
@@ -84,7 +96,8 @@ class ToolRunner:
         ).get_function_tool(fnc_call.name)
         if tool is None:
             names = list(tools.function_tools)
-            return {"kind": "tool_error", "text": _core.unknown_tool_message(fnc_call.name, names)}
+            message = _core.unknown_tool_message(fnc_call.name, names)
+            return ToolReport(outcome=ToolOutcomeToolError(message=message))
 
         handle = SpeechHandle._of(speech)
         ctx = RunContext(function_call=fnc_call, session=self._session, speech_handle=handle)
@@ -97,7 +110,7 @@ class ToolRunner:
 
         binding = _VoiceBinding(self._session, self._agent, origin=f"tool:{fnc_call.call_id}")
         # a tool that requires approval runs only on the core's grant, else asks its read-back
-        approval: list[str] = []  # the call's mark once decided: "granted" or "asked"
+        approval: list[Approval] = []  # the call's mark once decided
         gated = isinstance(tool, FunctionTool) and tool.info.needs_approval
         if gated and granted:
             approval.append("granted")
@@ -116,12 +129,12 @@ class ToolRunner:
         first_update = ctx._first_update
         await asyncio.wait({body, first_update}, return_when=asyncio.FIRST_COMPLETED)
         if body.done():
-            outcome = _ended(fnc_call, body, approval)
+            report = _ended(fnc_call, body, approval)
             # in a VoiceTask's speech a `Completed` ends the task, once validated; from an
             # ordinary tool it is the call's output, with a reply
-            if task and outcome["kind"] == "completed":
-                return await self._validated(ctx, body.result().value, outcome)
-            return outcome
+            if task and isinstance(report.outcome, ToolOutcomeCompleted):
+                return await self._validated(ctx, body.result().value, report)
+            return report
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
@@ -129,21 +142,19 @@ class ToolRunner:
 
         body.add_done_callback(_final)
         message, raw = first_update.result()
-        return {"kind": "update", "text": message, "raw": raw}
+        return ToolReport(outcome=ToolOutcomeUpdate(message=message, raw=raw))
 
-    async def _validated(
-        self, ctx: RunContext, value: Any, outcome: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _validated(self, ctx: RunContext, value: Any, report: ToolReport) -> ToolReport:
         """A task's `Completed(value)` through its agent's `output_type` and output validators:
         the value the task returns, or the error its model reads and corrects."""
         try:
             value = TypeAdapter(self._agent.output_type).validate_python(value)
             value = await self._agent._validate_output(ctx, value)
         except ValidationError as e:
-            return {"kind": "tool_error", "text": str(e)}
+            return ToolReport(outcome=ToolOutcomeToolError(message=str(e)))
         except ModelRetry as e:
-            return {"kind": "model_retry", "text": e.message}
-        return {**outcome, "transition": value}
+            return ToolReport(outcome=ToolOutcomeModelRetry(message=e.message))
+        return dataclasses.replace(report, transition=value)
 
     def _core_cancel(self, call_id: str) -> None:
         if task := self._running.get(call_id):
@@ -189,25 +200,25 @@ async def _read_back(
     )
 
 
-def _ended(fnc_call: FunctionCall, task: asyncio.Task[Any], approval: list[str]) -> dict[str, Any]:
+def _ended(fnc_call: FunctionCall, task: asyncio.Task[Any], approval: list[Approval]) -> ToolReport:
     if task.cancelled():
-        outcome: dict[str, Any] = {"kind": "cancelled"}
+        report = ToolReport(outcome=ToolOutcomeCancelled())
     elif (exc := task.exception()) is not None:
-        outcome = _outcome(fnc_call, None, exc)
+        report = _outcome(fnc_call, None, exc)
     else:
-        outcome = _outcome(fnc_call, task.result(), None)
+        report = _outcome(fnc_call, task.result(), None)
     if approval:
-        outcome["approval"] = approval[0]
-    return outcome
+        report = dataclasses.replace(report, approval=approval[0])
+    return report
 
 
-def _outcome(fnc_call: FunctionCall, output: Any, exc: BaseException | None) -> dict[str, Any]:
-    outcome = tool_outcome(output, exc)
-    if outcome["kind"] == "internal":
+def _outcome(fnc_call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:
+    report = tool_report(output, exc)
+    if isinstance(report.outcome, ToolOutcomeInternal):
         logger.error("exception occurred while executing a tool", exc_info=exc)
-    elif outcome["kind"] == "invalid":
+    elif isinstance(report.outcome, ToolOutcomeInvalid):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
             extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
-    return outcome
+    return report

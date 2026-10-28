@@ -18,6 +18,24 @@ from typing import TYPE_CHECKING, Any, Generic
 
 from .. import _core, llm, utils
 from .._exceptions import UnexpectedModelBehavior
+from .._generated.agent_run import (
+    FunctionToolInfo,
+    OutputNothing,
+    OutputText,
+    OutputValidated,
+    ReadBack,
+    RunError,
+    RunErrorCancelled,
+    RunErrorHost,
+    RunErrorModel,
+    RunErrorNoModel,
+    RunErrorOutputRetriesExceeded,
+    RunErrorToolRetriesExceeded,
+    RunOutcomeCompleted,
+    RunOutcomeInputRequired,
+    RunRequest,
+    RunSettled,
+)
 from ..llm import ChatContext, ChatItem, ChatMessage, FunctionTool, RawFunctionTool, ToolContext
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import Toolset
@@ -166,43 +184,47 @@ async def start_run(
     captured.run(_BindingContextVar.set, run)
     runner = _core.AgentRunner(agent._definition(run.tools), run.llm, agent._host)
     updates = runner.run(
-        {
-            "invocation_id": run.id,
-            "message": to_core_item(message),
-            "history": to_core_items(history),
-            "answer_tool": hooks.answer_tool if hooks is not None else None,
-            "delegated": hooks.delegated if hooks is not None else False,
-            "conn_options": conn_options,
-            "host_context": (asyncio.get_running_loop(), captured),
-        }
+        RunRequest(
+            invocation_id=run.id,
+            message=to_core_item(message),
+            history=to_core_items(history),
+            answer_tool=hooks.answer_tool if hooks is not None else None,
+            delegated=hooks.delegated if hooks is not None else False,
+            conn_options=conn_options,
+            host_context=(asyncio.get_running_loop(), captured),
+        )
     )
     return run, updates
 
 
-def settled_result(run: _TextRun[Any], finished: dict[str, Any]) -> RunResult[Any]:
-    """The ``finished`` update as the caller's ``RunResult``; this run's usage is added to the
+def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
+    """The settled invocation as the caller's ``RunResult``; this run's usage is added to the
     caller's accumulator."""
     from .._core_view import from_core_item
 
-    result = finished["result"]
-    usage = RunUsage(**result["usage"])
+    result = settled.result
+    usage = RunUsage(
+        requests=result.usage.requests,
+        input_tokens=result.usage.input_tokens,
+        output_tokens=result.usage.output_tokens,
+        tool_calls=result.usage.tool_calls,
+    )
     run.usage._add(usage)
-    settled: dict[str, Any] = {
-        "new_messages": [from_core_item(i) for i in result["new_messages"]],
-        "all_messages": [from_core_item(i) for i in result["all_messages"]],
+    common: dict[str, Any] = {
+        "new_messages": [from_core_item(i) for i in result.new_messages],
+        "all_messages": [from_core_item(i) for i in result.all_messages],
         "usage": usage,
-        "verbatim": result["verbatim"],
+        "verbatim": result.verbatim,
     }
-    outcome = result["outcome"]
-    if outcome["kind"] == "input_required":
-        return RunInputRequired(
-            question=outcome["question"], answer_tool=outcome["answer_tool"], **settled
-        )
-    output = outcome["output"]
-    value: Any = {"text": output.get("text"), "validated": finished["output"], "nothing": None}[
-        output["kind"]
-    ]
-    return RunCompleted(output=value, **settled)
+    match result.outcome:
+        case RunOutcomeInputRequired(question=question, answer_tool=answer_tool):
+            return RunInputRequired(question=question, answer_tool=answer_tool, **common)
+        case RunOutcomeCompleted(output=OutputText(text=text)):
+            return RunCompleted(output=text, **common)
+        case RunOutcomeCompleted(output=OutputValidated()):
+            return RunCompleted(output=settled.output, **common)
+        case RunOutcomeCompleted(output=OutputNothing()):
+            return RunCompleted(output=None, **common)
 
 
 def interrupted_result(run: _TextRun[Any]) -> RunResult[Any]:
@@ -217,37 +239,44 @@ def interrupted_result(run: _TextRun[Any]) -> RunResult[Any]:
     )
 
 
-def run_error(error: dict[str, Any]) -> BaseException:
-    """The exception a ``failed`` update raises."""
-    kind, message = error["kind"], error["message"]
-    if kind == "cancelled":
-        return asyncio.CancelledError(message)
-    if kind in ("tool_retries_exceeded", "output_retries_exceeded"):
-        return UnexpectedModelBehavior(message)
-    if kind == "model":
-        from .._exceptions import APIError
+def run_error(error: RunError) -> BaseException:
+    """The exception a run that settled without a result raises."""
+    match error:
+        case RunErrorCancelled():
+            return asyncio.CancelledError("the run was cancelled")
+        case RunErrorToolRetriesExceeded(tool=tool, retries=retries):
+            return UnexpectedModelBehavior(f"tool `{tool}` exceeded max retries count of {retries}")
+        case RunErrorOutputRetriesExceeded(retries=retries):
+            return UnexpectedModelBehavior(
+                f"exceeded maximum retries ({retries}) for output validation"
+            )
+        case RunErrorModel(message=message):
+            from .._exceptions import APIError
 
-        return APIError(message, retryable=False)
-    return RuntimeError(message)
+            return APIError(f"the model request failed: {message}", retryable=False)
+        case RunErrorHost(message=message):
+            return RuntimeError(message)
+        case RunErrorNoModel():
+            return RuntimeError("the agent has no model")
 
 
-def tool_infos(tools: ToolContext) -> list[dict[str, Any]]:
+def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     """The core's ``FunctionToolInfo`` of each function tool."""
     from .._core_view import tool_specs
 
     specs = {spec["name"]: spec for spec in tool_specs(tools.flatten())}
     infos = []
     for name, tool in tools.function_tools.items():
-        approval = None
+        approval: ReadBack | None = None
         if isinstance(tool, FunctionTool) and tool.info.needs_approval:
             approval = "function" if tool.info.read_back is not None else "default"
         infos.append(
-            {
-                "spec": specs[name],
-                "raw_schema": isinstance(tool, RawFunctionTool),
-                "needs_approval": approval,
-                "on_duplicate": tool.info.on_duplicate,
-                "duplicate_scope": tool.info.duplicate_scope,
-            }
+            FunctionToolInfo(
+                spec=specs[name],
+                raw_schema=isinstance(tool, RawFunctionTool),
+                needs_approval=approval,
+                on_duplicate=tool.info.on_duplicate,
+                duplicate_scope=tool.info.duplicate_scope,
+            )
         )
     return infos

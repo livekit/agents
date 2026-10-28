@@ -110,6 +110,7 @@ pub const ASK_IN_OWN_WORDS: &str =
 
 /// What a tool's run came to, as the host classified the value it returned or raised. The host
 /// only classifies; the outcome table in `lk-agents-core` decides what it means.
+#[crate::host(record(module = "tool_report", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolOutcome {
     /// A value the model reads: `text` is a string as written, anything else as its JSON.
@@ -117,15 +118,20 @@ pub enum ToolOutcome {
     /// verbatim result carries for the model alone.
     Value {
         text: String,
+        #[host(default = true)]
         reply_required: bool,
+        #[host(default = false)]
         verbatim: bool,
+        #[host(default = None)]
         more: Option<String>,
     },
     /// `None`: nothing to say, no reply asked.
     Nothing,
     /// `ToolError(message)`: the author's words, for the model.
+    #[host(field = "message")]
     ToolError(String),
     /// `ModelRetry(message)`: the reason, for the model to correct its call.
+    #[host(field = "message")]
     ModelRetry(String),
     /// `StopResponse`: answered with nothing, no reply.
     StopResponse,
@@ -143,118 +149,51 @@ pub enum ToolOutcome {
     /// `Completed(value)`: the value as text (`completed` for `None`).
     Completed {
         text: String,
+        #[host(default = false)]
         verbatim: bool,
     },
+    #[host(field = "error")]
     Failed(String),
+    #[host(field = "reason")]
     Rejected(String),
     /// `InputRequired(question)`: the turn waits on the person; `tool` takes the answer.
     InputRequired {
         question: String,
+        #[host(default = false)]
         verbatim: bool,
+        #[host(default = None)]
         tool: Option<String>,
     },
     /// `Working(message=)`: waits on a system, nothing delivered.
+    #[host(field = "message", default = None)]
     Working(Option<String>),
 }
 
 /// How a call of a tool that requires approval went (`approval_scope`): it asked for approval
 /// with its read-back, or ran on the person's answer. Marked on the call for the next to read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, extract)]
+#[crate::host(record(module = "tool_report", extract, emit))]
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Approval {
-    #[host(rename = "asked")]
     Asked,
-    #[host(rename = "granted")]
     Granted,
 }
 
 /// The host's report of one run: its outcome, and how its approval went.
-// Crosses by its own reader until the records family declares it.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+#[crate::host(record(module = "tool_report", extract))]
 #[derive(Debug, Clone)]
 pub struct ToolReport {
     pub outcome: ToolOutcome,
+    #[host(default = None)]
     pub approval: Option<Approval>,
     /// The `InputRequired` itself, the output of a run that ends on this call's speech; for a
     /// `Completed` from a VoiceTask's tool, the value the host validated, which ends the task.
+    #[host(default = None)]
     pub transition: Option<crate::HostRef>,
 }
 
 impl From<ToolOutcome> for ToolReport {
     fn from(outcome: ToolOutcome) -> Self {
         ToolReport { outcome, approval: None, transition: None }
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolOutcome {
-    type Error = pyo3::PyErr;
-
-    /// The host's `{"kind": .., ..}` dict. An unknown kind, or one missing its key, is a
-    /// `ValueError`, never a guess.
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{item, item_or};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "ToolOutcome";
-        let obj = &*obj;
-        let kind: String = item(obj, OWNER, "kind")?;
-        let text = || item::<String>(obj, OWNER, "text");
-        let flag = |key: &str, default: bool| {
-            item_or(obj, OWNER, key, |v| v.extract::<bool>(), || default)
-        };
-        let opt = |key: &str| item_or(obj, OWNER, key, |v| v.extract::<Option<String>>(), || None);
-        Ok(match kind.as_str() {
-            "value" => ToolOutcome::Value {
-                text: text()?,
-                reply_required: flag("reply_required", true)?,
-                verbatim: flag("verbatim", false)?,
-                more: opt("more")?,
-            },
-            "nothing" => ToolOutcome::Nothing,
-            "tool_error" => ToolOutcome::ToolError(text()?),
-            "model_retry" => ToolOutcome::ModelRetry(text()?),
-            "stop_response" => ToolOutcome::StopResponse,
-            "internal" => ToolOutcome::Internal,
-            "invalid" => ToolOutcome::Invalid,
-            "cancelled" => ToolOutcome::Cancelled,
-            "update" => ToolOutcome::Update { message: text()?, raw: item(obj, OWNER, "raw")? },
-            "completed" => {
-                ToolOutcome::Completed { text: text()?, verbatim: flag("verbatim", false)? }
-            }
-            "failed" => ToolOutcome::Failed(text()?),
-            "rejected" => ToolOutcome::Rejected(text()?),
-            "input_required" => ToolOutcome::InputRequired {
-                question: text()?,
-                verbatim: flag("verbatim", false)?,
-                tool: opt("tool")?,
-            },
-            "working" => ToolOutcome::Working(opt("text")?),
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "unknown tool outcome kind {other:?}"
-                )));
-            }
-        })
-    }
-}
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolReport {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::item_or;
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "ToolOutcome";
-        let obj = &*obj;
-        let transition = |v: &pyo3::Bound<'py, pyo3::PyAny>| {
-            if v.is_none() { Ok(None) } else { v.extract::<crate::HostRef>().map(Some) }
-        };
-        let approval = |v: &pyo3::Bound<'py, pyo3::PyAny>| v.extract::<Option<Approval>>();
-        Ok(ToolReport {
-            outcome: obj.extract()?,
-            approval: item_or(obj, OWNER, "approval", approval, || None)?,
-            transition: item_or(obj, OWNER, "transition", transition, || None)?,
-        })
     }
 }

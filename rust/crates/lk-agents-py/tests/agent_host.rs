@@ -7,15 +7,24 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 const HOST: &str = r#"
-import asyncio, contextvars, sys, threading, types
+import asyncio, contextvars, importlib.util, sys, threading, types
 
-for parent in ("livekit", "livekit.agents", "livekit.agents.voice"):
+for parent in ("livekit", "livekit.agents", "livekit.agents.voice", "livekit.agents._generated"):
     sys.modules.setdefault(parent, types.ModuleType(parent))
-module = types.ModuleType("livekit.agents.voice.agent_host")
-class ToolArgumentError(Exception):
-    pass
-module.ToolArgumentError = ToolArgumentError
-sys.modules["livekit.agents.voice.agent_host"] = module
+# The generated models, as the package holds them (they import nothing at runtime); loaded
+# once per process, as the classes the conversions cache are.
+if "livekit.agents._generated.agent_run" not in sys.modules:
+    spec = importlib.util.spec_from_file_location("livekit.agents._generated.agent_run", MODELS)
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = loaded
+    spec.loader.exec_module(loaded)
+    host_module = types.ModuleType("livekit.agents.voice.agent_host")
+    class ToolArgumentError(Exception):
+        pass
+    host_module.ToolArgumentError = ToolArgumentError
+    sys.modules["livekit.agents.voice.agent_host"] = host_module
+models = sys.modules["livekit.agents._generated.agent_run"]
+ToolArgumentError = sys.modules["livekit.agents.voice.agent_host"].ToolArgumentError
 
 var = contextvars.ContextVar("var", default="unset")
 loop = asyncio.new_event_loop()
@@ -43,18 +52,23 @@ class Host:
             raise ToolArgumentError("city is required")
         if arguments.get("crash"):
             raise KeyError("crash")
-        return {"prepared": arguments, "identity": {"kind": "json", "value": arguments}}
+        return models.PreparedArguments(
+            prepared=arguments, identity=models.ArgumentIdentityJson(value=arguments)
+        )
 
     async def validate_output(self, invocation, candidate):
         self.seen["candidate"] = candidate
-        return {"kind": "retry", "reason": "not a number"}
+        return models.ValidatedOutputRetry(reason="not a number")
 
     def cancel(self, invocation):
-        self.seen["cancel"] = (var.get(), invocation["operation"])
+        self.seen["cancel"] = (var.get(), invocation.operation)
         self.cancelled.set()
 
 host = Host()
 "#;
+
+/// The tests share one interpreter and the host modules they install: one at a time.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn invocation(context: lk_agents_abi::HostRef) -> Invocation {
     Invocation {
@@ -72,9 +86,15 @@ fn invocation(context: lk_agents_abi::HostRef) -> Invocation {
 // by anything but its declaration, or a notification that never reaches the host.
 #[test]
 fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     Python::initialize();
     let (globals, proxy, inv) = Python::attach(|py| {
         let globals = PyDict::new(py);
+        let models = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
+        );
+        globals.set_item("MODELS", models).unwrap();
         py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
         let context = lk_agents_abi::python::intern_host(pair.unbind());
@@ -119,14 +139,53 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
     Python::attach(|py| {
         let host = globals.bind(py).get_item("host").unwrap().unwrap();
         let seen = host.getattr("seen").unwrap();
-        let (var, invocation): (String, Bound<'_, PyDict>) =
+        let (var, invocation): (String, Bound<'_, PyAny>) =
             seen.get_item("render").unwrap().extract().unwrap();
         assert_eq!(var, "captured");
-        assert_eq!(invocation.get_item("agent_name").unwrap().unwrap().extract::<String>().unwrap(), "front");
-        assert!(invocation.get_item("host_context").unwrap().is_none(), "the context stays native");
+        assert_eq!(invocation.getattr("agent_name").unwrap().extract::<String>().unwrap(), "front");
+        assert!(invocation.getattr("host_context").is_err(), "the context stays native");
         let candidate = seen.get_item("candidate").unwrap();
-        assert_eq!(candidate.get_item("kind").unwrap().extract::<String>().unwrap(), "value");
+        let class = candidate.get_type().name().unwrap().to_string();
+        assert_eq!(class, "OutputCandidateValue");
+        assert_eq!(candidate.getattr("value").unwrap().extract::<i64>().unwrap(), 3);
         let (var, operation): (String, u64) = seen.get_item("cancel").unwrap().extract().unwrap();
         assert_eq!((var.as_str(), operation), ("captured", 7));
+    });
+}
+
+// Catches: a record read from anything but its model (a kind-dict, a look-alike), an explicit
+// None accepted for a field that is not optional, or a default applied to anything but omission.
+#[test]
+fn records_cross_as_their_models_with_declared_presence() {
+    use lk_agents_abi::agent::{ReadBackAnswer, Retries};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    Python::initialize();
+    Python::attach(|py| {
+        let globals = PyDict::new(py);
+        let models = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
+        );
+        globals.set_item("MODELS", models).unwrap();
+        py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
+        let eval = |code: &str| py.eval(&std::ffi::CString::new(code).unwrap(), Some(&globals), None).unwrap();
+
+        let accepted = eval("models.ValidatedOutputAccepted(text=None, value=None)");
+        assert!(matches!(
+            accepted.extract::<ValidatedOutput>().unwrap(),
+            ValidatedOutput::Accepted { text: None, value: None }
+        ));
+        let dict = eval("{'kind': 'retry', 'reason': 'no'}").extract::<ValidatedOutput>().unwrap_err();
+        assert!(dict.is_instance_of::<pyo3::exceptions::PyTypeError>(py), "{dict}");
+        assert!(dict.to_string().contains("ValidatedOutputAccepted | ValidatedOutputRetry"), "{dict}");
+
+        let null = eval("models.ReadBackAnswerInputRequired(question=None, verbatim=False)")
+            .extract::<ReadBackAnswer>()
+            .unwrap_err();
+        assert!(null.to_string().contains("ReadBackAnswerInputRequired.question"), "{null}");
+
+        assert_eq!(eval("models.Retries()").extract::<Retries>().unwrap(), Retries { tool: 1, output: 1 });
+        assert_eq!(eval("models.Retries(output=0)").extract::<Retries>().unwrap(), Retries { tool: 1, output: 0 });
+        assert!(eval("models.Retries(tool=None)").extract::<Retries>().is_err(), "None is not omission");
     });
 }

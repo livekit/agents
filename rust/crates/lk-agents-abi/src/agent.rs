@@ -6,7 +6,6 @@
 pub mod run;
 
 use async_trait::async_trait;
-use lk_agents_host_derive::Host;
 use serde_json::{Map, Value};
 
 use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
@@ -16,10 +15,9 @@ use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
 
 /// What one host callback runs within, captured when the owning operation was created (a
-/// `run()` call entry), never from whichever task dispatches it later. The host receives it as a
-/// dict of its fields, without the captured context.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, from_items)]
+/// `run()` call entry), never from whichever task dispatches it later.
+#[crate::host(record(module = "agent_run", emit))]
+#[derive(Debug, Clone)]
 pub struct Invocation {
     /// This callback, unique within its agent invocation: what [`AgentHost::cancel`] names.
     pub operation: u64,
@@ -32,7 +30,7 @@ pub struct Invocation {
     pub approval: Option<Approval>,
     /// The host execution context captured at the operation's entry (Python: a
     /// `contextvars.Context`); the adapter enters a copy of it for the callback.
-    #[binding(skip)]
+    #[host(skip)]
     pub host_context: Option<HostRef>,
 }
 
@@ -48,18 +46,19 @@ impl HostContext for Invocation {
 }
 
 /// The validated arguments a call is identified by: their JSON, or a fingerprint the host
-/// declares for a value JSON cannot represent. From the host: `{"kind": "json", "value": ..}` or
-/// `{"kind": "fingerprint", "value": str}`.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+/// declares for a value JSON cannot represent.
+#[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArgumentIdentity {
+    #[host(field = "value")]
     Json(Value),
+    #[host(field = "value")]
     Fingerprint(String),
 }
 
 /// Arguments the host bound and validated: `prepared` holds them for the body.
-#[derive(Debug, Clone, Host)]
-#[binding(extract, from_items)]
+#[crate::host(record(module = "agent_run", extract))]
+#[derive(Debug, Clone)]
 pub struct PreparedArguments {
     pub prepared: HostRef,
     pub identity: ArgumentIdentity,
@@ -79,11 +78,11 @@ impl From<String> for ToolArgumentError {
     }
 }
 
-/// What a read-back function returned. From the host: `{"kind": "question", "question": str}`
-/// or `{"kind": "input_required", "question": str, "verbatim": bool}`.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+/// What a read-back function returned.
+#[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReadBackAnswer {
+    #[host(field = "question")]
     Question(String),
     /// A detail is missing before there is anything to approve.
     InputRequired {
@@ -92,27 +91,28 @@ pub enum ReadBackAnswer {
     },
 }
 
-/// An output candidate for the host to validate. To the host: `{"kind": "text", "text": str}` or
-/// `{"kind": "value", "value": ..}`.
-#[crate::host(handwritten(emit, host = "dict[str, object]"))]
+/// An output candidate for the host to validate.
+#[crate::host(record(module = "agent_run", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputCandidate {
+    #[host(field = "text")]
     Text(String),
     /// `final_result`'s value, unwrapped.
+    #[host(field = "value")]
     Value(Value),
 }
 
-/// The host's verdict on an output candidate. From the host: `{"kind": "accepted", "text": str |
-/// None, "value": object | None}`, `{"kind": "retry", "reason": str}` or `{"kind": "failed",
-/// "error": str}`.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+/// The host's verdict on an output candidate.
+#[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone)]
 pub enum ValidatedOutput {
     /// Accepted: a `str` output's final text, or the validated value the host keeps.
     Accepted { text: Option<String>, value: Option<HostRef> },
     /// `ModelRetry` or a validation error: the model corrects its output.
+    #[host(field = "reason")]
     Retry(String),
     /// A validator or output function failed outright.
+    #[host(field = "error")]
     Failed(String),
 }
 
@@ -171,10 +171,9 @@ pub trait AgentHost: Send + Sync {
 
 /// The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads
 /// and none mutates. Host callables (tool bodies, validators, instruction functions, output
-/// functions, read-backs) stay in the host; the definition says which of them exist. From the
-/// host: a dict of these fields.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items)]
+/// functions, read-backs) stay in the host; the definition says which of them exist.
+#[crate::host(record(module = "agent_run", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentDefinition {
     pub name: String,
     /// The static instructions.
@@ -187,8 +186,8 @@ pub struct AgentDefinition {
 }
 
 /// `FunctionToolInfo`: one tool as the model and the gate see it.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items)]
+#[crate::host(record(module = "agent_run", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionToolInfo {
     pub spec: ToolSpec,
     /// Declared by a raw JSON schema (`raw_schema=`, MCP): no signature to validate against.
@@ -200,20 +199,17 @@ pub struct FunctionToolInfo {
 }
 
 /// How a `needs_approval` tool asks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(extract)]
+#[crate::host(record(module = "agent_run", extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadBack {
     /// "Please confirm: <first sentence> (<arguments>). Yes or no?"
-    #[host(rename = "default")]
     Default,
     /// The application's read-back function, run by the host on the prepared arguments.
-    #[host(rename = "function")]
     Function,
 }
 
-/// The final output contract (`output_type`). From the host: `{"kind": "text", "validated":
-/// bool}` or `{"kind": "structured", "schema": {..}}`.
-#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+/// The final output contract (`output_type`).
+#[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputSpec {
     /// `str`: the model's text is the output. `validated` when output validators are registered.
@@ -225,124 +221,17 @@ pub enum OutputSpec {
 
 /// How many consecutive retries the model gets before the run fails: per tool for argument
 /// errors and `ModelRetry`, and for the final output. pydantic-ai's defaults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(extract, from_items)]
+#[crate::host(record(module = "agent_run", extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retries {
+    #[host(default = 1)]
     pub tool: u32,
+    #[host(default = 1)]
     pub output: u32,
 }
 
 impl Default for Retries {
     fn default() -> Self {
         Retries { tool: 1, output: 1 }
-    }
-}
-
-// The host shapes of the callback records, read and written here until the records family
-// declares them: a dict whose `kind` names the variant.
-#[cfg(feature = "python")]
-mod host_shapes {
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
-
-    use super::{ArgumentIdentity, OutputCandidate, OutputSpec, ReadBackAnswer, ValidatedOutput};
-    use crate::python::{value_from_py, value_to_py};
-
-    fn kind(obj: &Bound<'_, PyAny>, owner: &str) -> PyResult<String> {
-        obj.get_item("kind")
-            .and_then(|k| k.extract())
-            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(format!("{owner}.kind: {e}")))
-    }
-
-    fn unknown(owner: &str, kind: &str) -> PyErr {
-        pyo3::exceptions::PyValueError::new_err(format!("{owner}: unknown kind {kind:?}"))
-    }
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for ArgumentIdentity {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            const OWNER: &str = "ArgumentIdentity";
-            let obj = &*obj;
-            let value = obj.get_item("value")?;
-            match kind(obj, OWNER)?.as_str() {
-                "json" => Ok(ArgumentIdentity::Json(value_from_py(&value, "ArgumentIdentity.value")?)),
-                "fingerprint" => Ok(ArgumentIdentity::Fingerprint(value.extract()?)),
-                other => Err(unknown(OWNER, other)),
-            }
-        }
-    }
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for ReadBackAnswer {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            const OWNER: &str = "ReadBackAnswer";
-            let obj = &*obj;
-            let question = obj.get_item("question")?.extract()?;
-            match kind(obj, OWNER)?.as_str() {
-                "question" => Ok(ReadBackAnswer::Question(question)),
-                "input_required" => Ok(ReadBackAnswer::InputRequired {
-                    question,
-                    verbatim: obj.get_item("verbatim")?.extract()?,
-                }),
-                other => Err(unknown(OWNER, other)),
-            }
-        }
-    }
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for ValidatedOutput {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            const OWNER: &str = "ValidatedOutput";
-            let obj = &*obj;
-            match kind(obj, OWNER)?.as_str() {
-                "accepted" => Ok(ValidatedOutput::Accepted {
-                    text: obj.get_item("text")?.extract()?,
-                    value: obj.get_item("value")?.extract()?,
-                }),
-                "retry" => Ok(ValidatedOutput::Retry(obj.get_item("reason")?.extract()?)),
-                "failed" => Ok(ValidatedOutput::Failed(obj.get_item("error")?.extract()?)),
-                other => Err(unknown(OWNER, other)),
-            }
-        }
-    }
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for OutputSpec {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            const OWNER: &str = "OutputSpec";
-            let obj = &*obj;
-            match kind(obj, OWNER)?.as_str() {
-                "text" => Ok(OutputSpec::Text { validated: obj.get_item("validated")?.extract()? }),
-                "structured" => Ok(OutputSpec::Structured {
-                    schema: value_from_py(&obj.get_item("schema")?, "OutputSpec.schema")?,
-                }),
-                other => Err(unknown(OWNER, other)),
-            }
-        }
-    }
-
-    impl<'py> IntoPyObject<'py> for OutputCandidate {
-        type Target = PyDict;
-        type Output = Bound<'py, PyDict>;
-        type Error = PyErr;
-
-        fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-            let out = PyDict::new(py);
-            match &self {
-                OutputCandidate::Text(text) => {
-                    out.set_item("kind", "text")?;
-                    out.set_item("text", text)?;
-                }
-                OutputCandidate::Value(value) => {
-                    out.set_item("kind", "value")?;
-                    out.set_item("value", value_to_py(py, value)?)?;
-                }
-            }
-            Ok(out)
-        }
     }
 }

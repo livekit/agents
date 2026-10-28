@@ -25,6 +25,21 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core
+from .._generated.tool_report import (
+    ToolOutcomeCompleted,
+    ToolOutcomeFailed,
+    ToolOutcomeInputRequired,
+    ToolOutcomeInternal,
+    ToolOutcomeInvalid,
+    ToolOutcomeModelRetry,
+    ToolOutcomeNothing,
+    ToolOutcomeRejected,
+    ToolOutcomeStopResponse,
+    ToolOutcomeToolError,
+    ToolOutcomeValue,
+    ToolOutcomeWorking,
+    ToolReport,
+)
 from ..log import logger
 from .chat_context import ChatContext, ImageContent
 from .tool_context import FunctionTool, RawFunctionTool, ToolError, is_raw_function_tool
@@ -475,9 +490,9 @@ def _value_text(value: Any) -> str | None:
     return str(value) if _is_valid_function_output(value) else None
 
 
-def tool_outcome(output: Any, exception: BaseException | None = None) -> dict[str, Any]:
-    """What a tool returned or raised, classified for the core (``_core.ToolOutcome``), which
-    decides what the model reads and whether it replies."""
+def tool_report(output: Any, exception: BaseException | None = None) -> ToolReport:
+    """What a tool returned or raised, classified for the core, which decides what the model
+    reads and whether it replies."""
     from .tool_context import (
         Completed,
         Failed,
@@ -492,45 +507,47 @@ def tool_outcome(output: Any, exception: BaseException | None = None) -> dict[st
     if isinstance(output, BaseException):
         exception, output = output, None
     if isinstance(exception, ToolError):
-        return {"kind": "tool_error", "text": exception.message}
+        return ToolReport(outcome=ToolOutcomeToolError(message=exception.message))
     if isinstance(exception, ModelRetry):
-        return {"kind": "model_retry", "text": exception.message}
+        return ToolReport(outcome=ToolOutcomeModelRetry(message=exception.message))
     if isinstance(exception, StopResponse):
-        return {"kind": "stop_response"}
+        return ToolReport(outcome=ToolOutcomeStopResponse())
     if exception is not None:
-        return {"kind": "internal"}
+        return ToolReport(outcome=ToolOutcomeInternal())
     if isinstance(output, Completed):
         text = "completed" if output.value is None else _value_text(output.value)
         if text is None:
-            return {"kind": "invalid"}
-        return {"kind": "completed", "text": text, "verbatim": output.verbatim}
+            return ToolReport(outcome=ToolOutcomeInvalid())
+        return ToolReport(outcome=ToolOutcomeCompleted(text=text, verbatim=output.verbatim))
     if isinstance(output, Failed):
-        return {"kind": "failed", "text": output.error}
+        return ToolReport(outcome=ToolOutcomeFailed(error=output.error))
     if isinstance(output, Rejected):
-        return {"kind": "rejected", "text": output.reason}
+        return ToolReport(outcome=ToolOutcomeRejected(reason=output.reason))
     if isinstance(output, InputRequired):
-        return {
-            "kind": "input_required",
-            "text": output.question,
-            "verbatim": output.verbatim,
-            "tool": output.tool.info.name if output.tool is not None else None,
-            "transition": output,
-        }
+        tool = output.tool.info.name if output.tool is not None else None
+        asked = ToolOutcomeInputRequired(
+            question=output.question, verbatim=output.verbatim, tool=tool
+        )
+        return ToolReport(outcome=asked, transition=output)
     if isinstance(output, Working):
-        return {"kind": "working", "text": output.message}
+        return ToolReport(outcome=ToolOutcomeWorking(message=output.message))
     if output is None:
-        return {"kind": "nothing"}
-    outcome: dict[str, Any] = {"kind": "value"}
+        return ToolReport(outcome=ToolOutcomeNothing())
     if isinstance(output, ToolResult):
-        outcome["reply_required"] = output.reply_required
-        outcome["verbatim"] = output.verbatim
-        outcome["more"] = getattr(output, "_more", None)
-        output = output.output
-    text = "" if output is None else _value_text(output)
+        text = "" if output.output is None else _value_text(output.output)
+        if text is None:
+            return ToolReport(outcome=ToolOutcomeInvalid())
+        value = ToolOutcomeValue(
+            text=text,
+            reply_required=output.reply_required,
+            verbatim=output.verbatim,
+            more=getattr(output, "_more", None),
+        )
+        return ToolReport(outcome=value)
+    text = _value_text(output)
     if text is None:
-        return {"kind": "invalid"}
-    outcome["text"] = text
-    return outcome
+        return ToolReport(outcome=ToolOutcomeInvalid())
+    return ToolReport(outcome=ToolOutcomeValue(text=text))
 
 
 def make_function_call_output(
@@ -543,8 +560,8 @@ def make_function_call_output(
     output each outcome gives the model is the core's (``_core.tool_call_output``)."""
     if isinstance(output, BaseException):
         exception, output = output, None
-    outcome = tool_outcome(output, exception)
-    if outcome["kind"] == "invalid":
+    outcome = tool_report(output, exception).outcome
+    if isinstance(outcome, ToolOutcomeInvalid):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
             extra={"call_id": fnc_call.call_id, "lk.pii.output": output},

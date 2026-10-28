@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
+use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use lk_agents_abi::agent::{
     ArgumentIdentity, OutputCandidate, PreparedArguments, ReadBackAnswer, ToolArgumentError,
 };
@@ -19,9 +21,7 @@ use lk_agents_abi::{
     ChatMessage, ChoiceDelta, Closed, FunctionToolCall, LlmChunk, LlmStream, ProviderId, RealClock,
     Role, StreamSource, ToolSpec, WallAnchor,
 };
-use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
 use lk_agents_core::tool_outcome::Mode;
-use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 
@@ -299,9 +299,10 @@ async fn drain(updates: &mut mpsc::Receiver<RunUpdate>) -> Vec<RunUpdate> {
     all
 }
 
-fn finished(updates: &[RunUpdate]) -> &Result<RunSettled, RunError> {
+fn finished(updates: &[RunUpdate]) -> Result<&RunSettled, &RunError> {
     match updates.last() {
-        Some(RunUpdate::Finished(result)) => result,
+        Some(RunUpdate::Finished(settled)) => Ok(settled),
+        Some(RunUpdate::Failed(error)) => Err(error),
         other => panic!("the last update is not the result: {other:?}"),
     }
 }
@@ -400,7 +401,7 @@ async fn a_body_that_ignores_cancel_is_reported_incomplete_at_the_deadline() {
     s.handle.cancel();
     let mut updates = Vec::new();
     while let Some(update) = s.updates.recv().await {
-        let last = matches!(update, RunUpdate::Finished(_));
+        let last = matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed(_));
         updates.push(update);
         if last {
             break;
@@ -436,7 +437,6 @@ async fn cancel_closes_the_model_stream_in_flight() {
 #[tokio::test]
 async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_result() {
     use lk_agents_abi::agent::run::{AgentRunner as _, Output, RunRequest};
-
 
     let registry: Arc<dyn RefRegistry> = Arc::new(Registry::default());
     let llm = || -> Arc<dyn Llm> {
@@ -479,7 +479,7 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
     while let Some(update) = updates.next().await.unwrap() {
         last = Some(update);
     }
-    let Some(RunUpdate::Finished(Ok(settled))) = last else { panic!("{last:?}") };
+    let Some(RunUpdate::Finished(settled)) = last else { panic!("{last:?}") };
     let RunOutcome::Completed { output: Output::Text(text) } = settled.result.outcome else {
         panic!("{:?}", settled.result.outcome)
     };

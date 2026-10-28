@@ -12,6 +12,14 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
     let mut out = Declarations::default();
     for (m, module) in krate.modules.iter().enumerate() {
         for item in &module.items {
+            if let syn::Item::Struct(_) | syn::Item::Enum(_) = item
+                && let Some(record) = record_entry(item_attrs(item))
+            {
+                let at = format!("{}: {}", module.file, item_ident(item));
+                let resolver = Resolver { krate, module: m, at: &at, assoc: Vec::new() };
+                out.records.push(resolver.record(item, &record)?);
+                continue;
+            }
             let syn::Item::Trait(tr) = item else { continue };
             let entries = voc::read(&tr.attrs)
                 .map_err(|e| format!("{}: trait {}: {e}", module.file, tr.ident))?;
@@ -432,6 +440,7 @@ impl Resolver<'_> {
                     (["u16"], []) => Ty::Int(Int::U16),
                     (["u32"], []) => Ty::Int(Int::U32),
                     (["u64"], []) => Ty::Int(Int::U64),
+                    (["usize"], []) => Ty::Int(Int::Usize),
                     (["i32"], []) => Ty::Int(Int::I32),
                     (["i64"], []) => Ty::Int(Int::I64),
                     (["std", "string", "String"], []) => Ty::Str,
@@ -655,6 +664,15 @@ impl Resolver<'_> {
         let ident = k.item_name(module, item);
         let attrs = item_attrs(it);
         let entries = voc::read(attrs).map_err(|e| format!("{at}: {e}"))?;
+        if let Some(record) = voc::find(&entries, "record") {
+            let (module_name, name, extract, emit) = record_target(at, record, &ident)?;
+            return Ok(Ty::Record(Record {
+                rust,
+                host: HostForm::Record { module: module_name, name },
+                extract,
+                emit,
+            }));
+        }
         if let Some(own) = voc::find(&entries, "handwritten") {
             voc::only(at, &own.nested, &["extract", "emit", "host"])?;
             let host = voc::text(at, &own.nested, "host")?.ok_or_else(|| {
@@ -694,11 +712,14 @@ impl Resolver<'_> {
                     ));
                 }
             };
+            // A unit-only enum's derive writes its string both ways.
+            let unit = matches!(it, syn::Item::Enum(e)
+                if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)));
             return Ok(Ty::Record(Record {
                 rust,
                 host,
-                extract: words.iter().any(|w| w == "extract"),
-                emit: words.iter().any(|w| w == "emit"),
+                extract: unit || words.iter().any(|w| w == "extract"),
+                emit: unit || words.iter().any(|w| w == "emit"),
             }));
         }
         for i in &k.modules[module].items {
@@ -731,6 +752,217 @@ impl Resolver<'_> {
             "{at}: `{rust}` is not a declared host type (#[derive(Host)] record or value class)"
         ))
     }
+}
+
+impl Resolver<'_> {
+    /// A `#[host(record)]` struct or enum, its fields resolved in its own module.
+    fn record(&self, item: &syn::Item, record: &Entry) -> Result<RecordDecl, String> {
+        let at = self.at;
+        let k = self.krate;
+        let module = &k.modules[self.module];
+        let index = module.items.iter().position(|i| std::ptr::eq(i, item)).expect("read from here");
+        let ident = item_ident(item);
+        let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
+        let entries = voc::read(item_attrs(item)).map_err(|e| format!("{at}: {e}"))?;
+        voc::only(at, &entries, &["record", "wire_strs"])?;
+        if derives_host(item_attrs(item)) {
+            return Err(format!("{at}: a #[host(record)] is not also #[derive(Host)]"));
+        }
+        let body = match item {
+            syn::Item::Struct(st) => {
+                if !st.generics.params.is_empty() {
+                    return Err(format!("{at}: a record is a concrete type"));
+                }
+                let syn::Fields::Named(named) = &st.fields else {
+                    return Err(format!("{at}: a record struct has named fields"));
+                };
+                RecordBody::Struct(self.fields(named.named.iter(), &name, (extract, emit))?)
+            }
+            syn::Item::Enum(en) => {
+                if en.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)) {
+                    let mut values = Vec::new();
+                    for v in &en.variants {
+                        let vat = format!("{at}::{}", v.ident);
+                        let entries = voc::read(&v.attrs).map_err(|e| format!("{vat}: {e}"))?;
+                        voc::only(&vat, &entries, &["rename"])?;
+                        let value = voc::text(&vat, &entries, "rename")?
+                            .unwrap_or_else(|| snake(&v.ident.to_string()));
+                        values.push((v.ident.to_string(), value));
+                    }
+                    RecordBody::Literals(values)
+                } else {
+                    let mut variants = Vec::new();
+                    for v in &en.variants {
+                        variants.push(self.variant(v, &name, (extract, emit))?);
+                    }
+                    RecordBody::Variants(variants)
+                }
+            }
+            _ => unreachable!("records are structs and enums"),
+        };
+        Ok(RecordDecl {
+            rust: k.extern_path(self.module, index).map_err(|e| format!("{at}: {e}"))?,
+            name,
+            module: py_module,
+            family: module.path.first().cloned().ok_or_else(|| {
+                format!("{at}: a record is declared in a subject module, not the crate root")
+            })?,
+            source: module.file.clone(),
+            doc: doc(item_attrs(item)),
+            extract,
+            emit,
+            body,
+        })
+    }
+
+    fn variant(&self, v: &syn::Variant, owner: &str, dirs: (bool, bool)) -> Result<Variant, String> {
+        let at = format!("{}::{}", self.at, v.ident);
+        let entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
+        let shape = match &v.fields {
+            syn::Fields::Unit => {
+                voc::only(&at, &entries, &["name"])?;
+                VariantShape::Unit
+            }
+            syn::Fields::Named(named) => {
+                voc::only(&at, &entries, &["name"])?;
+                VariantShape::Named(self.fields(named.named.iter(), owner, dirs)?)
+            }
+            syn::Fields::Unnamed(unnamed) => {
+                voc::only(&at, &entries, &["name", "field", "skip", "default"])?;
+                let [only] = &unnamed.unnamed.iter().collect::<Vec<_>>()[..] else {
+                    return Err(format!("{at}: a tuple variant carries one value"));
+                };
+                if voc::find(&entries, "skip").is_some() {
+                    if dirs.0 {
+                        return Err(format!("{at}: an extracted record reads every value: no `skip`"));
+                    }
+                    VariantShape::Tuple(None)
+                } else {
+                    let field = voc::text(&at, &entries, "field")?.ok_or_else(|| {
+                        format!("{at}: a tuple variant names its value: #[host(field = \"..\")]")
+                    })?;
+                    let ty = self.ty(&only.ty, &at)?;
+                    let default = literal_default(&at, &entries)?;
+                    check_default(&at, &ty, default.as_ref())?;
+                    check_record_field(&at, &ty, dirs)?;
+                    VariantShape::Tuple(Some(Field {
+                        rust_name: field,
+                        ty,
+                        default,
+                        skip: false,
+                        doc: Vec::new(),
+                    }))
+                }
+            }
+        };
+        let rust_name = v.ident.to_string();
+        Ok(Variant {
+            name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| format!("{owner}{rust_name}")),
+            rust_name,
+            doc: doc(&v.attrs),
+            shape,
+        })
+    }
+
+    fn fields<'f>(
+        &self,
+        fields: impl Iterator<Item = &'f syn::Field>,
+        owner: &str,
+        dirs: (bool, bool),
+    ) -> Result<Vec<Field>, String> {
+        let mut out = Vec::new();
+        for f in fields {
+            let ident = f.ident.as_ref().expect("named").to_string();
+            let at = format!("{}({owner}.{ident})", self.at);
+            let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
+            voc::only(&at, &entries, &["default", "skip"])?;
+            let skip = voc::find(&entries, "skip").is_some();
+            if skip && dirs.0 {
+                return Err(format!("{at}: an extracted record reads every field: no `skip`"));
+            }
+            let ty = if skip { Ty::Unit } else { self.ty(&f.ty, &at)? };
+            let default = literal_default(&at, &entries)?;
+            check_default(&at, &ty, default.as_ref())?;
+            if !skip {
+                check_record_field(&at, &ty, dirs)?;
+            }
+            out.push(Field { rust_name: ident, ty, default, skip, doc: doc(&f.attrs) });
+        }
+        Ok(out)
+    }
+}
+
+/// `record(module = "..", name = "..", extract, emit)`: its module, host name and directions.
+fn record_target(
+    at: &str,
+    record: &Entry,
+    ident: &str,
+) -> Result<(String, String, bool, bool), String> {
+    voc::only(at, &record.nested, &["module", "name", "extract", "emit"])?;
+    let module = voc::text(at, &record.nested, "module")?
+        .ok_or_else(|| format!("{at}: record(module = \"..\") is its generated Python module"))?;
+    let name = voc::text(at, &record.nested, "name")?.unwrap_or_else(|| ident.to_owned());
+    let extract = voc::find(&record.nested, "extract").is_some();
+    let emit = voc::find(&record.nested, "emit").is_some();
+    if !extract && !emit {
+        return Err(format!("{at}: a record crosses some way: extract, emit or both"));
+    }
+    Ok((module, name, extract, emit))
+}
+
+fn record_entry(attrs: &[syn::Attribute]) -> Option<Entry> {
+    voc::read(attrs).ok().and_then(|entries| voc::find(&entries, "record").cloned())
+}
+
+fn literal_default(at: &str, entries: &[Entry]) -> Result<Option<Literal>, String> {
+    match voc::find(entries, "default").map(|e| &e.value) {
+        None => Ok(None),
+        Some(Some(Value::Literal(l))) => Ok(Some(l.clone())),
+        Some(Some(Value::Text(t))) => Ok(Some(Literal::Str(t.clone()))),
+        Some(_) => Err(format!("{at}: `default` is a literal")),
+    }
+}
+
+/// A record field crosses each declared direction: its records declare it, and it is a value
+/// (no class, proxy or source).
+fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Result<(), String> {
+    match ty {
+        Ty::This | Ty::Proxy { .. } | Ty::Source { .. } | Ty::Unit | Ty::Tuple(_) => {
+            return Err(format!("{at}: `{}` is not a record field", ty.rust()));
+        }
+        _ => {}
+    }
+    if extract {
+        check_input(at, ty)?;
+    }
+    if emit {
+        check_output(at, ty)?;
+    }
+    Ok(())
+}
+
+fn item_ident(item: &syn::Item) -> String {
+    match item {
+        syn::Item::Struct(s) => s.ident.to_string(),
+        syn::Item::Enum(e) => e.ident.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// `InputRequired` -> `input_required`.
+fn snake(s: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Some method declares its call (`await`, `notify`): a declaration-model proxy.

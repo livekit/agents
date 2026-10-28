@@ -27,6 +27,7 @@ from typing_extensions import ParamSpec, TypeVar
 from livekit import rtc
 
 from .. import _core, inference, llm, stt, tts
+from .._generated.agent_run import AgentDefinition, Retries
 from .._generated.tool_executor import ToolHandlingOptions
 from .._generated.vad import VAD
 from ..llm import (
@@ -60,6 +61,7 @@ from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
 
 if TYPE_CHECKING:
+    from .._generated.agent_run import RunSettled
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from .agent_host import AgentHost
     from .agent_run import _TextRun
@@ -351,7 +353,7 @@ class Agent(Generic[Context_T, Output_T]):
                 conn_options=DEFAULT_API_CONNECT_OPTIONS,
             )
 
-            def settle(finished: dict[str, Any] | None) -> RunResult[Output_T]:
+            def settle(finished: RunSettled | None) -> RunResult[Output_T]:
                 result = (
                     interrupted_result(run) if finished is None else settled_result(run, finished)
                 )
@@ -389,21 +391,21 @@ class Agent(Generic[Context_T, Output_T]):
             self._host_instance = AgentHost(self)
         return self._host_instance
 
-    def _definition(self, tools: llm.ToolContext) -> dict[str, Any]:
+    def _definition(self, tools: llm.ToolContext) -> AgentDefinition:
         """The core's ``AgentDefinition`` of this agent with ``tools``."""
         from .agent_run import tool_infos
 
         static = self._instructions
         if isinstance(static, Instructions):
             static = static.render(modality="text")
-        return {
-            "name": self.id,
-            "instructions": static,
-            "dynamic_instructions": bool(self._instruction_fns),
-            "tools": tool_infos(tools),
-            "output": self._host._output.spec(validated=bool(self._output_validators)),
-            "retries": {"tool": 1, "output": 1},
-        }
+        return AgentDefinition(
+            name=self.id,
+            instructions=static,
+            dynamic_instructions=bool(self._instruction_fns),
+            tools=tool_infos(tools),
+            output=self._host._output.spec(validated=bool(self._output_validators)),
+            retries=Retries(),
+        )
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
         """The output through every validator; raises ``ModelRetry`` from the first that does."""

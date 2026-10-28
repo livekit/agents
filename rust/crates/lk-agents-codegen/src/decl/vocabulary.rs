@@ -20,6 +20,12 @@
 //! | error type | `error(with = path)`, `error(kind = "ValueError")`, `error(original)`, per-variant `kind`/`delegate` | `Result<_, E>` raises through E's `HostException`, the one conversion its declaration expands to |
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `handwritten(extract, emit, host = "..")` | crosses by its own pyo3 conversions; `host` is its annotation (to be replaced by a record declaration) |
+//! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a frozen dataclass, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions written into `lk-agents-abi/src/python/generated/` |
+//! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |
+//! | record field, tuple variant | `skip` | does not cross (emit-only records) |
+//! | tuple variant | `field = "x"` | the name its one value crosses under |
+//! | variant | `name = "X"` | its model class, when not `<Enum><Variant>` |
+//! | unit variant of a literal record | `rename = "x"` | its string, when not the snake-cased identifier |
 //!
 //! Rust is written unquoted (`item = LlmChunk`, `with = crate::python::raise`), host text quoted
 //! (`name = "InferenceLlm"`). Keys outside this table fail generation.

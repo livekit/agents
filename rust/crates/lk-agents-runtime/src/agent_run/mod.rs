@@ -7,15 +7,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::agent::AgentDefinition;
+use lk_agents_abi::agent::run::{Output, RunSettled, RunUpdate, ValidationId};
 use lk_agents_abi::agent::{AgentHost, Invocation, PreparedArguments, ValidatedOutput};
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
-use lk_agents_abi::agent::run::{Output, RunSettled, RunUpdate, ValidationId};
 use lk_agents_core::agent_run::{CallId, Effect, Event, OutputVerdict, RenderId, RequestId};
-use lk_agents_abi::agent::AgentDefinition;
 use lk_agents_core::{AgentError, AgentRun, RunInput, approval};
 use tokio::sync::{mpsc, oneshot};
 
@@ -296,7 +296,11 @@ impl Driver {
                 });
                 self.outputs.clear();
                 self.prepared.clear();
-                let _ = self.updates.send(RunUpdate::Finished(settled)).await;
+                let update = match settled {
+                    Ok(settled) => RunUpdate::Finished(settled),
+                    Err(error) => RunUpdate::Failed(error),
+                };
+                let _ = self.updates.send(update).await;
             }
         }
     }

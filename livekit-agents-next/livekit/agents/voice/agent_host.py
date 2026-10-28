@@ -5,10 +5,8 @@
 validates tool arguments, runs tool bodies and classifies what they returned or raised, renders
 the dynamic instructions, renders read-backs and validates output candidates. Each callback runs
 in a copy of the context captured when ``run()`` was entered, so the invocation it serves is the
-one ``_BindingContextVar`` holds there.
-
-The ``dict`` shapes are the interim host records of ``lk_agents_abi::agent`` (until the records
-family generates them).
+one ``_BindingContextVar`` holds there. The records crossing are the generated models of
+``lk_agents_abi::agent`` (``_generated.agent_run``).
 """
 
 from __future__ import annotations
@@ -23,6 +21,31 @@ from typing import TYPE_CHECKING, Any, get_type_hints
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
+from .._generated.agent_run import (
+    ArgumentIdentity,
+    ArgumentIdentityFingerprint,
+    ArgumentIdentityJson,
+    Invocation,
+    OutputCandidate,
+    OutputCandidateText,
+    OutputSpec,
+    OutputSpecStructured,
+    OutputSpecText,
+    PreparedArguments,
+    ReadBackAnswer,
+    ReadBackAnswerInputRequired,
+    ReadBackAnswerQuestion,
+    ValidatedOutput,
+    ValidatedOutputAccepted,
+    ValidatedOutputFailed,
+    ValidatedOutputRetry,
+)
+from .._generated.tool_report import (
+    ToolOutcomeCancelled,
+    ToolOutcomeInternal,
+    ToolOutcomeInvalid,
+    ToolReport,
+)
 from ..llm import FunctionCall
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
@@ -36,7 +59,7 @@ from ..llm.utils import (
     bind_function_arguments,
     function_arguments_to_pydantic_model,
     is_context_type,
-    tool_outcome,
+    tool_report,
     validated_arguments,
 )
 from ..log import logger
@@ -73,14 +96,14 @@ class AgentHost:
         # the callback task of each operation in flight, for `cancel`
         self._running: dict[tuple[str, int], asyncio.Task[Any]] = {}
 
-    async def render_instructions(self, invocation: dict[str, Any]) -> str:
+    async def render_instructions(self, invocation: Invocation) -> str:
         with self._operation(invocation):
             ctx = RunContext[Any](function_call=None, run=_current_run())
             return await self._agent._render_dynamic_instructions(ctx)
 
     async def prepare_tool(
-        self, invocation: dict[str, Any], arguments: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, invocation: Invocation, arguments: dict[str, Any]
+    ) -> PreparedArguments:
         """Binds and validates the call's arguments in the call's scope; the prepared call and
         the identity approval binds to (the validated arguments as JSON, decision 15)."""
         with self._operation(invocation):
@@ -96,15 +119,16 @@ class AgentHost:
                 raise ToolArgumentError(f"Error parsing arguments for `{call.name}`: {e}") from e
             args, kwargs = bind_function_arguments(tool, fields, ctx)
             identified = {k: v for k, v in fields.items() if k != CONFIRM_DUPLICATE_PARAM}
+            identity: ArgumentIdentity
             try:
-                identity = {"kind": "json", "value": to_jsonable_python(identified)}
+                identity = ArgumentIdentityJson(value=to_jsonable_python(identified))
             except PydanticSerializationError:
                 # no JSON for these arguments: a fresh fingerprint matches no earlier read-back,
                 # so the call can never be approved by mistake
-                identity = {"kind": "fingerprint", "value": uuid.uuid4().hex}
-            return {"prepared": _Prepared(tool, ctx, args, kwargs), "identity": identity}
+                identity = ArgumentIdentityFingerprint(value=uuid.uuid4().hex)
+            return PreparedArguments(prepared=_Prepared(tool, ctx, args, kwargs), identity=identity)
 
-    async def read_back(self, invocation: dict[str, Any], prepared: _Prepared) -> dict[str, Any]:
+    async def read_back(self, invocation: Invocation, prepared: _Prepared) -> ReadBackAnswer:
         """The tool's read-back function on the call's arguments."""
         with self._operation(invocation):
             assert isinstance(prepared.tool, FunctionTool) and prepared.tool.info.read_back
@@ -112,14 +136,12 @@ class AgentHost:
             if inspect.isawaitable(question):
                 question = await question
             if isinstance(question, InputRequired):
-                return {
-                    "kind": "input_required",
-                    "question": question.question,
-                    "verbatim": question.verbatim,
-                }
-            return {"kind": "question", "question": str(question)}
+                return ReadBackAnswerInputRequired(
+                    question=question.question, verbatim=question.verbatim
+                )
+            return ReadBackAnswerQuestion(question=str(question))
 
-    async def run_tool(self, invocation: dict[str, Any], prepared: _Prepared) -> dict[str, Any]:
+    async def run_tool(self, invocation: Invocation, prepared: _Prepared) -> ToolReport:
         """Runs the body, sync or async, and classifies what it returned or raised."""
         with self._operation(invocation):
             prepared.ctx._function_call = _function_call(invocation)
@@ -128,51 +150,51 @@ class AgentHost:
                 if inspect.isawaitable(output):
                     output = await output
             except asyncio.CancelledError:
-                return {"kind": "cancelled"}
+                return ToolReport(outcome=ToolOutcomeCancelled())
             except Exception as e:
-                outcome = tool_outcome(None, e)
-                if outcome["kind"] == "internal":
+                report = tool_report(None, e)
+                if isinstance(report.outcome, ToolOutcomeInternal):
                     logger.exception(
                         "exception occurred while executing a tool",
                         extra={"function": prepared.ctx.function_call.name},
                     )
-                return outcome
-            outcome = tool_outcome(output)
-            if outcome["kind"] == "invalid":
+                return report
+            report = tool_report(output)
+            if isinstance(report.outcome, ToolOutcomeInvalid):
                 logger.error(
                     f"tool `{prepared.ctx.function_call.name}` returned an invalid output",
                     extra={"lk.pii.output": output},
                 )
-            return outcome
+            return report
 
     async def validate_output(
-        self, invocation: dict[str, Any], candidate: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, invocation: Invocation, candidate: OutputCandidate
+    ) -> ValidatedOutput:
         """The output contract and the output validators on a candidate."""
         with self._operation(invocation):
             ctx = RunContext[Any](function_call=None, run=_current_run())
             try:
-                if candidate["kind"] == "text":
-                    text = await self._agent._validate_output(ctx, candidate["text"])
-                    return {"kind": "accepted", "text": str(text), "value": None}
-                value = await self._output.accept(ctx, candidate["value"])
+                if isinstance(candidate, OutputCandidateText):
+                    text = await self._agent._validate_output(ctx, candidate.text)
+                    return ValidatedOutputAccepted(text=str(text), value=None)
+                value = await self._output.accept(ctx, candidate.value)
                 value = await self._agent._validate_output(ctx, value)
             except ValidationError as e:
-                return {"kind": "retry", "reason": str(e)}
+                return ValidatedOutputRetry(reason=str(e))
             except (ModelRetry, ToolError) as e:
-                return {"kind": "retry", "reason": e.message}
+                return ValidatedOutputRetry(reason=e.message)
             except Exception as e:
                 logger.exception("the output validation failed")
-                return {"kind": "failed", "error": f"{type(e).__name__}: {e}"}
-            return {"kind": "accepted", "text": None, "value": value}
+                return ValidatedOutputFailed(error=f"{type(e).__name__}: {e}")
+            return ValidatedOutputAccepted(text=None, value=value)
 
-    def cancel(self, invocation: dict[str, Any]) -> None:
+    def cancel(self, invocation: Invocation) -> None:
         """Cancels the callback in flight for ``invocation``; it still settles."""
         task = self._running.get(_operation_key(invocation))
         if task is not None:
             task.cancel()
 
-    def _operation(self, invocation: dict[str, Any]) -> _Operation:
+    def _operation(self, invocation: Invocation) -> _Operation:
         return _Operation(self._running, _operation_key(invocation))
 
 
@@ -247,11 +269,11 @@ class OutputContract:
 
         return cls(schema=schema, accept=call)
 
-    def spec(self, *, validated: bool) -> dict[str, Any]:
+    def spec(self, *, validated: bool) -> OutputSpec:
         """The core's ``OutputSpec``."""
         if self.schema is None:
-            return {"kind": "text", "validated": validated}
-        return {"kind": "structured", "schema": self.schema}
+            return OutputSpecText(validated=validated)
+        return OutputSpecStructured(schema=self.schema)
 
 
 async def _unexpected_value(ctx: RunContext[Any], value: Any) -> Any:
@@ -267,10 +289,10 @@ def _current_run() -> _TextRun:
     return run
 
 
-def _function_call(invocation: dict[str, Any]) -> FunctionCall:
+def _function_call(invocation: Invocation) -> FunctionCall:
     from .._core_view import from_core_item
 
-    call = invocation["function_call"]
+    call = invocation.function_call
     if isinstance(call, FunctionCall):
         return call
     if isinstance(call, dict) and "type" not in call:
@@ -280,5 +302,5 @@ def _function_call(invocation: dict[str, Any]) -> FunctionCall:
     return item
 
 
-def _operation_key(invocation: dict[str, Any]) -> tuple[str, int]:
-    return invocation["invocation_id"], invocation["operation"]
+def _operation_key(invocation: Invocation) -> tuple[str, int]:
+    return invocation.invocation_id, invocation.operation
