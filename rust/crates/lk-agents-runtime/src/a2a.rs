@@ -13,23 +13,18 @@ use tokio_util::task::TaskTracker;
 
 use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
-use lk_agents_core::a2a::task::{
-    Answer, Completion, Effect, Event, HandlerEvent, Operation, TaskMachine,
-};
+use lk_agents_core::a2a::task::{Completion, Effect, Event, HandlerEvent, Operation, TaskMachine};
 use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
-    Verdict, caller_history_of, failed_message, host_error, resolve_policy, result_for,
-    unpersisted_failed,
+    Verdict, caller_history_of, failed_message, host_error, resolve_policy,
 };
+use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Receive, ReceiveInput};
 use lk_agents_storage::run::{
     ItemRow, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, TaskRow, TaskState,
 };
-use lk_agents_storage::{StorageError, TaskWrite};
 
-use crate::storage::{
-    CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_ms, now_secs, shortuuid,
-};
+use crate::storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 
 /// Who watches a turn from outside: its response stream.
 #[async_trait::async_trait]
@@ -171,7 +166,7 @@ impl Turn {
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut machine = TaskMachine::new(
             self.lane.clone(),
-            msg.clone(),
+            msg,
             task_id,
             self.stream.clone(),
             &self.opts,
@@ -190,7 +185,8 @@ impl Turn {
                     effects = machine.handle(Event::Completed { id, result }, epoch.elapsed());
                 }
                 Some(Effect::Finished(answer)) => {
-                    return answer.map(|answer| self.result(&msg, answer));
+                    let now = epoch.elapsed();
+                    return answer.map(|answer| machine.result(answer, self.thread.id(), now));
                 }
                 None => {
                     let at = machine.wake_at().ok_or_else(|| {
@@ -200,48 +196,6 @@ impl Turn {
                     effects = machine.handle(Event::Wake, epoch.elapsed());
                 }
             }
-        }
-    }
-
-    /// The machine's answer as the caller's result: a row it could not read is the task as this
-    /// worker left it, failed with the machine's reason or still `working` while it resolves.
-    fn result(&self, msg: &Message, answer: Answer) -> TurnResult {
-        let task = answer.task.unwrap_or_else(|| match answer.reason {
-            Some(reason) => unpersisted_failed(
-                &answer.task_id,
-                &self.lane,
-                Some(msg),
-                reason,
-                now_ms(),
-                shortuuid("msg_"),
-            ),
-            None => TaskRow {
-                status: TaskState::Working,
-                ..self.submitted(msg, &answer.task_id).row(&self.lane)
-            },
-        });
-        let mut result = result_for(task, self.thread.id(), answer.run_id.as_deref());
-        if let Some(answered_by) = answer.answered_by {
-            result.answered_by = answered_by;
-            result.output = answer.output;
-        }
-        result
-    }
-
-    fn submitted(&self, msg: &Message, task_id: &str) -> TaskWrite {
-        TaskWrite {
-            task_id: task_id.to_owned(),
-            status: TaskState::Submitted,
-            message_id: Some(msg.message_id.clone()),
-            name: None,
-            data: lk_agents_storage::schema::TaskData {
-                history: vec![msg.to_a2a()],
-                ..Default::default()
-            },
-            internal: self.stream.clone().map(|stream| lk_agents_storage::schema::TaskInternal {
-                ask: None,
-                streams: vec![stream],
-            }),
         }
     }
 

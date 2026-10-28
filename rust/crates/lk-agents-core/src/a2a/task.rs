@@ -23,8 +23,8 @@ use lk_agents_abi::storage::thread::{
 use serde_json::Value;
 
 use crate::a2a::{
-    HandlerOutput, HistoryEdit, Message, Policy, TaskTransition, TurnOptions, Verdict,
-    python_reason, resolve_debounce, resolve_policy,
+    HandlerOutput, HistoryEdit, Message, Policy, TaskTransition, TurnOptions, TurnResult, Verdict,
+    python_reason, resolve_debounce, resolve_policy, result_for, unpersisted_failed,
 };
 use lk_agents_abi::storage::RunUsage;
 use lk_agents_abi::storage::context::ContextScopeWrite;
@@ -362,6 +362,36 @@ impl TaskMachine {
 
     pub fn wait_timeout(&self) -> Duration {
         self.wait_timeout
+    }
+
+    /// The caller's result for the machine's `answer`: a row it could not read is the task as
+    /// this worker left it, failed with the machine's reason or still `working` while a commit
+    /// resolves.
+    pub fn result(&mut self, answer: Answer, thread_id: &str, now: Duration) -> TurnResult {
+        let message_id = self.mint("msg");
+        let now_ms = ((self.epoch + now.as_secs_f64()) * 1000.0) as i64;
+        let task = answer.task.unwrap_or_else(|| match answer.reason {
+            Some(reason) => unpersisted_failed(
+                &answer.task_id,
+                &self.lane,
+                Some(&self.message),
+                reason,
+                now_ms,
+                message_id,
+            ),
+            None => TaskWrite {
+                task_id: answer.task_id.clone(),
+                status: TaskState::Working,
+                ..self.submitted()
+            }
+            .row(&self.lane),
+        });
+        let mut result = result_for(task, thread_id, answer.run_id.as_deref());
+        if let Some(answered_by) = answer.answered_by {
+            result.answered_by = answered_by;
+            result.output = answer.output;
+        }
+        result
     }
 
     pub fn wake_at(&self) -> Option<Duration> {
