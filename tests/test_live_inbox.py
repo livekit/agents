@@ -724,7 +724,6 @@ async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
 
 
 @pytest.mark.rule("B49")
-@pytest.mark.xfail(strict=True, reason="B49: the error carries the exception's type and text")
 async def test_a_request_that_fails_answers_a_fixed_sentence(door: Callable[..., Door]) -> None:
     desk = door()
     thread = await desk.thread()

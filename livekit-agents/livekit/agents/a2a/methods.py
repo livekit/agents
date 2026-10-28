@@ -96,6 +96,8 @@ READY_STREAMS = 2
 """Answer streams created ahead of the requests that will use them."""
 REASON_STORAGE_UNAVAILABLE = "storage-unavailable"
 """Plan 5.12: the ``failed`` reason of a message to an id the threads service does not know."""
+REQUEST_FAILED = "the request failed before it finished"
+"""A request's error message when it raised outside a turn; what raised stays in the log."""
 
 
 @dataclass
@@ -207,12 +209,10 @@ class A2AService(Generic[S]):
                 "an agent-store error ended an A2A request",
                 extra={"endpoint": self._endpoint.name, "error": str(e)},
             )
-            yield build_error_response(request_id, InternalError(message=str(e)))
-        except Exception as e:
+            yield build_error_response(request_id, InternalError(message=REQUEST_FAILED))
+        except Exception:
             logger.exception("an A2A request failed", extra={"endpoint": self._endpoint.name})
-            yield build_error_response(
-                request_id, InternalError(message=f"{type(e).__name__}: {e}")
-            )
+            yield build_error_response(request_id, InternalError(message=REQUEST_FAILED))
 
     async def _results(
         self, name: str, params: Params, call: CallContext
@@ -672,6 +672,7 @@ __all__ = [
     "METHODS",
     "REASON_THREAD_NOT_FOUND",
     "REASON_STORAGE_UNAVAILABLE",
+    "REQUEST_FAILED",
     "STREAMING",
     "A2AService",
     "CallContext",
