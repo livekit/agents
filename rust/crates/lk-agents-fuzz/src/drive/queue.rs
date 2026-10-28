@@ -55,11 +55,16 @@ impl Policy {
         Self::ALL.into_iter().find(|p| format!("{p:?}") == name)
     }
 
+    /// A seed's own policy: the task bridge for half the seeds, full POS without it for a
+    /// quarter, and arrival order for a quarter, which is still what reaches some bugs first (the
+    /// paper and gosim found the same). `tests/pos.rs bench` over the known bugs: on a failing
+    /// case's schedules the geometric-mean hit ratio is 0.07 under arrival, 0.30 under BasicPOS,
+    /// 0.33 under full POS and 0.66 with the bridge, for about a quarter more time per seed.
     pub fn of(schedule: u64) -> Self {
-        if Rng::with_seed(schedule ^ POLICY_STREAM).bool() {
-            Policy::BasicPos
-        } else {
-            Policy::Arrival
+        match Rng::with_seed(schedule ^ POLICY_STREAM).u8(0..4) {
+            0 => Policy::Arrival,
+            1 => Policy::FullPos,
+            _ => Policy::TaskPos,
         }
     }
 }
