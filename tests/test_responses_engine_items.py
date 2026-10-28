@@ -314,6 +314,47 @@ async def test_commentary_phase_only_on_done_still_joins() -> None:
     assert reply.text == "Let me check. It's sunny."
 
 
+async def test_commentary_chain_joins_until_non_commentary(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(
+            _message("m1", "Let me check.", phase="commentary"),
+            _message("m2", "Looking it up.", phase="commentary"),
+            _message("m3", "It's sunny.", phase="final_answer"),
+        )
+    )
+
+    assert reply.text == "Let me check. Looking it up. It's sunny."
+    assert reply.phases == ["commentary", "commentary", "final_answer"]
+    assert not [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+
+
+async def test_final_answer_owner_after_commentary_drops_next(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(
+            _message("m1", "Let me check.", phase="commentary"),
+            _message("m2", "It's sunny.", phase="final_answer"),
+            _message("m3", "It is sunny."),
+        )
+    )
+
+    assert reply.text == "Let me check. It's sunny."
+    records = [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["dropped_item_ids"] == ["m3"]
+
+
 async def test_dropped_message_phase_is_not_emitted() -> None:
     reply = await _reply_over_ws(
         _stream(
