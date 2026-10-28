@@ -6,7 +6,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -361,6 +361,10 @@ class AgentActivity(RecognitionHooks):
         # one awaited inline AgentTask may pause this activity at a time
         self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
+        # tool updates reach the model one at a time
+        self._tools_lock = asyncio.Lock()
+        self._tool_refreshes: set[asyncio.Task[None]] = set()
+        self._listened: list[tuple[llm.Toolset, Callable[[], None]]] = []
 
         self._started = False
         self._closed = False
@@ -815,7 +819,8 @@ class AgentActivity(RecognitionHooks):
             self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
-            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
+            async with self._tools_lock:
+                await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
@@ -1267,6 +1272,35 @@ class AgentActivity(RecognitionHooks):
         for ts in llm.ToolContext(agent_toolsets).toolsets:
             if isinstance(ts, AsyncToolset):
                 ts._attach_activity(activity=self, session=self._session)
+
+        async def refresh() -> None:
+            async with self._tools_lock:
+                if self._closed or self._rt_session is None:
+                    return  # a pipeline model reads ``self.tools`` at each request
+                try:
+                    await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
+                except Exception:
+                    logger.exception("could not give the model a toolset's changed tools")
+
+        # runs on the activity's loop, so the refresh tasks are only touched there
+        def schedule() -> None:
+            if self._closed:
+                return
+            task = asyncio.create_task(refresh(), name="refresh_tools")
+            self._tool_refreshes.add(task)
+            task.add_done_callback(self._tool_refreshes.discard)
+
+        loop = asyncio.get_running_loop()
+
+        def changed() -> None:
+            # a toolset is shared by every call in the process, which may run on another loop;
+            # once that loop is closed there is nothing to refresh
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(schedule)
+
+        for ts in llm.ToolContext(all_toolsets).toolsets:
+            ts._tools_listeners.append(changed)
+            self._listened.append((ts, changed))
 
         @utils.log_exceptions(logger=logger)
         async def _do_setup(toolset: llm.Toolset) -> None:
@@ -1721,6 +1755,11 @@ class AgentActivity(RecognitionHooks):
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
+
+            for toolset, listener in self._listened:
+                toolset._tools_listeners.remove(listener)
+            if self._tool_refreshes:
+                await utils.aio.cancel_and_wait(*self._tool_refreshes)
 
             # cancel cancellable tools and await the rest before teardown
             await self._tool_executor.drain()

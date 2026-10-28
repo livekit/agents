@@ -60,7 +60,7 @@ from .codec import (
     task_to_pb,
     to_stream_response,
 )
-from .extension import REASON, Extensions, pb, to_json
+from .extension import CALLER_LANE, REASON, Extensions, pb, to_json
 from .pump import ResponsePump, WireHost, start
 
 if TYPE_CHECKING:
@@ -242,6 +242,7 @@ class A2AService(Generic[S]):
         if thread_id is None:
             record, context_id = self._unknown_session(message, call)
         else:
+            pump: ResponsePump[TurnOutcome] | None = None
             try:
                 pump = await self._start(thread_id, message, call.extensions)
                 async for _ in pump.frames():
@@ -250,7 +251,8 @@ class A2AService(Generic[S]):
             except (RunRejected, ThreadNotFound):
                 raise
             except StorageError as e:
-                record, context_id = self._unsaved(thread_id, message, e)
+                acked = pump.acked if pump is not None else None
+                record, context_id = self._unsaved(thread_id, message, e, acked)
 
         configuration = params.get("configuration")
         length = configuration.get("historyLength") if isinstance(configuration, Mapping) else None
@@ -274,7 +276,7 @@ class A2AService(Generic[S]):
             yield final_event(record, context_id, exts=call.extensions)
             return
 
-        announced = False
+        pump: ResponsePump[TurnOutcome] | None = None
         try:
             pump = await self._start(thread_id, message, call.extensions)
             logger.debug(
@@ -285,13 +287,13 @@ class A2AService(Generic[S]):
                 },
             )
             async for event in pump.frames():
-                announced = True
                 yield event
         except (RunRejected, ThreadNotFound):
             raise
         except StorageError as e:
-            record, context_id = self._unsaved(thread_id, message, e)
-            if not announced:
+            acked = pump.acked if pump is not None else None
+            record, context_id = self._unsaved(thread_id, message, e, acked)
+            if acked is None:
                 yield submitted_task(record.id, context_id)
             yield final_event(record, context_id, exts=call.extensions)
 
@@ -334,6 +336,12 @@ class A2AService(Generic[S]):
         self, thread_id: str, message: StoredMessage, exts: Extensions
     ) -> ResponsePump[TurnOutcome]:
         """The turn in a task of its own, its frames through the pump (plan 6)."""
+        if metadata_from_wire(message.get("metadata")).get(CALLER_LANE) == self.lane:
+            # it would wait for the lane its caller holds while the caller waits on it
+            raise UnsupportedOperationError(
+                message=f"a delegation to the caller's own lane {self.lane} cannot run",
+                data={"lane": self.lane},
+            )
         opening = asyncio.ensure_future(self._storage.open(thread_id))
         try:
             continued, created = await asyncio.gather(
@@ -433,15 +441,18 @@ class A2AService(Generic[S]):
         return record, context_id
 
     def _unsaved(
-        self, thread_id: str, message: StoredMessage, error: StorageError
+        self, thread_id: str, message: StoredMessage, error: StorageError, task_id: str | None
     ) -> tuple[TaskRecord, str]:
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
-        answer, unpersisted, and the client resends (docs/a2a.md)."""
+        answer, under the id the client was acknowledged with, and the client resends
+        (docs/a2a.md)."""
         logger.warning(
             "an agent-store error ended a turn",
             extra={"endpoint": self._endpoint.name, "threadId": thread_id, "error": str(error)},
         )
-        record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_STORAGE_UNAVAILABLE)
+        record = _failed_record(
+            task_id or shortuuid("AST_"), self.lane, message, REASON_STORAGE_UNAVAILABLE
+        )
         return record, thread_id
 
     # -- tasks/* --

@@ -58,6 +58,8 @@ class ResponsePump(Generic[T]):
         self._stream_id = stream_id
         self._queue: asyncio.Queue[StreamEvent | BaseException | None] = asyncio.Queue()
         self._outcome: T | None = None
+        self.acked: str | None = None
+        """The task id the acknowledgment named, once it went out."""
 
     @property
     def outcome(self) -> T:
@@ -125,7 +127,6 @@ class WireHost(Generic[S]):
         self._exts = exts
         self._artifact_id = shortuuid("art_")
         self._streamed: list[str] = []
-        self._acked = False
         self._started = time.monotonic()
         self._marks: dict[str, int] = {}
 
@@ -177,10 +178,10 @@ class WireHost(Generic[S]):
         logger.debug("a turn's timing", extra={"taskId": self._task_id, **self._marks})
 
     def _ack(self, task_id: str, context_id: str) -> None:
-        if self._acked:
+        if self._pump.acked is not None:
             return
 
-        self._acked = True
+        self._pump.acked = task_id
         self._mark("ackMs")
         self._pump.emit(submitted_task(task_id, context_id))
 

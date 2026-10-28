@@ -43,7 +43,7 @@ use crate::run::{
     LEASE_POLL_MAX, LEASE_POLL_MIN, LEASE_WAIT_TIMEOUT, Lane, Run, RunOptions, RunOutcome,
     TaskRecord, TaskState, Thread, shortuuid,
 };
-use crate::run::{REASON_LEASE_TIMEOUT, REASON_WORKER_LOST};
+use crate::run::{REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST};
 use crate::schema::TaskData;
 use crate::statements::{Duplicate, Receive, ReceiveRequest, Received, SubmittedTask};
 use step::python_reason;
@@ -259,7 +259,18 @@ impl Turn {
                 .map(Some)
         }
         .await;
-        let outcome = self.close_run(&mut run, body).await?;
+        let outcome = match self.close_run(&mut run, body).await {
+            Err(e @ (StorageError::VersionConflict { .. } | StorageError::Unavailable(_))) => {
+                // the save was not written: the row the client was told about fails now, under
+                // its own id, instead of staying `working` until another holder finds it
+                if let Err(write) = self.fail_unrun(ctx, task_id, REASON_STORAGE_UNAVAILABLE).await
+                {
+                    log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id; "the unsaved task could not be failed: {write}");
+                }
+                return Err(e);
+            }
+            other => other?,
+        };
         match outcome {
             Some(outcome) => self.finish(ctx, outcome, task_id, &mut run).await,
             None => {
@@ -506,7 +517,19 @@ impl Turn {
                 Ok(())
             }
             .await;
-            self.close_run(&mut run, body).await?;
+            match self.close_run(&mut run, body).await {
+                Err(e @ (StorageError::VersionConflict { .. } | StorageError::Unavailable(_))) => {
+                    // the save was not written: the batch's rows fail under their own ids
+                    for tid in &task_ids {
+                        let message = failed_message(tid, REASON_STORAGE_UNAVAILABLE);
+                        if let Err(write) = db.mark_orphan_failed(&self.lane, tid, &message).await {
+                            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = tid.as_str(); "the unsaved task could not be failed: {write}");
+                        }
+                    }
+                    return Err(e);
+                }
+                other => other?,
+            }
             ctx.last_run_id = Some(run.run_id.clone());
             let token = run
                 .lease_token()

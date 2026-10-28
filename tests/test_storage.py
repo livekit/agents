@@ -173,7 +173,7 @@ async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
 
     result = await run_turn(storage, sid, LANE, a2a("hello", "m1"), "queue", boom)
     assert result.task.status == "failed"
-    assert result.task.status_message["parts"][0]["text"] == "RuntimeError: boom"
+    assert result.task.status_message["parts"][0]["text"] == "the agent failed before it finished"
     assert [i.text_content for i in await history_items(storage, sid, LANE)] == ["hello"]
     assert await run_outcomes(storage, sid) == ["failed"]
 
