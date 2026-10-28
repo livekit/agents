@@ -3,6 +3,7 @@
 use super::side_table::side_table_ref;
 
 /// A key into the binding's side table for a captured host exception.
+#[crate::host(handwritten(emit, host = "BaseException"))]
 #[derive(Clone)]
 pub struct CapturedError(std::sync::Arc<super::side_table::Entry>);
 side_table_ref!(CapturedError);

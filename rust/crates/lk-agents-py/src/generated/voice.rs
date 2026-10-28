@@ -1020,3 +1020,246 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         });
     }
 }
+
+// Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
+
+/// [`::lk_agents_abi::voice::session_effects::SessionHooks`] over a host `livekit.agents.voice.agent_session._AgentHooks`.
+#[derive(Clone)]
+pub struct SessionHooksProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: ::lk_agents_runtime::host::python::Notifier,
+}
+
+impl SessionHooksProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(SessionHooksProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>(|obj| SessionHooksProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+#[::async_trait::async_trait]
+impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy {
+    async fn on_enter(&self, agent: &::lk_agents_abi::HostRef) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let agent_arg = ::std::clone::Clone::clone(agent);
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_enter")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn on_exit(&self, agent: &::lk_agents_abi::HostRef) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let agent_arg = ::std::clone::Clone::clone(agent);
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_exit")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn close_toolsets(&self, agent: Option<&::lk_agents_abi::HostRef>) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let agent_arg = agent.map(::std::borrow::ToOwned::to_owned);
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
+                Ok((host.bind(py).getattr("_core_close_toolsets")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await {
+            ::lk_agents_abi::python::log::warn!("SessionHooks._core_close_toolsets failed: {e}");
+        }
+    }
+
+    async fn setup_tools(&self, tools: &::lk_agents_abi::HostRef) -> ::std::result::Result<::std::vec::Vec<::lk_agents_abi::ToolSpec>, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let tools_arg = ::std::clone::Clone::clone(tools);
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(tools_arg, py)?];
+                Ok((host.bind(py).getattr("_core_setup_tools")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::ToolSpec>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn closing(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_closing")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn on_user_turn_completed(&self, agent: &::lk_agents_abi::HostRef, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, new_transcript: &str, transcript_confidence: f64) -> ::std::result::Result<(::std::option::Option<::std::string::String>, ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>, bool), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let agent_arg = ::std::clone::Clone::clone(agent);
+        let chat_ctx_arg = chat_ctx;
+        let new_transcript_arg = new_transcript.to_owned();
+        let transcript_confidence_arg = transcript_confidence;
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(chat_ctx_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_user_turn_completed")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<::std::option::Option<::std::string::String>>())?, (item_1.extract::<::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>>().map_err(::pyo3::PyErr::from))?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn on_user_turn_exceeded(&self, agent: &::lk_agents_abi::HostRef, ev: &::lk_agents_abi::voice::events::UserTurnExceededEvent) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let agent_arg = ::std::clone::Clone::clone(agent);
+        let ev_arg = ::std::clone::Clone::clone(ev);
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(ev_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_user_turn_exceeded")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn function_tools_executed(&self, function_calls: ::std::vec::Vec<::lk_agents_abi::ChatItem>, function_call_outputs: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> ::std::result::Result<::std::vec::Vec<bool>, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let function_calls_arg = function_calls;
+        let function_call_outputs_arg = function_call_outputs;
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(function_calls_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(function_call_outputs_arg, py)?];
+                Ok((host.bind(py).getattr("_core_function_tools_executed")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<bool>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn filler_source(&self, source: &::lk_agents_abi::HostRef, step: u32) -> ::std::result::Result<::lk_agents_abi::voice::session_effects::FillerReply, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let source_arg = ::std::clone::Clone::clone(source);
+        let step_arg = step;
+        let context = ::std::clone::Clone::clone(&self.context);
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(source_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(step_arg, py)?];
+                Ok((host.bind(py).getattr("_core_filler_source")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.extract::<::lk_agents_abi::voice::session_effects::FillerReply>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn hook_failed(&self, hook: &str, error: ::std::option::Option<::lk_agents_abi::errors::CapturedError>) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let hook_arg = hook.to_owned();
+        let error_arg = error;
+        let context = ::std::clone::Clone::clone(&self.context);
+        self.notifier.notify(context, "SessionHooks._core_hook_failed", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?];
+            Ok((host.bind(py).getattr("_core_hook_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
+        });
+    }
+}

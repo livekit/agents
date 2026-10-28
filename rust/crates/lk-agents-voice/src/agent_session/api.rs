@@ -825,59 +825,7 @@ pub trait SessionEvents: Send + Sync {
 
 pub use lk_agents_abi::worker::job::SessionJob;
 
-/// The agent's hooks, run by the host and awaited by the core: each hook call is answered with
-/// what its method returns, or `Failed` when it raises (after `hook_failed`). A hook still running
-/// when the loop has returned is cancelled.
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
-#[async_trait::async_trait]
-pub trait SessionHooks: Send + Sync {
-    /// `Agent.on_enter()` for `agent`, the `Agent` the host installed.
-    async fn on_enter(&self, agent: &lk_agents_abi::HostRef) -> Result<(), HostError>;
-    /// `Agent.on_exit()`.
-    async fn on_exit(&self, agent: &lk_agents_abi::HostRef) -> Result<(), HostError>;
-    /// The toolsets of `agent` (after its `on_exit` was answered), or of the session (`None`, as
-    /// it closes) closed.
-    async fn close_toolsets(&self, agent: Option<&lk_agents_abi::HostRef>);
-    /// The toolsets among `tools` (an agent's and the session's, a list) set up; the specs of every
-    /// tool they hold then.
-    async fn setup_tools(
-        &self,
-        tools: &lk_agents_abi::HostRef,
-    ) -> Result<Vec<lk_agents_abi::ToolSpec>, HostError>;
-    /// The session closes: what runs beside it (AMD) closes first.
-    async fn closing(&self) -> Result<(), HostError>;
-    /// `agent.on_user_turn_completed(turn_ctx, new_message)`, `turn_ctx` built from `chat_ctx`
-    /// (a copy of the agent's own context): the message's text as the hook left it, the turn's
-    /// items when it changed them, and whether it raised `StopResponse`.
-    async fn on_user_turn_completed(
-        &self,
-        agent: &lk_agents_abi::HostRef,
-        chat_ctx: Vec<lk_agents_abi::ChatItem>,
-        new_transcript: &str,
-        transcript_confidence: f64,
-    ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>;
-    /// `agent.on_user_turn_exceeded(ev)`.
-    async fn on_user_turn_exceeded(
-        &self,
-        agent: &lk_agents_abi::HostRef,
-        ev: &lk_agents_abi::voice::events::UserTurnExceededEvent,
-    ) -> Result<(), HostError>;
-    /// The `function_tools_executed` event emitted: each output's `reply_required` as its
-    /// handlers left it.
-    async fn function_tools_executed(
-        &self,
-        function_calls: Vec<lk_agents_abi::ChatItem>,
-        function_call_outputs: Vec<lk_agents_abi::ChatItem>,
-    ) -> Result<Vec<bool>, HostError>;
-    /// A filler's callable `source` called for `step`, awaited when it returns an awaitable.
-    async fn filler_source(
-        &self,
-        source: &lk_agents_abi::HostRef,
-        step: u32,
-    ) -> Result<FillerReply, HostError>;
-    /// Hook `hook` raised `error` (the exception itself, when there is one): logged.
-    fn hook_failed(&self, hook: &str, error: Option<lk_agents_abi::errors::CapturedError>);
-}
+pub use lk_agents_abi::voice::session_effects::SessionHooks;
 
 pub use lk_agents_abi::voice::session_effects::FillerReply;
 

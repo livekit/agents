@@ -249,7 +249,6 @@
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|trait HostRoom|lk_agents_abi :: host (proxy (host = \"livekit.agents.voice.room_io.Room\" , clock))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|trait NodeFactory|lk_agents_abi :: host (proxy (clock))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|trait SessionEvents|lk_agents_abi :: host (proxy)",
-  "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|trait SessionHooks|lk_agents_abi :: host (proxy (cancel_on_drop))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|trait SessionRoom|lk_agents_abi :: host (native (through (HostRoom = HostedRoom :: new)))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::aclose|host (method (kw_only , defaults (reason = \"user_initiated\" , drain = false)))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::agent_chat_ctx|host (method)",

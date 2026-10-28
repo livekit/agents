@@ -376,7 +376,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v}, None)")
         }
         Ty::List(inner) => format!(
-            "{v}.try_iter()?.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()",
+            "{v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>())",
             from_object("item", inner, path, at)?
         ),
         Ty::Tuple(items) => {

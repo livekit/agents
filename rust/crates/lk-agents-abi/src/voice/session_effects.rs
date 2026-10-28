@@ -19,10 +19,75 @@ pub struct StartPlan {
 /// scheduled itself).
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[binding(extract, untagged)]
+#[crate::host(handwritten(extract, host = "str | None | object"))]
 pub enum FillerReply {
     #[binding(none)]
     Declined,
     Text(String),
     #[binding(rest)]
     Spoke,
+}
+
+/// The agent's hooks, run by the host and awaited by the core: each hook call is answered with
+/// what its method returns, or `Failed` when it raises (after `hook_failed`). A hook still running
+/// when the loop has returned is cancelled.
+#[crate::host(proxy(host = "livekit.agents.voice.agent_session._AgentHooks"))]
+#[async_trait::async_trait]
+pub trait SessionHooks: Send + Sync {
+    /// `Agent.on_enter()` for `agent`, the `Agent` the host installed.
+    #[host(await, name = "_core_on_enter")]
+    async fn on_enter(&self, agent: &crate::HostRef) -> Result<(), crate::errors::HostError>;
+    /// `Agent.on_exit()`.
+    #[host(await, name = "_core_on_exit")]
+    async fn on_exit(&self, agent: &crate::HostRef) -> Result<(), crate::errors::HostError>;
+    /// The toolsets of `agent` (after its `on_exit` was answered), or of the session (`None`, as
+    /// it closes) closed.
+    #[host(await, name = "_core_close_toolsets")]
+    async fn close_toolsets(&self, agent: Option<&crate::HostRef>);
+    /// The toolsets among `tools` (an agent's and the session's, a list) set up; the specs of every
+    /// tool they hold then.
+    #[host(await, name = "_core_setup_tools")]
+    async fn setup_tools(
+        &self,
+        tools: &crate::HostRef,
+    ) -> Result<Vec<crate::ToolSpec>, crate::errors::HostError>;
+    /// The session closes: what runs beside it (AMD) closes first.
+    #[host(await, name = "_core_closing")]
+    async fn closing(&self) -> Result<(), crate::errors::HostError>;
+    /// `agent.on_user_turn_completed(turn_ctx, new_message)`, `turn_ctx` built from `chat_ctx`
+    /// (a copy of the agent's own context): the message's text as the hook left it, the turn's
+    /// items when it changed them, and whether it raised `StopResponse`.
+    #[host(await, name = "_core_on_user_turn_completed")]
+    async fn on_user_turn_completed(
+        &self,
+        agent: &crate::HostRef,
+        chat_ctx: Vec<crate::ChatItem>,
+        new_transcript: &str,
+        transcript_confidence: f64,
+    ) -> Result<(Option<String>, Option<Vec<crate::ChatItem>>, bool), crate::errors::HostError>;
+    /// `agent.on_user_turn_exceeded(ev)`.
+    #[host(await, name = "_core_on_user_turn_exceeded")]
+    async fn on_user_turn_exceeded(
+        &self,
+        agent: &crate::HostRef,
+        ev: &crate::voice::events::UserTurnExceededEvent,
+    ) -> Result<(), crate::errors::HostError>;
+    /// The `function_tools_executed` event emitted: each output's `reply_required` as its
+    /// handlers left it.
+    #[host(await, name = "_core_function_tools_executed")]
+    async fn function_tools_executed(
+        &self,
+        function_calls: Vec<crate::ChatItem>,
+        function_call_outputs: Vec<crate::ChatItem>,
+    ) -> Result<Vec<bool>, crate::errors::HostError>;
+    /// A filler's callable `source` called for `step`, awaited when it returns an awaitable.
+    #[host(await, name = "_core_filler_source")]
+    async fn filler_source(
+        &self,
+        source: &crate::HostRef,
+        step: u32,
+    ) -> Result<FillerReply, crate::errors::HostError>;
+    /// Hook `hook` raised `error` (the exception itself, when there is one): logged.
+    #[host(notify, name = "_core_hook_failed")]
+    fn hook_failed(&self, hook: &str, error: Option<crate::errors::CapturedError>);
 }
