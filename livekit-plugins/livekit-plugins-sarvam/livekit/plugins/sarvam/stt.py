@@ -26,12 +26,14 @@ import logging
 import os
 import platform
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
+from pydantic import ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -49,8 +51,19 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
+from ._utils import looks_like_error_text
 from .log import logger
-from .models import AudioData, EventData, ProviderMessage, TranscriptionData, message_request_id
+from .models import (
+    STT_MESSAGE,
+    ErrorData,
+    EventData,
+    EventMessage,
+    STTMessage,
+    TranscriptionData,
+    TranscriptMessage,
+    UnknownData,
+    message_request_id,
+)
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 EOS_FALLBACK_TIMEOUT = 1.0
@@ -326,8 +339,12 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
 
 
+def _string_option(value: object, default: str) -> str:
+    return value if isinstance(value, str) else default
+
+
 def _extract_confidence(
-    payload: object,
+    payload: TranscriptionData,
     instance_logger: logging.Logger,
 ) -> float:
     """Read Sarvam's ``language_probability`` from a response payload.
@@ -337,7 +354,7 @@ def _extract_confidence(
     (defensive — the field is documented for the REST endpoint but not
     explicitly for streaming, so contract drift is logged for visibility).
     """
-    value = TranscriptionData.model_validate(payload).language_probability
+    value = payload.language_probability
     # bool is a subclass of int — exclude explicitly so that an accidental
     # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
     # as livekit-plugins-slng/.../stt.py.
@@ -396,34 +413,13 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     return f"{base_url}?{urlencode(params)}"
 
 
-def _looks_like_error_text(value: object) -> bool:
-    """Heuristic to detect server-side error hints in text payloads/reasons."""
-    if not isinstance(value, str):
-        return False
-
-    lowered = value.lower()
-    error_hints = (
-        "error",
-        "invalid",
-        "failed",
-        "forbidden",
-        "unauthorized",
-        "not found",
-        "rate limit",
-        "timeout",
-    )
-    return any(hint in lowered for hint in error_hints)
-
-
-def _has_error_field(data: object) -> bool:
-    """Check whether a parsed message carries an explicit error indicator."""
-    message = ProviderMessage.model_validate(data)
+def _has_error_field(message: STTMessage) -> bool:
     if message.error is not None:
         return True
-    if isinstance(message.data, dict):
-        nested = EventData.model_validate(message.data)
+    nested = message.data
+    if isinstance(nested, (EventData, UnknownData)):
         return nested.error is not None or nested.event_type == "error" or nested.event == "error"
-    return False
+    return isinstance(nested, ErrorData) and nested.error is not None
 
 
 class STT(stt.STT):
@@ -559,12 +555,13 @@ class STT(stt.STT):
         Raises:
             ValueError: If mode is explicitly given but not supported by the model.
         """
-        resolved_language = LanguageCode(language) if is_given(language) else self._opts.language
-        resolved_model = model if is_given(model) else self._opts.model
-        if not isinstance(resolved_language, str):
-            resolved_language = self._opts.language
-        if not isinstance(resolved_model, str):
-            resolved_model = self._opts.model
+        resolved_language = _string_option(
+            LanguageCode(language) if is_given(language) else self._opts.language,
+            self._opts.language,
+        )
+        resolved_model = _string_option(
+            model if is_given(model) else self._opts.model, self._opts.model
+        )
         if is_given(model):
             _warn_if_sunset_stt_model(resolved_model)
 
@@ -833,6 +830,7 @@ class STT(stt.STT):
             conn_options=single_attempt_conn_options,
             api_key=self._api_key,
             http_session=stream_session,
+            release_stream=self._streams.discard,
         )
         self._streams.add(stream)
         return stream
@@ -868,9 +866,11 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
+        release_stream: Callable[[SpeechStream], None],
         client_request_id: str | None = None,
         server_request_id: str | None = None,
     ) -> None:
+        self._release_stream = release_stream
         self._opts = opts
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._api_key = api_key
@@ -934,9 +934,9 @@ class SpeechStream(stt.SpeechStream):
             "server_request_id": self._server_request_id,
         }
 
-    def _maybe_set_server_request_id(self, data: object) -> None:
+    def _maybe_set_server_request_id(self, request_id: object) -> None:
         """Capture server-assigned request_id once it is available."""
-        if self._server_request_id is None and (request_id := message_request_id(data)):
+        if self._server_request_id is None and request_id:
             self._server_request_id = str(request_id)
 
     def _positive_time(self, value: object) -> float | None:
@@ -965,8 +965,7 @@ class SpeechStream(stt.SpeechStream):
             return fallback_task
         return None
 
-    def _send_final_transcript(self, transcript_data: object) -> bool:
-        transcript = TranscriptionData.model_validate(transcript_data)
+    def _send_final_transcript(self, transcript: TranscriptionData) -> bool:
         transcript_text = transcript.transcript
         if not transcript_text:
             return False
@@ -981,7 +980,7 @@ class SpeechStream(stt.SpeechStream):
             text=transcript_text,
             start_time=self._positive_time(transcript.speech_start) or 0.0,
             end_time=self._positive_time(transcript.speech_end) or 0.0,
-            confidence=_extract_confidence(transcript_data, self._logger),
+            confidence=_extract_confidence(transcript, self._logger),
         )
         self.send(
             stt.SpeechEvent(
@@ -1083,9 +1082,8 @@ class SpeechStream(stt.SpeechStream):
             self._client_request_id = None
             self._server_request_id = None
             # Release the STT's strong ownership only after session cleanup succeeds.
-            stt = self._stt
-            if self._session.closed and isinstance(stt, STT):
-                stt._streams.discard(self)
+            if self._session.closed:
+                self._release_stream(self)
 
     def update_options(
         self,
@@ -1263,10 +1261,7 @@ class SpeechStream(stt.SpeechStream):
                 if task != reconnect_task:
                     exc = task.exception()
                     if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
+                        raise exc
 
         finally:
             # Clean up tasks
@@ -1309,7 +1304,8 @@ class SpeechStream(stt.SpeechStream):
                     try:
                         # Convert audio frame to Int16 data
                         audio_data = frame.data.tobytes()
-                        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                        # NumPy's Buffer/ArrayLike overloads contain Unknown.
+                        audio_array = np.frombuffer(audio_data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
                         audio_buffer.extend(audio_array)
 
                         # Check if we have enough data for a chunk
@@ -1350,7 +1346,7 @@ class SpeechStream(stt.SpeechStream):
                         )
                         raise
 
-                elif isinstance(frame, self.Flush):
+                else:
                     # LiveKit VAD FlushSentinel - handles stream termination
                     self._logger.debug(
                         "Received FlushSentinel, sending end of stream",
@@ -1395,10 +1391,13 @@ class SpeechStream(stt.SpeechStream):
                 msg = await ws.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        data = json.loads(msg.data)
-                        await self._handle_message(data)
-                    except json.JSONDecodeError as e:
-                        if _looks_like_error_text(msg.data):
+                        await self._handle_message(STT_MESSAGE.validate_json(msg.data))
+                    except ValidationError as e:
+                        if any(error["type"] != "json_invalid" for error in e.errors()):
+                            raise APIConnectionError(
+                                "Sarvam STT sent an invalid event", retryable=False
+                            ) from e
+                        if looks_like_error_text(msg.data):
                             raise APIStatusError(
                                 message=(f"Sarvam STT non-JSON error message: {msg.data}"),
                                 body={"raw_message": msg.data},
@@ -1439,7 +1438,7 @@ class SpeechStream(stt.SpeechStream):
                     close_code = ws.close_code if ws.close_code is not None else msg.data
                     close_reason = msg.extra
                     is_expected_close = close_code in (1000, 1001, None)
-                    has_error_reason = _looks_like_error_text(close_reason)
+                    has_error_reason = looks_like_error_text(close_reason)
 
                     if not is_expected_close or has_error_reason:
                         self._logger.error(
@@ -1491,11 +1490,11 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_message(self, data: object) -> None:
+    async def _handle_message(self, data: STTMessage) -> None:
         """Handle different types of messages from Sarvam streaming API."""
         try:
-            msg_type = ProviderMessage.model_validate(data).type
-            self._maybe_set_server_request_id(data)
+            msg_type = data.type
+            self._maybe_set_server_request_id(message_request_id(data))
             if not msg_type:
                 self._logger.warning(
                     "Received message without type field",
@@ -1503,9 +1502,9 @@ class SpeechStream(stt.SpeechStream):
                 )
                 return
 
-            if msg_type == "data":
+            if isinstance(data, TranscriptMessage):
                 await self._handle_transcript_data(data)
-            elif msg_type in ("events", "event"):
+            elif isinstance(data, EventMessage):
                 if _has_error_field(data):
                     await self._handle_error_message(data)
                 else:
@@ -1536,13 +1535,14 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"Message processing error: {e}") from e
 
-    async def _handle_transcript_data(self, data: object) -> None:
+    async def _handle_transcript_data(self, data: TranscriptMessage) -> None:
         """Handle transcription result messages."""
-        transcript_data = TranscriptionData.model_validate(
-            ProviderMessage.model_validate(data).data
-        )
+        transcript_data = data.data
+        if transcript_data is None:
+            self._logger.debug("Received transcript without data", extra=self._build_log_context())
+            return
         transcript_text = transcript_data.transcript
-        self._maybe_set_server_request_id(transcript_data)
+        self._maybe_set_server_request_id(transcript_data.request_id)
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
         request_id = transcript_data.request_id or self._server_request_id or ""
@@ -1595,11 +1595,14 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_events(self, data: object) -> None:
+    async def _handle_events(self, data: EventMessage) -> None:
         """Handle VAD (Voice Activity Detection) events."""
-        event_data = EventData.model_validate(ProviderMessage.model_validate(data).data)
+        event_data = data.data
+        if event_data is None:
+            self._logger.debug("Received event without data", extra=self._build_log_context())
+            return
         signal_type = event_data.signal_type
-        self._maybe_set_server_request_id(event_data)
+        self._maybe_set_server_request_id(event_data.request_id)
 
         if not signal_type:
             self._logger.warning(
@@ -1661,33 +1664,20 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_error_message(self, data: object) -> None:
-        """Handle error messages from the API."""
-        message = ProviderMessage.model_validate(data)
-        error_data = AudioData.model_validate(
-            message.data if isinstance(message.data, dict) else {}
-        )
-        error_info = message.error or error_data.error or error_data.message or "Unknown error"
-        error_code = message.code if message.code is not None else error_data.code
-        raw_error_message = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        self._maybe_set_server_request_id(data)
-
-        self._logger.error(
-            f"API error received: {error_info}",
-            extra={
-                **self._build_log_context(),
-                "error_code": error_code,
-                "error_info": error_info,
-                "lk.pii.raw_message": data,
-            },
-        )
-
+    async def _handle_error_message(self, message: STTMessage) -> None:
+        """Preserve provider error details and request identity."""
+        nested = message.data
+        error_code = message.code
+        if error_code is None and isinstance(nested, (ErrorData, EventData, UnknownData)):
+            error_code = nested.code
+        raw = message.model_dump(mode="json", exclude_unset=True)
+        raw_error_message = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
+        self._maybe_set_server_request_id(message_request_id(message))
         status_code = int(error_code) if isinstance(error_code, int) else -1
         if isinstance(error_code, str) and error_code.isdigit():
             status_code = int(error_code)
-
         raise APIStatusError(
             message=f"Sarvam streaming API error: {raw_error_message}",
             status_code=status_code,
-            body=data,
+            body=raw,
         )

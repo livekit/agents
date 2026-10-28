@@ -28,11 +28,13 @@ import os
 import platform
 import re
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
 import numpy as np
 import numpy.typing as npt
+from pydantic import ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -51,8 +53,11 @@ from livekit.agents import (
 from .log import logger
 from .models import (
     MODEL_SPEAKER_COMPATIBILITY,
-    AudioData,
-    ProviderMessage,
+    TTS_MESSAGE,
+    AudioMessage,
+    ErrorData,
+    ErrorMessage,
+    EventMessage,
     SarvamTTSLanguages,
     SarvamTTSModels,
     SarvamTTSOutputAudioBitrate,
@@ -166,7 +171,8 @@ def _decode_telephony(codec: str, data: bytes) -> bytes:
         table = _ALAW_TABLE
     else:
         raise ValueError(f"_decode_telephony does not support codec: {codec}")
-    pcm = table[np.frombuffer(data, dtype=np.uint8)]
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    pcm = table[np.frombuffer(data, dtype=np.uint8)]  # pyright: ignore[reportUnknownMemberType]
     return pcm.astype("<i2").tobytes()
 
 
@@ -336,18 +342,14 @@ _MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
 _CODE_STATUS_RE = re.compile(r"\s*\d{3}\s*")
 
 
-def _error_status_code(error_data: object) -> int:
+def _error_status_code(error_data: ErrorData) -> int:
     """Extract the HTTP-equivalent status code from a Sarvam websocket error frame.
 
     Schema rejections carry ``code`` (e.g. 422, or the string ``"422"``). Others omit
     it and prefix the message instead, as in ``"400: Speaker '...' is not compatible
     with model bulbul:v4-flash"``. Returns -1 when neither form is present.
     """
-    if not isinstance(error_data, (dict, AudioData)):
-        return -1
-
-    parsed = AudioData.model_validate(error_data)
-    code = parsed.code
+    code = error_data.code
     if isinstance(code, bool):  # bool is an int subclass; never a status code
         return -1
     if isinstance(code, int):
@@ -355,7 +357,7 @@ def _error_status_code(error_data: object) -> int:
     if isinstance(code, str) and _CODE_STATUS_RE.fullmatch(code):
         return int(code)
 
-    match = _MESSAGE_STATUS_RE.match(str(parsed.message))
+    match = _MESSAGE_STATUS_RE.match(str(error_data.message))
     return int(match.group(1)) if match else -1
 
 
@@ -800,15 +802,42 @@ class TTS(tts.TTS):
         """Synthesize text to audio using Sarvam.ai TTS API."""
         if conn_options is None:
             conn_options = DEFAULT_API_CONNECT_OPTIONS
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            get_session=self._ensure_session,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            pool=self._pool,
+            options_for_connection=self._options_for_connection,
+            stop_keepalive=self._stop_keepalive,
+            return_ws=self._return_ws,
+        )
         self._streams.add(stream)
         return stream
+
+    def _options_for_connection(self, stream_options: SarvamTTSOptions) -> SarvamTTSOptions:
+        return replace(
+            self._opts,
+            speech_sample_rate=stream_options.speech_sample_rate,
+            output_audio_codec=stream_options.output_audio_codec,
+        )
+
+    async def _return_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        if id(ws) in self._retired_ws:
+            await self._close_ws(ws)
+        else:
+            self._start_keepalive(ws)
 
     def prewarm(self) -> None:
         """Prewarm WebSocket connections."""
@@ -824,10 +853,19 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        opts: SarvamTTSOptions,
+        get_session: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
@@ -852,7 +890,7 @@ class ChunkedStream(tts.ChunkedStream):
         mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 url=self._opts.base_url,
                 json=payload,
@@ -895,10 +933,24 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """WebSocket-based streaming TTS for Sarvam.ai."""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: SarvamTTSOptions,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        options_for_connection: Callable[[SarvamTTSOptions], SarvamTTSOptions],
+        stop_keepalive: Callable[[aiohttp.ClientWebSocketResponse], Awaitable[None]],
+        return_ws: Callable[[aiohttp.ClientWebSocketResponse], Awaitable[None]],
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
+        self._options_for_connection = options_for_connection
+        self._stop_keepalive = stop_keepalive
+        self._return_ws = return_ws
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         # Connection state management
@@ -948,7 +1000,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         word_stream = tokenizer_instance.stream()
                         self._segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
@@ -1149,7 +1201,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise
 
         try:
-            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 # Nothing suspends between the pool's get() and here, and every change to a
                 # handshake option invalidates the pool, so this socket was opened with the
                 # TTS's current model and completion setting. Adopt every model-coupled
@@ -1157,15 +1209,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # some could pair a model with a speaker or language it rejects. Sample
                 # rate and codec stay this stream's own, as the output emitter is already
                 # initialized from them.
-                self._opts = replace(
-                    self._tts._opts,
-                    speech_sample_rate=self._opts.speech_sample_rate,
-                    output_audio_codec=self._opts.output_audio_codec,
-                )
+                self._opts = self._options_for_connection(self._opts)
                 # Pause the keepalive while this stream holds the socket so its pings don't
                 # interleave with config, text and flush frames. It was started by
                 # _connect_ws for a fresh socket, or by the stream that last returned it.
-                await self._tts._stop_keepalive(ws)
+                await self._stop_keepalive(ws)
 
                 self._ws_conn = ws
                 self._connection_state = ConnectionState.CONNECTED
@@ -1193,10 +1241,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # pool removes the socket and closes it with its next drain. A socket that
                 # update_options retired meanwhile would otherwise stay open until the
                 # pool's next acquisition, which may not come, so close it now.
-                if id(ws) in self._tts._retired_ws:
-                    await self._tts._close_ws(ws)
-                else:
-                    self._tts._start_keepalive(ws)
+                await self._return_ws(ws)
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED
@@ -1226,9 +1271,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             True if processing should continue, False if stream should end
         """
         try:
-            resp = json.loads(msg_data)
-            msg_type = resp.get("type")
-            self._maybe_set_server_request_id(resp)
+            resp = TTS_MESSAGE.validate_json(msg_data)
+            msg_type = resp.type
+            self._maybe_set_server_request_id(message_request_id(resp))
             if self._server_request_id:
                 # Expose the server-assigned request id on the tts_request_run span so
                 # users can correlate traces with Sarvam's logs for debugging. Deduped
@@ -1244,18 +1289,20 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             # logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
 
-            if msg_type == "audio":
+            if isinstance(resp, AudioMessage):
                 return await self._handle_audio_message(resp, output_emitter)
-            elif msg_type == "error":
+            elif isinstance(resp, ErrorMessage):
                 await self._handle_error_message(resp)
                 return False  # Stop processing on error
-            elif msg_type == "event":
+            elif isinstance(resp, EventMessage):
                 return await self._handle_event_message(resp, output_emitter)
             else:
                 logger.debug(f"Unknown message type: {msg_type}", extra=self._build_log_context())
                 return True
 
-        except json.JSONDecodeError as e:
+        except ValidationError as e:
+            if any(error["type"] != "json_invalid" for error in e.errors()):
+                raise APIConnectionError("Sarvam TTS sent an invalid event", retryable=False) from e
             logger.warning(
                 f"Invalid JSON in WebSocket message: {e}",
                 extra={**self._build_log_context(), "lk.pii.raw_data": msg_data[:200]},
@@ -1275,10 +1322,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 body={"raw_message": msg_data},
             ) from e
 
-    async def _handle_audio_message(self, resp: object, output_emitter: tts.AudioEmitter) -> bool:
+    async def _handle_audio_message(
+        self, resp: AudioMessage, output_emitter: tts.AudioEmitter
+    ) -> bool:
         """Handle audio message with proper error handling."""
         try:
-            audio_data = AudioData.model_validate(ProviderMessage.model_validate(resp).data).audio
+            audio_data = resp.data.audio if resp.data is not None else ""
             if not audio_data:
                 logger.debug("Received empty audio data", extra=self._build_log_context())
                 return True
@@ -1295,9 +1344,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Don't stop processing for audio decode errors
             return True
 
-    async def _handle_error_message(self, resp: object) -> None:
+    async def _handle_error_message(self, resp: ErrorMessage) -> None:
         """Handle error messages from the API."""
-        error_data = AudioData.model_validate(ProviderMessage.model_validate(resp).data)
+        error_data = resp.data or ErrorData()
         error_msg = error_data.message
         error_code = _error_status_code(error_data)
 
@@ -1310,7 +1359,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "lk.pii.error_message": error_msg,
-                "lk.pii.raw_message": resp,
+                "lk.pii.raw_message": resp.model_dump(mode="json", exclude_unset=True),
             },
         )
 
@@ -1328,11 +1377,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=error_data.request_id,
         )
 
-    async def _handle_event_message(self, resp: object, output_emitter: tts.AudioEmitter) -> bool:
+    async def _handle_event_message(
+        self, resp: EventMessage, output_emitter: tts.AudioEmitter
+    ) -> bool:
         """Handle event messages from the API."""
-        event_data = AudioData.model_validate(ProviderMessage.model_validate(resp).data)
+        event_data = resp.data
+        if event_data is None:
+            logger.debug("Received event without data", extra=self._build_log_context())
+            return True
         event_type = event_data.event_type
-        self._maybe_set_server_request_id(event_data)
+        self._maybe_set_server_request_id(event_data.request_id)
 
         if event_type == "final":
             logger.debug("Generation complete event received", extra=self._build_log_context())
@@ -1353,9 +1407,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             "server_request_id": self._server_request_id,
         }
 
-    def _maybe_set_server_request_id(self, data: object) -> None:
+    def _maybe_set_server_request_id(self, request_id: object) -> None:
         """Capture server-assigned request_id once it is available."""
-        if self._server_request_id is None and (request_id := message_request_id(data)):
+        if self._server_request_id is None and request_id:
             self._server_request_id = str(request_id)
 
     async def aclose(self) -> None:

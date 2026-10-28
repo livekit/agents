@@ -21,7 +21,7 @@ import platform
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -44,10 +44,8 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
-from ._utils import PeriodicCollector
+from ._utils import PeriodicCollector, looks_like_error_text
 from .log import logger
-from .models import ProviderMessage, message_request_id
-from .stt import _looks_like_error_text
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
@@ -78,7 +76,8 @@ def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
     if encoding == "linear16":
         return pcm
 
-    samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)  # pyright: ignore[reportUnknownMemberType]
     if encoding == "linear32":
         return (samples.astype(np.int64) * (1 << 16)).astype("<i4").tobytes()
     if encoding == "mulaw":
@@ -91,19 +90,24 @@ def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
 def _encode_mulaw(samples: np.ndarray) -> bytes:
     """Encode signed linear PCM samples as 8-bit ITU-T G.711 mu-law."""
     magnitude = np.minimum(np.abs(samples), 32635) + 0x84
-    exponent = np.clip(np.floor(np.log2(magnitude)).astype(np.int32) - 7, 0, 7)
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    exponent = np.clip(np.floor(np.log2(magnitude)).astype(np.int32) - 7, 0, 7)  # pyright: ignore[reportUnknownMemberType]
     mantissa = (magnitude >> (exponent + 3)) & 0x0F
-    sign = np.where(samples < 0, 0x80, 0)
-    return cast(bytes, (~(sign | (exponent << 4) | mantissa) & 0xFF).astype(np.uint8).tobytes())
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    sign = np.where(samples < 0, 0x80, 0)  # pyright: ignore[reportUnknownMemberType]
+    return bytes((~(sign | (exponent << 4) | mantissa) & 0xFF).astype(np.uint8).tobytes())
 
 
 def _encode_alaw(samples: np.ndarray) -> bytes:
     """Encode signed linear PCM samples as 8-bit ITU-T G.711 A-law."""
     magnitude = np.minimum(np.abs(samples), 32767)
-    exponent = np.clip(np.floor(np.log2(np.maximum(magnitude, 1))).astype(np.int32) - 7, 0, 7)
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    exponent = np.clip(np.floor(np.log2(np.maximum(magnitude, 1))).astype(np.int32) - 7, 0, 7)  # pyright: ignore[reportUnknownMemberType]
     mantissa = (magnitude >> (exponent + 3)) & 0x0F
-    encoded = np.where(magnitude < 256, magnitude >> 4, (exponent << 4) | mantissa)
-    xor_mask = np.where(samples >= 0, 0xD5, 0x55)
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    encoded = np.where(magnitude < 256, magnitude >> 4, (exponent << 4) | mantissa)  # pyright: ignore[reportUnknownMemberType]
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    xor_mask = np.where(samples >= 0, 0xD5, 0x55)  # pyright: ignore[reportUnknownMemberType]
     return bytes((encoded ^ xor_mask).astype(np.uint8).tobytes())
 
 
@@ -133,6 +137,10 @@ SUPPORTED_LANGUAGES = {
     "doi-IN",
     "auto",
 }
+
+
+_APPLIED_KEYS = TypeAdapter(list[str])
+_CONFIG = TypeAdapter(dict[str, object])
 
 
 @dataclass
@@ -690,7 +698,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if not isinstance(applied, list):
             return None
         try:
-            applied_keys = TypeAdapter(list[str]).validate_python(applied, strict=True)
+            applied_keys = _APPLIED_KEYS.validate_python(applied, strict=True)
         except ValidationError:
             return None
         return any(entry.split("=", 1)[0].strip() == "endpointing" for entry in applied_keys)
@@ -735,13 +743,21 @@ class RealtimeSpeechStream(stt.SpeechStream):
         }
 
     @staticmethod
-    def _extract_request_id(data: object) -> str | None:
-        request_id = message_request_id(data)
-        return request_id if isinstance(request_id, str) and request_id else None
+    def _extract_request_id(data: dict[str, object]) -> str | None:
+        request_id = data.get("request_id")
+        if isinstance(request_id, str) and request_id:
+            return request_id
+        for key in ("data", "metadata"):
+            match data.get(key):
+                case {"request_id": str(nested_id)} if nested_id:
+                    return nested_id
+                case _:
+                    pass
+        return None
 
     @staticmethod
-    def _extract_session_id(data: object) -> str | None:
-        session_id = ProviderMessage.model_validate(data).session_id
+    def _extract_session_id(data: dict[str, object]) -> str | None:
+        session_id = data.get("session_id")
         return session_id if isinstance(session_id, str) and session_id else None
 
     def _capture_server_ids(self, data: dict[str, Any]) -> None:
@@ -983,7 +999,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 try:
                     await self._handle_message(json.loads(msg.data))
                 except json.JSONDecodeError as e:
-                    if _looks_like_error_text(msg.data):
+                    if looks_like_error_text(msg.data):
                         self._logger.error(
                             "Sarvam realtime STT non-JSON error message",
                             extra={**self._build_log_context(), "raw_message": msg.data},
@@ -1017,7 +1033,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break
-                if close_code in (1000, 1001, None) and not _looks_like_error_text(close_reason):
+                if close_code in (1000, 1001, None) and not looks_like_error_text(close_reason):
                     self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break
@@ -1066,9 +1082,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if event == "session.begin":
             config = data.get("config")
             self._resolved_config = (
-                TypeAdapter(dict[str, object]).validate_python(config)
-                if isinstance(config, dict)
-                else None
+                _CONFIG.validate_python(config) if isinstance(config, dict) else None
             )
         self._log_stt_event(event, data)
         if event == "session.begin":

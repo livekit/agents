@@ -285,6 +285,10 @@ def _ws_stream(tts: sarvam_tts.TTS) -> sarvam_tts.SynthesizeStream:
     """A SynthesizeStream carrying what `_run_ws` reads, without the task `__init__` starts."""
     stream = object.__new__(sarvam_tts.SynthesizeStream)
     stream._tts = tts
+    stream._pool = tts._pool
+    stream._options_for_connection = tts._options_for_connection
+    stream._stop_keepalive = tts._stop_keepalive
+    stream._return_ws = tts._return_ws
     stream._opts = replace(tts._opts)
     stream._conn_options = APIConnectOptions(max_retry=0, read_timeout=5.0)
     stream._session_id = 0
@@ -479,7 +483,7 @@ async def test_error_frame_status_code_drives_retryability(
     resp = {"type": "error", "data": frame}
 
     with pytest.raises(APIStatusError) as exc:
-        await _error_stream()._handle_error_message(resp)
+        await _error_stream()._handle_error_message(sarvam_tts.TTS_MESSAGE.validate_python(resp))
 
     assert exc.value.status_code == status_code
     assert exc.value.retryable is retryable
@@ -496,7 +500,9 @@ async def test_error_frame_keeps_provider_text_in_redactable_fields(
 
     with caplog.at_level("ERROR", logger=sarvam_tts.logger.name):
         with pytest.raises(APIStatusError) as exc:
-            await _error_stream()._handle_error_message(resp)
+            await _error_stream()._handle_error_message(
+                sarvam_tts.TTS_MESSAGE.validate_python(resp)
+            )
 
     record = next(r for r in caplog.records if r.name == sarvam_tts.logger.name)
     # provider text reaches the log only under lk.pii.* keys, which collectors redact
@@ -512,10 +518,21 @@ async def test_error_frame_keeps_provider_text_in_redactable_fields(
 async def test_error_frame_forwards_request_id() -> None:
     with pytest.raises(APIStatusError) as exc:
         await _error_stream()._handle_error_message(
-            {
-                "type": "error",
-                "data": {"request_id": "20260918_abc", "code": 422, "message": "bad input"},
-            }
+            sarvam_tts.TTS_MESSAGE.validate_python(
+                {
+                    "type": "error",
+                    "data": {"request_id": "20260918_abc", "code": 422, "message": "bad input"},
+                }
+            )
         )
 
     assert exc.value.request_id == "20260918_abc"
+
+
+@pytest.mark.parametrize("kind", ["audio", "event"])
+async def test_missing_stream_data_does_not_terminate_synthesis(kind: str) -> None:
+    stream = _error_stream()
+    emitter = MagicMock()
+    assert await stream._handle_websocket_message(json.dumps({"type": kind}), emitter)
+    emitter.push.assert_not_called()
+    emitter.end_input.assert_not_called()

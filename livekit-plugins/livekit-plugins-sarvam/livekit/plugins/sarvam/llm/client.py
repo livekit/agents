@@ -324,8 +324,7 @@ class LLM(OpenAILLM):
         effective_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         effective_tools = tools or []
         if is_given(effective_tool_choice) and not effective_tools:
-            tc_str = effective_tool_choice if isinstance(effective_tool_choice, str) else "function"
-            if tc_str not in ("none", "auto"):
+            if effective_tool_choice not in ("none", "auto"):
                 raise ValueError(
                     "tool_choice requires a non-empty tools array. "
                     "Provide tools or set tool_choice to 'none' or 'auto'."

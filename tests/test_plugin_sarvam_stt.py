@@ -221,7 +221,7 @@ async def test_sarvam_stt_stream_error_message_preserves_raw_payload() -> None:
     }
 
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_error_message(payload)
+        await stream._handle_error_message(sarvam_stt.STT_MESSAGE.validate_python(payload))
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.body == payload
@@ -340,7 +340,7 @@ async def test_sarvam_stt_handle_message_treats_event_error_payload_as_error() -
     }
 
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_message(payload)
+        await stream._handle_message(sarvam_stt.STT_MESSAGE.validate_python(payload))
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.body == payload
@@ -360,7 +360,7 @@ async def test_sarvam_stt_handle_message_treats_unknown_error_shape_as_error() -
     }
 
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_message(payload)
+        await stream._handle_message(sarvam_stt.STT_MESSAGE.validate_python(payload))
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.body == payload
@@ -416,6 +416,7 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
             conn_options: APIConnectOptions,
             api_key: str,
             http_session: object,
+            release_stream: object,
         ) -> None:
             del stt, opts, api_key
             captured["conn_options"] = conn_options
@@ -577,3 +578,12 @@ async def test_batch_transcript_without_timestamps_uses_audio_duration(
             assert result.alternatives[0].end_time == pytest.approx(0.1)
         finally:
             await model.aclose()
+
+
+@pytest.mark.parametrize("kind", ["data", "events", "event"])
+async def test_missing_stream_data_does_not_terminate_recognition(kind: str) -> None:
+    stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
+    stream._build_log_context = lambda: {}
+    stream._server_request_id = None
+    await stream._handle_message(sarvam_stt.STT_MESSAGE.validate_python({"type": kind}))

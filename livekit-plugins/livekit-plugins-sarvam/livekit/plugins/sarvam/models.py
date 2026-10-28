@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal
+from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter
 
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3", "bulbul:v4-flash"]
@@ -460,26 +460,32 @@ MODEL_SPEAKER_COMPATIBILITY = {
 }
 
 
-class ProviderMessage(BaseModel):
-    model_config = ConfigDict(strict=True, from_attributes=True)
+class RequestMetadata(BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow")
 
-    type: str | None = None
-    request_id: object | None = None
+    request_id: str | None = None
+
+
+DataT = TypeVar("DataT", bound=RequestMetadata, covariant=True)
+
+
+class ProviderMessage(BaseModel, Generic[DataT]):
+    model_config = ConfigDict(strict=True, extra="allow")
+
+    request_id: str | None = None
     session_id: object | None = None
-    data: dict[str, object] | BaseModel | None = None
-    metadata: dict[str, object] | BaseModel | None = None
+    data: DataT | None = None
+    metadata: RequestMetadata | None = None
     error: object | None = None
     code: object | None = None
 
 
-def message_request_id(payload: object) -> object:
-    message = ProviderMessage.model_validate(payload)
-    request_id = message.request_id
-    if request_id is None and isinstance(message.data, (dict, BaseModel)):
-        request_id = ProviderMessage.model_validate(message.data).request_id
-    if request_id is None and isinstance(message.metadata, (dict, BaseModel)):
-        request_id = ProviderMessage.model_validate(message.metadata).request_id
-    return request_id
+def message_request_id(message: ProviderMessage[RequestMetadata]) -> object:
+    if message.request_id is not None:
+        return message.request_id
+    if message.data is not None and message.data.request_id is not None:
+        return message.data.request_id
+    return message.metadata.request_id if message.metadata is not None else None
 
 
 class TranscriptionTimestamps(BaseModel):
@@ -495,9 +501,7 @@ class TranscriptionMetrics(BaseModel):
     audio_duration: float = 0.0
 
 
-class TranscriptionData(BaseModel):
-    model_config = ConfigDict(strict=True, from_attributes=True)
-
+class TranscriptionData(RequestMetadata):
     transcript: str = ""
     language_code: str | None = None
     request_id: str | None = None
@@ -508,25 +512,83 @@ class TranscriptionData(BaseModel):
     metrics: TranscriptionMetrics = Field(default_factory=TranscriptionMetrics)
 
 
-class EventData(BaseModel):
-    model_config = ConfigDict(strict=True)
-
+class EventData(RequestMetadata):
     request_id: str | None = None
     signal_type: str | None = None
     event_type: str | None = None
     event: str | None = None
     error: object | None = None
+    code: object | None = None
+    message: object = "Unknown error"
 
 
-class AudioData(BaseModel):
-    model_config = ConfigDict(strict=True, from_attributes=True)
-
+class AudioData(RequestMetadata):
     audio: str = ""
-    event_type: str | None = None
-    request_id: str | None = None
+
+
+class ErrorData(RequestMetadata):
     code: object | None = None
     message: object = "Unknown error"
     error: object | None = None
+
+
+class UnknownData(ErrorData):
+    event_type: str | None = None
+    event: str | None = None
+
+
+class TranscriptMessage(ProviderMessage[TranscriptionData]):
+    type: Literal["data"]
+
+
+class EventMessage(ProviderMessage[EventData]):
+    type: Literal["event", "events"]
+
+
+class AudioMessage(ProviderMessage[AudioData]):
+    type: Literal["audio"]
+
+
+class ErrorMessage(ProviderMessage[ErrorData]):
+    type: Literal["error", "errors"]
+
+
+class UnknownMessage(ProviderMessage[UnknownData]):
+    type: str | None = None
+
+
+def _message_kind(value: object) -> str:
+    match value:
+        case {"type": str(kind)} if kind in {"data", "event", "events", "audio", "error", "errors"}:
+            return kind
+        case _:
+            return "unknown"
+
+
+STTMessage = TranscriptMessage | EventMessage | ErrorMessage | UnknownMessage
+STT_MESSAGE: TypeAdapter[STTMessage] = TypeAdapter(
+    Annotated[
+        Annotated[TranscriptMessage, Tag("data")]
+        | Annotated[EventMessage, Tag("event")]
+        | Annotated[EventMessage, Tag("events")]
+        | Annotated[ErrorMessage, Tag("error")]
+        | Annotated[ErrorMessage, Tag("errors")]
+        | Annotated[UnknownMessage, Tag("unknown")],
+        Discriminator(_message_kind),
+    ]
+)
+TTSMessage = AudioMessage | EventMessage | ErrorMessage | UnknownMessage
+TTS_MESSAGE: TypeAdapter[TTSMessage] = TypeAdapter(
+    Annotated[
+        Annotated[AudioMessage, Tag("audio")]
+        | Annotated[EventMessage, Tag("event")]
+        | Annotated[EventMessage, Tag("events")]
+        | Annotated[ErrorMessage, Tag("error")]
+        | Annotated[ErrorMessage, Tag("errors")]
+        | Annotated[UnknownMessage, Tag("unknown")],
+        Discriminator(_message_kind),
+    ]
+)
 
 
 class TTSBatchResponse(BaseModel):
