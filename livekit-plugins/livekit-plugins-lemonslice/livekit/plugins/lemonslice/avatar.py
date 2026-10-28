@@ -257,6 +257,7 @@ class AvatarSession(BaseAvatarSession):
                 meeting_audio.submit,
                 chat_sink=chat_sink,
                 stop=relay_stop,
+                conn_options=self._conn_options,
             )
         )
         self._meeting_bot_id = result.meeting_bot_id

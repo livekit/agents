@@ -11,6 +11,8 @@ import aiohttp
 import numpy as np
 
 from livekit import rtc
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.utils import http_context
 from livekit.agents.voice.io import AudioInput
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,7 @@ async def stream_meeting_relay(
     *,
     stop: asyncio.Event,
     chat_sink: Callable[[str], None] | None = None,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     reconnect_delay_s: float = _INITIAL_RECONNECT_DELAY_S,
     max_reconnect_delay_s: float = _MAX_RECONNECT_DELAY_S,
 ) -> None:
@@ -142,7 +145,9 @@ async def stream_meeting_relay(
         try:
             async with (
                 aiohttp.ClientSession() as http,
-                http.ws_connect(websocket_url, heartbeat=20.0) as ws,
+                await http_context.ws_connect(
+                    http, websocket_url, conn_options=conn_options, heartbeat=20.0
+                ) as ws,
             ):
                 backoff_time = reconnect_delay_s
                 audio_frames = 0
