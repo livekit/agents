@@ -58,6 +58,7 @@ async def test_null_usage_fields_do_not_crash_stream() -> None:
     finally:
         await stream.aclose()
         await model.aclose()
+        await client.close()
 
     assert len(usage_chunks) == 1
     usage = usage_chunks[0]
@@ -110,6 +111,7 @@ async def test_reasoning_tokens_are_reported_from_completion_tokens_details() ->
     finally:
         await stream.aclose()
         await model.aclose()
+        await client.close()
 
     assert len(usage_chunks) == 1
     usage = usage_chunks[0]
@@ -138,5 +140,6 @@ async def test_reasoning_tokens_default_to_zero_without_details() -> None:
     finally:
         await stream.aclose()
         await model.aclose()
+        await client.close()
 
     assert usage_chunks[0].reasoning_tokens == 0

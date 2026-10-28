@@ -8,7 +8,6 @@ import pytest
 from livekit.agents import Agent, InputRequired, RunContext
 from livekit.agents.llm import FunctionToolCall, ToolResult
 from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS, DELIVERED
-from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -53,16 +52,6 @@ async def test_a_verbatim_question_is_asked_as_written() -> None:
     result = await agent_asking(verbatim=True).run("book me")
     assert result.status == "input_required" and result.question == QUESTION
     assert result.verbatim == QUESTION
-
-
-async def test_asked_by_another_agent_the_question_goes_up_unphrased() -> None:
-    token = set_run_hooks(RunHooks(delegated=True))
-    try:
-        result = await agent_asking(verbatim=False).run("book me")
-    finally:
-        reset_run_hooks(token)
-    assert result.status == "input_required" and result.question == QUESTION
-    assert result.verbatim is None  # the agent facing the person phrases it
 
 
 def agent_saying(*, reply_required: bool) -> Agent:

@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from livekit.agents.tokenize.utils import replace_words
+from livekit.agents.tokenize import replace_words
 
 pytestmark = pytest.mark.unit
 

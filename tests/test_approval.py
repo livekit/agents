@@ -8,7 +8,6 @@ import pytest
 
 from livekit.agents import Agent, InputRequired, RunContext
 from livekit.agents.llm import FunctionToolCall
-from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -75,7 +74,11 @@ async def test_a_call_runs_only_on_the_repeat_after_the_answer_and_once() -> Non
 
 async def test_a_read_back_function_takes_the_tools_parameters_or_asks_first() -> None:
     def read_back(ctx: RunContext, date: str, email: str | None = None) -> str | InputRequired:
-        return InputRequired("Which email?") if email is None else f"Book {date} to {email}?"
+        return (
+            InputRequired("Which email?", verbatim=True)
+            if email is None
+            else f"Book {date} to {email}?"
+        )
 
     llm = FakeLLM(
         fake_responses=[
@@ -102,15 +105,11 @@ async def test_a_read_back_function_takes_the_tools_parameters_or_asks_first() -
         """Book."""
         return "booked"
 
-    token = set_run_hooks(RunHooks(delegated=True))  # questions pass up as written
-    try:
-        missing = await desk.run("book monday")
-        assert missing.status == "input_required" and missing.question == "Which email?"
-        first = next(i for i in missing.new_messages() if i.type == "function_call")
-        assert APPROVAL_KEY not in first.extra, "a missing detail is not a read-back"
+    missing = await desk.run("book monday")
+    assert missing.status == "input_required" and missing.question == "Which email?"
+    first = next(i for i in missing.new_messages() if i.type == "function_call")
+    assert APPROVAL_KEY not in first.extra, "a missing detail is not a read-back"
 
-        asked = await desk.run("jo@example.com", message_history=missing.all_messages())
-    finally:
-        reset_run_hooks(token)
+    asked = await desk.run("jo@example.com", message_history=missing.all_messages())
     assert asked.status == "input_required"
     assert asked.question == "Book monday to jo@example.com?"
