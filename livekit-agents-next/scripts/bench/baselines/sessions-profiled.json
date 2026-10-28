@@ -1,0 +1,592 @@
+{
+  "schema_version": 1,
+  "revision": "e59de03e533164528496928471e2ad72d0bce525",
+  "tracked_diff_sha256": "71dcec3ed1a89a99a5f8d586690a6255e43f0d1f3a4a953f0a25e1eabfded3af",
+  "native_library": "/Users/theo/livekit/agents-v2/livekit-agents-next/livekit/agents/_core.abi3.so",
+  "native_library_sha256": "24914bb5d6a5bbf7b816f705a14b74be6fb30e3852fed435ed4b8f9a4cd737c5",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.12.11 (main, Aug 18 2025, 19:02:39) [Clang 20.1.4 ]",
+  "logical_cpus": 16,
+  "profile_enabled": true,
+  "sample_enabled": false,
+  "results": [
+    {
+      "sessions": 1,
+      "control_cadence_ms": 10,
+      "input_frame_ms": 20,
+      "seconds": 6.000155917368829,
+      "process_cpu_seconds": 0.48444699999999996,
+      "startup_ms": 28.115666937083006,
+      "startup_loop_lag": {
+        "count": 4,
+        "p99_ms": 24.133333,
+        "p999_ms": 24.133333,
+        "max_ms": 24.133333,
+        "buckets_ms": {
+          ">20": 1,
+          "0.5": 1,
+          "1": 1,
+          "0.1": 1
+        }
+      },
+      "loop_lag": {
+        "count": 5995,
+        "p99_ms": 0.195622,
+        "p999_ms": 0.261336,
+        "max_ms": 3.949879,
+        "buckets_ms": {
+          "0.5": 5622,
+          "0.1": 371,
+          "5": 2
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 600,
+        "p99_ms": 0.085374,
+        "p999_ms": 0.152667,
+        "max_ms": 0.152667,
+        "buckets_ms": {
+          "0.1": 597,
+          "0.5": 3
+        }
+      },
+      "injected_input_frames": 300,
+      "provider_frames": 740,
+      "stt_frames": 300,
+      "vad_frames": 300,
+      "vad_predictions": 187,
+      "tts_frames": 140,
+      "played_bytes": 134880,
+      "native_call_wall": {
+        "count": 941,
+        "p99_ms": 0.133834,
+        "p999_ms": 0.139667,
+        "max_ms": 0.139667,
+        "buckets_ms": {
+          "0.5": 265,
+          "0.01": 248,
+          "0.1": 428
+        }
+      },
+      "native_call_thread_cpu": {
+        "count": 941,
+        "p99_ms": 0.133125,
+        "p999_ms": 0.139042,
+        "max_ms": 0.139042,
+        "buckets_ms": {
+          "0.5": 263,
+          "0.01": 247,
+          "0.1": 431
+        }
+      },
+      "native_calls_by_operation": {
+        "speak": 300,
+        "advance": 600,
+        "stt_stream_metrics": 3,
+        "normalize_language": 2,
+        "resolve_host_ref": 1,
+        "observe": 21,
+        "finish": 2,
+        "otel_usage_records": 8,
+        "fields": 3,
+        "validate_synthesis": 1
+      },
+      "visible_copy_calls": 0,
+      "visible_copy_bytes": 0,
+      "visible_copies_per_provider_frame": 0.0,
+      "binding_pcm_copies_lower_bound": 600,
+      "binding_pcm_copy_bytes_lower_bound": 576000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 1.7306669615209103,
+      "measured_budget_pass": true
+    },
+    {
+      "sessions": 1,
+      "control_cadence_ms": 20,
+      "input_frame_ms": 20,
+      "seconds": 6.000410625245422,
+      "process_cpu_seconds": 0.46819299999999986,
+      "startup_ms": 1.9323327578604221,
+      "startup_loop_lag": {
+        "count": 1,
+        "p99_ms": 0.036582,
+        "p999_ms": 0.036582,
+        "max_ms": 0.036582,
+        "buckets_ms": {
+          "0.1": 1
+        }
+      },
+      "loop_lag": {
+        "count": 5988,
+        "p99_ms": 0.325474,
+        "p999_ms": 1.532298,
+        "max_ms": 4.076717,
+        "buckets_ms": {
+          "0.5": 5423,
+          "0.1": 540,
+          "1": 16,
+          "2": 7,
+          "5": 2
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 300,
+        "p99_ms": 0.370792,
+        "p999_ms": 1.566375,
+        "max_ms": 1.566375,
+        "buckets_ms": {
+          "0.1": 12,
+          "0.5": 285,
+          "2": 2,
+          "1": 1
+        }
+      },
+      "injected_input_frames": 300,
+      "provider_frames": 740,
+      "stt_frames": 300,
+      "vad_frames": 300,
+      "vad_predictions": 187,
+      "tts_frames": 140,
+      "played_bytes": 134880,
+      "native_call_wall": {
+        "count": 641,
+        "p99_ms": 0.157208,
+        "p999_ms": 0.329042,
+        "max_ms": 0.329042,
+        "buckets_ms": {
+          "0.5": 292,
+          "0.01": 108,
+          "0.1": 241
+        }
+      },
+      "native_call_thread_cpu": {
+        "count": 641,
+        "p99_ms": 0.151541,
+        "p999_ms": 0.328834,
+        "max_ms": 0.328834,
+        "buckets_ms": {
+          "0.5": 291,
+          "0.01": 102,
+          "0.1": 248
+        }
+      },
+      "native_calls_by_operation": {
+        "speak": 300,
+        "advance": 300,
+        "stt_stream_metrics": 3,
+        "normalize_language": 2,
+        "resolve_host_ref": 1,
+        "observe": 21,
+        "finish": 2,
+        "otel_usage_records": 8,
+        "fields": 3,
+        "validate_synthesis": 1
+      },
+      "visible_copy_calls": 0,
+      "visible_copy_bytes": 0,
+      "visible_copies_per_provider_frame": 0.0,
+      "binding_pcm_copies_lower_bound": 600,
+      "binding_pcm_copy_bytes_lower_bound": 576000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 1.5640826895833015,
+      "measured_budget_pass": true
+    },
+    {
+      "sessions": 8,
+      "control_cadence_ms": 10,
+      "input_frame_ms": 20,
+      "seconds": 6.0002076253294945,
+      "process_cpu_seconds": 1.475732,
+      "startup_ms": 13.241209089756012,
+      "startup_loop_lag": {
+        "count": 13,
+        "p99_ms": 0.376041,
+        "p999_ms": 0.376041,
+        "max_ms": 0.376041,
+        "buckets_ms": {
+          "0.1": 9,
+          "0.5": 4
+        }
+      },
+      "loop_lag": {
+        "count": 5981,
+        "p99_ms": 0.752989,
+        "p999_ms": 1.526207,
+        "max_ms": 6.034338,
+        "buckets_ms": {
+          "1": 194,
+          "0.5": 5388,
+          "2": 11,
+          "5": 1,
+          "0.1": 386,
+          "10": 1
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 600,
+        "p99_ms": 0.250792,
+        "p999_ms": 1.008667,
+        "max_ms": 1.008667,
+        "buckets_ms": {
+          "0.1": 572,
+          "0.5": 24,
+          "1": 3,
+          "2": 1
+        }
+      },
+      "injected_input_frames": 2400,
+      "provider_frames": 5920,
+      "stt_frames": 2400,
+      "vad_frames": 2400,
+      "vad_predictions": 1496,
+      "tts_frames": 1120,
+      "played_bytes": 1079040,
+      "native_call_wall": {
+        "count": 7528,
+        "p99_ms": 0.12975,
+        "p999_ms": 0.17175,
+        "max_ms": 0.336042,
+        "buckets_ms": {
+          "0.5": 332,
+          "0.1": 2785,
+          "0.01": 4411
+        }
+      },
+      "native_call_thread_cpu": {
+        "count": 7528,
+        "p99_ms": 0.128792,
+        "p999_ms": 0.157667,
+        "max_ms": 0.323041,
+        "buckets_ms": {
+          "0.5": 322,
+          "0.1": 2783,
+          "0.01": 4423
+        }
+      },
+      "native_calls_by_operation": {
+        "speak": 2400,
+        "advance": 4800,
+        "stt_stream_metrics": 24,
+        "normalize_language": 16,
+        "resolve_host_ref": 8,
+        "observe": 168,
+        "finish": 16,
+        "otel_usage_records": 64,
+        "fields": 24,
+        "validate_synthesis": 8
+      },
+      "visible_copy_calls": 0,
+      "visible_copy_bytes": 0,
+      "visible_copies_per_provider_frame": 0.0,
+      "binding_pcm_copies_lower_bound": 4800,
+      "binding_pcm_copy_bytes_lower_bound": 4608000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 5.169500131160021,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 8,
+      "control_cadence_ms": 20,
+      "input_frame_ms": 20,
+      "seconds": 6.0011486248113215,
+      "process_cpu_seconds": 1.778556,
+      "startup_ms": 10.98712533712387,
+      "startup_loop_lag": {
+        "count": 10,
+        "p99_ms": 0.428916,
+        "p999_ms": 0.428916,
+        "max_ms": 0.428916,
+        "buckets_ms": {
+          "0.1": 6,
+          "0.5": 4
+        }
+      },
+      "loop_lag": {
+        "count": 5734,
+        "p99_ms": 1.994876,
+        "p999_ms": 5.452335,
+        "max_ms": 19.374626,
+        "buckets_ms": {
+          "1": 227,
+          "0.5": 5121,
+          "0.1": 250,
+          "10": 7,
+          "5": 49,
+          "2": 79,
+          "20": 1
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 300,
+        "p99_ms": 1.582208,
+        "p999_ms": 11.395624,
+        "max_ms": 11.395624,
+        "buckets_ms": {
+          "0.1": 5,
+          "0.5": 275,
+          "2": 8,
+          "5": 2,
+          "20": 1,
+          "1": 9
+        }
+      },
+      "injected_input_frames": 2400,
+      "provider_frames": 5920,
+      "stt_frames": 2400,
+      "vad_frames": 2400,
+      "vad_predictions": 1496,
+      "tts_frames": 1120,
+      "played_bytes": 1079040,
+      "native_call_wall": {
+        "count": 5128,
+        "p99_ms": 0.324917,
+        "p999_ms": 0.646834,
+        "max_ms": 1.005167,
+        "buckets_ms": {
+          "0.1": 2430,
+          "0.01": 2139,
+          "0.5": 550,
+          "1": 8,
+          "2": 1
+        }
+      },
+      "native_call_thread_cpu": {
+        "count": 5128,
+        "p99_ms": 0.289958,
+        "p999_ms": 0.344458,
+        "max_ms": 0.393833,
+        "buckets_ms": {
+          "0.1": 2468,
+          "0.01": 2136,
+          "0.5": 524
+        }
+      },
+      "native_calls_by_operation": {
+        "speak": 2400,
+        "advance": 2400,
+        "stt_stream_metrics": 24,
+        "normalize_language": 16,
+        "resolve_host_ref": 8,
+        "observe": 168,
+        "finish": 16,
+        "otel_usage_records": 64,
+        "fields": 24,
+        "validate_synthesis": 8
+      },
+      "visible_copy_calls": 0,
+      "visible_copy_bytes": 0,
+      "visible_copies_per_provider_frame": 0.0,
+      "binding_pcm_copies_lower_bound": 4800,
+      "binding_pcm_copy_bytes_lower_bound": 4608000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 5.714416038244963,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 32,
+      "control_cadence_ms": 10,
+      "input_frame_ms": 20,
+      "seconds": 6.000384332612157,
+      "process_cpu_seconds": 4.321042,
+      "startup_ms": 46.86091607436538,
+      "startup_loop_lag": {
+        "count": 46,
+        "p99_ms": 0.597122,
+        "p999_ms": 0.597122,
+        "max_ms": 0.597122,
+        "buckets_ms": {
+          "0.1": 24,
+          "0.5": 21,
+          "1": 1
+        }
+      },
+      "loop_lag": {
+        "count": 4911,
+        "p99_ms": 3.742843,
+        "p999_ms": 9.041648,
+        "max_ms": 13.112135,
+        "buckets_ms": {
+          "5": 319,
+          "1": 309,
+          "2": 182,
+          "0.5": 3451,
+          "0.1": 636,
+          "10": 12,
+          "20": 2
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 600,
+        "p99_ms": 3.691125,
+        "p999_ms": 6.871291,
+        "max_ms": 6.871291,
+        "buckets_ms": {
+          "0.1": 96,
+          "0.5": 479,
+          "1": 10,
+          "2": 3,
+          "5": 8,
+          "10": 4
+        }
+      },
+      "injected_input_frames": 9600,
+      "provider_frames": 23680,
+      "stt_frames": 9600,
+      "vad_frames": 9600,
+      "vad_predictions": 5984,
+      "tts_frames": 4480,
+      "played_bytes": 4316160,
+      "native_call_wall": {
+        "count": 30112,
+        "p99_ms": 0.11125,
+        "p999_ms": 0.264291,
+        "max_ms": 1.766875,
+        "buckets_ms": {
+          "0.1": 10847,
+          "0.01": 18811,
+          "0.5": 452,
+          "2": 1,
+          "1": 1
+        }
+      },
+      "native_call_thread_cpu": {
+        "count": 30112,
+        "p99_ms": 0.108042,
+        "p999_ms": 0.247416,
+        "max_ms": 0.333916,
+        "buckets_ms": {
+          "0.1": 10739,
+          "0.01": 18958,
+          "0.5": 415
+        }
+      },
+      "native_calls_by_operation": {
+        "speak": 9600,
+        "advance": 19200,
+        "stt_stream_metrics": 96,
+        "normalize_language": 64,
+        "resolve_host_ref": 32,
+        "observe": 672,
+        "finish": 64,
+        "otel_usage_records": 256,
+        "fields": 96,
+        "validate_synthesis": 32
+      },
+      "visible_copy_calls": 0,
+      "visible_copy_bytes": 0,
+      "visible_copies_per_provider_frame": 0.0,
+      "binding_pcm_copies_lower_bound": 19200,
+      "binding_pcm_copy_bytes_lower_bound": 18432000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 12.916208244860172,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 32,
+      "control_cadence_ms": 20,
+      "input_frame_ms": 20,
+      "seconds": 6.003080083057284,
+      "process_cpu_seconds": 3.9746550000000003,
+      "startup_ms": 35.691041965037584,
+      "startup_loop_lag": {
+        "count": 35,
+        "p99_ms": 0.32329,
+        "p999_ms": 0.32329,
+        "max_ms": 0.32329,
+        "buckets_ms": {
+          "0.1": 20,
+          "0.5": 15
+        }
+      },
+      "loop_lag": {
+        "count": 4883,
+        "p99_ms": 4.405681,
+        "p999_ms": 5.611573,
+        "max_ms": 14.159263,
+        "buckets_ms": {
+          "5": 299,
+          "1": 274,
+          "0.5": 3566,
+          "0.1": 642,
+          "2": 93,
+          "10": 6,
+          "20": 3
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 300,
+        "p99_ms": 1.790165,
+        "p999_ms": 16.96525,
+        "max_ms": 16.96525,
+        "buckets_ms": {
+          "0.1": 37,
+          "0.5": 258,
+          "5": 2,
+          "20": 1,
+          "2": 2
+        }
+      },
+      "injected_input_frames": 9600,
+      "provider_frames": 23680,
+      "stt_frames": 9600,
+      "vad_frames": 9600,
+      "vad_predictions": 5984,
+      "tts_frames": 4480,
+      "played_bytes": 4316160,
+      "native_call_wall": {
+        "count": 20512,
+        "p99_ms": 0.116,
+        "p999_ms": 0.133625,
+        "max_ms": 0.432334,
+        "buckets_ms": {
+          "0.1": 9772,
+          "0.01": 10292,
+          "0.5": 448
+        }
+      },
+      "native_call_thread_cpu": {
+        "count": 20512,
+        "p99_ms": 0.115208,
+        "p999_ms": 0.131958,
+        "max_ms": 0.288083,
+        "buckets_ms": {
+          "0.1": 9803,
+          "0.01": 10287,
+          "0.5": 422
+        }
+      },
+      "native_calls_by_operation": {
+        "speak": 9600,
+        "advance": 9600,
+        "stt_stream_metrics": 96,
+        "normalize_language": 64,
+        "resolve_host_ref": 32,
+        "observe": 672,
+        "finish": 64,
+        "otel_usage_records": 256,
+        "fields": 96,
+        "validate_synthesis": 32
+      },
+      "visible_copy_calls": 0,
+      "visible_copy_bytes": 0,
+      "visible_copies_per_provider_frame": 0.0,
+      "binding_pcm_copies_lower_bound": 19200,
+      "binding_pcm_copy_bytes_lower_bound": 18432000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 14.608916826546192,
+      "measured_budget_pass": false
+    }
+  ]
+}

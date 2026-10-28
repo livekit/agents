@@ -1,0 +1,380 @@
+[
+  {
+    "subject": "AudioForwarder::on_frame",
+    "sessions": 1,
+    "frame_ms": 10,
+    "input_rate_hz": 48000,
+    "output_rate_hz": 16000,
+    "step_wall": {
+      "count": 1000,
+      "p99_us": 25.042,
+      "p999_us": 50.458,
+      "max_us": 170.833,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        157,
+        610,
+        232,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "step_thread_cpu": {
+      "count": 1000,
+      "p99_us": 24.833,
+      "p999_us": 34.75,
+      "max_us": 37.792,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        167,
+        600,
+        233,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "steps_per_second": 139936.78215929173,
+    "measured_budget_pass": true
+  },
+  {
+    "subject": "AudioForwarder::on_frame",
+    "sessions": 1,
+    "frame_ms": 20,
+    "input_rate_hz": 48000,
+    "output_rate_hz": 16000,
+    "step_wall": {
+      "count": 1000,
+      "p99_us": 8.084,
+      "p999_us": 9.417,
+      "max_us": 10.292,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        0,
+        999,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "step_thread_cpu": {
+      "count": 1000,
+      "p99_us": 7.959,
+      "p999_us": 9.291,
+      "max_us": 10.166,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        0,
+        999,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "steps_per_second": 182723.49367319903,
+    "measured_budget_pass": true
+  },
+  {
+    "subject": "AudioForwarder::on_frame",
+    "sessions": 8,
+    "frame_ms": 10,
+    "input_rate_hz": 48000,
+    "output_rate_hz": 16000,
+    "step_wall": {
+      "count": 8000,
+      "p99_us": 7.542,
+      "p999_us": 8.917,
+      "max_us": 9.75,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        5213,
+        2787,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "step_thread_cpu": {
+      "count": 8000,
+      "p99_us": 7.458,
+      "p999_us": 8.792,
+      "max_us": 9.667,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        5552,
+        2448,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "steps_per_second": 339371.3146396301,
+    "measured_budget_pass": true
+  },
+  {
+    "subject": "AudioForwarder::on_frame",
+    "sessions": 8,
+    "frame_ms": 20,
+    "input_rate_hz": 48000,
+    "output_rate_hz": 16000,
+    "step_wall": {
+      "count": 8000,
+      "p99_us": 8.25,
+      "p999_us": 9.875,
+      "max_us": 10.542,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        0,
+        7993,
+        7,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "step_thread_cpu": {
+      "count": 8000,
+      "p99_us": 8.125,
+      "p999_us": 9.791,
+      "max_us": 10.375,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        0,
+        7995,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "steps_per_second": 181159.24799165726,
+    "measured_budget_pass": true
+  },
+  {
+    "subject": "AudioForwarder::on_frame",
+    "sessions": 32,
+    "frame_ms": 10,
+    "input_rate_hz": 48000,
+    "output_rate_hz": 16000,
+    "step_wall": {
+      "count": 32000,
+      "p99_us": 20.666,
+      "p999_us": 23.208,
+      "max_us": 11576.5,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        19961,
+        11675,
+        359,
+        4,
+        0,
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    "step_thread_cpu": {
+      "count": 32000,
+      "p99_us": 20.458,
+      "p999_us": 23.041,
+      "max_us": 87.208,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        21305,
+        10335,
+        360,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "steps_per_second": 283540.6856029727,
+    "measured_budget_pass": true
+  },
+  {
+    "subject": "AudioForwarder::on_frame",
+    "sessions": 32,
+    "frame_ms": 20,
+    "input_rate_hz": 48000,
+    "output_rate_hz": 16000,
+    "step_wall": {
+      "count": 32000,
+      "p99_us": 22.875,
+      "p999_us": 77.542,
+      "max_us": 64360.5,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        0,
+        30569,
+        1403,
+        15,
+        3,
+        0,
+        1,
+        2,
+        7
+      ]
+    },
+    "step_thread_cpu": {
+      "count": 32000,
+      "p99_us": 22.625,
+      "p999_us": 30.416,
+      "max_us": 44.125,
+      "bucket_upper_us": [
+        1,
+        10,
+        100,
+        500,
+        1000,
+        2000,
+        5000,
+        10000
+      ],
+      "buckets": [
+        0,
+        30586,
+        1414,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "steps_per_second": 62355.928818665096,
+    "measured_budget_pass": true
+  }
+]

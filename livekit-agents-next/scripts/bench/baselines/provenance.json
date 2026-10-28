@@ -1,0 +1,9 @@
+{
+  "native_tool_binary_sha256": "a07c83733ae42e7bc90b2dbdbe94e14d6ad7a590bc8129b5c6e37873230e752f",
+  "native_tool_source_sha256": "da3b90898432d0a8c0bb1291dd8b7d03884c8aa07c44618dfd51947872268d9b",
+  "native_tool_lock_sha256": "cf7d7cc957c62667e9c21bb1aeae687e9cb936d40cab102e98838e7729fa056e",
+  "native_tool_build": "01:08:12 native-rebuild-after-concurrent-fix, rc=0, 102s",
+  "native_tool_captured_after_revision": "a7bb94d9f16c4b641c06e49598f9add73b2c9d6a",
+  "native_tool_tracked_diff_sha256": "113d4e23f00e57ab4f4628ee857226136b16ae34e821451fffd58c43dbddb9c3",
+  "note": "The native tool is rebuilt from current source. Python captures separately record the installed extension hash. Product workspace lock/manifests are untouched by this task; the tool has an independent lockfile aligned to available product versions."
+}

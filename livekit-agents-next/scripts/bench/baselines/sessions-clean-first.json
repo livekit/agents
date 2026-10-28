@@ -1,0 +1,425 @@
+{
+  "schema_version": 1,
+  "revision": "e59de03e533164528496928471e2ad72d0bce525",
+  "tracked_diff_sha256": "2d0dc3cc347e9d15882a21be56fd19f60312e2c850e7807ff747a99cf05bec69",
+  "native_library": "/Users/theo/livekit/agents-v2/livekit-agents-next/livekit/agents/_core.abi3.so",
+  "native_library_sha256": "24914bb5d6a5bbf7b816f705a14b74be6fb30e3852fed435ed4b8f9a4cd737c5",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.12.11 (main, Aug 18 2025, 19:02:39) [Clang 20.1.4 ]",
+  "logical_cpus": 16,
+  "profile_enabled": false,
+  "sample_enabled": false,
+  "results": [
+    {
+      "sessions": 1,
+      "control_cadence_ms": 10,
+      "input_frame_ms": 20,
+      "seconds": 6.000457750167698,
+      "process_cpu_seconds": 0.44435199999999997,
+      "startup_ms": 48.65050036460161,
+      "startup_loop_lag": {
+        "count": 3,
+        "p99_ms": 44.28729,
+        "p999_ms": 44.28729,
+        "max_ms": 44.28729,
+        "buckets_ms": {
+          ">20": 1,
+          "0.5": 1,
+          "2": 1
+        }
+      },
+      "loop_lag": {
+        "count": 5950,
+        "p99_ms": 0.835349,
+        "p999_ms": 2.410345,
+        "max_ms": 4.826151,
+        "buckets_ms": {
+          "0.1": 719,
+          "0.5": 5087,
+          "1": 108,
+          "2": 28,
+          "5": 8
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 600,
+        "p99_ms": 0.964875,
+        "p999_ms": 1.918791,
+        "max_ms": 1.918791,
+        "buckets_ms": {
+          "0.1": 65,
+          "1": 5,
+          "0.5": 524,
+          "2": 6
+        }
+      },
+      "injected_input_frames": 300,
+      "provider_frames": 740,
+      "stt_frames": 300,
+      "vad_frames": 300,
+      "vad_predictions": 187,
+      "tts_frames": 140,
+      "played_bytes": 134880,
+      "native_call_wall": null,
+      "native_call_thread_cpu": null,
+      "native_calls_by_operation": {},
+      "visible_copy_calls": null,
+      "visible_copy_bytes": null,
+      "visible_copies_per_provider_frame": null,
+      "binding_pcm_copies_lower_bound": 600,
+      "binding_pcm_copy_bytes_lower_bound": 576000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 2.2638747468590736,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 1,
+      "control_cadence_ms": 20,
+      "input_frame_ms": 20,
+      "seconds": 6.000738041009754,
+      "process_cpu_seconds": 0.49812900000000004,
+      "startup_ms": 2.6444592513144016,
+      "startup_loop_lag": {
+        "count": 2,
+        "p99_ms": 0.487957,
+        "p999_ms": 0.487957,
+        "max_ms": 0.487957,
+        "buckets_ms": {
+          "0.5": 2
+        }
+      },
+      "loop_lag": {
+        "count": 5669,
+        "p99_ms": 2.655006,
+        "p999_ms": 5.655806,
+        "max_ms": 11.107113,
+        "buckets_ms": {
+          "0.1": 220,
+          "0.5": 5127,
+          "1": 163,
+          "2": 85,
+          "5": 58,
+          "10": 15,
+          "20": 1
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 300,
+        "p99_ms": 3.413333,
+        "p999_ms": 5.260708,
+        "max_ms": 5.260708,
+        "buckets_ms": {
+          "0.1": 3,
+          "0.5": 272,
+          "5": 11,
+          "2": 5,
+          "1": 8,
+          "10": 1
+        }
+      },
+      "injected_input_frames": 300,
+      "provider_frames": 740,
+      "stt_frames": 300,
+      "vad_frames": 300,
+      "vad_predictions": 187,
+      "tts_frames": 140,
+      "played_bytes": 134880,
+      "native_call_wall": null,
+      "native_call_thread_cpu": null,
+      "native_calls_by_operation": {},
+      "visible_copy_calls": null,
+      "visible_copy_bytes": null,
+      "visible_copies_per_provider_frame": null,
+      "binding_pcm_copies_lower_bound": 600,
+      "binding_pcm_copy_bytes_lower_bound": 576000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 3.881624899804592,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 8,
+      "control_cadence_ms": 10,
+      "input_frame_ms": 20,
+      "seconds": 6.001011041924357,
+      "process_cpu_seconds": 1.831718,
+      "startup_ms": 38.07929111644626,
+      "startup_loop_lag": {
+        "count": 26,
+        "p99_ms": 4.525999,
+        "p999_ms": 4.525999,
+        "max_ms": 4.525999,
+        "buckets_ms": {
+          "2": 8,
+          "0.5": 9,
+          "1": 6,
+          "0.1": 2,
+          "5": 1
+        }
+      },
+      "loop_lag": {
+        "count": 3677,
+        "p99_ms": 7.925662,
+        "p999_ms": 15.80192,
+        "max_ms": 21.681406,
+        "buckets_ms": {
+          "5": 373,
+          "1": 646,
+          "2": 420,
+          "0.1": 77,
+          "0.5": 2036,
+          "10": 104,
+          "20": 20,
+          ">20": 1
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 600,
+        "p99_ms": 11.021874,
+        "p999_ms": 14.3825,
+        "max_ms": 14.3825,
+        "buckets_ms": {
+          "0.5": 287,
+          "1": 83,
+          "2": 73,
+          "0.1": 19,
+          "5": 99,
+          "10": 28,
+          "20": 11
+        }
+      },
+      "injected_input_frames": 2400,
+      "provider_frames": 5920,
+      "stt_frames": 2400,
+      "vad_frames": 2400,
+      "vad_predictions": 1496,
+      "tts_frames": 1120,
+      "played_bytes": 1079040,
+      "native_call_wall": null,
+      "native_call_thread_cpu": null,
+      "native_calls_by_operation": {},
+      "visible_copy_calls": null,
+      "visible_copy_bytes": null,
+      "visible_copies_per_provider_frame": null,
+      "binding_pcm_copies_lower_bound": 4800,
+      "binding_pcm_copy_bytes_lower_bound": 4608000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 11.049041990190744,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 8,
+      "control_cadence_ms": 20,
+      "input_frame_ms": 20,
+      "seconds": 6.001136625185609,
+      "process_cpu_seconds": 1.6464950000000003,
+      "startup_ms": 33.75370800495148,
+      "startup_loop_lag": {
+        "count": 21,
+        "p99_ms": 3.397874,
+        "p999_ms": 3.397874,
+        "max_ms": 3.397874,
+        "buckets_ms": {
+          "1": 3,
+          "0.5": 8,
+          "2": 6,
+          "5": 2,
+          "0.1": 2
+        }
+      },
+      "loop_lag": {
+        "count": 5211,
+        "p99_ms": 3.624259,
+        "p999_ms": 9.768881,
+        "max_ms": 13.531772,
+        "buckets_ms": {
+          "1": 517,
+          "2": 221,
+          "0.5": 4142,
+          "0.1": 157,
+          "10": 23,
+          "5": 147,
+          "20": 4
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 300,
+        "p99_ms": 4.945707,
+        "p999_ms": 7.684917,
+        "max_ms": 7.684917,
+        "buckets_ms": {
+          "0.5": 233,
+          "1": 29,
+          "2": 20,
+          "5": 12,
+          "10": 3,
+          "0.1": 3
+        }
+      },
+      "injected_input_frames": 2400,
+      "provider_frames": 5920,
+      "stt_frames": 2400,
+      "vad_frames": 2400,
+      "vad_predictions": 1496,
+      "tts_frames": 1120,
+      "played_bytes": 1079040,
+      "native_call_wall": null,
+      "native_call_thread_cpu": null,
+      "native_calls_by_operation": {},
+      "visible_copy_calls": null,
+      "visible_copy_bytes": null,
+      "visible_copies_per_provider_frame": null,
+      "binding_pcm_copies_lower_bound": 4800,
+      "binding_pcm_copy_bytes_lower_bound": 4608000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 5.0425841473042965,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 32,
+      "control_cadence_ms": 10,
+      "input_frame_ms": 20,
+      "seconds": 6.000437208916992,
+      "process_cpu_seconds": 3.448818,
+      "startup_ms": 38.655875250697136,
+      "startup_loop_lag": {
+        "count": 38,
+        "p99_ms": 0.513914,
+        "p999_ms": 0.513914,
+        "max_ms": 0.513914,
+        "buckets_ms": {
+          "0.1": 23,
+          "0.5": 14,
+          "1": 1
+        }
+      },
+      "loop_lag": {
+        "count": 5082,
+        "p99_ms": 3.588897,
+        "p999_ms": 7.174937,
+        "max_ms": 14.912337,
+        "buckets_ms": {
+          "5": 295,
+          "2": 32,
+          "0.5": 4000,
+          "1": 122,
+          "0.1": 623,
+          "10": 6,
+          "20": 4
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 600,
+        "p99_ms": 1.311333,
+        "p999_ms": 14.212124,
+        "max_ms": 14.212124,
+        "buckets_ms": {
+          "0.1": 52,
+          "0.5": 531,
+          "2": 2,
+          "1": 9,
+          "10": 3,
+          "5": 1,
+          "20": 2
+        }
+      },
+      "injected_input_frames": 9600,
+      "provider_frames": 23680,
+      "stt_frames": 9600,
+      "vad_frames": 9600,
+      "vad_predictions": 5984,
+      "tts_frames": 4480,
+      "played_bytes": 4316160,
+      "native_call_wall": null,
+      "native_call_thread_cpu": null,
+      "native_calls_by_operation": {},
+      "visible_copy_calls": null,
+      "visible_copy_bytes": null,
+      "visible_copies_per_provider_frame": null,
+      "binding_pcm_copies_lower_bound": 19200,
+      "binding_pcm_copy_bytes_lower_bound": 18432000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 13.211625162512064,
+      "measured_budget_pass": false
+    },
+    {
+      "sessions": 32,
+      "control_cadence_ms": 20,
+      "input_frame_ms": 20,
+      "seconds": 6.005657082889229,
+      "process_cpu_seconds": 4.525131,
+      "startup_ms": 38.60654216259718,
+      "startup_loop_lag": {
+        "count": 38,
+        "p99_ms": 0.594873,
+        "p999_ms": 0.594873,
+        "max_ms": 0.594873,
+        "buckets_ms": {
+          "0.5": 13,
+          "0.1": 24,
+          "1": 1
+        }
+      },
+      "loop_lag": {
+        "count": 4063,
+        "p99_ms": 9.704302,
+        "p999_ms": 19.532061,
+        "max_ms": 30.091584,
+        "buckets_ms": {
+          "5": 245,
+          "1": 300,
+          "0.5": 3025,
+          "2": 149,
+          "0.1": 217,
+          "10": 88,
+          "20": 35,
+          ">20": 4
+        }
+      },
+      "frame_dispatch_lag": {
+        "count": 300,
+        "p99_ms": 12.587249,
+        "p999_ms": 14.000916,
+        "max_ms": 14.000916,
+        "buckets_ms": {
+          "0.1": 13,
+          "0.5": 226,
+          "10": 6,
+          "1": 34,
+          "5": 6,
+          "2": 8,
+          "20": 7
+        }
+      },
+      "injected_input_frames": 9600,
+      "provider_frames": 23680,
+      "stt_frames": 9600,
+      "vad_frames": 9600,
+      "vad_predictions": 5984,
+      "tts_frames": 4480,
+      "played_bytes": 4316160,
+      "native_call_wall": null,
+      "native_call_thread_cpu": null,
+      "native_calls_by_operation": {},
+      "visible_copy_calls": null,
+      "visible_copy_bytes": null,
+      "visible_copies_per_provider_frame": null,
+      "binding_pcm_copies_lower_bound": 19200,
+      "binding_pcm_copy_bytes_lower_bound": 18432000,
+      "binding_copies_per_input_frame_lower_bound": 2.0,
+      "exact_driver_step_cpu": null,
+      "per_worker_heartbeat": null,
+      "close_ms": 29.703333973884583,
+      "measured_budget_pass": false
+    }
+  ]
+}

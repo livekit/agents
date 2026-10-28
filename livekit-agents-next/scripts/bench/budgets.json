@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "purpose": "Decision 62 measurement bootstrap, not full K-23/K-26 qualification",
+  "workload": {
+    "sessions_per_process": [1, 8, 32],
+    "qualification_ceiling_sessions": 32,
+    "seconds_per_case": 6,
+    "control_cadence_ms": [10, 20],
+    "fake_room_input_frame_ms": 20,
+    "input_sample_rate_hz": 48000,
+    "channels": 1,
+    "tts_sample_rate_hz": 24000,
+    "tts_frame_ms": 20,
+    "stt_utterance_ms": 400,
+    "stt_finalize_ms": 100,
+    "llm_chunk_ms": 30,
+    "tts_startup_ms": 80,
+    "tts_words_per_minute": 150,
+    "vad_window_ms": 32,
+    "vad_model_cpu": "not simulated; boundary cadence only",
+    "direct_core_instances": [1, 8, 32],
+    "direct_core_frames_ms": [10, 20],
+    "direct_core_frames_per_instance": 1000,
+    "direct_core_conversion_hz": [48000, 16000]
+  },
+  "interfaces": {
+    "asyncio": {
+      "heartbeat_ms": 1,
+      "loop_lag_p999_fraction_of_cadence": 0.2,
+      "loop_lag_max_exclusive_fraction_of_cadence": 0.5,
+      "derivation": "Reserve 80% of each frame for downstream work at the tail; never consume half a frame in scheduling alone. 10ms gives 2ms p99.9 / <5ms max; 20ms gives 4ms / <10ms."
+    },
+    "synchronous_native_call": {
+      "thread_cpu_max_fraction_of_cadence": 0.1,
+      "derivation": "One uninterrupted dispatch may consume 10% of the frame: 1ms at 10ms, 2ms at 20ms. These boundary calls exclude async Driver steps."
+    },
+    "audio_forwarder_step": {
+      "thread_cpu_p999_fraction_of_cadence": 0.05,
+      "thread_cpu_max_fraction_of_cadence": 0.1,
+      "derivation": "Target half the dispatch ceiling at p99.9, leaving 2x margin to the maximum; 10ms gives 0.5ms / 1ms, 20ms gives 1ms / 2ms. Includes clock overhead, excludes input allocation and effect execution."
+    },
+    "pcm_binding": {
+      "measured_baseline_copies_per_input_frame_lower_bound": 2,
+      "measurement": "Count and size frames actually consumed by STT and VAD. Each crosses AudioFrame::into_pyobject, whose PyBytes::new copies once; fake providers never construct their own RTC frames.",
+      "upper_bound": null,
+      "limitation": "Excludes TTS, other Rust allocations/copies and RTC native internals. Zero visible memoryview.tobytes calls does not mean zero copies."
+    },
+    "tokio_workers": {
+      "measurement": "Separate external native stack sampling, typed per-thread inclusive counts and original raw call tree",
+      "exact_stall_max_ms": null,
+      "limitation": "Parked workers are normal; aggregate call trees have no consecutive-sample order. Sampling cannot derive heartbeat lateness, exact poll duration or per-step CPU."
+    }
+  },
+  "evidence_limits": [
+    "MacOS shared machine with concurrent builds; no production CPU quota or deployment-capacity claim.",
+    "FakeRoom input is always 20ms; 10ms in full sessions is control/clock cadence. Direct Rust steps exercise genuine 10ms and 20ms frames.",
+    "Profiled and externally sampled passes perturb timing and must remain separate from the primary clean pass.",
+    "No real Silero/EOT model inference, codec drain, recording, stalled transport, 30-minute soak or multi-process job qualification.",
+    "Direct AudioForwarder CPU is not the async session decision Driver CPU. Missing exact measurements remain null.",
+    "Loop progress under fake native work cannot establish GIL release across unexecuted native waits.",
+    "Played bytes are FakeRoom local playback evidence, not remote receiver rendering.",
+    "Retained resources, queue bytes, allocation counts and worker-wide admission ceilings are not measured here; K-26 remains open."
+  ]
+}
