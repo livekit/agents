@@ -306,7 +306,7 @@ class ScriptedRealtimeModel(FakeRealtimeModel):
         return sess
 
 
-_held: set[asyncio.Task[None]] = set()
+_held: set[asyncio.Task[object]] = set()
 
 
 def _generation(
@@ -340,11 +340,16 @@ def _generation(
         message_ch.close()
         function_ch.close()
 
+    def ended(task: asyncio.Task[object]) -> None:
+        _held.discard(task)
+        end()
+
     if hold is None:
         end()
     else:
-        _held.add(task := asyncio.create_task(hold.wait()))
-        task.add_done_callback(lambda t: (_held.discard(t), end()))
+        task: asyncio.Task[object] = asyncio.create_task(hold.wait())
+        _held.add(task)
+        task.add_done_callback(ended)
     return GenerationCreatedEvent(
         message_stream=message_ch,
         function_stream=function_ch,

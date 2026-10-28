@@ -121,7 +121,7 @@ async def test_the_acknowledgement_is_spoken_on_a_call(expert: Callable[..., A2A
 async def test_text_shows_no_acknowledgement_by_default(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]
 ) -> None:
-    gate, ended = asyncio.Event(), []
+    gate, ended = asyncio.Event(), list[str]()
     gate.set()
     model = ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="slots")]), Reply("10 slots."))
     agent = Agent(instructions="front desk", llm=model, tools=[expert(slow_expert(gate, ended))])
@@ -140,7 +140,7 @@ async def test_text_shows_no_acknowledgement_by_default(
 async def test_on_a_call_the_experts_progress_is_spoken_and_its_answer_told(
     expert: Callable[..., A2ADelegate],
 ) -> None:
-    gate, ended = asyncio.Event(), []
+    gate, ended = asyncio.Event(), list[str]()
     model = ScriptedRealtimeModel(
         Reply("", [call("ask", "a1", request="slots")]),
         Reply("Checking the calendar now.", when=lambda c: "Checking" in outputs(c)[-1]),
@@ -191,7 +191,7 @@ async def test_a_result_after_only_the_persons_words_is_told_as_new() -> None:
 async def test_a_barge_in_stops_the_speech_and_never_the_experts_task(
     expert: Callable[..., A2ADelegate],
 ) -> None:
-    gate, ended, speaking = asyncio.Event(), [], asyncio.Event()
+    gate, ended, speaking = asyncio.Event(), list[str](), asyncio.Event()
     model = ScriptedRealtimeModel(
         Reply("Let me check.", [call("ask", "a1", request="slots")], hold=speaking),
         Reply("Sure.", when=answering("wait, sorry")),
