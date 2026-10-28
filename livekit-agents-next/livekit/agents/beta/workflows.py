@@ -7,7 +7,9 @@ from __future__ import annotations
 import os
 from datetime import date
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
+
+from pydantic import AfterValidator
 
 from livekit import api, rtc
 
@@ -26,12 +28,12 @@ from .._generated.workflows import (
     WarmTransferResult,
 )
 from ..job import JobContext, get_job_context
-from ..llm.tool_context import ToolFlag, function_tool
+from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from ..voice import room_io
 from ..voice.agent import Agent
-from ..voice.agent_session import VoiceSession
+from ..voice.agent_session import VoiceSession, VoiceTask
 from ..voice.background_audio import (
     AudioConfig,
     AudioSource,
@@ -39,6 +41,7 @@ from ..voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
+from ..voice.events import RunContext
 from ..voice.room_io import Room
 
 if TYPE_CHECKING:
@@ -52,6 +55,7 @@ __all__ = [
     "GetDOBResult",
     "GetDtmfResult",
     "GetEmailResult",
+    "GetEmailTask",
     "GetExpirationDateResult",
     "GetNameResult",
     "GetPhoneNumberResult",
@@ -117,6 +121,64 @@ async def receive_dtmf(
 ) -> _core.GetDtmfResult:
     """Receive keypad digits; stop at the delimiter or after an inter-digit timeout."""
     return await _core.receive_dtmf(room, num_digits, timeout, stop_event.value)
+
+
+def _email_address(email: str) -> str:
+    try:
+        return normalize_email_address(email)
+    except ToolError as e:
+        raise ValueError(e.message) from None
+
+
+EmailAddress = Annotated[str, AfterValidator(_email_address)]
+"""An email address as said, trimmed and checked."""
+
+_email_collector = Agent(
+    name="get_email",
+    instructions="""\
+You only capture the caller's email address, one step in a broader system.
+Treat what you hear as a noisy transcription of an address said aloud: turn 'dot', \
+'underscore', 'dash', 'plus' and 'at' into `.`, `_`, `-`, `+` and `@`, join a word spelled \
+after it ('john j o h n' is john), and drop filler words. Never invent an address. When only \
+the part before the '@' was said, ask for the domain; when it stays unclear, ask for it in \
+parts. Call confirm_email_address with the address as soon as you have one; its read-back \
+asks the caller to confirm, and a correction means calling it again with the corrected \
+address. No greetings, no markdown, nothing off topic.""",
+    output_type=GetEmailResult,
+)
+
+
+@_email_collector.on_enter
+async def _ask_email(session: VoiceSession) -> None:
+    await session.generate_reply(
+        instructions="Ask for their email address, or confirm one they already gave."
+    )
+
+
+async def _read_back_email(ctx: RunContext, email_address: EmailAddress) -> str:
+    return f"Just to confirm, your email is {email_address}, right?"
+
+
+@_email_collector.tool(name="confirm_email_address", needs_approval=_read_back_email)
+async def _confirm_email_address(
+    ctx: RunContext, email_address: EmailAddress
+) -> Completed[GetEmailResult]:
+    """Record the caller's email address; they confirm it before it is kept.
+
+    Args:
+        email_address: the address the caller gave, in standard form
+    """
+    return Completed(GetEmailResult(email_address=email_address))
+
+
+class GetEmailTask(VoiceTask[GetEmailResult]):
+    """Collect and confirm the caller's email address on the call (docs/voice-tasks.md)::
+
+    result = await GetEmailTask().run()
+    """
+
+    def __init__(self) -> None:
+        super().__init__(agent=_email_collector)
 
 
 class WorkflowInstructions:
