@@ -1,4 +1,3 @@
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::trace::{ChannelEndCause, InputStep};
 use lk_agents_abi::Closed;
@@ -111,44 +110,6 @@ impl AudioChannel {
 pub struct Tagged<T> {
     pub stream: ResourceId,
     pub item: T,
-}
-
-/// A speech about to push its first frame while the user speaks keeps it until the user stops. No
-/// timer. Level, not edge: `publish` runs every iteration; the task reads the level before its
-/// first push and parks while it names its speech.
-pub struct LaunchGate {
-    /// The speeches held at launch. A set: a speech blocked while parked is still held when the
-    /// next is authorized behind it.
-    held: tokio::sync::watch::Sender<std::collections::BTreeSet<SpeechId>>,
-}
-
-impl Default for LaunchGate {
-    fn default() -> Self {
-        LaunchGate::new()
-    }
-}
-
-impl LaunchGate {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn new() -> Self {
-        LaunchGate { held: tokio::sync::watch::channel(std::collections::BTreeSet::new()).0 }
-    }
-
-    /// The loop: the level as of the end of this iteration.
-    pub fn publish(&self, held: std::collections::BTreeSet<SpeechId>) {
-        self.held.send_if_modified(|h| {
-            if *h == held {
-                false
-            } else {
-                *h = held;
-                true
-            }
-        });
-    }
-
-    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<std::collections::BTreeSet<SpeechId>> {
-        self.held.subscribe()
-    }
 }
 
 /// A drain or a reader exited, sent to the loop so it is journalled there.

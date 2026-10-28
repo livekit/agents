@@ -258,8 +258,8 @@ fn synchronized(heard: Option<String>, text: String) -> String {
 /// `false` when interrupted while parked. Every source and every sink goes through here.
 async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool {
     let speech = handle.id();
-    let mut level = shared.launch.subscribe();
-    if !level.borrow_and_update().contains(&speech) {
+    let mut level = shared.view.subscribe();
+    if !level.borrow_and_update().launch_holds.contains(&speech) {
         return true;
     }
     shared.trace(crate::trace::InterruptStep::PlayoutGate {
@@ -273,7 +273,7 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
             () = handle.wait_for_interrupted() => return false,
             changed = level.changed() => {
                 // A closed level (the loop is gone) holds nothing.
-                if changed.is_err() || !level.borrow_and_update().contains(&speech) {
+                if changed.is_err() || !level.borrow_and_update().launch_holds.contains(&speech) {
                     shared.report(GenEvent::LaunchReleased { speech });
                     return true;
                 }

@@ -228,7 +228,6 @@
   "allow:rust/crates/lk-agents-voice/src/amd/detector.rs:struct AmdSystem/field tx:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/amd/detector.rs:struct GatedSink/field open:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/amd/detector.rs:use std :: sync :: atomic :: { AtomicBool , Ordering }:clippy::disallowed_types:allow:always:1",
-  "allow:rust/crates/lk-agents-voice/src/audio.rs:impl  LaunchGate/fn new:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/avatar_runner.rs:impl  AvatarRunner/fn scheduled:clippy::disallowed_methods:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/avatar_runner.rs:struct AvatarRunner/field events:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/avatar_runner.rs:struct AvatarRunner/field next_call:clippy::disallowed_types:allow:always:1",

@@ -5,7 +5,6 @@
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Effect, Effects, Out, Timer};
-use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
 use lk_agents_abi::voice::events::AgentState;
@@ -387,6 +386,7 @@ impl IdMint {
 /// Runtime-published values accepted by the session's decision core.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionView {
+    pub launch_holds: std::collections::BTreeSet<SpeechId>,
     pub config: DriverConfig,
     pub agent: String,
     pub vad: Option<lk_agents_abi::resources::VadRef>,
@@ -401,9 +401,6 @@ pub struct SessionShared {
     pub output: tokio::sync::watch::Sender<Outputs>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
-    /// Published by the loop every iteration, read by `perform_audio_forwarding` before its first
-    /// push.
-    pub launch: LaunchGate,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool

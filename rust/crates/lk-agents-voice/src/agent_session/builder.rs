@@ -399,7 +399,6 @@ impl DriverBuilder {
             time: self.time.clone(),
             output: tokio::sync::watch::channel(outputs).0,
             recorder: Arc::new(std::sync::RwLock::new(None)),
-            launch: crate::audio::LaunchGate::new(),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
                 self.config.effective.speech.tts_text_transforms(),
             ),

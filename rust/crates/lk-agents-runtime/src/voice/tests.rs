@@ -16,6 +16,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
         lk_agents_voice::agent_activity::options::SessionLegs::none(),
     );
     let (view, _) = tokio::sync::watch::channel(Arc::new(SessionView {
+        launch_holds: Default::default(),
         config: config.clone(),
         agent: "agent".into(),
         vad: None,

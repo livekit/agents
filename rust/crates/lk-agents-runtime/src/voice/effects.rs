@@ -36,10 +36,9 @@ impl Runtime {
         let mut operations = Vec::with_capacity(effects.len());
         for effect in effects {
             match effect {
-                Effect::SessionView(_)
-                | Effect::ChatContext(_)
-                | Effect::Outputs(_)
-                | Effect::LaunchHold(_) => self.perform_voice_effect(effect),
+                Effect::SessionView(_) | Effect::ChatContext(_) | Effect::Outputs(_) => {
+                    self.perform_voice_effect(effect)
+                }
                 effect => operations.push(effect),
             }
         }
@@ -194,7 +193,6 @@ impl Runtime {
                 self.shared.output.send_replace(outputs);
             }
             E::Tap(tap) => self.peer.publish(tap),
-            E::LaunchHold(hold) => self.shared.launch.publish(hold),
             E::SessionView(view) => {
                 self.shared.view.send_replace(view);
             }

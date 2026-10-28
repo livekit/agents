@@ -789,7 +789,6 @@ impl Driver {
     /// Sent to the data plane and journalled only when the verdict changed. Through
     /// [`Driver::journal`]: no cycle exists here.
     pub(super) fn publish_gate(&mut self) {
-        self.outbox.push(crate::agent_session::effects::Effect::LaunchHold(self.launch_hold()));
         let session = &self.session;
         let inputs = crate::audio::GateInputs {
             agent_state: session.states.agent_state(),

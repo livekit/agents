@@ -463,13 +463,7 @@ impl Executor {
         let frames = Arc::clone(&self.shared.frames);
         let _scope = frames.enter(self.driver.frame());
         let (views, operations): (Vec<_>, Vec<_>) = effects.into_iter().partition(|effect| {
-            matches!(
-                effect,
-                Effect::SessionView(_)
-                    | Effect::ChatContext(_)
-                    | Effect::Outputs(_)
-                    | Effect::LaunchHold(_)
-            )
+            matches!(effect, Effect::SessionView(_) | Effect::ChatContext(_) | Effect::Outputs(_))
         });
         for effect in views.into_iter().chain(operations) {
             self.perform_voice_effect(effect);
@@ -596,7 +590,6 @@ impl Executor {
                 shared.output.send_replace(outputs);
             }
             Effect::Tap(tap) => self.peer.publish(tap),
-            Effect::LaunchHold(hold) => shared.launch.publish(hold),
             Effect::SessionView(view) => {
                 shared.view.send_replace(view);
             }

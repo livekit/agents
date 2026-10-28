@@ -283,6 +283,7 @@ impl SessionApi {
         let config = DriverConfig::new(stack, legs);
         let (view_tx, view) =
             tokio::sync::watch::channel(Arc::new(crate::agent_session::SessionView {
+                launch_holds: Default::default(),
                 config: config.clone(),
                 agent: agent.clone(),
                 vad: None,

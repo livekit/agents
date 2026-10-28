@@ -205,7 +205,6 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         | Effect::StorageAbort(_)
         | Effect::Outputs(_)
         | Effect::Tap(_)
-        | Effect::LaunchHold(_)
         | Effect::SessionView(_)
         | Effect::Draining
         | Effect::Closing
@@ -280,7 +279,6 @@ pub enum Effect {
     },
     Outputs(crate::agent_session::Outputs),
     Tap(crate::agent_session::SystemTap),
-    LaunchHold(std::collections::BTreeSet<SpeechId>),
     SessionView(Arc<crate::agent_session::SessionView>),
     Draining,
     Closing,
@@ -694,12 +692,15 @@ impl Driver {
             }
         }
         self.flush_activity();
+        let launch_holds = self.launch_hold();
         let view = &self.view;
-        if view.config != self.session.config
+        if view.launch_holds != launch_holds
+            || view.config != self.session.config
             || view.agent != self.activity.agent
             || view.vad != self.session.vad
         {
             self.view = Arc::new(crate::agent_session::SessionView {
+                launch_holds,
                 config: self.session.config.clone(),
                 agent: self.activity.agent.clone(),
                 vad: self.session.vad.clone(),
