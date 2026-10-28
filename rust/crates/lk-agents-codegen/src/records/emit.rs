@@ -29,6 +29,9 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             "match {x} {{ None => py.None().into_bound(py), Some(x) => {} }}",
             emit(t, "x")?
         ),
+        Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => {
+            format!("::pyo3::types::PyBytes::new(py, &{x}).into_any()")
+        }
         Ty::List(t) => format!(
             "::pyo3::types::PyList::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
             emit(t, "x")?

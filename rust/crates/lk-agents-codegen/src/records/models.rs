@@ -496,6 +496,8 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        // Bytes cross as `bytes`, as class arguments and results do.
+        Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => "bytes".into(),
         Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, typing)),
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => format!(
             "dict[{}, {}]",

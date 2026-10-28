@@ -446,3 +446,14 @@ impl InferenceTts {
         },
     }
 }
+
+// A `::lk_agents_abi::Tts` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
+        write: |py, native| {
+            let native = native.downcast::<InferenceTtsImpl>().ok()?;
+            Some(::pyo3::Py::new(py, InferenceTts(native)).map(::pyo3::Py::into_any))
+        },
+    }
+}

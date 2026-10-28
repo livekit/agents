@@ -160,6 +160,11 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         s.push_str(&format!(
             "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\n::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
         ));
+        if c.form != Form::MutableClass {
+            s.push_str(&format!(
+                "\n// A `{tr}` this class implements is handed to the host as an instance of it.\n::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::HostNativeClass {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        write: |py, native| {{\n            let native = native.downcast::<{name}Impl>().ok()?;\n            Some(::pyo3::Py::new(py, {name}(native)).map(::pyo3::Py::into_any))\n        }},\n    }}\n}}\n"
+            ));
+        }
     }
     Ok(s)
 }

@@ -23,7 +23,11 @@ pub trait HostBridge: Send + Sync + 'static {
     }
 
     /// `obj.a.b` (`""` is `obj`): a pure read touches no `asyncio` object, so any thread will do.
-    fn read<T>(&self, path: &str, fold: impl FnOnce(&Bound<'_, PyAny>) -> PyResult<T>) -> PyResult<T> {
+    fn read<T>(
+        &self,
+        path: &str,
+        fold: impl FnOnce(&Bound<'_, PyAny>) -> PyResult<T>,
+    ) -> PyResult<T> {
         Python::attach(|py| {
             let mut v = self.object().bind(py).clone();
             for part in path.split('.').filter(|p| !p.is_empty()) {
@@ -48,7 +52,11 @@ pub trait HostBridge: Send + Sync + 'static {
             let call = pyo3::types::PyTuple::new(py, call)?;
             let kwargs = pyo3::types::PyDict::new(py);
             kwargs.set_item("context", self.task_locals().context(py))?;
-            self.task_locals().event_loop(py).call_method("call_soon_threadsafe", call, Some(&kwargs))?;
+            self.task_locals().event_loop(py).call_method(
+                "call_soon_threadsafe",
+                call,
+                Some(&kwargs),
+            )?;
             Ok(())
         })
     }
@@ -79,7 +87,9 @@ pub trait HostBridge: Send + Sync + 'static {
         f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
     ) -> impl std::future::Future<Output = Result<HostHandle, crate::errors::ProviderError>> + Send
     {
-        let host = Python::attach(|py| HostHandle::from_parts(self.object().clone_ref(py), self.task_locals().clone()));
+        let host = Python::attach(|py| {
+            HostHandle::from_parts(self.object().clone_ref(py), self.task_locals().clone())
+        });
         async move {
             let obj = Python::attach(|py| host.bind(py).clone().unbind());
             let stream = host.run_on_loop(move |py| Ok(f(obj.bind(py))?.unbind())).await?;
@@ -122,12 +132,12 @@ pub trait Ambient {
 /// ([`LoopRuntime`](super::LoopRuntime)), else the wall clock.
 impl Ambient for std::sync::Arc<dyn crate::Clock> {
     fn ambient() -> Self {
-        CLOCK_SCOPE.with(|s| s.borrow().last().cloned()).unwrap_or_else(|| {
-            match Python::try_attach(super::LoopRuntime::current).flatten() {
+        CLOCK_SCOPE.with(|s| s.borrow().last().cloned()).unwrap_or_else(
+            || match Python::try_attach(super::LoopRuntime::current).flatten() {
                 Some(rt) => rt.clock(),
                 None => std::sync::Arc::new(crate::RealClock::new()),
-            }
-        })
+            },
+        )
     }
 }
 
@@ -139,7 +149,9 @@ pub use crate::utils::clock::HostClock;
 
 impl Ambient for crate::utils::clock::LoopClock {
     fn ambient() -> Self {
-        crate::utils::clock::LoopClock(Python::try_attach(super::LoopRuntime::current).flatten().map(|rt| rt.clock()))
+        crate::utils::clock::LoopClock(
+            Python::try_attach(super::LoopRuntime::current).flatten().map(|rt| rt.clock()),
+        )
     }
 }
 
@@ -195,7 +207,9 @@ impl Ambient for std::sync::Arc<dyn crate::Spawner> {
     fn ambient() -> Self {
         match Python::try_attach(super::LoopRuntime::current).flatten() {
             Some(rt) => rt.spawner(),
-            None => std::sync::Arc::new(crate::TokioSpawner::new(pyo3_async_runtimes::tokio::get_runtime().handle().clone())),
+            None => std::sync::Arc::new(crate::TokioSpawner::new(
+                pyo3_async_runtimes::tokio::get_runtime().handle().clone(),
+            )),
         }
     }
 }
@@ -216,7 +230,10 @@ impl HostHandle {
 
     /// Captures the loop that is running *now*.
     pub fn new(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Self> {
-        Ok(HostHandle { obj, locals: pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)? })
+        Ok(HostHandle {
+            obj,
+            locals: pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?,
+        })
     }
 
     pub fn child(&self, obj: Py<PyAny>) -> Self {
@@ -237,9 +254,15 @@ impl HostHandle {
 
     /// A direct call from a tokio worker fails (`push_text` creates a task), and `loop.call_soon`
     /// from a foreign thread leaves the item unwoken for ~1 s. `Ok(())` means handed to the loop.
-    pub fn call_in_loop(&self, py: Python<'_>, name: &str, arg: Option<Bound<'_, PyAny>>) -> Result<(), ProviderError> {
+    pub fn call_in_loop(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        arg: Option<Bound<'_, PyAny>>,
+    ) -> Result<(), ProviderError> {
         let arg = arg.map(Bound::unbind);
-        self.call_soon(name, move |py| PyTuple::new(py, arg.map(|a| a.into_bound(py)))).map_err(|e| capture(py, &e))
+        self.call_soon(name, move |py| PyTuple::new(py, arg.map(|a| a.into_bound(py))))
+            .map_err(|e| capture(py, &e))
     }
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -273,7 +296,10 @@ impl HostHandle {
         .map_err(captured)?;
         // No GIL is held across this await, so the loop thread can run the callback.
         rx.await.unwrap_or_else(|_| {
-            Err(crate::errors::ApiError::new("the host event loop shut down before it could run the call").into())
+            Err(crate::errors::ApiError::new(
+                "the host event loop shut down before it could run the call",
+            )
+            .into())
         })
     }
 }
@@ -294,7 +320,8 @@ impl HostBridge for HostHandle {
             }
             let (module, class) = host.rsplit_once('.').unwrap_or(("builtins", host));
             let class = py.import(module)?.getattr(class)?;
-            let view = py.import("livekit.agents._core_view")?.getattr("duck")?.call1((obj, class))?;
+            let view =
+                py.import("livekit.agents._core_view")?.getattr("duck")?.call1((obj, class))?;
             Ok(self.child(view.unbind()))
         })
     }
@@ -343,7 +370,10 @@ pub struct CancellingHandle {
 impl CancellingHandle {
     /// Captures the loop that is running *now*.
     pub fn new(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Self> {
-        Ok(CancellingHandle { obj, locals: pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)? })
+        Ok(CancellingHandle {
+            obj,
+            locals: pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?,
+        })
     }
 
     /// Another object on the same loop and context (one this object's call returned).
@@ -377,7 +407,9 @@ impl HostBridge for CancellingHandle {
         &self,
         f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>,
     ) -> impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send {
-        let submitted = Python::attach(|py| -> PyResult<_> { cancelling::submit(&self.locals, f(self.obj.bind(py))?) });
+        let submitted = Python::attach(|py| -> PyResult<_> {
+            cancelling::submit(&self.locals, f(self.obj.bind(py))?)
+        });
         async move { submitted?.await }
     }
 }
@@ -403,11 +435,15 @@ mod cancelling {
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// In the captured context: the job's context variables are visible to it.
-    pub(super) fn submit(locals: &pyo3_async_runtimes::TaskLocals, awaitable: Bound<'_, PyAny>) -> PyResult<Submitted> {
+    pub(super) fn submit(
+        locals: &pyo3_async_runtimes::TaskLocals,
+        awaitable: Bound<'_, PyAny>,
+    ) -> PyResult<Submitted> {
         let py = awaitable.py();
         let slot = Arc::new(Mutex::new(Slot::default()));
         let (tx, rx) = oneshot::channel();
-        let starter = Starter { awaitable: Some(awaitable.unbind()), tx: Some(tx), slot: Arc::clone(&slot) };
+        let starter =
+            Starter { awaitable: Some(awaitable.unbind()), tx: Some(tx), slot: Arc::clone(&slot) };
         let kwargs = PyDict::new(py);
         kwargs.set_item("context", locals.context(py))?;
         let event_loop = locals.event_loop(py);
@@ -428,7 +464,9 @@ mod cancelling {
     impl Starter {
         #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         fn __call__(&mut self, py: Python<'_>) -> PyResult<()> {
-            let (Some(awaitable), Some(tx)) = (self.awaitable.take(), self.tx.take()) else { return Ok(()) };
+            let (Some(awaitable), Some(tx)) = (self.awaitable.take(), self.tx.take()) else {
+                return Ok(());
+            };
             if self.slot.lock().expect("slot").cancelled {
                 // nobody is waiting any more: never start it
                 let _ = awaitable.bind(py).call_method0("close");
@@ -493,7 +531,9 @@ mod cancelling {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(outcome) => {
                     self.done = true;
-                    Poll::Ready(outcome.unwrap_or_else(|_| Err(pyo3::exceptions::asyncio::CancelledError::new_err(()))))
+                    Poll::Ready(outcome.unwrap_or_else(|_| {
+                        Err(pyo3::exceptions::asyncio::CancelledError::new_err(()))
+                    }))
                 }
             }
         }
@@ -552,10 +592,16 @@ pub fn host_err<E: FromHostErr>(err: PyErr) -> E {
 pub trait HostProxy {
     /// A registered native class ([`HostNative`]) as itself, anything else behind the proxy.
     /// `clock` `None` is the ambient clock.
-    fn from_host(obj: &Bound<'_, PyAny>, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<std::sync::Arc<Self>>;
+    fn from_host(
+        obj: &Bound<'_, PyAny>,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<std::sync::Arc<Self>>;
 
     /// The view a running proxy hands back for another trait, on `handle`'s loop.
-    fn view(handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<Box<Self>>;
+    fn view(
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<Box<Self>>;
 }
 
 /// A `_core` class whose value the core uses as it is rather than proxying; submitted
@@ -567,6 +613,36 @@ pub struct HostNative {
 }
 
 inventory::collect!(HostNative);
+
+/// The reverse of [`HostNative`]: a native implementation handed to the host as the declared
+/// class registered for its trait. `write` answers `None` for another class's implementation.
+pub struct HostNativeClass {
+    pub trait_id: fn() -> std::any::TypeId,
+    pub write: fn(
+        Python<'_>,
+        std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Option<PyResult<Py<PyAny>>>,
+}
+
+inventory::collect!(HostNativeClass);
+
+pub fn native_to_host<'py, T: ?Sized + 'static>(
+    py: Python<'py>,
+    value: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let id = std::any::TypeId::of::<T>();
+    for n in inventory::iter::<HostNativeClass> {
+        if (n.trait_id)() == id
+            && let Some(object) = (n.write)(py, value.clone())
+        {
+            return object.map(|object| object.into_bound(py));
+        }
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(format!(
+        "no declared class hands `{}` to the host",
+        std::any::type_name::<T>()
+    )))
+}
 
 pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::Arc<T>> {
     let id = std::any::TypeId::of::<T>();
@@ -594,7 +670,9 @@ pub struct DeclaredProxy {
 }
 
 impl DeclaredProxy {
-    pub const fn of<T: ?Sized + 'static>(from_host: fn(&Bound<'_, PyAny>) -> PyResult<Box<dyn std::any::Any>>) -> Self {
+    pub const fn of<T: ?Sized + 'static>(
+        from_host: fn(&Bound<'_, PyAny>) -> PyResult<Box<dyn std::any::Any>>,
+    ) -> Self {
         DeclaredProxy { trait_id: std::any::TypeId::of::<T>, from_host }
     }
 }
@@ -607,22 +685,37 @@ pub use inventory;
 /// `obj` as the declared trait `T`, through its generated proxy.
 pub fn declared_proxy<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> PyResult<std::sync::Arc<T>> {
     let id = std::any::TypeId::of::<T>();
-    let entry = inventory::iter::<DeclaredProxy>.into_iter().find(|p| (p.trait_id)() == id).ok_or_else(|| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("no proxy of `{}` is registered (the registration shell generates it)", std::any::type_name::<T>()))
-    })?;
+    let entry = inventory::iter::<DeclaredProxy>
+        .into_iter()
+        .find(|p| (p.trait_id)() == id)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "no proxy of `{}` is registered (the registration shell generates it)",
+                std::any::type_name::<T>()
+            ))
+        })?;
     let proxy = (entry.from_host)(obj)?;
     proxy.downcast::<std::sync::Arc<T>>().map(|p| *p).map_err(|_| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("the registered proxy of `{}` is another trait's", std::any::type_name::<T>()))
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "the registered proxy of `{}` is another trait's",
+            std::any::type_name::<T>()
+        ))
     })
 }
 
 /// A returned host stream or trait view. The expansion cannot see through a type alias
 /// (`SttSource`), so it asks the type ([`ProxyValue`]).
 pub trait ProxyReturn: Sized {
-    fn from_proxy(obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<Self>;
+    fn from_proxy(
+        obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<Self>;
 }
 
-fn clock_or_ambient(clock: Option<std::sync::Arc<dyn crate::Clock>>) -> std::sync::Arc<dyn crate::Clock> {
+fn clock_or_ambient(
+    clock: Option<std::sync::Arc<dyn crate::Clock>>,
+) -> std::sync::Arc<dyn crate::Clock> {
     clock.unwrap_or_else(<std::sync::Arc<dyn crate::Clock> as Ambient>::ambient)
 }
 
@@ -632,8 +725,16 @@ where
     T: for<'a, 'py> FromPyObject<'a, 'py>,
     for<'a, 'py> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
-    fn from_proxy(_obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<Self> {
-        Ok(Box::new(super::HostSource::iterating(handle, Box::new(|i| i.extract::<T>().map_err(Into::into)), clock_or_ambient(clock))))
+    fn from_proxy(
+        _obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<Self> {
+        Ok(Box::new(super::HostSource::iterating(
+            handle,
+            Box::new(|i| i.extract::<T>().map_err(Into::into)),
+            clock_or_ambient(clock),
+        )))
     }
 }
 
@@ -645,17 +746,26 @@ where
     T: for<'a, 'py> FromPyObject<'a, 'py>,
     for<'a, 'py> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
-    fn from_proxy(obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<Self> {
+    fn from_proxy(
+        obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<Self> {
         let sink = HostSink::new(handle.clone_ref(obj.py()), |py, v: &I| -> PyResult<Py<PyAny>> {
             pyo3::IntoPyObjectExt::into_py_any(v, py)
         });
-        let source = <Box<dyn crate::StreamSource<T>> as ProxyReturn>::from_proxy(obj, handle, clock)?;
+        let source =
+            <Box<dyn crate::StreamSource<T>> as ProxyReturn>::from_proxy(obj, handle, clock)?;
         Ok((Box::new(sink), source))
     }
 }
 
 impl<Tr: ?Sized + HostProxy> ProxyReturn for std::sync::Arc<Tr> {
-    fn from_proxy(_obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<Self> {
+    fn from_proxy(
+        _obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<Self> {
         Tr::view(handle, clock).map(std::sync::Arc::from)
     }
 }
@@ -674,27 +784,52 @@ impl<T> ProxyValue<T> {
 
 #[doc(hidden)]
 pub trait ProxyValueReturn<T> {
-    fn read(&self, obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<T>;
+    fn read(
+        &self,
+        obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<T>;
 }
 
 impl<T: ProxyReturn> ProxyValueReturn<T> for &&ProxyValue<T> {
-    fn read(&self, obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<T> {
+    fn read(
+        &self,
+        obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<T> {
         T::from_proxy(obj, handle, clock)
     }
 }
 
 #[doc(hidden)]
 pub trait ProxyValuePlain<T> {
-    fn read(&self, obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<T>;
+    fn read(
+        &self,
+        obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<T>;
 }
 
 #[doc(hidden)]
 pub trait ProxyValueClass<T> {
-    fn read(&self, obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<T>;
+    fn read(
+        &self,
+        obj: &Bound<'_, PyAny>,
+        handle: HostHandle,
+        clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<T>;
 }
 
 impl<T: pyo3::PyClass + Clone> ProxyValueClass<T> for &ProxyValue<T> {
-    fn read(&self, obj: &Bound<'_, PyAny>, _handle: HostHandle, _clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<T> {
+    fn read(
+        &self,
+        obj: &Bound<'_, PyAny>,
+        _handle: HostHandle,
+        _clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<T> {
         Ok(obj.extract::<pyo3::PyRef<'_, T>>()?.clone())
     }
 }
@@ -704,7 +839,12 @@ where
     T: for<'a, 'py> FromPyObject<'a, 'py>,
     for<'a, 'py> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
-    fn read(&self, obj: &Bound<'_, PyAny>, _handle: HostHandle, _clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<T> {
+    fn read(
+        &self,
+        obj: &Bound<'_, PyAny>,
+        _handle: HostHandle,
+        _clock: Option<std::sync::Arc<dyn crate::Clock>>,
+    ) -> PyResult<T> {
         obj.extract::<T>().map_err(Into::into)
     }
 }
@@ -713,7 +853,11 @@ where
 
 /// Duck-typed: a plugin with its own sockets declares no `_bind_session_clock`. An error from a
 /// declared hook propagates.
-pub fn bind_host_provider(py: Python<'_>, obj: &Bound<'_, PyAny>, clock: &std::sync::Arc<dyn crate::Clock>) -> PyResult<()> {
+pub fn bind_host_provider(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    clock: &std::sync::Arc<dyn crate::Clock>,
+) -> PyResult<()> {
     if !obj.hasattr("_bind_session_clock")? {
         return Ok(());
     }
@@ -741,10 +885,10 @@ pub fn schedule_coroutine(
     // A loop that stopped runs nothing more: the coroutine is closed here, not left to the
     // collector's "coroutine ... was never awaited" (the worker's periodic calls at shutdown).
     let scheduled = if event_loop.call_method0("is_running")?.is_truthy()? {
-        locals.context(py).call_method0("copy")?.call_method1(
-            "run",
-            (asyncio.getattr("run_coroutine_threadsafe")?, &coro, event_loop),
-        )
+        locals
+            .context(py)
+            .call_method0("copy")?
+            .call_method1("run", (asyncio.getattr("run_coroutine_threadsafe")?, &coro, event_loop))
     } else {
         Err(pyo3::exceptions::PyRuntimeError::new_err("the event loop is not running"))
     };

@@ -38,7 +38,7 @@ class DataPart:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class FilePart:
     url: str | None = None
-    data: list[int] | None = None
+    data: bytes | None = None
     filename: str | None = None
     media_type: str | None = None
     metadata: dict[str, object] | None = None

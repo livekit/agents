@@ -385,7 +385,7 @@ pub(crate) fn boxed_future(out: &syn::ReturnType) -> Option<(String, syn::Type)>
 /// optional or not) handed back as its host object (`check_handed_back`).
 fn check_argument(at: &str, ty: &Ty) -> Result<(), String> {
     match ty {
-        Ty::Proxy { declared: Some(_), boxed: false, .. } => Ok(()),
+        Ty::Proxy { declared: Some(_), boxed: false, .. } | Ty::Native { .. } => Ok(()),
         Ty::Optional(t) if matches!(**t, Ty::Proxy { .. }) => check_argument(at, t),
         other => check_output(at, other),
     }

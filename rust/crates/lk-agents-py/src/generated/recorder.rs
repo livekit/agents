@@ -113,3 +113,14 @@ impl SessionRecorder {
         },
     }
 }
+
+// A `::lk_agents_abi::recorder::AudioRecorder` this class implements is handed to the host as an instance of it.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNativeClass {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::recorder::AudioRecorder>(),
+        write: |py, native| {
+            let native = native.downcast::<SessionRecorderImpl>().ok()?;
+            Some(::pyo3::Py::new(py, SessionRecorder(native)).map(::pyo3::Py::into_any))
+        },
+    }
+}
