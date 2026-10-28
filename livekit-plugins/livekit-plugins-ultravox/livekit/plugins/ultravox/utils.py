@@ -29,7 +29,7 @@ def parse_tools(
             model = function_arguments_to_pydantic_model(tool)
             name = fnc_info.name
             description = fnc_info.description
-            parameters = model.model_json_schema()
+            parameters = _JSON_SCHEMA.validate_python(model.model_json_schema())
 
         def _extract_type(prop: dict[str, JsonValue]) -> str:
             """Best-effort guess of a parameter's primitive type."""
