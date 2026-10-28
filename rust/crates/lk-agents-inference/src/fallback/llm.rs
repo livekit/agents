@@ -9,9 +9,11 @@ use async_trait::async_trait;
 use lk_agents_abi::Clock;
 use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::llm::inference::InvalidPayload;
-use lk_agents_abi::{ChatRequest, Closed, Extra, HostRef, Llm, LlmStream, StreamSource, ToolChoice, ToolSpec, Ts};
+use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{
+    ChatRequest, Closed, Extra, HostRef, Llm, LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
+};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
@@ -19,8 +21,8 @@ use crate::fallback::chain::{
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
-use lk_agents_net::env::{Env, Standalone};
 use crate::fallback::policy::ChainPolicy;
+use lk_agents_net::env::{Env, Standalone};
 
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,

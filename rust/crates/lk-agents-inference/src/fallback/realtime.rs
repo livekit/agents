@@ -24,16 +24,8 @@ impl std::fmt::Display for CapabilityMismatch {
 impl std::error::Error for CapabilityMismatch {}
 
 /// `_merge_capabilities` (`:70-86`). `audio_output` and `turn_detection` must agree (they shape
-/// the pipeline at activity start); the rest are ANDed. Raises `ValueError` naming the capability
-/// and both values, as the reference does.
-#[lk_agents_abi::host(export(name = "merge_realtime_capabilities"))]
-pub fn merge_capabilities_of(
-    caps: Vec<RealtimeCapabilities>,
-) -> Result<RealtimeCapabilities, CapabilityMismatch> {
-    merge_capabilities(&caps)
-}
-
-/// [`merge_capabilities_of`] over a borrowed list.
+/// the pipeline at activity start); the rest are ANDed. The mismatch names the capability and
+/// both values, as the reference's `ValueError` does.
 pub fn merge_capabilities(
     models: &[RealtimeCapabilities],
 ) -> Result<RealtimeCapabilities, CapabilityMismatch> {

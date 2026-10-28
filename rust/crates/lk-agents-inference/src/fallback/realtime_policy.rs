@@ -6,7 +6,6 @@ use lk_agents_abi::Ts;
 
 pub use lk_agents_abi::llm::fallback::{AvailabilityChange, ErrorPlan};
 
-
 /// `self._available` + `self._cooldown_deadline` (`:189-190`), pure over `now`.
 #[derive(Debug, Clone)]
 struct AvailabilityTable {
@@ -30,8 +29,7 @@ impl AvailabilityTable {
             return false;
         }
         self.available[index] = available;
-        self.deadline[index] =
-            if available { None } else { Some(now.saturating_add(cooldown)) };
+        self.deadline[index] = if available { None } else { Some(now.saturating_add(cooldown)) };
         true
     }
 
@@ -44,8 +42,7 @@ impl AvailabilityTable {
 
     /// `_next_available_index`'s scan (`:266-270`); call [`expired`](AvailabilityTable::expired) first.
     pub fn find(&self, exclude_current: bool, current: usize) -> Option<usize> {
-        (0..self.available.len())
-            .find(|&i| !(exclude_current && i == current) && self.available[i])
+        (0..self.available.len()).find(|&i| !(exclude_current && i == current) && self.available[i])
     }
 }
 
@@ -74,7 +71,12 @@ impl RealtimePolicy {
     }
 
     /// `_set_available`. The event to emit, or `None` when nothing changed (no re-armed cooldown).
-    pub fn set_available(&mut self, index: usize, available: bool, now: f64) -> Option<AvailabilityChange> {
+    pub fn set_available(
+        &mut self,
+        index: usize,
+        available: bool,
+        now: f64,
+    ) -> Option<AvailabilityChange> {
         let now = ts(now);
         self.table
             .set(index, available, now, self.cooldown)
@@ -83,7 +85,11 @@ impl RealtimePolicy {
 
     /// `_next_available_index`: expire cooldowns, then first available, primary preferred. Returns
     /// the target and the sweep's re-enable events.
-    pub fn next_available_index(&mut self, now: f64, exclude_current: bool) -> (Option<usize>, Vec<AvailabilityChange>) {
+    pub fn next_available_index(
+        &mut self,
+        now: f64,
+        exclude_current: bool,
+    ) -> (Option<usize>, Vec<AvailabilityChange>) {
         let changes = self.sweep(ts(now));
         (self.table.find(exclude_current, self.active_index), changes)
     }
@@ -111,7 +117,11 @@ impl RealtimePolicy {
 
     /// `restart(switch_model=)`: the next available model, or the current one when there is no
     /// other. Never `None`.
-    pub fn restart_target(&mut self, switch_model: bool, now: f64) -> (usize, Vec<AvailabilityChange>) {
+    pub fn restart_target(
+        &mut self,
+        switch_model: bool,
+        now: f64,
+    ) -> (usize, Vec<AvailabilityChange>) {
         if !switch_model {
             return (self.active_index, vec![]);
         }
@@ -119,7 +129,6 @@ impl RealtimePolicy {
         let current = self.active_index;
         (self.table.find(true, current).unwrap_or(current), changes)
     }
-
 }
 
 /// Host `time.time()` stamps are only compared with each other, so only monotonicity matters.

@@ -231,6 +231,31 @@ pub fn tts_normalize_fallback_str(model: ::std::string::String) -> PyResult<::lk
     Ok(out)
 }
 
+/// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
+#[pyfunction]
+#[pyo3(signature = (entries))]
+pub fn stt_fallback_capabilities(entries: ::std::vec::Vec<::lk_agents_abi::SttCapabilities>) -> PyResult<::lk_agents_abi::SttCapabilities> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_fallback_capabilities(entries);
+    Ok(out)
+}
+
+/// `tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
+#[pyfunction]
+#[pyo3(signature = (entries))]
+pub fn tts_fallback_capabilities(entries: ::std::vec::Vec<::lk_agents_abi::TtsCapabilities>) -> PyResult<::lk_agents_abi::TtsCapabilities> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_fallback_capabilities(entries);
+    Ok(out)
+}
+
+/// The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
+/// `ValueError` naming the capability and both values), the rest are ANDed.
+#[pyfunction]
+#[pyo3(signature = (caps))]
+pub fn merge_realtime_capabilities(caps: ::std::vec::Vec<::lk_agents_abi::llm::realtime::RealtimeCapabilities>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/inference/avatar_session.rs.
 type InferenceAvatarImpl = <crate::Selected as super::Implementations>::InferenceAvatar;
 

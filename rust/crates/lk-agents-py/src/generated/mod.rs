@@ -143,6 +143,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::stt_resolve_vad_for_model, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_normalize_fallback_str, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_normalize_fallback_str, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::stt_fallback_capabilities, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::tts_fallback_capabilities, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::merge_realtime_capabilities, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
     m.add_class::<llm::FallbackLlm>()?;

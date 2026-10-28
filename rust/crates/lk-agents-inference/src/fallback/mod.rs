@@ -21,15 +21,15 @@ pub use chain::{
 };
 pub use llm::{FallbackLlm, LlmBackend};
 pub use policy::{ChainPolicy, caller_default, conn_options_for_attempt, resampling_plan};
-pub use realtime::{CapabilityMismatch, merge_capabilities_of};
+pub use realtime::{CapabilityMismatch, merge_capabilities as merge_realtime_capabilities};
 pub use realtime_policy::{AvailabilityChange, ErrorPlan, RealtimePolicy};
 pub use stt::{
     FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession,
-    merge_capabilities as merge_stt_capabilities, stt_capabilities_for_host,
+    merge_capabilities as merge_stt_capabilities,
 };
 pub use tts::{
     FallbackTts, Token, TokenLog, TtsBackend, TtsChainError, TtsReq,
-    merge_capabilities as merge_tts_capabilities, tts_capabilities_for_host,
+    merge_capabilities as merge_tts_capabilities,
 };
 
 #[cfg(test)]

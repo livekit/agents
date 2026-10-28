@@ -14,6 +14,9 @@ from livekit.agents.types import APIConnectOptions
 
 from .._core import InferenceTtsStream
 from .inference_tts import FallbackModel
+from .realtime import RealtimeCapabilities
+from .stt import STTCapabilities
+from .tts import TTSCapabilities
 
 def inference_resolve_api_key(explicit: str | None = None) -> str:
     """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
@@ -112,6 +115,17 @@ def stt_normalize_fallback_str(model: str) -> dict[str, object]:
 
 def tts_normalize_fallback_str(model: str) -> dict[str, object]:
     """`_normalize_fallback`'s string arm for a TTS chain."""
+
+def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> dict[str, object]:
+    """`stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
+
+def tts_fallback_capabilities(entries: Sequence[TTSCapabilities]) -> dict[str, object]:
+    """`tts.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
+
+def merge_realtime_capabilities(caps: Sequence[RealtimeCapabilities]) -> dict[str, object]:
+    """The realtime fallback's capabilities: `audio_output` and `turn_detection` must agree (a
+    `ValueError` naming the capability and both values), the rest are ANDed.
+    """
 
 class InferenceAvatar:
     """One avatar provisioned through LiveKit Inference: at most one provider session per instance,

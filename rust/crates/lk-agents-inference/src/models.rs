@@ -3,11 +3,28 @@
 
 use lk_agents_abi::inference::fallback::{SttFallbackModel, TtsFallbackModel};
 use lk_agents_abi::inference::{InferenceModels, InvalidOption, VadResolution};
+use lk_agents_abi::llm::realtime::RealtimeCapabilities;
+use lk_agents_abi::{SttCapabilities, TtsCapabilities};
 use serde_json::{Map, Value};
 
 pub struct Models;
 
 impl InferenceModels for Models {
+    fn stt_fallback_capabilities(entries: Vec<SttCapabilities>) -> SttCapabilities {
+        crate::fallback::merge_stt_capabilities(&entries)
+    }
+
+    fn tts_fallback_capabilities(entries: Vec<TtsCapabilities>) -> TtsCapabilities {
+        crate::fallback::merge_tts_capabilities(&entries)
+    }
+
+    fn merge_realtime_capabilities(
+        caps: Vec<RealtimeCapabilities>,
+    ) -> Result<RealtimeCapabilities, InvalidOption> {
+        crate::fallback::merge_realtime_capabilities(&caps)
+            .map_err(|mismatch| InvalidOption(mismatch.to_string()))
+    }
+
     fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)> {
         crate::headers::quota_usage(headers)
             .into_iter()

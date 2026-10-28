@@ -335,12 +335,6 @@ impl std::fmt::Display for SttChainError {
 impl std::error::Error for SttChainError {}
 
 /// `stt:79-93`, field for field; `offline_recognize` is not merged, as in the reference.
-/// `stt.FallbackAdapter`'s capabilities, which the host reads before any chain is built.
-#[lk_agents_abi::host(export(name = "stt_fallback_capabilities", pid = false))]
-pub fn stt_capabilities_for_host(entries: Vec<SttCapabilities>) -> SttCapabilities {
-    merge_capabilities(&entries)
-}
-
 pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
     let all = |f: fn(&SttCapabilities) -> bool| entries.iter().all(f);
     let any = |f: fn(&SttCapabilities) -> bool| entries.iter().any(f);
