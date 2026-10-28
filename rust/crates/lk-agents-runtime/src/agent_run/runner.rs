@@ -15,7 +15,7 @@ use lk_agents_core::RunInput;
 use lk_agents_core::tool_outcome::Mode;
 use tokio::sync::mpsc;
 
-use super::{AgentRunHandle, Ports, Progress, start};
+use super::{AgentRunHandle, PROGRESS_QUEUE, Ports, Progress, ProgressRefused, start};
 
 /// How long cancelled work may take to settle before it is reported incomplete.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -90,12 +90,23 @@ impl AgentRunner for Runner {
         Ok(Updates { run: handle, updates, clock: self.clock.clone() })
     }
 
-    fn progress(&self, invocation_id: &str, operation: u64, message: String) -> Result<(), InvalidRun> {
+    fn progress(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> Result<(), InvalidRun> {
         let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
         let progress = running.iter().find(|(id, _)| id == invocation_id).map(|(_, p)| p);
-        match progress {
-            Some(progress) if progress.report(operation, message) => Ok(()),
-            _ => Err(InvalidRun(format!("invocation {invocation_id} is not running"))),
+        match progress.map(|p| p.report(operation, message)) {
+            Some(Ok(())) => Ok(()),
+            Some(Err(ProgressRefused::Full)) => {
+                log::warn!(target: "livekit.agents", "invocation {invocation_id}: a progress update was dropped, {PROGRESS_QUEUE} are waiting");
+                Ok(())
+            }
+            None | Some(Err(ProgressRefused::Ended)) => {
+                Err(InvalidRun(format!("invocation {invocation_id} is not running")))
+            }
         }
     }
 }

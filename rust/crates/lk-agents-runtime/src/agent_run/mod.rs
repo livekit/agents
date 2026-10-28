@@ -23,6 +23,8 @@ use crate::host::HostInvoker;
 
 /// Events the work in flight may report ahead of the driver.
 const EVENT_QUEUE: usize = 64;
+/// Progress updates not yet taken by the driver; it takes them ahead of every other report.
+const PROGRESS_QUEUE: usize = 32;
 
 /// What a run executes against.
 #[derive(Clone)]
@@ -42,15 +44,26 @@ pub struct AgentRunHandle {
 }
 
 /// Where a tool body's `ctx.update(message)` reaches its run: the host operation running the body
-/// and the message. Unbounded so the host's loop never waits on it; a report whose call settled
-/// first is dropped by the driver (the update raced the call's end).
+/// and the message. The host's loop never waits on it: an update finding the bounded queue full is
+/// refused (the driver is behind by [`PROGRESS_QUEUE`] updates), and one whose call settled first
+/// is dropped by the driver (the update raced the call's end).
 #[derive(Clone)]
-pub struct Progress(mpsc::UnboundedSender<(u64, String)>);
+pub struct Progress(mpsc::Sender<(u64, String)>);
+
+/// Why an update did not reach its run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressRefused {
+    /// [`PROGRESS_QUEUE`] updates are waiting: this one is dropped.
+    Full,
+    Ended,
+}
 
 impl Progress {
-    /// `false` once the run ended.
-    pub fn report(&self, operation: u64, message: String) -> bool {
-        self.0.send((operation, message)).is_ok()
+    pub fn report(&self, operation: u64, message: String) -> Result<(), ProgressRefused> {
+        self.0.try_send((operation, message)).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => ProgressRefused::Full,
+            mpsc::error::TrySendError::Closed(_) => ProgressRefused::Ended,
+        })
     }
 
     pub fn ended(&self) -> bool {
@@ -90,7 +103,7 @@ pub fn start(
     let (cancel, cancelled) = oneshot::channel();
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
-    let (progress_tx, progress) = mpsc::unbounded_channel();
+    let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
     let driver = Driver {
         run,
         invoker: HostInvoker::new(ports.entry.clone()),
@@ -151,7 +164,7 @@ impl Driver {
     async fn drive(
         mut self,
         mut events: mpsc::Receiver<Report>,
-        mut progress: mpsc::UnboundedReceiver<(u64, String)>,
+        mut progress: mpsc::Receiver<(u64, String)>,
         mut cancelled: oneshot::Receiver<()>,
     ) {
         let mut cancel_seen = false;

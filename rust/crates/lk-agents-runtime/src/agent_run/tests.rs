@@ -200,7 +200,7 @@ impl AgentHost for FakeHost {
             Body::Stuck => std::future::pending::<()>().await,
             Body::Reports => {
                 let progress = self.progress.lock().unwrap().clone().expect("the run started");
-                assert!(progress.report(invocation.operation, "halfway".into()));
+                assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
             }
         }
         Ok(ToolOutcome::Value {
@@ -332,11 +332,25 @@ async fn a_tool_bodys_progress_streams_before_its_result() {
         matches!(u, RunUpdate::Stream(StreamEvent::Progress { call_id, message, .. })
             if call_id == "call_find_slot" && message == "halfway")
     });
-    let result = updates
-        .iter()
-        .position(|u| matches!(u, RunUpdate::Stream(StreamEvent::ToolResult { .. })));
+    let result =
+        updates.iter().position(|u| matches!(u, RunUpdate::Stream(StreamEvent::ToolResult { .. })));
     assert!(progress.is_some() && progress < result, "{updates:?}");
     assert!(finished(&updates).is_ok());
+}
+
+// Catches: progress queued without bound while the driver is behind (the host loop never waits
+// on it, so a flood must be refused, not retained).
+#[tokio::test]
+async fn progress_past_its_bound_is_refused_not_queued() {
+    let (tx, mut rx) = mpsc::channel(PROGRESS_QUEUE);
+    let progress = Progress(tx);
+    for i in 0..PROGRESS_QUEUE {
+        assert_eq!(progress.report(1, format!("{i}")), Ok(()));
+    }
+    assert_eq!(progress.report(1, "over".into()), Err(ProgressRefused::Full));
+    assert_eq!(rx.recv().await.map(|(_, m)| m).as_deref(), Some("0"));
+    drop(rx);
+    assert_eq!(progress.report(1, "late".into()), Err(ProgressRefused::Ended));
 }
 
 // Catches: a callback run without its call's invocation scope (or a scope leaking into another
