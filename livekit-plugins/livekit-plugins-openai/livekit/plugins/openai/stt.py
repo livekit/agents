@@ -74,7 +74,7 @@ from openai.types.realtime.session_update_event import SessionUpdateEvent
 
 from .log import logger
 from .models import STTModels
-from .utils import AsyncAzureADTokenProvider
+from .utils import AsyncAzureADTokenProvider, http_timeout
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -439,6 +439,15 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if (
+            conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "Realtime transcription cannot enforce write/read inactivity or total_timeout",
+                retryable=False,
+            )
         opts = dataclasses.replace(self._opts)
         if is_given(language):
             opts.languages = _as_languages(language)
@@ -570,7 +579,7 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options()
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         query_params: dict[str, str] = {
             "intent": "transcription",
         }
@@ -618,6 +627,7 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        timeout = http_timeout(conn_options)
         if is_given(language):
             languages = _as_languages(language)
             _validate_context(self._opts.model, languages, self._opts.keywords)
@@ -632,7 +642,7 @@ class STT(stt.STT):
                 format = "verbose_json"
 
             transcription = _transcription(self._opts)
-            resp = await self._client.audio.transcriptions.create(
+            resp = await self._client.with_options(max_retries=0).audio.transcriptions.create(
                 file=(
                     "file.wav",
                     data,
@@ -647,7 +657,7 @@ class STT(stt.STT):
                 temperature=self._opts.temperature
                 if is_given(self._opts.temperature)
                 else openai.omit,
-                timeout=httpx.Timeout(30, connect=conn_options.timeout),
+                timeout=timeout,
             )
 
             # the detected language beats the hint, dominant code first; an empty list keeps it
@@ -965,7 +975,10 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = False  # reset the flag
             # a segment left open across the reconnect gap would fuse into the next utterance
             self._stop_speaking()
-            async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 if self._pool.last_connection_reused and not self._opts.languages:
                     # detecting the language needs a session that was never given one, and a
                     # pooled socket carries whatever the stream before it set

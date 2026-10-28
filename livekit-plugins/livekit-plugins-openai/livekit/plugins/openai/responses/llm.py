@@ -12,7 +12,7 @@ import httpx2 as httpx
 from yarl import URL
 
 import openai
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatItem
@@ -46,6 +46,7 @@ from openai.types.shared_params import ResponsesModel
 from ..log import logger
 from ..models import _supports_reasoning_effort
 from ..tools import OpenAITool
+from ..utils import http_timeout
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
@@ -88,7 +89,7 @@ class _ResponsesWebsocket:
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _create_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         try:
             return await asyncio.wait_for(
                 self._ensure_http_session().ws_connect(
@@ -109,7 +110,19 @@ class _ResponsesWebsocket:
     async def aclose(self) -> None:
         await self._pool.aclose()
 
-    async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
+    async def generate_response(
+        self, msg: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> AsyncGenerator[dict, None]:
+        if (
+            conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "Responses WebSocket cannot enforce write/read inactivity or total_timeout",
+                retryable=False,
+            )
+
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
                 # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
@@ -132,7 +145,7 @@ class _ResponsesWebsocket:
         except TypeError as e:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
-        ws = await self._acquire_and_send(data)
+        ws = await self._acquire_and_send(data, conn_options)
         completed = False
         try:
             while True:
@@ -173,11 +186,15 @@ class _ResponsesWebsocket:
             else:
                 self._pool.remove(ws)
 
-    async def _acquire_and_send(self, data: str) -> aiohttp.ClientWebSocketResponse:
+    async def _acquire_and_send(
+        self, data: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> aiohttp.ClientWebSocketResponse:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
-            ws = await self._pool.get(timeout=self._timeout)
+            ws = await self._pool.get(
+                timeout=conn_options.connect_timeout, pool_timeout=conn_options.pool_timeout
+            )
             reused = self._pool.last_connection_reused
             try:
                 await ws.send_str(data)
@@ -505,7 +522,9 @@ class LLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.generate_response(payload):
+                async for raw_event in self._llm._ws.generate_response(
+                    payload, conn_options=self._conn_options
+                ):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)
                     if chunk is not None and chunk.has_response():
@@ -513,23 +532,24 @@ class LLMStream(llm.LLMStream):
 
                 if not self._response_completed:
                     raise APIConnectionError(retryable=True)
-            except (APIConnectionError, APIStatusError, APITimeoutError):
+            except APIError:
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
 
         else:
+            timeout = http_timeout(self._conn_options)
             self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
             retryable = True
             try:
                 self._oai_stream = stream = cast(
                     openai.AsyncStream[ResponseStreamEvent],
-                    await self._client.responses.create(  # type: ignore
+                    await self._client.with_options(max_retries=0).responses.create(  # type: ignore
                         model=self._model,
                         tools=tool_schemas,
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
                         stream=True,
-                        timeout=httpx.Timeout(self._conn_options.timeout),
+                        timeout=timeout,
                         **self._extra_kwargs,
                     ),
                 )
@@ -550,7 +570,7 @@ class LLMStream(llm.LLMStream):
                     body=e.body,
                     retryable=retryable,
                 )
-            except (APIConnectionError, APIStatusError, APITimeoutError):
+            except APIError:
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e

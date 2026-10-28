@@ -55,7 +55,7 @@ from .models import (
     XAIChatModels,
     _supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider
+from .utils import AsyncAzureADTokenProvider, http_timeout
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -1034,12 +1034,14 @@ class LLM(llm.LLM):
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
+        if conn_options.total_timeout is not None:
+            http_timeout(conn_options)
         return LLMStream(
             self,
             model=self._opts.model,
             provider_fmt=self._provider_fmt,
             strict_tool_schema=self._strict_tool_schema,
-            client=self._client,
+            client=self._client.with_options(max_retries=0),
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,

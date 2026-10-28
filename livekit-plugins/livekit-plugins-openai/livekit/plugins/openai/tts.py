@@ -34,7 +34,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import aio, is_given
 
 from .models import TTSModels, TTSVoices
-from .utils import AsyncAzureADTokenProvider
+from .utils import AsyncAzureADTokenProvider, http_timeout
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -258,7 +258,9 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        oai_stream = self._tts._client.audio.speech.with_streaming_response.create(
+        oai_stream = self._tts._client.with_options(
+            max_retries=0
+        ).audio.speech.with_streaming_response.create(
             input=self.input_text,
             model=self._opts.model,
             voice=self._opts.voice,
@@ -267,7 +269,7 @@ class ChunkedStream(tts.ChunkedStream):
             instructions=self._opts.instructions or openai.omit,
             # `sse` is not supported for tts-1/tts-1-hd (character-based billing)
             stream_format="audio" if self._opts.model in AUDIO_STREAM_MODELS else "sse",
-            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+            timeout=http_timeout(self._conn_options),
         )
 
         try:

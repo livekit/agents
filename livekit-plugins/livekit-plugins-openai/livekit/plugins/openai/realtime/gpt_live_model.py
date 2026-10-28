@@ -569,6 +569,17 @@ class GPTVoiceSession(
         self._session_id = None
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
+        options = self._opts.conn_options
+        if (
+            options.pool_timeout is not None
+            or options.write_timeout is not None
+            or options.read_timeout is not None
+            or options.total_timeout is not None
+        ):
+            raise APIError(
+                "GPT-Live transport cannot enforce pool/write/read or total_timeout",
+                retryable=False,
+            )
         headers = {"User-Agent": "LiveKit Agents"}
         if not self._opts.is_azure:
             headers["Authorization"] = f"Bearer {self._opts.api_key}"
@@ -588,7 +599,7 @@ class GPTVoiceSession(
         try:
             ws = await asyncio.wait_for(
                 self._live_model._ensure_http_session().ws_connect(url=url, headers=headers),
-                self._opts.conn_options.timeout,
+                self._opts.conn_options.connect_timeout,
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
