@@ -9,12 +9,12 @@ use lk_agents_worker::endpoint_budget::EndpointBudget;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a2a::{JsonRpcId, error_code};
-use lk_agents_core::a2a::auth::{allows, allows_first_message};
-use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_abi::a2a::auth::{AuthError, AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage::StorageError;
+use lk_agents_core::a2a::auth::{allows, allows_first_message};
+use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_storage::db::TaskQuery;
 
 use lk_agents_storage::run::{REASON_KEY, REASON_THREAD_NOT_FOUND, TaskState};
@@ -158,9 +158,7 @@ impl A2ADoor for Door {
                         }
                         DoorError::Storage(error) => {
                             let code = match error {
-                                StorageError::Invalid(_) => {
-                                    error_code::INVALID_PARAMS
-                                }
+                                StorageError::Invalid(_) => error_code::INVALID_PARAMS,
                                 _ => error_code::INTERNAL_ERROR,
                             };
                             let _ = sender.try_send(Ok(wire::frame(

@@ -589,8 +589,11 @@ impl Lane {
                     )
                 }
                 false => {
+                    // without a lease, the claim is conditional: only a `submitted` row is taken
+                    let picked_up = opts.pickup
+                        && self.db.pickup(&opts.task_id).await? == Some(TaskState::Submitted);
                     let items = self.db.history().await?;
-                    (None, false, None, items, Tasks::new(self.db.clone()), None, false, Vec::new())
+                    (None, false, None, items, Tasks::new(self.db.clone()), None, picked_up, Vec::new())
                 }
             };
         Ok(Run {

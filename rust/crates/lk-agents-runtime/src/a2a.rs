@@ -1,33 +1,29 @@
-//! The A2A text door's turns: [`Turn::run`] takes one incoming message through its channel's
-//! policy against storage and drives the host's handler, applying the A2A core's decisions
-//! (`lk_agents_core::a2a::outcome`) to the run. The turn writes the message's task row: `submitted`,
-//! `working`, then its end state.
+//! The A2A text door's turns: [`Turn::run`] takes one incoming message to its answer by executing
+//! the operations of `lk_agents_core::a2a::task::TaskMachine` against storage and the host's
+//! handler, and feeding each typed result back. Every decision (deduplication, arrival policy,
+//! claim, drain, commit and failure outcomes) is the machine's; this file only executes.
 
 pub mod door;
 
 use std::sync::Arc;
-use std::time::Duration;
 
+use serde_json::Value;
 use tokio_util::task::TaskTracker;
 
+use lk_agents_abi::storage::StreamInfo;
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_core::a2a::task::{Answer, Completion, Effect, Event, Operation, TaskMachine};
 use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TurnContext, TurnEvent, TurnHost, TurnIds,
     TurnOptions, TurnResult, Verdict, answer_pending, batch_to_chat_message, caller_history_of,
-    channel_of, channel_of_record, checkpoint_stop, failed_message, host_error, python_reason,
-    resolve_debounce, resolve_policy, result_for, settle, unpersisted_failed,
+    checkpoint_stop, failed_message, host_error, resolve_policy, result_for, settle,
+    unpersisted_failed,
 };
-use lk_agents_abi::storage::StreamInfo;
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT};
-use lk_agents_storage::StorageError;
-use lk_agents_storage::db::{Committed};
-use lk_agents_storage::TaskWrite;
-use lk_agents_storage::lease::LanePoll;
+use lk_agents_storage::db::{Receive, ReceiveInput};
 use lk_agents_storage::run::{
-    ItemRow, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, RunOutcome,
-    TaskRow, TaskState,
+    ItemRow, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, TaskRow, TaskState,
 };
-use lk_agents_storage::schema::{TaskData, TaskInternal};
-use serde_json::Value;
+use lk_agents_storage::{StorageError, TaskWrite};
 
 use crate::storage::{
     CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_ms, now_secs, shortuuid,
@@ -41,15 +37,28 @@ pub trait Acceptance: Send + Sync {
 
 /// How many task rows the handler's context carries.
 const TASKS_IN_CONTEXT: i64 = 50;
-/// How many runs `reject` reads to name the running task.
+/// How many runs a refusal reads to name the running task.
 const RUNS_FOR_REJECT: usize = 50;
 
-/// What one `run` call carries between the policy steps.
+/// One message's live resources while its machine runs: the lane, the open run, a kept lease.
 struct Call {
     lane: Lane,
-    last_run_id: Option<String>,
-    /// A delegating caller's conversation, when this call's message carried one.
+    run: Option<Run>,
+    lease: Option<Lease>,
+    /// A delegating caller's conversation, when the message carried one.
     caller_history: Option<Value>,
+}
+
+impl Call {
+    fn run(&mut self) -> Result<&mut Run, StorageError> {
+        self.run.as_mut().ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))
+    }
+}
+
+/// What a turn leaves for the commit: the task that carries the reply, and the reply.
+struct Outcome {
+    task_id: String,
+    output: Option<Value>,
 }
 
 /// One text door's turns: its lane, its options, its host.
@@ -68,73 +77,11 @@ pub struct Turn {
     resolvers: TaskTracker,
 }
 
-/// A turn's row data: the message it came from.
-fn turn_data(msg: &Message) -> TaskData {
-    TaskData { history: vec![msg.to_a2a()], ..TaskData::default() }
-}
-
-/// The early `submitted` row of a turn: its message as the task's history.
-fn submitted_task(msg: &Message, task_id: &str, stream: Option<&StreamInfo>) -> TaskWrite {
-    TaskWrite {
-        task_id: task_id.to_owned(),
-        status: TaskState::Submitted,
-        message_id: Some(msg.message_id.clone()),
-        name: None,
-        data: turn_data(msg),
-        internal: stream.map(|s| TaskInternal { ask: None, streams: vec![s.clone()] }),
-    }
-}
-
-/// What a turn leaves for `finish`: the task that carries the reply, and the reply.
-struct Outcome {
-    task_id: String,
-    output: Option<Value>,
-}
-
-/// The commit of a turn that ran: its answer task read back with the writes.
-fn answering(outcome: &Option<Outcome>) -> CommitOptions {
-    let answer_task = outcome.as_ref().map(|o| o.task_id.clone());
-    CommitOptions { answer_task, ..CommitOptions::default() }
-}
-
 fn failed(task_id: &str, reason: &str) -> a2a::Message {
     failed_message(task_id, reason, shortuuid("msg_"))
 }
 
 impl Turn {
-    pub fn with_acceptance(mut self, acceptance: Arc<dyn Acceptance>) -> Self {
-        self.acceptance = Some(acceptance);
-        self
-    }
-
-    async fn accepted(&self, call: &Call, task_id: &str) -> Result<(), StorageError> {
-        if let Some(observer) = &self.acceptance {
-            let task =
-                call.lane.task(task_id).await?.ok_or_else(|| {
-                    StorageError::Invalid("accepted task was not durable".into())
-                })?;
-            observer.accepted(&task).await?;
-        }
-        Ok(())
-    }
-
-    pub fn with_owner(mut self, owner: TaskTracker) -> Self {
-        self.resolvers = owner;
-        self
-    }
-
-    /// Each invocation supplies its own host execution context; the endpoint proxy is shared.
-    pub fn with_context(mut self, context: lk_agents_abi::HostRef) -> Self {
-        self.host_context = Some(context);
-        self
-    }
-
-    /// The response stream is independent of task identity and is recorded with submission.
-    pub fn with_stream(mut self, stream: StreamInfo) -> Self {
-        self.stream = Some(stream);
-        self
-    }
-
     pub fn new(
         thread: Thread,
         lane: &str,
@@ -155,6 +102,28 @@ impl Turn {
         }
     }
 
+    pub fn with_acceptance(mut self, acceptance: Arc<dyn Acceptance>) -> Self {
+        self.acceptance = Some(acceptance);
+        self
+    }
+
+    pub fn with_owner(mut self, owner: TaskTracker) -> Self {
+        self.resolvers = owner;
+        self
+    }
+
+    /// Each invocation supplies its own host execution context; the endpoint proxy is shared.
+    pub fn with_context(mut self, context: lk_agents_abi::HostRef) -> Self {
+        self.host_context = Some(context);
+        self
+    }
+
+    /// The response stream is independent of task identity and is recorded with submission.
+    pub fn with_stream(mut self, stream: StreamInfo) -> Self {
+        self.stream = Some(stream);
+        self
+    }
+
     pub fn lane(&self) -> &str {
         &self.lane
     }
@@ -169,19 +138,6 @@ impl Turn {
 
     pub fn policy_for(&self, channel: &str) -> Policy {
         resolve_policy(&self.opts.policy, channel)
-    }
-
-    /// A record this worker has, or the failed one it could not write.
-    fn record_or_failed(
-        &self,
-        record: Option<TaskRow>,
-        task_id: &str,
-        msg: Option<&Message>,
-        reason: &str,
-    ) -> TaskRow {
-        record.unwrap_or_else(|| {
-            unpersisted_failed(task_id, &self.lane, msg, reason, now_ms(), shortuuid("msg_"))
-        })
     }
 
     /// One incoming message through its policy. `task_id` is the answer stream's id when the
@@ -206,173 +162,238 @@ impl Turn {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
         let caller_history = caller_history_of(&message);
         let msg = Message::from_a2a(&message, now_secs(), None)?;
-        let policy = self.policy_for(&msg.channel);
-        let debounce = resolve_debounce(&self.opts.debounce, &msg.channel, policy);
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
+        let mut machine = TaskMachine::new(
+            self.lane.clone(),
+            msg.clone(),
+            task_id,
+            self.stream.clone(),
+            &self.opts,
+        );
         let mut call =
-            Call { lane: self.thread.lane(&self.lane), last_run_id: None, caller_history };
-        match policy {
-            Policy::Batch => self.batch(&mut call, &msg, &task_id, debounce).await,
-            Policy::Concurrent => self.concurrent(&call, &msg, &task_id).await,
-            Policy::Reject => self.reject(&call, &msg, &task_id).await,
-            Policy::Interrupt | Policy::Queue => {
-                let interrupt = policy == Policy::Interrupt;
-                self.exclusive(&call, &msg, &task_id, interrupt, debounce).await
-            }
-        }
-    }
-
-    async fn exclusive(
-        &self,
-        call: &Call,
-        msg: &Message,
-        task_id: &str,
-        interrupt: bool,
-        debounce: Duration,
-    ) -> Result<TurnResult, StorageError> {
-        // the early `submitted` row is durable before anything waits: before the debounce when
-        // there is one, else in the acquire batch with the lease and the pickup. A `tasks/get`
-        // finds the task at once, and a holder that dies leaves an orphan.
-        let row = submitted_task(msg, task_id, self.stream.as_ref());
-        let submitted = Some(call.lane.db().submit(&row).await?);
-        if submitted == Some(true) {
-            self.accepted(call, task_id).await?;
-        }
-        if !debounce.is_zero() {
-            tokio::time::sleep(debounce).await;
-        }
-        let opened = call
-            .lane
-            .open(RunOptions {
-                interrupt,
-                channel: Some(msg.channel.clone()),
-                wait_timeout: self.opts.wait_timeout(),
-                submit: submitted.is_none().then_some(row),
-                pickup: true,
-                ..RunOptions::new(task_id, task_id)
-            })
-            .await;
-        let mut run = match opened {
-            Ok(run) => run,
-            Err(StorageError::Rejected { .. }) => {
-                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "the lane was not released in time; the task fails lease-timeout");
-                // the early row ends failed, so no `submitted` row outlives a message the caller
-                // was told failed
-                let db = call.lane.db();
-                if db.pickup(task_id).await?.is_some() {
-                    db.fail_orphan(task_id, &failed(task_id, REASON_LEASE_TIMEOUT)).await?;
+            Call { lane: self.thread.lane(&self.lane), run: None, lease: None, caller_history };
+        let epoch = tokio::time::Instant::now();
+        let mut effects = machine.handle(Event::Start, epoch.elapsed());
+        loop {
+            match effects.pop() {
+                Some(Effect::Execute { id, operation }) => {
+                    let result = self.execute(&mut call, &machine, operation).await;
+                    effects = machine.handle(Event::Completed { id, result }, epoch.elapsed());
                 }
-                let record = call.lane.task(task_id).await?;
-                let record =
-                    self.record_or_failed(record, task_id, Some(msg), REASON_LEASE_TIMEOUT);
-                return Ok(TurnResult {
-                    task: record,
-                    output: None,
-                    thread_id: self.thread.id().to_owned(),
-                    answered_by: task_id.to_owned(),
-                    run_id: None,
-                });
+                Some(Effect::Finished(answer)) => {
+                    return answer.map(|answer| self.result(&msg, answer));
+                }
+                None => {
+                    let at = machine.wake_at().ok_or_else(|| {
+                        StorageError::Invalid("the A2A task stalled with nothing to wait on".into())
+                    })?;
+                    tokio::time::sleep_until(epoch + at).await;
+                    effects = machine.handle(Event::Wake, epoch.elapsed());
+                }
             }
-            Err(e) => return Err(e),
-        };
-        if submitted.or(run.submitted) == Some(false)
-            && let Some(mut existing) = run.tasks.by_message_id(&msg.message_id).await?
-        {
-            // a retried messageId: the task it created, awaited when a runner still has it, or
-            // failed worker-lost when its holder died and the lease lapsed
-            self.close_run(&mut run, Ok(()), |_| CommitOptions::default()).await?;
-            if !existing.terminal()
-                && let Some(ended) =
-                    self.await_task(call, &existing.task_id.clone(), false, true).await?
-            {
-                existing = ended;
-            }
-            return Ok(result_for(existing, self.thread.id(), None));
         }
-        let body = async {
-            if run.closed || !run.picked_up {
-                return Ok(None);
-            }
-            self.fail_orphans(&run, &[task_id.to_owned()]).await?;
-            self.turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], interrupt)
-                .await
-                .map(Some)
-        }
-        .await;
-        self.end_answered(call, run, msg, task_id, body).await
     }
 
-    /// Ends a run that may have answered `task_id`'s message: the commit and the task as
-    /// committed. A lost acknowledgment nobody could resolve in the wait answers the task as it
-    /// stands (still `working`) and keeps resolving in the background; a rejected save fails the
-    /// task `storage-unavailable`, its staged changes absent. Never a failure it did not observe.
-    async fn end_answered(
+    /// The machine's answer as the caller's result: a row it could not read is the task as this
+    /// worker left it, failed with the machine's reason or still `working` while it resolves.
+    fn result(&self, msg: &Message, answer: Answer) -> TurnResult {
+        let task = answer.task.unwrap_or_else(|| match answer.reason {
+            Some(reason) => unpersisted_failed(
+                &answer.task_id,
+                &self.lane,
+                Some(msg),
+                reason,
+                now_ms(),
+                shortuuid("msg_"),
+            ),
+            None => TaskRow {
+                status: TaskState::Working,
+                ..self.submitted(msg, &answer.task_id).row(&self.lane)
+            },
+        });
+        let mut result = result_for(task, self.thread.id(), answer.run_id.as_deref());
+        if let Some(answered_by) = answer.answered_by {
+            result.answered_by = answered_by;
+            result.output = answer.output;
+        }
+        result
+    }
+
+    fn submitted(&self, msg: &Message, task_id: &str) -> TaskWrite {
+        TaskWrite {
+            task_id: task_id.to_owned(),
+            status: TaskState::Submitted,
+            message_id: Some(msg.message_id.clone()),
+            name: None,
+            data: lk_agents_storage::schema::TaskData {
+                history: vec![msg.to_a2a()],
+                ..Default::default()
+            },
+            internal: self.stream.clone().map(|stream| lk_agents_storage::schema::TaskInternal {
+                ask: None,
+                streams: vec![stream],
+            }),
+        }
+    }
+
+    async fn execute(
         &self,
-        call: &Call,
-        mut run: Run,
-        msg: &Message,
-        task_id: &str,
-        body: Result<Option<Outcome>, StorageError>,
-    ) -> Result<TurnResult, StorageError> {
-        let body = match body {
-            Ok(body) => body,
-            Err(e) => {
-                let outcome = match e {
-                    StorageError::Cancelled(_) => RunOutcome::Canceled,
-                    _ => RunOutcome::Failed,
+        call: &mut Call,
+        machine: &TaskMachine,
+        operation: Operation,
+    ) -> Result<Completion, StorageError> {
+        let db = call.lane.db().clone();
+        Ok(match operation {
+            Operation::FindReceipt(message_id) => {
+                Completion::Task(db.task_for_message(&message_id).await?)
+            }
+            Operation::FindTarget(task_id) => Completion::Task(self.thread.task(&task_id).await?),
+            Operation::ReadTask(task_id) => Completion::Task(call.lane.task(&task_id).await?),
+            Operation::Submit(task) => Completion::Submitted(db.submit(&task).await?),
+            Operation::Receive { message, task } => {
+                let input = ReceiveInput {
+                    task_id: &task.task_id,
+                    message: &message,
+                    data: &task.data,
+                    internal: task.internal.as_ref(),
                 };
-                run.abandon(outcome, python_reason(&e)).await?;
-                if matches!(e, StorageError::Unavailable(_)) {
-                    call.lane
-                        .db()
-                        .fail_orphan(task_id, &failed(task_id, REASON_STORAGE_UNAVAILABLE))
-                        .await?;
-                    if let Some(task) = call.lane.task(task_id).await? {
-                        return Ok(result_for(task, self.thread.id(), Some(&run.run_id)));
+                let (received, lease) = db.receive(self.thread.holder(), input).await?;
+                call.lease = lease;
+                match received {
+                    Receive::Duplicate(existing) => Completion::Received {
+                        duplicate: Some(existing.unwrap_or(task.task_id)),
+                        leased: false,
+                    },
+                    Receive::Received(_) => {
+                        Completion::Received { duplicate: None, leased: call.lease.is_some() }
                     }
                 }
-                return Err(e);
             }
-        };
-        let answer = body.as_ref().map_or(task_id, |o| o.task_id.as_str()).to_owned();
-        match run.commit(answering(&body)).await {
-            Ok(committed) => match body {
-                Some(outcome) => Ok(self.finish(outcome, task_id, &run, committed)),
-                None => {
-                    let record = call.lane.task(task_id).await?;
-                    let record = self.record_or_failed(record, task_id, None, "not-written");
-                    Ok(result_for(record, self.thread.id(), None))
+            Operation::Accepted(task_id) => {
+                if let Some(observer) = &self.acceptance {
+                    let task = call.lane.task(&task_id).await?.ok_or_else(|| {
+                        StorageError::Unavailable("an accepted task was not durable".into())
+                    })?;
+                    observer.accepted(&task).await?;
                 }
-            },
-            Err(StorageError::Uncertain(why)) => {
-                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = answer.as_str(); "the commit is unresolved; the task stays working while it resolves: {why}");
-                self.resolve_later(call, run, answer.clone());
-                let current = match call.lane.task(&answer).await {
-                    Ok(Some(row)) => row,
-                    // unreadable: the row as this worker left it, picked up
-                    _ => TaskRow {
-                        status: TaskState::Working,
-                        ..submitted_task(msg, &answer, self.stream.as_ref()).row(&self.lane)
-                    },
+                Completion::Done
+            }
+            Operation::Open {
+                run_id,
+                task_id,
+                channel,
+                exclusive,
+                wait,
+                interrupt,
+                pickup,
+                resume,
+            } => {
+                let options = RunOptions {
+                    exclusive,
+                    wait,
+                    interrupt,
+                    channel,
+                    pickup,
+                    wait_timeout: machine.wait_timeout(),
+                    ..RunOptions::new(run_id, task_id)
                 };
-                Ok(result_for(current, self.thread.id(), None))
+                let run = match call.lease.take().filter(|_| resume) {
+                    Some(lease) => call.lane.resume(options, lease).await?,
+                    None => call.lane.open(options).await?,
+                };
+                let opened = Completion::Opened { closed: run.closed, picked_up: run.picked_up };
+                call.run = Some(run);
+                opened
             }
-            Err(e) => {
-                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = answer.as_str(); "the commit was rejected; the task fails storage-unavailable: {e}");
-                let db = call.lane.db();
-                db.fail_orphan(&answer, &failed(&answer, REASON_STORAGE_UNAVAILABLE)).await?;
-                let record = call.lane.task(&answer).await?;
-                let record =
-                    self.record_or_failed(record, &answer, Some(msg), REASON_STORAGE_UNAVAILABLE);
-                Ok(result_for(record, self.thread.id(), None))
+            Operation::ReadInbox => Completion::Inbox(db.inbox(true).await?),
+            Operation::Pickup(task_id) => Completion::Picked(db.pickup(&task_id).await?),
+            Operation::FailTask { task_id, reason } => {
+                if db.pickup(&task_id).await?.is_some() {
+                    db.fail_orphan(&task_id, &failed(&task_id, reason)).await?;
+                    log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
+                }
+                Completion::Done
             }
-        }
+            Operation::RecoverOrphans { skip } => {
+                let run = call.run()?;
+                for row in run.tasks.working().await? {
+                    if !skip.contains(&row.task_id) {
+                        let failed = failed(&row.task_id, REASON_WORKER_LOST);
+                        run.tasks.lane().fail_orphan(&row.task_id, &failed).await?;
+                        log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = row.task_id.as_str(); "a task whose worker died fails worker-lost");
+                    }
+                }
+                Completion::Done
+            }
+            Operation::Run { batch, task_ids, interrupt } => {
+                let mut run = call
+                    .run
+                    .take()
+                    .ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))?;
+                let outcome = self.turn(call, &mut run, &batch, &task_ids, interrupt).await;
+                call.run = Some(run);
+                let outcome = outcome?;
+                Completion::Ran { answer_task: outcome.task_id, output: outcome.output }
+            }
+            Operation::Commit { answer_task, keep_lease, drained_id } => {
+                let run = call.run()?;
+                let committed = run
+                    .commit(CommitOptions {
+                        answer_task,
+                        keep_lease,
+                        drained_id,
+                        ..Default::default()
+                    })
+                    .await?;
+                let run_id = run.run_id.clone();
+                if keep_lease {
+                    call.lease = run.lease().cloned();
+                }
+                call.run = None;
+                Completion::Committed { task: committed.task, run_id }
+            }
+            Operation::Abandon { outcome, reason } => {
+                if let Some(mut run) = call.run.take() {
+                    run.abandon(outcome, reason).await?;
+                }
+                Completion::Done
+            }
+            Operation::ResolveLater { task_id } => {
+                let run = call
+                    .run
+                    .take()
+                    .ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))?;
+                self.resolve_later(call.lane.clone(), run, task_id);
+                Completion::Done
+            }
+            Operation::CloseRun => {
+                if let Some(mut run) = call.run.take() {
+                    run.commit(CommitOptions::default()).await?;
+                }
+                Completion::Done
+            }
+            Operation::ReleaseDrained => {
+                let released = match &call.lease {
+                    Some(lease) => lease.release_if_drained().await?,
+                    None => true,
+                };
+                if released {
+                    call.lease = None;
+                }
+                Completion::Released(released)
+            }
+            Operation::RunningTask => {
+                let runs = call.lane.runs(RUNS_FOR_REJECT).await?;
+                Completion::RunningTask(
+                    runs.into_iter().find(|r| r.interrupted()).and_then(|r| r.task_id),
+                )
+            }
+        })
     }
 
     /// Hands a run whose commit stayed uncertain to a background resolver: an authoritative
     /// rejection fails its task `storage-unavailable`; a commit found committed needs nothing.
-    fn resolve_later(&self, call: &Call, run: Run, answer: String) {
-        let lane = call.lane.clone();
+    fn resolve_later(&self, lane: Lane, run: Run, answer: String) {
         self.resolvers.spawn(async move {
             match run.resolve_later().await {
                 Some(Err(StorageError::VersionConflict { .. })) => {
@@ -389,330 +410,6 @@ impl Turn {
         });
     }
 
-    /// Ends a run: the commit on success, with the options the body's value asks for, else
-    /// `run_ended` with the outcome and the error returned.
-    async fn close_run<T>(
-        &self,
-        run: &mut Run,
-        body: Result<T, StorageError>,
-        opts: impl FnOnce(&T) -> CommitOptions,
-    ) -> Result<(T, Committed), StorageError> {
-        match body {
-            Ok(v) => {
-                let committed = run.commit(opts(&v)).await?;
-                Ok((v, committed))
-            }
-            Err(e) => {
-                let outcome = match e {
-                    StorageError::Cancelled(_) => RunOutcome::Canceled,
-                    _ => RunOutcome::Failed,
-                };
-                run.abandon(outcome, python_reason(&e)).await?;
-                Err(e)
-            }
-        }
-    }
-
-    async fn batch(
-        &self,
-        call: &mut Call,
-        msg: &Message,
-        task_id: &str,
-        debounce: Duration,
-    ) -> Result<TurnResult, StorageError> {
-        let (received, lease) = call
-            .lane
-            .db()
-            .receive(
-                self.thread.holder(),
-                lk_agents_storage::db::ReceiveInput {
-                    task_id,
-                    message: &msg.to_a2a(),
-                    data: &turn_data(msg),
-                    internal: submitted_task(msg, task_id, self.stream.as_ref()).internal.as_ref(),
-                },
-            )
-            .await?;
-        if matches!(&received, lk_agents_storage::db::Receive::Received(_)) {
-            self.accepted(call, task_id).await?;
-        }
-        match (received, lease) {
-            (lk_agents_storage::db::Receive::Duplicate(existing), _) => {
-                let existing_id = existing.unwrap_or_else(|| task_id.to_owned());
-                let mut record = call.lane.task(&existing_id).await?;
-                if let Some(r) = &record
-                    && !r.terminal()
-                {
-                    // the first receive may have landed with its answer lost: nobody drains the
-                    // row unless this worker does once the lease frees
-                    record = self.await_task(call, &r.task_id.clone(), true, true).await?;
-                }
-                let record = self.record_or_failed(record, &existing_id, None, "not-written");
-                Ok(result_for(record, self.thread.id(), None))
-            }
-            (_, Some(lease)) => {
-                // this worker is the runner: let the burst land, then drain
-                if !debounce.is_zero() {
-                    tokio::time::sleep(debounce).await;
-                }
-                self.drain(call, Some(lease)).await?;
-                let record = call.lane.task(task_id).await?;
-                let record = self.record_or_failed(record, task_id, None, "not-written");
-                Ok(result_for(record, self.thread.id(), call.last_run_id.as_deref()))
-            }
-            (_, None) => {
-                let record = self.await_task(call, task_id, true, false).await?;
-                let record = self.record_or_failed(record, task_id, None, "not-written");
-                Ok(result_for(record, self.thread.id(), call.last_run_id.as_deref()))
-            }
-        }
-    }
-
-    /// Polls the task and the lease: the task ends, or the lease frees and this worker drains the
-    /// inbox (`drain_if_free`) or fails the orphaned `working` row `worker-lost`
-    /// (`fail_if_free`: a resend of the dead holder's message is told to send it again).
-    async fn await_task(
-        &self,
-        call: &Call,
-        task_id: &str,
-        drain_if_free: bool,
-        fail_if_free: bool,
-    ) -> Result<Option<TaskRow>, StorageError> {
-        let epoch = tokio::time::Instant::now();
-        let mut poll = LanePoll::new(epoch.elapsed(), self.opts.wait_timeout());
-        // the drain never holds a lease across the loop; a fresh call per pass
-        let mut drain_call =
-            Call { lane: call.lane.clone(), last_run_id: None, caller_history: None };
-        loop {
-            let mut record = call.lane.task(task_id).await?;
-            if record.as_ref().is_some_and(TaskRow::terminal) {
-                return Ok(record);
-            }
-            if drain_if_free && !call.lane.db().inbox(true).await?.is_empty() {
-                match self.drain(&mut drain_call, None).await {
-                    Err(StorageError::Rejected { .. }) => {}
-                    Err(e) => return Err(e),
-                    Ok(()) => {
-                        record = call.lane.task(task_id).await?;
-                        if record.as_ref().is_some_and(TaskRow::terminal) {
-                            return Ok(record);
-                        }
-                    }
-                }
-            }
-            if fail_if_free
-                && let Some(r) = &record
-                && r.status == TaskState::Working
-            {
-                let opened = call
-                    .lane
-                    .open(RunOptions {
-                        wait: false,
-                        channel: channel_of_record(r),
-                        ..RunOptions::new(shortuuid("lost_"), task_id)
-                    })
-                    .await;
-                match opened {
-                    Err(StorageError::Rejected { .. }) => {}
-                    Err(e) => return Err(e),
-                    Ok(mut run) => {
-                        let body = async {
-                            if !run.closed {
-                                self.fail_orphans(&run, &[]).await?;
-                            }
-                            Ok(())
-                        }
-                        .await;
-                        self.close_run(&mut run, body, |_| CommitOptions::default()).await?;
-                        record = call.lane.task(task_id).await?;
-                        if record.as_ref().is_some_and(TaskRow::terminal) {
-                            return Ok(record);
-                        }
-                    }
-                }
-            }
-            let Some(at) = poll.next(epoch.elapsed()) else {
-                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "a queued message was not answered in time");
-                return Ok(record);
-            };
-            tokio::time::sleep_until(epoch + at).await;
-        }
-    }
-
-    /// The drain loop: one turn per batch of pending rows until nothing is pending.
-    /// `LeaseHeld` when another runner holds the lane.
-    async fn drain(&self, call: &mut Call, lease: Option<Lease>) -> Result<(), StorageError> {
-        let db = call.lane.db().clone();
-        let mut lease = lease;
-        loop {
-            let rows = db.inbox(true).await?;
-            let Some(last) = rows.last() else {
-                if let Some(lease) = &lease {
-                    lease.release_if_drained().await?;
-                }
-                return Ok(());
-            };
-            let task_ids: Vec<String> = rows.iter().map(|r| r.task_id.clone()).collect();
-            let options = RunOptions {
-                wait: false,
-                channel: Some(channel_of(&last.message)),
-                ..RunOptions::new(shortuuid("drain_"), last.task_id.clone())
-            };
-            let mut run = match lease.take() {
-                Some(lease) => call.lane.resume(options, lease).await?,
-                None => call.lane.open(options).await?,
-            };
-            let last_id = last.id;
-            let body = async {
-                let mut batch: Vec<Message> = Vec::new();
-                let mut batch_ids: Vec<String> = Vec::new();
-                for (row, tid) in rows.iter().zip(&task_ids) {
-                    let Some(was) = db.pickup(tid).await? else {
-                        continue; // terminal already: answered by an earlier drain
-                    };
-                    if was == TaskState::Working {
-                        db.fail_orphan(tid, &failed(tid, REASON_WORKER_LOST)).await?;
-                        log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = tid.as_str(); "a message whose drain died fails worker-lost");
-                        continue;
-                    }
-                    batch.push(Message::from_a2a(&row.message, row.received_at as f64, Some(tid))?);
-                    batch_ids.push(tid.clone());
-                }
-                if !batch.is_empty() {
-                    self.fail_orphans(&run, &task_ids).await?;
-                    self.turn(call, &mut run, &batch, &batch_ids, false).await?;
-                }
-                Ok(())
-            }
-            .await;
-            let keep = |_: &()| CommitOptions {
-                keep_lease: true,
-                drained_id: Some(last_id),
-                ..CommitOptions::default()
-            };
-            self.close_run(&mut run, body, keep).await?;
-            call.last_run_id = Some(run.run_id.clone());
-            let kept = run.lease().cloned();
-            let kept =
-                kept.ok_or_else(|| StorageError::Invalid("a drain run without a lease".into()))?;
-            if kept.release_if_drained().await? {
-                return Ok(());
-            }
-            lease = Some(kept);
-        }
-    }
-
-    async fn concurrent(
-        &self,
-        call: &Call,
-        msg: &Message,
-        task_id: &str,
-    ) -> Result<TurnResult, StorageError> {
-        if !call.lane.db().submit(&submitted_task(msg, task_id, self.stream.as_ref())).await? {
-            // a resent task or message id: the task it created, awaited, not a second run
-            let mut existing = match call.lane.task(task_id).await? {
-                Some(r) => Some(r),
-                None => call.lane.db().task_for_message(&msg.message_id).await?,
-            };
-            if let Some(r) = &existing
-                && !r.terminal()
-            {
-                existing = self.await_task(call, &r.task_id.clone(), false, false).await?;
-            }
-            let id = existing.as_ref().map_or(task_id, |r| r.task_id.as_str()).to_owned();
-            let record = self.record_or_failed(existing, &id, None, "not-written");
-            return Ok(result_for(record, self.thread.id(), None));
-        }
-        self.accepted(call, task_id).await?;
-        let mut run = call
-            .lane
-            .open(RunOptions {
-                exclusive: false,
-                channel: Some(msg.channel.clone()),
-                ..RunOptions::new(task_id, task_id)
-            })
-            .await?;
-        let body = self
-            .turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
-            .await;
-        self.end_answered(call, run, msg, task_id, body.map(Some)).await
-    }
-
-    async fn reject(
-        &self,
-        call: &Call,
-        msg: &Message,
-        task_id: &str,
-    ) -> Result<TurnResult, StorageError> {
-        if let Some(info) = call.lane.info().await?
-            && info.lease_until > now_ms() / 1000
-        {
-            let running_task_id = self.running_task(call).await?;
-            return Err(StorageError::Rejected { running_task_id });
-        }
-        let result = async {
-            let mut run = call
-                .lane
-                .open(RunOptions {
-                    wait: false,
-                    channel: Some(msg.channel.clone()),
-                    ..RunOptions::new(task_id, task_id)
-                })
-                .await?;
-            // the row is written under the lease: a refused message leaves none (docs/server.md)
-            let body = async {
-                if run.closed {
-                    return Ok(None);
-                }
-                call.lane.db().submit(&submitted_task(msg, task_id, self.stream.as_ref())).await?;
-                self.accepted(call, task_id).await?;
-                // the row goes `working` once the lease is held, so a holder that dies leaves an
-                // orphan; a row a client canceled before the turn started runs nothing
-                if call.lane.db().pickup(task_id).await?.is_none() {
-                    return Ok(None);
-                }
-                self.fail_orphans(&run, &[task_id.to_owned()]).await?;
-                self.turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
-                    .await
-                    .map(Some)
-            }
-            .await;
-            self.end_answered(call, run, msg, task_id, body).await
-        }
-        .await;
-        match result {
-            // the lane was taken between the check and the open: the run that took it is named
-            Err(StorageError::Rejected { .. }) => {
-                let running_task_id = self.running_task(call).await?;
-                Err(StorageError::Rejected { running_task_id })
-            }
-            other => other,
-        }
-    }
-
-    /// The task of the run holding the lane: the newest run with no `run_ended`.
-    async fn running_task(&self, call: &Call) -> Result<Option<String>, StorageError> {
-        let runs = call.lane.runs(RUNS_FOR_REJECT).await?;
-        Ok(runs.into_iter().find(|r| r.interrupted()).and_then(|r| r.task_id))
-    }
-
-    /// A dead holder's `working` rows, found under this run's lease: each fails `worker-lost`
-    /// and nothing runs again; the client resends. `skip` is this run's own row.
-    async fn fail_orphans(&self, run: &Run, skip: &[String]) -> Result<(), StorageError> {
-        for row in run.tasks.working().await? {
-            if skip.contains(&row.task_id) {
-                continue;
-            }
-            run.tasks
-                .lane()
-                .fail_orphan(&row.task_id, &failed(&row.task_id, REASON_WORKER_LOST))
-                .await?;
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = row.task_id.as_str(); "a task whose worker died fails worker-lost");
-        }
-        Ok(())
-    }
-
-    /// One turn over a batch inside an open run; writes the task rows, commits nothing itself.
     async fn turn(
         &self,
         call: &Call,
@@ -892,23 +589,5 @@ impl Turn {
             log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id; "the handler's stream did not close within its deadline; its host task is still running");
         }
         out.map(|out| (out, stop))
-    }
-
-    /// The task after the commit, and the reply.
-    fn finish(
-        &self,
-        outcome: Outcome,
-        task_id: &str,
-        run: &Run,
-        committed: Committed,
-    ) -> TurnResult {
-        let record = self.record_or_failed(committed.task, task_id, None, "not-written");
-        TurnResult {
-            task: record,
-            output: outcome.output,
-            thread_id: self.thread.id().to_owned(),
-            answered_by: outcome.task_id,
-            run_id: Some(run.run_id.clone()),
-        }
     }
 }

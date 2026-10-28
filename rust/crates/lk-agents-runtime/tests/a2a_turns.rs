@@ -884,9 +884,7 @@ async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
         // another worker, before the commit: the row is there, with the message
         let lane = b.lane(LANE);
         let during = lane.task("AST_early").await.unwrap().expect("the early row");
-        let status =
-            if policy == Policy::Concurrent { TaskState::Submitted } else { TaskState::Working };
-        assert_eq!(during.status, status, "{policy}");
+        assert_eq!(during.status, TaskState::Working, "{policy}");
         assert_eq!(during.message_id.as_deref(), Some("m1"));
         assert_eq!(during.data.history, vec![user_message("hello", "m1", None, None)]);
         assert_eq!(during.seq, 1);
