@@ -5,18 +5,20 @@
 
 from __future__ import annotations
 
-from asyncio import Future
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
+from livekit.agents._core import EndpointServer, ServerConfig
 from livekit.agents.cli import _DevServer
 from livekit.agents.http import AsgiApplication, ExchangeStream
 from livekit.agents.ipc import JobExecutor, ProcPool
 from livekit.agents.ipc.child import _JobProc
+from livekit.agents.worker import _ServerHost
 
 from .._core import StartJobFields
 from .worker_cli import CliArgs
 from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
 from .worker_options import ServerOptions
+from .worker_server import EndpointRoute
 
 class EndpointStream:
     async def read(self, max_bytes: int = 65536) -> bytes: ...
@@ -263,8 +265,12 @@ class JobRun:
         """
 
 class ServerConfig:
-    def __init__(self, options: ServerOptions) -> None: ...
-    def update(self, options: ServerOptions) -> None: ...
+    def __init__(self, options: ServerOptions) -> None:
+        """`options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
+        `HTTP_PROXY`).
+        """
+    def update(self, options: ServerOptions) -> None:
+        """Before the server starts only."""
     @property
     def ws_url(self) -> str: ...
     @property
@@ -276,7 +282,8 @@ class ServerConfig:
     @property
     def deployment(self) -> str: ...
     @property
-    def cloud(self) -> bool: ...
+    def cloud(self) -> bool:
+        """Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set)."""
     @property
     def drain_timeout(self) -> float: ...
     @property
@@ -285,15 +292,14 @@ class ServerConfig:
     def simulation(self, value: bool) -> None: ...
 
 class ServerRuntime:
-    """Returned host references are futures owned by the bootstrap loop."""
-    def __init__(self, config: object, host: object) -> None: ...
+    def __init__(self, config: ServerConfig, host: _ServerHost) -> None: ...
     @property
     def worker_id(self) -> str: ...
     @property
     def draining(self) -> bool: ...
     @property
     def http_port(self) -> int: ...
-    def run(
+    async def run(
         self,
         *,
         devmode: bool,
@@ -301,14 +307,21 @@ class ServerRuntime:
         has_rtc: bool,
         has_text_doors: bool,
         publisher: bool,
-        routes: object,
+        routes: Sequence[EndpointRoute],
         has_load_fnc: bool,
         has_on_request: bool,
-    ) -> Future[None]: ...
-    def drain(self, timeout: float | None = None) -> Future[None]: ...
-    def aclose(self) -> Future[None]: ...
-    def job_status(self, job_id: str, status: str) -> None: ...
-    def simulate_job(
+        endpoints: EndpointServer,
+        app: AsgiApplication,
+    ) -> None:
+        """Start the job processes and the health listener and, unless `unregistered`, register;
+        return once closed. `endpoints` serves `routes` with `app`.
+        """
+    async def drain(self, timeout: float | None = None) -> None:
+        """`None` (or `0`) waits without a deadline; past it raises `TimeoutError`."""
+    async def aclose(self) -> None: ...
+    def job_status(self, job_id: str, status: str) -> None:
+        """`"running"`, `"failed"` or `"success"`."""
+    async def simulate_job(
         self,
         room: str,
         *,
@@ -316,4 +329,5 @@ class ServerRuntime:
         agent_identity: str | None = None,
         room_info: bytes | bytearray | memoryview | list[int] | None = None,
         token: str | None = None,
-    ) -> Future[None]: ...
+    ) -> None:
+        """A job in `room` with no dispatch: the console's, a notebook's."""

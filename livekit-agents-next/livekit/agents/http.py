@@ -169,25 +169,9 @@ class AgentHttp:
             )
         return manifest
 
-    async def serve(self, args: dict[str, Any]) -> None:
-        """One ``open("endpoint", args)`` call from the worker: serve the stream to completion."""
-        await serve_endpoint(args.pop("stream"), _request_from_args(args), self.app, self)
-
     async def close_websockets(self, code: int = 1001, reason: str = "worker draining") -> None:
         """Send every open WebSocket a close frame, so clients reconnect to another worker."""
         await self._server.close_websockets(code, reason)
-
-
-def _request_from_args(args: dict[str, Any]) -> EndpointRequest:
-    return EndpointRequest(
-        request_id=args.get("request_id", ""),
-        authorized=bool(args.get("authorized", False)),
-        route=args.get("route", ""),
-        kind=args.get("kind", "http"),
-        client_addr=args.get("client_addr", ""),
-        scheme=args.get("scheme") or "http",
-        timeout_ms=int(args.get("timeout_ms") or 0),
-    )
 
 
 async def serve_endpoint(

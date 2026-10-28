@@ -157,8 +157,12 @@ pub trait AsgiReceiver: Any + Send + Sync {}
 #[crate::host(native(refused = "expected a native AsgiSend"))]
 pub trait AsgiSender: Any + Send + Sync {}
 
+/// A native `EndpointServer`, as the server runtime serves its routes with it.
+#[crate::host(native(refused = "expected a native EndpointServer"))]
+pub trait EndpointService: Any + Send + Sync {}
+
 /// The host's ASGI application bridge and its active WebSockets.
-#[crate::host(class(name = "EndpointServer"))]
+#[crate::host(class(name = "EndpointServer", native = EndpointService))]
 pub trait EndpointServer: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new() -> Self;

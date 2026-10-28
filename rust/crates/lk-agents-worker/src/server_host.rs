@@ -1,0 +1,477 @@
+//! The agent server as the host drives it: `_core.ServerConfig` (`AgentServer`'s options, the
+//! environment read where one was left empty, writable until the server starts) and
+//! `_core.ServerRuntime` (the server over the host's job processes and callbacks, which it
+//! reaches through the declared `ServerHost`), with the endpoint routes served natively.
+
+use std::any::Any;
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::endpoint::EndpointRequest as RequestInfo;
+use lk_agents_abi::worker::endpoint_host::{AsgiApplication, EndpointServer, EndpointService};
+use lk_agents_abi::worker::ipc_host::WorkerError;
+use lk_agents_abi::worker::server_host::{
+    EndpointRoute, JobAnswer, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
+};
+use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
+
+use crate::endpoint_host::{Endpoints, NativeStream};
+use crate::env::Env;
+use crate::io::WorkerIo;
+use crate::server::{self, ServerHost, ServerPhase, ServerSettings, ServerStart};
+use crate::transport::AgentEndpointKind;
+use crate::{
+    AcceptArguments, EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId,
+    JobRequest, RunningJobInfo, TransportConfig, WorkerCommand, WorkerHost, WorkerRegistered,
+    protocol,
+};
+
+pub struct Configuration {
+    settings: Arc<Mutex<ServerSettings>>,
+    /// Seals the configuration once the server starts.
+    running: Arc<AtomicBool>,
+}
+
+impl Configuration {
+    fn get(&self) -> MutexGuard<'_, ServerSettings> {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl ServerConfiguration for Configuration {}
+
+impl ServerConfig for Configuration {
+    fn new(options: ServerOptions) -> Result<Self, WorkerError> {
+        let env = |name: &str| std::env::var(name).ok();
+        let mut settings =
+            ServerSettings { http_proxy: ServerSettings::env_proxy(env), ..Default::default() };
+        settings.apply(options).map_err(WorkerError::Invalid)?;
+        Ok(Self { settings: Arc::new(Mutex::new(settings.with_env(env))), running: Arc::default() })
+    }
+
+    fn update(&self, options: ServerOptions) -> Result<(), WorkerError> {
+        if self.running.load(Ordering::Acquire) {
+            return Err(WorkerError::Failed(
+                "cannot update options after starting the server".into(),
+            ));
+        }
+        self.get().apply(options).map_err(WorkerError::Invalid)
+    }
+
+    fn ws_url(&self) -> String {
+        self.get().ws_url.clone()
+    }
+
+    fn api_key(&self) -> String {
+        self.get().api_key.clone()
+    }
+
+    fn api_secret(&self) -> String {
+        self.get().api_secret.clone()
+    }
+
+    fn agent_name(&self) -> String {
+        self.get().agent_name.clone()
+    }
+
+    fn deployment(&self) -> String {
+        self.get().deployment.clone()
+    }
+
+    fn cloud(&self) -> bool {
+        self.get().cloud()
+    }
+
+    fn drain_timeout(&self) -> f64 {
+        self.get().drain_timeout
+    }
+
+    fn simulation(&self) -> bool {
+        self.get().simulation
+    }
+
+    fn set_simulation(&self, value: bool) {
+        self.get().simulation = value;
+    }
+}
+
+/// What serves the endpoint routes, once the server runs.
+type Mounted = Arc<OnceLock<(Arc<Endpoints>, Arc<dyn AsgiApplication>)>>;
+
+/// The host server with what the runtime decides on its own.
+#[derive(Clone)]
+pub struct HostedServer {
+    host: Arc<dyn Host>,
+    /// The user gave a `load_fnc` the worker may call (not on Cloud).
+    user_load: bool,
+    /// The server has a voice door, and that door an `on_request`.
+    has_rtc: bool,
+    has_on_request: bool,
+    mounted: Mounted,
+}
+
+fn to_string(error: HostError) -> String {
+    error.to_string()
+}
+
+#[async_trait]
+impl WorkerHost for HostedServer {
+    async fn on_job_request(&self, req: JobRequest) -> JobDecision {
+        if let Some(decision) = server::own_decision(&req, self.has_rtc, self.has_on_request) {
+            return decision;
+        }
+        // A failed `request_fnc` rejects without terminating, so the server can redispatch.
+        match self.host.job_request(req).await {
+            Err(error) => JobDecision::Failed(error),
+            Ok(JobAnswer::Accept { name, identity, metadata, attributes }) => {
+                JobDecision::Accept(AcceptArguments { name, identity, metadata, attributes })
+            }
+            Ok(JobAnswer::Reject) => JobDecision::Reject { terminate: false },
+            Ok(JobAnswer::Terminate) => JobDecision::Reject { terminate: true },
+            Ok(JobAnswer::Unanswered) => JobDecision::Unanswered,
+        }
+    }
+
+    async fn launch_job(&self, info: RunningJobInfo) -> Result<JobId, HostError> {
+        self.host.launch_job(info).await
+    }
+
+    async fn terminate_job(&self, id: JobId) -> Result<(), HostError> {
+        self.host.terminate_job(id).await
+    }
+
+    /// A raising `load_fnc` must not read as idle (that over-schedules); `None` falls back to the
+    /// CPU monitor.
+    async fn user_load(&self) -> Option<f32> {
+        if !self.user_load {
+            return None;
+        }
+        self.host.load().await.ok().map(|load| load as f32)
+    }
+
+    async fn serve_endpoint(&self, request: EndpointRequest) {
+        let EndpointRequest { preamble, stream } = request;
+        let Some((endpoints, app)) = self.mounted.get() else {
+            return stream.refuse();
+        };
+        let (writer, reader) = stream.split();
+        let kind = match AgentEndpointKind::try_from(preamble.kind) {
+            Ok(AgentEndpointKind::AekText) => "text",
+            _ => "http",
+        };
+        let info = RequestInfo {
+            request_id: preamble.request_id,
+            authorized: preamble.authorized,
+            route: preamble.route,
+            kind: kind.into(),
+            client_addr: preamble.client_addr,
+            scheme: if preamble.scheme.is_empty() { "http".into() } else { preamble.scheme },
+            timeout_ms: u64::from(preamble.timeout_ms),
+        };
+        let stream = Arc::new(NativeStream::new(reader, writer));
+        EndpointServer::serve(endpoints.as_ref(), stream, app.clone(), info).await;
+    }
+}
+
+#[async_trait]
+impl ServerHost for HostedServer {
+    fn configured(&self, has_rtc: bool, has_on_request: bool, user_load: bool) -> Self {
+        Self { has_rtc, has_on_request, user_load, ..self.clone() }
+    }
+
+    async fn start(
+        &self,
+        start: ServerSettings,
+        devmode: bool,
+        has_rtc: bool,
+    ) -> Result<(), String> {
+        let options = ProcessStartOptions {
+            devmode,
+            job_processes: has_rtc,
+            env: start.child_env().into_iter().map(|(key, value)| (key.into(), value)).collect(),
+            job_executor_type: start.job_executor_type.clone(),
+            multiprocessing_context: start.multiprocessing_context.clone(),
+            pool: ProcessPoolOptions {
+                num_idle_processes: start
+                    .num_idle_processes
+                    .unwrap_or(EnvOption::Fixed(0))
+                    .get(devmode),
+                initialize_timeout: start.initialize_process_timeout,
+                close_timeout: start.shutdown_process_timeout,
+                session_end_timeout: start.session_end_timeout,
+                memory_warn_mb: start.job_memory_warn_mb,
+                memory_limit_mb: start.job_memory_limit_mb,
+                http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
+            },
+        };
+        self.host.start(options).await.map_err(to_string)
+    }
+
+    async fn started(&self) -> Result<(), String> {
+        self.host.started().await.map_err(to_string)
+    }
+
+    async fn registered(&self, info: WorkerRegistered) -> Result<(), String> {
+        self.host.registered(info).await.map_err(to_string)
+    }
+
+    async fn idle_processes(&self, target: u32) -> Result<(), String> {
+        self.host.idle_processes(target).await.map_err(to_string)
+    }
+
+    async fn worker_load(&self, load: f32) -> Result<(), String> {
+        self.host.worker_load(f64::from(load)).await.map_err(to_string)
+    }
+
+    /// Clients of an open WebSocket get a close frame and reconnect to another worker.
+    async fn close_websockets(&self) -> Result<(), String> {
+        if let Some((endpoints, _)) = self.mounted.get() {
+            endpoints.close_websockets(1001, "worker draining".into()).await;
+        }
+        Ok(())
+    }
+
+    async fn join_jobs(&self) -> Result<(), String> {
+        self.host.join_jobs().await.map_err(to_string)
+    }
+
+    async fn close(&self) -> Result<(), String> {
+        self.host.close().await.map_err(to_string)
+    }
+
+    async fn active_jobs(&self) -> usize {
+        self.host.active_jobs().await.unwrap_or(0)
+    }
+
+    async fn metrics(&self) -> Option<(String, String)> {
+        self.host.metrics().await.ok()
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(std::env::var(name).unwrap_or_default().to_lowercase().as_str(), "1" | "true" | "yes")
+}
+
+/// The transport the routes need: the endpoint data plane rides WebTransport; without routes the
+/// WebSocket control connection suffices (`LIVEKIT_WORKER_WEBTRANSPORT` asks for it anyway).
+fn transport_for(routes: bool) -> TransportConfig {
+    if routes || env_flag("LIVEKIT_WORKER_WEBTRANSPORT") {
+        TransportConfig::WebTransport { insecure: env_flag("LIVEKIT_WORKER_INSECURE") }
+    } else {
+        TransportConfig::WebSocket { heartbeat: HEARTBEAT_INTERVAL }
+    }
+}
+
+/// A manifest route as the register message carries it.
+fn manifest_entry(route: EndpointRoute) -> Result<protocol::AgentEndpoint, WorkerError> {
+    let kind = match route.kind.as_str() {
+        "http" => AgentEndpointKind::AekHttp,
+        "text" => AgentEndpointKind::AekText,
+        other => {
+            return Err(WorkerError::Invalid(format!(
+                "endpoints: {}: unknown kind {other:?}, expected \"http\" or \"text\"",
+                route.path
+            )));
+        }
+    };
+    Ok(protocol::AgentEndpoint {
+        path: route.path,
+        methods: route.methods,
+        kind: kind as i32,
+        public: route.public,
+    })
+}
+
+pub struct AgentRuntime<E> {
+    settings: Arc<Mutex<ServerSettings>>,
+    running: Arc<AtomicBool>,
+    runtime: server::ServerRuntime<HostedServer>,
+    mounted: Mounted,
+    io: WorkerIo,
+    env: PhantomData<fn() -> E>,
+}
+
+impl<E> AgentRuntime<E> {
+    fn settings(&self) -> ServerSettings {
+        self.settings.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    }
+}
+
+impl<E: Env> ServerRuntime for AgentRuntime<E> {
+    fn new(config: Arc<dyn ServerConfiguration>, host: Arc<dyn Host>) -> Result<Self, WorkerError> {
+        let config: Arc<dyn Any + Send + Sync> = config;
+        let config = config
+            .downcast::<Configuration>()
+            .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
+        let io = E::worker_io().map_err(WorkerError::Failed)?;
+        let mounted = Mounted::default();
+        let host = HostedServer {
+            host,
+            user_load: true,
+            has_rtc: false,
+            has_on_request: false,
+            mounted: mounted.clone(),
+        };
+        Ok(Self {
+            settings: config.settings.clone(),
+            running: config.running.clone(),
+            runtime: server::ServerRuntime::new(host, Some(io.clone())),
+            mounted,
+            io,
+            env: PhantomData,
+        })
+    }
+
+    fn worker_id(&self) -> String {
+        self.runtime.snapshot().worker_id
+    }
+
+    fn draining(&self) -> bool {
+        self.runtime.snapshot().phase == ServerPhase::Draining
+    }
+
+    fn http_port(&self) -> u16 {
+        self.runtime.snapshot().http_port
+    }
+
+    async fn run(
+        &self,
+        devmode: bool,
+        unregistered: bool,
+        has_rtc: bool,
+        has_text_doors: bool,
+        publisher: bool,
+        routes: Vec<EndpointRoute>,
+        has_load_fnc: bool,
+        has_on_request: bool,
+        endpoints: Arc<dyn EndpointService>,
+        app: Arc<dyn AsgiApplication>,
+    ) -> Result<(), WorkerError> {
+        let endpoints: Arc<dyn Any + Send + Sync> = endpoints;
+        let endpoints = endpoints
+            .downcast::<Endpoints>()
+            .map_err(|_| WorkerError::Invalid("expected a native EndpointServer".into()))?;
+        let routes = routes.into_iter().map(manifest_entry).collect::<Result<Vec<_>, _>>()?;
+        let _ = self.mounted.set((endpoints, app));
+        let start = ServerStart {
+            settings: self.settings(),
+            devmode,
+            unregistered,
+            has_rtc,
+            has_text_doors,
+            publisher,
+            transport: transport_for(!routes.is_empty()),
+            endpoints: routes,
+            has_load_fnc,
+            has_on_request,
+            worker_url: std::env::var("LIVEKIT_WORKER_URL").ok().filter(|url| !url.is_empty()),
+        };
+        self.running.store(true, Ordering::Release);
+        let runtime = self.runtime.clone();
+        self.io.run(async move { runtime.run(start).await }).await.map_err(WorkerError::Failed)
+    }
+
+    async fn drain(&self, timeout: Option<f64>) -> Result<(), WorkerError> {
+        let timeout = timeout
+            .filter(|timeout| *timeout != 0.0)
+            .map(Duration::try_from_secs_f64)
+            .transpose()
+            .map_err(|_| {
+                WorkerError::Invalid("drain timeout must be finite and nonnegative".into())
+            })?;
+        let runtime = self.runtime.clone();
+        self.io.run(async move { runtime.drain(timeout).await }).await.map_err(|error| {
+            if error == "drain timed out" {
+                WorkerError::TimedOut(error)
+            } else {
+                WorkerError::Failed(error)
+            }
+        })
+    }
+
+    async fn aclose(&self) -> Result<(), WorkerError> {
+        let runtime = self.runtime.clone();
+        self.io.run(async move { runtime.close().await }).await.map_err(WorkerError::Failed)
+    }
+
+    fn job_status(&self, job_id: String, status: String) {
+        let status = match status.as_str() {
+            "failed" => protocol::JobStatus::JsFailed,
+            "success" => protocol::JobStatus::JsSuccess,
+            _ => protocol::JobStatus::JsRunning,
+        };
+        if let Some(worker) = self.runtime.snapshot().worker
+            && worker.send(WorkerCommand::JobStatus { job_id: job_id.clone(), status }).is_err()
+        {
+            crate::diagnostics::emit(
+                log::Level::Error,
+                format!("worker job status admission failed job_id={job_id}"),
+            );
+        }
+    }
+
+    async fn simulate_job(
+        &self,
+        room: String,
+        fake_job: bool,
+        agent_identity: Option<String>,
+        room_info: Option<Vec<u8>>,
+        token: Option<String>,
+    ) -> Result<(), WorkerError> {
+        let snapshot = self.runtime.snapshot();
+        if !snapshot.has_rtc {
+            return Err(WorkerError::Failed("a server with no rtc_session runs no job".into()));
+        }
+        if snapshot.phase != ServerPhase::Running {
+            return Err(WorkerError::Failed("the server is not accepting jobs".into()));
+        }
+        let room_info = room_info
+            .map(|bytes| server::decode_room(&bytes))
+            .transpose()
+            .map_err(WorkerError::Invalid)?;
+        let info = server::simulated_job(
+            &self.settings(),
+            &snapshot.worker_id,
+            &room,
+            fake_job,
+            agent_identity,
+            room_info,
+            token,
+        )
+        .map_err(WorkerError::Invalid)?;
+        let runtime = self.runtime.clone();
+        self.io
+            .run(async move { runtime.simulate_job(info).await })
+            .await
+            .map_err(WorkerError::Failed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: a manifest entry's kind or methods lost on the way to the register message, or an
+    // unknown kind registered instead of refused.
+    #[test]
+    fn routes_reach_the_manifest_with_their_kind_and_an_unknown_kind_is_refused() {
+        let route = |path: &str, kind: &str| EndpointRoute {
+            path: path.into(),
+            methods: vec!["GET".into(), "HEAD".into()],
+            kind: kind.into(),
+            public: true,
+        };
+        let text = manifest_entry(route("/a2a", "text")).unwrap();
+        let http = manifest_entry(route("/items/{id}", "http")).unwrap();
+        assert_eq!(text.kind, AgentEndpointKind::AekText as i32);
+        assert_eq!(http.kind, AgentEndpointKind::AekHttp as i32);
+        assert_eq!(http.methods, vec!["GET", "HEAD"]);
+        assert!(http.public);
+        assert!(matches!(transport_for(true), TransportConfig::WebTransport { .. }));
+        assert!(manifest_entry(route("/x", "grpc")).is_err());
+    }
+}

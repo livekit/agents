@@ -9,7 +9,7 @@ use lk_agents_abi::errors::{HostError, HostResult};
 use lk_agents_abi::worker::endpoint::EndpointRequest;
 use lk_agents_abi::worker::endpoint_host::{
     AsgiApplication, AsgiReceive, AsgiReceived, AsgiReceiver, AsgiSend, AsgiSender, AsgiSent,
-    EndpointServer, EndpointStream, ExchangeStream,
+    EndpointServer, EndpointService, EndpointStream, ExchangeStream,
 };
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use tokio::sync::Mutex;
@@ -205,6 +205,8 @@ impl AsgiApp for Application {
 pub struct Endpoints {
     websockets: Arc<Registry>,
 }
+
+impl EndpointService for Endpoints {}
 
 impl EndpointServer for Endpoints {
     fn new() -> Self {

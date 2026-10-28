@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents import _core
 from livekit.agents._generated.worker_options import ServerOptions
+from livekit.agents.http import AgentHttp, AsgiApplication
 
 pytestmark = pytest.mark.unit
 
@@ -18,21 +19,28 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
             self.joining = asyncio.Event()
             self.closed = asyncio.Event()
 
-        async def open(self, kind: str, args: object) -> object:
-            if kind == "started":
-                self.started.set()
-            elif kind == "join_jobs":
-                self.joining.set()
-                unfinished: asyncio.Future[None] = asyncio.Future()
-                await unfinished
-            elif kind == "close":
-                self.closed.set()
-            return None
+        async def _core_start(self, options: object) -> None:
+            pass
+
+        async def _core_started(self) -> None:
+            self.started.set()
+
+        async def _core_worker_load(self, load: float) -> None:
+            pass
+
+        async def _core_join_jobs(self) -> None:
+            self.joining.set()
+            unfinished: asyncio.Future[None] = asyncio.Future()
+            await unfinished
+
+        async def _core_close(self) -> None:
+            self.closed.set()
 
     host = Host()
     config = _core.ServerConfig(ServerOptions())
     config.simulation = True
     runtime = _core.ServerRuntime(config, host)
+    http = AgentHttp()
     running = asyncio.ensure_future(
         runtime.run(
             devmode=True,
@@ -43,6 +51,8 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
             routes=[],
             has_load_fnc=False,
             has_on_request=False,
+            endpoints=http._server,
+            app=AsgiApplication(http.app),
         )
     )
     draining: asyncio.Future[object] | None = None

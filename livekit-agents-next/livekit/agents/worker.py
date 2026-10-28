@@ -19,8 +19,16 @@ from livekit.protocol import agent, models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions, WorkerPermissions
-from ._generated.worker_server import RegisteredInfo
-from .http import AgentHttp
+from ._generated.worker_server import (
+    EndpointRoute,
+    JobAnswer,
+    JobAnswerAccept,
+    JobAnswerReject,
+    JobAnswerTerminate,
+    JobAnswerUnanswered,
+    RegisteredInfo,
+)
+from .http import AgentHttp, AsgiApplication
 from .ipc.launch import preload_module_names, validate_setup_fnc
 from .job import (
     JobAcceptArguments,
@@ -279,9 +287,11 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
             has_rtc=self._rtc is not None,
             has_text_doors=bool(self._a2a_endpoints),
             publisher=self._rtc is not None and self._rtc.type == ServerType.PUBLISHER,
-            routes=self._http.manifest(),
+            routes=[EndpointRoute(**route) for route in self._http.manifest()],
             has_load_fnc=self.load_fnc is not None,
             has_on_request=self._rtc is not None and self._rtc.on_request is not None,
+            endpoints=self._http._server,
+            app=AsgiApplication(self._http.app),
         )
 
     def update_options(self, **options: Any) -> None:
@@ -332,18 +342,13 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
 
 
 class _ServerHost:
-    """What the core's server runtime opens on the host (``open(kind, args)``): the job
-    processes and the user's callbacks. Which jobs to take, when they were taken and whether job
-    processes start at all are the core's decisions."""
+    """What the core's server runtime calls on the host: the job processes and the user's
+    callbacks. Which jobs to take, when they were taken and whether job processes start at all
+    are the core's decisions."""
 
     def __init__(self, server: AgentServer) -> None:
         self._server = server
         self._proc_pool: ipc.ProcPool | None = None
-
-    def open(self, kind: str, args: Any) -> Awaitable[Any]:
-        if kind == "endpoint":
-            return self._server._http.serve(args)
-        return getattr(self, f"_{kind}")(args)  # type: ignore[no-any-return]
 
     def active_jobs(self) -> list[RunningJobInfo]:
         pool = self._proc_pool
@@ -355,7 +360,7 @@ class _ServerHost:
 
     # --- the lifecycle
 
-    async def _start(self, opts: _core.ProcessStartOptions) -> None:
+    async def _core_start(self, opts: _core.ProcessStartOptions) -> None:
         """The job processes, when the core wants them."""
         os.environ.update(opts.env)
         # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
@@ -402,10 +407,10 @@ class _ServerHost:
             self._proc_pool.on(event, self._job_status)
         await self._proc_pool.start()
 
-    async def _started(self, _: Any) -> None:
+    async def _core_started(self) -> None:
         self._server.emit("worker_started")
 
-    async def _registered(self, info: RegisteredInfo) -> None:
+    async def _core_registered(self, info: RegisteredInfo) -> None:
         server = self._server
         server.emit(
             "worker_registered",
@@ -413,32 +418,28 @@ class _ServerHost:
             models.ServerInfo(region=info.region, protocol=info.protocol),
         )
 
-    async def _idle_processes(self, target: int) -> None:
+    async def _core_idle_processes(self, target: int) -> None:
         if self._proc_pool is not None:
             self._proc_pool.set_target_idle_processes(target)
 
-    async def _worker_load(self, load: float) -> None:
+    async def _core_worker_load(self, load: float) -> None:
         telemetry.metrics._update_worker_load(load)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
             await asyncio.get_running_loop().run_in_executor(
                 None, telemetry.metrics._update_child_proc_count
             )
 
-    async def _metrics(self, _: Any) -> tuple[str, str]:
+    async def _core_metrics(self) -> tuple[str, str]:
         return await asyncio.get_running_loop().run_in_executor(None, telemetry.metrics.exposition)
 
-    async def _health(self, _: Any) -> int:
+    async def _core_health(self) -> int:
         return len(self.active_jobs())
 
-    async def _close_websockets(self, _: Any) -> None:
-        # clients of an open WebSocket get a close frame and reconnect to another worker
-        await self._server._http.close_websockets()
-
-    async def _join_jobs(self, _: Any) -> None:
+    async def _core_join_jobs(self) -> None:
         if self._proc_pool is not None:
             await self._proc_pool.join_jobs()
 
-    async def _close(self, _: Any) -> None:
+    async def _core_close(self) -> None:
         if self._proc_pool is not None:
             await self._proc_pool.aclose()
 
@@ -449,17 +450,18 @@ class _ServerHost:
     # --- the user's callbacks
 
     @utils.log_exceptions(logger=logger)
-    async def _job_request(self, req: _core.JobRequest) -> dict[str, Any]:
+    async def _core_job_request(self, req: _core.JobRequest) -> JobAnswer:
         """The voice door's ``on_request``, which the core asks only when there is one; a
         request it leaves unanswered or raises in, the core rejects."""
-        answer: dict[str, Any] = {"decision": "unanswered"}
+        answer: JobAnswer = JobAnswerUnanswered()
 
         async def on_reject(terminate: bool) -> None:
-            answer.update(decision="terminate" if terminate else "reject")
+            nonlocal answer
+            answer = JobAnswerTerminate() if terminate else JobAnswerReject()
 
         async def on_accept(args: JobAcceptArguments) -> None:
-            answer.update(
-                decision="accept",
+            nonlocal answer
+            answer = JobAnswerAccept(
                 name=args.name,
                 identity=args.identity,
                 metadata=args.metadata,
@@ -472,7 +474,7 @@ class _ServerHost:
         await door.on_request(JobRequest(job=job, on_reject=on_reject, on_accept=on_accept))
         return answer
 
-    async def _launch_job(self, info: _core.RunningJobInfo) -> str:
+    async def _core_launch_job(self, info: _core.RunningJobInfo) -> str:
         """A job the core took, with the timeline it stamped."""
         job = agent.Job.FromString(info.job.proto)
         await self.launch(
@@ -495,11 +497,11 @@ class _ServerHost:
         )
         return job.id  # `job_status` is keyed on the LiveKit job id
 
-    async def _terminate_job(self, job_id: str) -> None:
+    async def _core_terminate_job(self, job_id: str) -> None:
         if self._proc_pool is not None and (proc := self._proc_pool.get_by_job_id(job_id)):
             await proc.aclose()
 
-    async def _load(self, _: Any) -> float:
+    async def _core_load(self) -> float:
         """The user's ``load_fnc``, which the core asks only when there is one."""
         load_fnc: Callable[..., float] | None = self._server.load_fnc
         assert load_fnc is not None

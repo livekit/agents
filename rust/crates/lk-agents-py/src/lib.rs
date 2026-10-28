@@ -31,7 +31,7 @@ pub mod runtime;
 pub mod storage;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
-/// Worker bootstrap and Python host adapters.
+/// The worker CLI's host log-record conversion.
 pub mod worker_host;
 
 pub use lk_agents_runtime::{inference, process, worker};
@@ -124,8 +124,9 @@ impl generated::Implementations for Selected {
     type EndpointServer = lk_agents_runtime::worker::endpoint_host::Endpoints;
     type AsgiReceive = lk_agents_runtime::worker::endpoint_host::ReceiveCall;
     type AsgiSend = lk_agents_runtime::worker::endpoint_host::SendCall;
-    type ServerConfig = crate::worker_host::PyServerConfig;
-    type ServerRuntime = crate::worker_host::PyServer;
+    type ServerConfig = lk_agents_runtime::worker::server_host::Configuration;
+    type ServerRuntime =
+        lk_agents_runtime::worker::server_host::AgentRuntime<lk_agents_runtime::process::Process>;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_runtime::cores::InferenceCredentials;
