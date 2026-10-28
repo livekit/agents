@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! Provider metric accumulation and emission eligibility, independent of host event loops.
 use crate::metrics::base::{LlmMetrics, Metadata, SttMetrics, TtsMetrics};
 use crate::{CompletionUsage, LlmChunk, SynthesizedAudio};

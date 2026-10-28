@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `to_provider_format` and `to_fnc_ctx` as the host calls them. Images arrive pre-serialised, so
 //! each is encoded once; dropped items are logged with the reference's warning, not raised.
 

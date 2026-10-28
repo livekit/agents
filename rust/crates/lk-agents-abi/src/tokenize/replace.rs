@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `replace_words` and `split_paragraphs`, with the reference's arithmetic. Characters, not bytes.
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]

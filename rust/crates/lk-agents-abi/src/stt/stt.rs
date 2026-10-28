@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! `Stt`: the abstract path is batch (`stt/stt.py:204`); `stream()` is optional. `recognize` is
 //! always callable; `SttCapabilities::offline_recognize` says whether it works.
 

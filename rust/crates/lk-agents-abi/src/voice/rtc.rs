@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "python",
+    allow(
+        clippy::disallowed_types,
+        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
+    )
+)]
+
 //! Values exchanged through the RTC capability boundary. Opaque video references keep frame
 //! resources owned by the host.
 
