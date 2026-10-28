@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-starter-python"
+name = "juniper-front-desk"
 version = "1.0.0"
-description = "Simple voice AI assistant built with LiveKit Agents for Python"
+description = "Juniper Health front desk voice agent: books and moves visits, and calls to confirm them"
 requires-python = ">=3.10, <3.15"
 
 dependencies = [

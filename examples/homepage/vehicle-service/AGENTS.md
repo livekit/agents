@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This is a LiveKit Agents project. LiveKit Agents is a Python SDK for building voice AI agents. This starter is designed to run in LiveKit Cloud. See @README.md for more about the rest of the LiveKit ecosystem.
+This is a LiveKit Agents project. LiveKit Agents is a Python SDK for building voice AI agents. It's one of the LiveKit homepage demos and runs on LiveKit Cloud. See @README.md for what it does and how it's built.
 
 ## Tooling
 
@@ -40,7 +40,7 @@ Voice AI agents are highly sensitive to latency. Design complex agents in a stru
 
 ## Testing
 
-To keep agent behavior from regressing, add a scenario to `scenarios.yaml` and run it with `lk agent simulate text --scenarios scenarios.yaml`. Make sure the scenarios run in CI on every merge to `main`. Read the [simulations documentation](https://docs.livekit.io/testing/simulations/) before editing them.
+To keep agent behavior from regressing, add a scenario to `scenarios.yaml` and run it with `lk agent simulate text --scenarios scenarios.yaml`. Read the [simulations documentation](https://docs.livekit.io/testing/simulations/) before editing them.
 
 Important: when you modify core agent behavior such as instructions, tool descriptions, or tasks, workflows, and handoffs, never guess at what works. Start by writing a scenario for the desired behavior. For example, if you're adding a tool, write a scenario that exercises it, then iterate on the tool until the scenario passes. This is how you produce a working, reliable agent.
 
