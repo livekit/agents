@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::agent::AgentDefinition;
-use lk_agents_abi::agent::run::{Output, RunSettled, RunUpdate, ValidationId};
+use lk_agents_abi::agent::run::{Output, RunError, RunSettled, RunUpdate, ValidationId};
 use lk_agents_abi::agent::{AgentHost, Invocation, PreparedArguments, ValidatedOutput};
+use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT;
 use lk_agents_abi::resources::ResourceId;
@@ -41,6 +42,7 @@ pub struct Ports {
 pub struct AgentRunHandle {
     cancel: Option<oneshot::Sender<()>>,
     progress: Progress,
+    model_error: oneshot::Receiver<ProviderError>,
 }
 
 /// Where a tool body's `ctx.update(message)` reaches its run: the host operation running the body
@@ -77,6 +79,12 @@ impl AgentRunHandle {
         self.progress.clone()
     }
 
+    /// The provider's failure a run that failed on its model ended with, sent before its
+    /// `Failed` update: the caller gets the provider's own error, not only its message.
+    pub fn model_error(&mut self) -> Option<ProviderError> {
+        self.model_error.try_recv().ok()
+    }
+
     /// Requests cancellation; idempotent. The run settles once its work reported back.
     pub fn cancel(&mut self) {
         if let Some(cancel) = self.cancel.take() {
@@ -104,6 +112,7 @@ pub fn start(
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
+    let (model_error_tx, model_error) = oneshot::channel();
     let driver = Driver {
         run,
         invoker: HostInvoker::new(ports.entry.clone()),
@@ -117,16 +126,22 @@ pub fn start(
         prepared: BTreeMap::new(),
         outputs: BTreeMap::new(),
         next_resource: 0,
+        failure: None,
+        model_error: Some(model_error_tx),
         finished: false,
     };
     runtime.spawn(driver.drive(events, progress, cancelled));
-    Ok((AgentRunHandle { cancel: Some(cancel), progress: Progress(progress_tx) }, update_rx))
+    let handle =
+        AgentRunHandle { cancel: Some(cancel), progress: Progress(progress_tx), model_error };
+    Ok((handle, update_rx))
 }
 
 /// What work in flight reports to the driver: a core event, with the host value it returned when
-/// the runtime keeps one for the core.
+/// the runtime keeps one for the core; a failed model request keeps the provider's error for the
+/// run's caller.
 enum Report {
     Core(Event),
+    LlmFailed { request: RequestId, error: ProviderError },
     Prepared { call: CallId, resource: ResourceId, prepared: PreparedArguments },
     Validated { validation: ValidationId, verdict: OutputVerdict, value: Option<HostRef> },
 }
@@ -157,6 +172,9 @@ struct Driver {
     /// Validated output values the core names by validation.
     outputs: BTreeMap<ValidationId, HostRef>,
     next_resource: u64,
+    /// The provider error of the last failed model request.
+    failure: Option<ProviderError>,
+    model_error: Option<oneshot::Sender<ProviderError>>,
     finished: bool,
 }
 
@@ -348,6 +366,11 @@ impl Driver {
                 });
                 self.outputs.clear();
                 self.prepared.clear();
+                if let (Err(RunError::Model(_)), Some(error), Some(tx)) =
+                    (&settled, self.failure.take(), self.model_error.take())
+                {
+                    let _ = tx.send(error);
+                }
                 let update = match settled {
                     Ok(settled) => RunUpdate::Finished(settled),
                     Err(error) => RunUpdate::Failed(error),
@@ -361,6 +384,11 @@ impl Driver {
     fn adopt(&mut self, report: Report) -> Event {
         match report {
             Report::Core(event) => event,
+            Report::LlmFailed { request, error } => {
+                let message = error.to_string();
+                self.failure = Some(error);
+                Event::LlmFailed { request, error: message }
+            }
             Report::Prepared { call, resource, prepared } => {
                 self.prepared.insert(resource, prepared.prepared);
                 Event::ToolPrepared { call, prepared: resource, identity: prepared.identity }
@@ -435,9 +463,8 @@ async fn stream_request(
                 .await;
             return;
         }
-        Some(Err(e)) => {
-            let _ =
-                events.send(Report::Core(Event::LlmFailed { request, error: e.to_string() })).await;
+        Some(Err(error)) => {
+            let _ = events.send(Report::LlmFailed { request, error }).await;
             return;
         }
         Some(Ok(stream)) => stream,
@@ -448,11 +475,11 @@ async fn stream_request(
             _ = &mut cancelled => None,
             next = stream.next() => Some(next),
         };
-        let event = match next {
+        let report = match next {
             None => {
                 let deadline = clock.now().saturating_add(Duration::from_secs(5));
                 let _ = stream.close(deadline).await;
-                Event::LlmFailed { request, error: "cancelled".into() }
+                Report::Core(Event::LlmFailed { request, error: "cancelled".into() })
             }
             Some(Ok(Some(chunk))) => {
                 if events.send(Report::Core(Event::LlmChunk { request, chunk })).await.is_err() {
@@ -460,10 +487,10 @@ async fn stream_request(
                 }
                 continue;
             }
-            Some(Ok(None)) => Event::LlmEnded { request },
-            Some(Err(e)) => Event::LlmFailed { request, error: e.to_string() },
+            Some(Ok(None)) => Report::Core(Event::LlmEnded { request }),
+            Some(Err(error)) => Report::LlmFailed { request, error },
         };
-        let _ = events.send(Report::Core(event)).await;
+        let _ = events.send(report).await;
         return;
     }
 }

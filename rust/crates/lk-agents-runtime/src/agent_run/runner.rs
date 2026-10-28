@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunRequest, RunUpdate};
+use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, RunUpdate};
 use lk_agents_abi::agent::{AgentDefinition, AgentHost, Invocation};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
@@ -120,8 +120,15 @@ pub struct Updates {
 
 #[async_trait::async_trait]
 impl StreamSource<RunUpdate> for Updates {
+    /// A run that failed on its model raises the provider's own error.
     async fn next(&mut self) -> Result<Option<RunUpdate>, ProviderError> {
-        Ok(self.updates.recv().await)
+        let update = self.updates.recv().await;
+        if let Some(RunUpdate::Failed(RunError::Model(_))) = &update
+            && let Some(error) = self.run.model_error()
+        {
+            return Err(error);
+        }
+        Ok(update)
     }
 
     fn cancel_safe(&self) -> bool {

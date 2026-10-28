@@ -193,7 +193,13 @@ class RunStream(Generic[ResultT]):
         started = self._started
         assert started is not None and started.updates is not None
         while True:
-            update = await started.updates.recv()
+            try:
+                update = await started.updates.recv()
+            except Exception as e:
+                # the run failed on its model: the provider's own error
+                await started.cleanup()
+                self._error = e
+                return None
             if update is None:
                 # closed while pulling: the cancellation settles
                 await self._close()
