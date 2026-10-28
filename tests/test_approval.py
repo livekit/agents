@@ -142,16 +142,18 @@ async def test_on_a_call_the_repeat_is_approved_by_its_validated_arguments_once(
     async with VoiceSession() as session:
         await session.start(desk)
         asked = await session.run(user_input="cancel monday")
-        assert isinstance(asked.output, InputRequired)
-        assert asked.output.question.startswith("Please confirm: Cancel the appointment on a date")
+        assert asked.status == "input_required" and asked.output is None
+        assert asked.question.startswith("Please confirm: Cancel the appointment on a date")
+        assert asked.verbatim == asked.question
         assert ran == []
 
         granted = await session.run(user_input="yes")
         assert ran == ["monday"]
+        assert granted.status == "completed" and granted.question is None
         assert granted.output == "Done, it is canceled."
         repeat = next(i for i in granted.new_messages() if i.type == "function_call")
         assert repeat.extra[APPROVAL_KEY] == "granted"
 
         again = await session.run(user_input="cancel monday again")
-        assert isinstance(again.output, InputRequired), "an identical later call asks again"
+        assert again.status == "input_required", "an identical later call asks again"
         assert ran == ["monday"]

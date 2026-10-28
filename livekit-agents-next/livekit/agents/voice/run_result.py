@@ -199,7 +199,9 @@ RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | Agen
 
 
 class VoiceRunResult(Generic[Run_T]):
-    """What ``VoiceSession.run()`` records of a reply on a call, for assertions (testing.md)."""
+    """What ``VoiceSession.run()`` records of a reply on a call, for assertions (testing.md).
+    Once awaited it reads as a ``RunResult``: ``status`` is ``"completed"`` with ``output``, or
+    ``"input_required"`` with ``question``."""
 
     def __init__(
         self,
@@ -224,14 +226,19 @@ class VoiceRunResult(Generic[Run_T]):
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
-        self._input_outcome: llm.InputRequired | None = None
-        self._verbatim: str | None = None
+        self._question: dict[str, Any] | None = None
 
     @property
-    def output(self) -> Run_T | llm.InputRequired | None:
-        """The accepted output or a request for human input."""
-        if self._input_outcome is not None:
-            return self._input_outcome
+    def status(self) -> Literal["completed", "input_required"]:
+        """``"input_required"`` when the run ended on a question for the person."""
+        return "completed" if self._question is None else "input_required"
+
+    @property
+    def output(self) -> Run_T | None:
+        """The accepted output of a completed run: what a tool completed it with, else the last
+        reply's text. ``None`` when the run asks the person."""
+        if self._question is not None:
+            return None
         if self._final_output is not None:
             return self._final_output
         for event in reversed(self._recorded_items):
@@ -240,11 +247,16 @@ class VoiceRunResult(Generic[Run_T]):
         return None
 
     @property
+    def question(self) -> str | None:
+        """What an ``"input_required"`` run asks the person."""
+        return None if self._question is None else str(self._question["question"])
+
+    @property
     def verbatim(self) -> str | None:
-        """The part of the answer, or of the question, that reaches the person exactly as
-        written: what verbatim results and questions delivered, in order; ``None`` when none
-        did. The rest is the agent's own, for the one facing the person to phrase."""
-        return self._verbatim
+        """The question, when it reaches the person exactly as written."""
+        if self._question is None or not self._question["verbatim"]:
+            return None
+        return str(self._question["question"])
 
     def new_messages(self) -> list[llm.ChatItem]:
         """What this run added to the history."""
@@ -305,16 +317,17 @@ class VoiceRunResult(Generic[Run_T]):
             index = self._find_insertion_index(created_at=event.item.created_at)
             self._recorded_items.insert(index, event)
 
-    def _settle(self, *, output: Any, error: BaseException | None) -> None:
-        """The core settled the run: ``output`` is what a tool completed it with, if any."""
+    def _settle(
+        self, *, output: Any, error: BaseException | None, question: dict[str, Any] | None = None
+    ) -> None:
+        """The core settled the run: ``output`` is what a tool completed it with, if any;
+        ``question`` what the run asks the person instead."""
         if self._done_fut.done():
             return
         if error is not None:
             self._done_fut.set_exception(error)
-        elif isinstance(output, llm.InputRequired):
-            self._input_outcome = output
-            self._done_fut.set_result(None)
-        elif self._input_outcome is not None:
+        elif question is not None:
+            self._question = question
             self._done_fut.set_result(None)
         elif self._output_type and not isinstance(output, self._output_type):
             from .._exceptions import UnexpectedModelBehavior
