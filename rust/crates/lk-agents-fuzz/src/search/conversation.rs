@@ -362,6 +362,22 @@ pub fn randomness(seed: u64) -> f64 {
 /// session winds down are part of the contract, a person still talking into it is not.
 const CLOSING_BEATS: usize = 20;
 
+/// A long read-out (terms, a policy, a list of options): about fifty seconds of speech.
+const READ_OUT: &str = "Before we continue, I need to read you our terms. This call may be recorded for \
+quality and training purposes. Your information is used only to service your account and is \
+never sold. You can ask for a copy of your data at any time, and you can ask us to delete it, \
+except where the law requires us to keep it. Payments made today are processed within two \
+business days, and refunds take five to seven business days to appear on your statement. If \
+you cancel within thirty days you will receive a full refund, minus any shipping costs. After \
+thirty days, cancellations are subject to a fee of ten percent of the remaining balance. By \
+continuing, you confirm that you are the account holder or are authorized to act on their \
+behalf, and that you agree to these terms. Do you agree to continue?";
+
+/// How often the program makes its own calls in the instant the call ends, before the close and
+/// with nothing settling between: teardown code (`session.input.audio = None`, a last update, a
+/// goodbye) followed by `await session.aclose()`, or a call already on its way as the room goes.
+const TEARDOWN: u8 = 30;
+
 /// How often, per beat, a camera the case attached delivers frames.
 const CAMERA: u8 = 30;
 
@@ -619,8 +635,13 @@ impl Talk {
         &of[self.rng.usize(0..of.len())]
     }
 
+    /// One of the agent's lines: a sentence or two, and now and then a long read-out that plays
+    /// for most of a minute, during which the program and the person keep acting.
     fn line(&mut self) -> AgentText {
-        AgentText(AGENT_TURNS[self.rng.usize(0..AGENT_TURNS.len())].to_owned())
+        match self.rng.usize(0..AGENT_TURNS.len() + 1) {
+            i if i < AGENT_TURNS.len() => AgentText(AGENT_TURNS[i].to_owned()),
+            _ => AgentText(READ_OUT.to_owned()),
+        }
     }
 
     /// One value of a table type, drawn the way the table draws it.
@@ -817,6 +838,11 @@ impl Talk {
     /// room goes. The developer keeps calling the API while the session winds down.
     async fn hang_up(&mut self) -> Result<(), Halt> {
         self.ending = true;
+        if self.rng.u8(0..100) < TEARDOWN {
+            for _ in 0..self.rng.u8(1..=3) {
+                self.stray().await?;
+            }
+        }
         let room = self.run.setup.room.is_some();
         match self.rng.u8(0..if room { 5 } else { 3 }) {
             0 => self.send(Input::Close { drain: false }).await?,
