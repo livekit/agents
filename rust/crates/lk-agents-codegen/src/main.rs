@@ -181,6 +181,8 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/events.rs",
     "rust/crates/lk-agents-voice/src/agent_session/commands.rs",
     "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
+    "rust/crates/lk-agents-abi/src/llm/mcp.rs",
+    "rust/crates/lk-agents-abi/src/metrics/log.rs",
 ];
 
 /// The generated Python package, under every Python project the repo has: `python/livekit-agents`
@@ -289,6 +291,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
         }
         exposed.extend(x);
     }
+    unlisted_exports(root)?;
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
     records::check_in_place(root, &declared)?;
@@ -447,6 +450,44 @@ fn declared(t: &ir::Ty) -> Vec<String> {
         ir::Ty::Map(k, v) => [declared(k), declared(v)].concat(),
         ir::Ty::Tuple(items) => items.iter().flat_map(declared).collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Refuses an in-place export (`#[host(export)]`, `object`, `stream`, ..) in a file outside
+/// [`EXPORT_SOURCES`]: its macro registers the name in `_core`, but no stub or `core_names.json`
+/// entry would declare it. The ABI's `python` bridge (the macros' own home and fixtures) is exempt.
+fn unlisted_exports(root: &Path) -> Result<(), String> {
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-c", "-o", "--exclude-standard", "-z", "--", "rust/crates/**/*.rs"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("git ls-files: {e}"))?;
+    let paths = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    let mut unlisted = Vec::new();
+    for path in paths.split('\0').filter(|p| !p.is_empty() && !EXPORT_SOURCES.contains(p)) {
+        if path.starts_with("rust/crates/lk-agents-abi/src/python/")
+            || ["codegen", "bindgen", "host-derive"]
+                .iter()
+                .any(|c| path.starts_with(&format!("rust/crates/lk-agents-{c}/")))
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(path)) else { continue };
+        let exports = text.lines().map(str::trim_start).any(|l| {
+            l.starts_with("#[")
+                && ["host(export", "host(object(", "host(stream("].iter().any(|h| l.contains(h))
+        });
+        if exports {
+            unlisted.push(path);
+        }
+    }
+    match unlisted.is_empty() {
+        true => Ok(()),
+        false => Err(format!(
+            "{} hold in-place exports but are not in EXPORT_SOURCES (their `_core` names would \
+             have no stub)",
+            unlisted.join(", ")
+        )),
     }
 }
 
