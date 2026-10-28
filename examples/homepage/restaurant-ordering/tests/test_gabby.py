@@ -2,6 +2,11 @@
 on the conversation hand back."""
 
 import json
+from types import SimpleNamespace
+
+import pytest
+from livekit.agents import llm
+from livekit.agents.llm import ToolError
 
 from gabby import DeliveryUpdate, TakeOrder, delivery_opener
 from pizzeria import Pizzeria
@@ -58,3 +63,47 @@ def test_the_opener_uses_the_customers_name_only_when_its_known():
         "Hi Sam, this is"
     )
     assert delivery_opener(Pizzeria.out_for_delivery(None)).startswith("Hi, this is")
+
+
+class FakeContext:
+    def __init__(self, call_id: str, items: list[llm.ChatItem]) -> None:
+        self.function_call = llm.FunctionCall(
+            call_id=call_id, name="end_call", arguments="{}"
+        )
+        self.session = SimpleNamespace(history=SimpleNamespace(items=items))
+        self.speech_handle = SimpleNamespace(add_done_callback=lambda cb: None)
+
+    async def wait_for_playout(self) -> None:
+        pass
+
+
+def said(role: str, text: str, *, interrupted: bool = False) -> llm.ChatMessage:
+    return llm.ChatMessage(role=role, content=[text], interrupted=interrupted)
+
+
+def tool_output(
+    call_id: str, name: str, *, is_error: bool = False
+) -> llm.FunctionCallOutput:
+    return llm.FunctionCallOutput(
+        call_id=call_id, name=name, output="{}", is_error=is_error
+    )
+
+
+async def test_a_cut_off_confirmation_is_replayed_before_hanging_up():
+    agent = TakeOrder(Pizzeria())
+    agent._must_tell(FakeContext("call_done", []), "their order number")
+    items: list[llm.ChatItem] = [
+        tool_output("call_done", "place_order"),
+        said("assistant", "You're order two fifteen, ready in", interrupted=True),
+        said("user", "Sorry, what was that?"),
+        said("assistant", "Order two fifteen, ready in twenty minutes."),
+        said("user", "Great, bye."),
+        said("assistant", "Bye!"),
+    ]
+    with pytest.raises(ToolError, match="first tell them their order number"):
+        await agent.end_call(FakeContext("call_end", items))
+    items += [
+        tool_output("call_end", "end_call", is_error=True),
+        said("assistant", "It's order two fifteen, ready in twenty minutes. Bye!"),
+    ]
+    assert await agent.end_call(FakeContext("call_end_again", items)) is None
