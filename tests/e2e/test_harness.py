@@ -33,7 +33,7 @@ def live_credentials(monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, str]:
 async def test_real_worker_processes_start_and_refuse_unauthenticated_requests(
     workers: Workers,
 ) -> None:
-    assert workers.first.process.pid != workers.second.process.pid
+    assert workers.a_process.process.pid != workers.b_process.process.pid
     for name, caller in (("worker-a", workers.a), ("worker-b", workers.b)):
         assert (await caller.http.get("/ready")).text == name
         async with httpx.AsyncClient(base_url=caller.http.base_url, trust_env=False) as http:

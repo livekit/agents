@@ -192,9 +192,9 @@ async def test_worker_killed_mid_turn_settles_orphan_and_other_worker_continues(
         submitted = await anext(events)
         assert submitted.HasField("task") and submitted.task.id
         await service.wait_for_call(thread, "wait")
-        workers.first.process.kill()
-        await finish_cleanup(workers.first.stop())
-        assert workers.first.reaped and workers.first.process.returncode is not None
+        workers.a_process.process.kill()
+        await finish_cleanup(workers.a_process.stop())
+        assert workers.a_process.reaped and workers.a_process.process.returncode is not None
     result = await workers.b.send(workers.b.message("replacement", thread))
     assert result.status.state == pb.TaskState.TASK_STATE_COMPLETED
     assert answer(result) == "reply: replacement"

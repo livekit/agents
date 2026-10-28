@@ -49,13 +49,9 @@ class A2ACaller:
     async def rpc(
         self, method: str, params: ProtoMessage, endpoint: str = "desk", *, thread: str = ""
     ) -> dict[str, JsonValue]:
-        wire_params = to_json(params)
-        if thread:
-            wire_params["contextId"] = thread
         async with asyncio.timeout(REQUEST_SECONDS):
             response = await self.http.post(
-                f"/{endpoint}/v1",
-                json=JSONRPC20Request(method=method, params=wire_params, _id=uuid.uuid4().hex).data,
+                f"/{endpoint}/v1", json=_request(method, params, thread)
             )
         response.raise_for_status()
         envelope = JSONRPC20Response.from_json(response.text)
@@ -73,16 +69,10 @@ class A2ACaller:
     async def events(
         self, method: str, params: ProtoMessage, *, endpoint: str = "desk", thread: str = ""
     ) -> AsyncGenerator[pb.StreamResponse, None]:
-        wire_params = to_json(params)
-        if thread:
-            # The current v0 server requires this extension to task lookup parameters.
-            wire_params["contextId"] = thread
         async with (
             asyncio.timeout(REQUEST_SECONDS),
             self.http.stream(
-                "POST",
-                f"/{endpoint}/v1",
-                json=JSONRPC20Request(method=method, params=wire_params, _id=uuid.uuid4().hex).data,
+                "POST", f"/{endpoint}/v1", json=_request(method, params, thread)
             ) as response,
         ):
             response.raise_for_status()
@@ -94,6 +84,17 @@ class A2ACaller:
                     yield json_format.ParseDict(envelope.result, pb.StreamResponse())
 
 
+def _request(method: str, params: ProtoMessage, thread: str) -> dict[str, object]:
+    wire_params = to_json(params)
+    if thread:
+        # The current server requires the thread beside task lookup parameters.
+        wire_params["contextId"] = thread
+    request: dict[str, object] = JSONRPC20Request(
+        method=method, params=wire_params, _id=uuid.uuid4().hex
+    ).data
+    return request
+
+
 def answer(task: pb.Task) -> str:
     return "".join(part.text for artifact in task.artifacts for part in artifact.parts)
 
@@ -102,5 +103,5 @@ def answer(task: pb.Task) -> str:
 class Workers:
     a: A2ACaller
     b: A2ACaller
-    first: Child
-    second: Child
+    a_process: Child
+    b_process: Child
