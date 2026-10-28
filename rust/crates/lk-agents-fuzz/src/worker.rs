@@ -19,6 +19,8 @@
 //! * `worker_processes_are_released`: every process created is released or reported in the
 //!   close's missing cleanup, and the close completes exactly once when nothing is left.
 
+pub mod registration;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 

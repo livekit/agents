@@ -151,19 +151,30 @@ pub const INFERENCE: Boundary = Boundary {
 
 /// The worker campaign (`tests/worker_survey.rs`, `worker` module).
 pub const WORKER: Boundary = Boundary {
-    cores: &["process pool allocation core (lk_agents_worker::ipc::pool::PoolState), stepped per \
-         delivered process, driver or server event and due wake"],
+    cores: &[
+        "process pool allocation core (lk_agents_worker::ipc::pool::PoolState), stepped per \
+         delivered process, driver or server event and due wake",
+        "worker registration and job assignment core (lk_agents_worker::WorkerState), stepped \
+         per delivered server message, host answer, connection event, load sample, drain and due \
+         timer",
+    ],
     fakes: &[
         "worker::Os: job processes that spawn or fail to, initialize, crash or hang, run a job \
          and exit, close late, and whose exit watches and reaps fail and are retried",
         "the driver: admissions with duplicate dispatches, cancels, a drain, the close, launches \
          of reserved jobs, forgets of settled requests, the cleanup report",
+        "worker::registration: a LiveKit server that registers (or never answers), dispatches \
+         and re-dispatches jobs, assigns late, never or twice, assigns and terminates jobs the \
+         worker does not hold, terminates running ones; a host that accepts, rejects or fails a \
+         request, launches that fail or report before returning; loads over the threshold; \
+         connections that drop, reconnect and roll over; a drain with or without a deadline",
     ],
-    transitional: &["the driver mirrors lk_agents_worker::ipc::pool's task loop by hand"],
+    transitional: &["the drivers mirror lk_agents_worker::ipc::pool's task loop and \
+         lk_agents_runtime::worker's connection loop by hand"],
     outside: &[
         "the pool's async task, the supervisor's process I/O, IPC and the server connection \
          (G-12 stress, K-30 conformance)",
-        "registration, job assignment and the server lifecycle (WorkerState: K-2 remainder)",
+        "the server lifecycle (ServerLifecycle: startup, drain and cleanup ordering)",
     ],
 };
 
