@@ -158,7 +158,7 @@ impl A2ADoor for Door {
                         }
                         DoorError::Storage(error) => {
                             let code = match error {
-                                StorageError::Invalid(_) | StorageError::Decode(_) => {
+                                StorageError::Invalid(_) => {
                                     error_code::INVALID_PARAMS
                                 }
                                 _ => error_code::INTERNAL_ERROR,
@@ -429,7 +429,7 @@ impl Inner {
                     Self::authorize(&principal, AuthOperation::Write, context, Some(&info.scope))?;
                     context.to_owned()
                 }
-                Err(StorageError::ThreadNotFound(_)) => {
+                Err(StorageError::NotFound(_)) => {
                     Self::authorize(&principal, AuthOperation::Write, context, None)?;
                     let row = lk_agents_core::a2a::unpersisted_failed(
                         &shortuuid("AST_"),
@@ -636,7 +636,7 @@ impl Inner {
                 let next = tokio::select! { _ = observer.cancelled() => return Ok(()), next = reader.next() => next? };
                 let Some(bytes) = next else { break };
                 let event: a2a::StreamResponse = serde_json::from_slice(&bytes)
-                    .map_err(|e| StorageError::Decode(format!("stored A2A event: {e}")))?;
+                    .map_err(|e| StorageError::Unavailable(format!("stored A2A event: {e}")))?;
                 let cursor = stream::Cursor {
                     task_id: task.id.clone(),
                     stream_id: stream.stream_id.clone(),

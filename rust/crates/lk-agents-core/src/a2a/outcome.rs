@@ -440,7 +440,7 @@ pub fn insert_by_created_at(history: &mut Vec<ItemRow>, item: ItemRow) {
 /// message.
 pub fn python_reason(e: &StorageError) -> String {
     match e {
-        StorageError::ThreadNotFound(m) => format!("ThreadNotFound: {m}"),
+        StorageError::NotFound(m) => format!("ThreadNotFound: {m}"),
         StorageError::VersionConflict { .. } => format!("VersionConflict: {e}"),
         StorageError::NotSerializable(..) => format!("NotSerializable: {e}"),
         StorageError::TooLarge { .. } => format!("TooLarge: {e}"),

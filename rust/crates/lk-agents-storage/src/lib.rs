@@ -59,7 +59,7 @@ pub trait SqliteConnection: Send + Sync {
 pub trait Storage: Send + Sync {
     /// A new `AT_` thread, returned only once its metadata and database exist.
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError>;
-    /// Unknown, deleted or expired threads fail [`StorageError::ThreadNotFound`].
+    /// Unknown, deleted or expired threads fail [`StorageError::NotFound`].
     async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError>;
     async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError>;
     /// Merges attributes (an empty value deletes the key) and moves expiry: the activity

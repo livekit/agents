@@ -842,7 +842,7 @@ async fn reject_refuses_while_a_turn_runs(backend: Backend) {
     gate.set();
     let r1 = first.await.unwrap().unwrap();
     match err {
-        StorageError::RunRejected { running_task_id } => {
+        StorageError::Rejected { running_task_id } => {
             assert_eq!(
                 running_task_id.as_deref(),
                 Some(r1.task.task_id.as_str()),
@@ -995,7 +995,7 @@ async fn a_rejected_message_leaves_no_submitted_row(backend: Backend) {
         .run(a2a("two", "m2", None, None), Some("AST_2".into()))
         .await
         .expect_err("rejected");
-    assert!(matches!(err, StorageError::RunRejected { .. }), "{err}");
+    assert!(matches!(err, StorageError::Rejected { .. }), "{err}");
     assert!(b.lane(LANE).task("AST_2").await.unwrap().is_none());
     gate.set();
     first.await.unwrap().unwrap();

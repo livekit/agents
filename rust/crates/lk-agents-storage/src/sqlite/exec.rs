@@ -19,7 +19,7 @@ pub fn sqlite_error(e: rusqlite::Error) -> StorageError {
         {
             StorageError::Unavailable(e.to_string())
         }
-        _ => StorageError::Server { code: "sqlite".into(), message: e.to_string() },
+        _ => StorageError::Invalid(format!("sqlite: {e}")),
     }
 }
 
@@ -45,7 +45,7 @@ fn cell(v: ValueRef<'_>) -> Result<SqlValue, StorageError> {
         ValueRef::Real(d) => SqlValue::Double(d),
         ValueRef::Text(t) => SqlValue::Text(
             std::str::from_utf8(t)
-                .map_err(|e| StorageError::Decode(format!("a text cell: {e}")))?
+                .map_err(|e| StorageError::Unavailable(format!("a text cell: {e}")))?
                 .to_owned(),
         ),
         ValueRef::Blob(b) => SqlValue::Blob(b.to_vec()),

@@ -772,7 +772,7 @@ mod tests {
             SqlValue::Int(0),
         ];
         assert!(
-            matches!(LaneRow::from_row(&lane), Err(StorageError::Decode(m)) if m.starts_with("lease_until"))
+            matches!(LaneRow::from_row(&lane), Err(StorageError::Unavailable(m)) if m.starts_with("lease_until"))
         );
         lane[4] = SqlValue::Int(0);
         assert_eq!(LaneRow::from_row(&lane).unwrap().lease_until, 0);

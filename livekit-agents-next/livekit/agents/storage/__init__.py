@@ -4,6 +4,7 @@ writes."""
 from .backends import AgentDBStorage, SQLiteStorage, Storage
 from .context_store import ContextStore, load_context, persisted, save_context
 from .errors import (
+    LeaseLost,
     NotSerializable,
     RunRejected,
     StorageError,
@@ -21,6 +22,7 @@ __all__ = [
     "AgentDBStorage",
     "SQLiteStorage",
     "Storage",
+    "LeaseLost",
     "NotSerializable",
     "RunRejected",
     "ThreadNotFound",

@@ -157,7 +157,7 @@ impl BatchResult {
     /// zero-row success.
     pub fn at(&self, i: usize) -> Result<&StatementResult, StorageError> {
         self.results.get(i).ok_or_else(|| {
-            StorageError::Protocol(format!(
+            StorageError::Unavailable(format!(
                 "a batch answered {} results, statement {i} has none",
                 self.results.len()
             ))
@@ -174,7 +174,7 @@ pub struct Cells<'a> {
 impl<'a> Cells<'a> {
     pub fn new(row: &'a Row, columns: &'static [&'static str]) -> Result<Self, StorageError> {
         if row.len() != columns.len() {
-            return Err(StorageError::Decode(format!(
+            return Err(StorageError::Unavailable(format!(
                 "expected {} columns, got {}",
                 columns.len(),
                 row.len()
@@ -186,7 +186,7 @@ impl<'a> Cells<'a> {
     /// Cell `i`, typed; a mismatch names the column.
     pub fn get<T: FromCell>(&self, i: usize) -> Result<T, StorageError> {
         T::from_cell(&self.row[i]).map_err(|expected| {
-            StorageError::Decode(format!("{}: expected {expected}", self.columns[i]))
+            StorageError::Unavailable(format!("{}: expected {expected}", self.columns[i]))
         })
     }
 }

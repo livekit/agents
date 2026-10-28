@@ -18,7 +18,7 @@ use lk_agents_storage::db::TaskQuery;
 use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 
-use super::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, thread_error};
+use super::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
 use super::engine::LeaseTiming;
 use super::sqlite::SqliteStorage;
 use lk_agents_storage::QueuedStreams;
@@ -148,7 +148,7 @@ fn thread_page(r: ListResponse) -> ThreadPage {
 }
 
 fn json<T: serde::Serialize>(v: &T) -> Result<Value, StorageError> {
-    serde_json::to_value(v).map_err(|e| StorageError::Decode(e.to_string()))
+    serde_json::to_value(v).map_err(|e| StorageError::Invalid(e.to_string()))
 }
 
 fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
@@ -163,7 +163,7 @@ fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
 /// Preserve the framework's A2A state and the presence of an application label.
 fn cloud_task(t: Task) -> Result<ThreadTask, StorageError> {
     let status = TaskState::parse(&t.status)
-        .ok_or_else(|| StorageError::Decode(format!("unknown task state {}", t.status)))?;
+        .ok_or_else(|| StorageError::Unavailable(format!("unknown task state {}", t.status)))?;
     Ok(ThreadTask {
         task_id: t.task_id,
         thread_id: t.thread_id,
@@ -351,7 +351,7 @@ impl HostStorageClass for HostStorage {
                     limit: page_limit(limit)?,
                     ..Default::default()
                 };
-                let page = cloud.threads().items(request).await.map_err(thread_error)?;
+                let page = cloud.threads().items(request).await.map_err(service_error)?;
                 let items = page.items.into_iter().map(cloud_item).collect::<Result<_, _>>()?;
                 Ok(ThreadItemPage { items, after: page.next_page_token })
             }
@@ -395,7 +395,7 @@ impl HostStorageClass for HostStorage {
                         page_token,
                         ..Default::default()
                     };
-                    let page = cloud.threads().tasks(request).await.map_err(thread_error)?;
+                    let page = cloud.threads().tasks(request).await.map_err(service_error)?;
                     tasks.extend(
                         page.tasks.into_iter().map(cloud_task).collect::<Result<Vec<_>, _>>()?,
                     );

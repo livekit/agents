@@ -24,8 +24,8 @@ struct Diagnostics {
 impl Diagnostics {
     fn error(&self, error: StorageError) -> StorageError {
         match error {
-            StorageError::Server { code, .. } if self.reword.load(Ordering::Relaxed) => {
-                StorageError::Server { code, message: "backend diagnostic was reworded".into() }
+            StorageError::Invalid(_) if self.reword.load(Ordering::Relaxed) => {
+                StorageError::Invalid("backend diagnostic was reworded".into())
             }
             other => other,
         }
@@ -85,7 +85,7 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
         run.commit(CommitOptions::default()).await?;
         let mut restored = lane.open(RunOptions::new("schema-read", "AST_read")).await?;
         if restored.state != Some(json!({"saved": true})) {
-            return Err(StorageError::Protocol(
+            return Err(StorageError::Unavailable(
                 "the initialized schema lost the committed state".into(),
             ));
         }
@@ -97,7 +97,7 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
     diagnostics.close().await;
     store.close().await;
     if version.is_some() {
-        assert!(matches!(result, Err(StorageError::Schema(_))), "{result:?}");
+        assert!(matches!(result, Err(StorageError::Invalid(_))), "{result:?}");
     } else {
         result.unwrap();
     }

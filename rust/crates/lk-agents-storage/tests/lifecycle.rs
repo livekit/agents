@@ -21,7 +21,7 @@ fn attributes(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 }
 
 fn not_found<T: std::fmt::Debug>(r: Result<T, StorageError>) -> bool {
-    matches!(r, Err(StorageError::ThreadNotFound(_)))
+    matches!(r, Err(StorageError::NotFound(_)))
 }
 
 async fn a_thread_is_created_read_listed_and_updated(backend: Backend) {

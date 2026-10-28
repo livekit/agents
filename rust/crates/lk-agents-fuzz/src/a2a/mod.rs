@@ -289,7 +289,7 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
             }
             // a follow-up the door refused is not sent again: the client starts a new task
             let refused = matches!(&response.answer,
-                Err(StorageError::Server { code, .. }) if code == door::FOLLOW_UP_REFUSED);
+                Err(StorageError::Invalid(m)) if m.starts_with(door::FOLLOW_UP_REFUSED));
             if refused {
                 clients.pending = None;
             }

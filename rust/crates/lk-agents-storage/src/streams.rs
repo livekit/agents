@@ -138,7 +138,7 @@ RETURNING seq",
             Some(StatementResult::Rows(rows)) => {
                 rows.first().and_then(|r| r.first()).and_then(SqlValue::as_i64)
             }
-            _ => return Err(StorageError::Decode("a stream append's answer".into())),
+            _ => return Err(StorageError::Unavailable("a stream append's answer".into())),
         };
         match seq {
             Some(seq) => {
@@ -262,7 +262,7 @@ impl LocalReader {
                 (Some(seq), Some(SqlValue::Blob(body))) => {
                     self.buffered.push_back((seq.to_string(), body.clone()))
                 }
-                _ => return Err(StorageError::Decode("a stream record".into())),
+                _ => return Err(StorageError::Unavailable("a stream record".into())),
             }
         }
         Ok(closed)

@@ -111,7 +111,7 @@ impl Turn {
         if let Some(observer) = &self.acceptance {
             let task =
                 call.lane.task(task_id).await?.ok_or_else(|| {
-                    StorageError::Protocol("accepted task was not durable".into())
+                    StorageError::Invalid("accepted task was not durable".into())
                 })?;
             observer.accepted(&task).await?;
         }
@@ -185,7 +185,7 @@ impl Turn {
     }
 
     /// One incoming message through its policy. `task_id` is the answer stream's id when the
-    /// caller created one. [`StorageError::RunRejected`] under `reject`,
+    /// caller created one. [`StorageError::Rejected`] under `reject`,
     /// [`StorageError::Cancelled`] when the host cancelled the handler.
     pub async fn run(
         &self,
@@ -254,7 +254,7 @@ impl Turn {
             .await;
         let mut run = match opened {
             Ok(run) => run,
-            Err(StorageError::LeaseTimeout(_)) => {
+            Err(StorageError::Rejected { .. }) => {
                 log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "the lane was not released in time; the task fails lease-timeout");
                 // the early row ends failed, so no `submitted` row outlives a message the caller
                 // was told failed
@@ -490,7 +490,7 @@ impl Turn {
             }
             if drain_if_free && !call.lane.db().inbox(true).await?.is_empty() {
                 match self.drain(&mut drain_call, None).await {
-                    Err(StorageError::LeaseHeld(_)) => {}
+                    Err(StorageError::Rejected { .. }) => {}
                     Err(e) => return Err(e),
                     Ok(()) => {
                         record = call.lane.task(task_id).await?;
@@ -513,7 +513,7 @@ impl Turn {
                     })
                     .await;
                 match opened {
-                    Err(StorageError::LeaseHeld(_)) => {}
+                    Err(StorageError::Rejected { .. }) => {}
                     Err(e) => return Err(e),
                     Ok(mut run) => {
                         let body = async {
@@ -648,7 +648,7 @@ impl Turn {
             && info.lease_until > now_ms() / 1000
         {
             let running_task_id = self.running_task(call).await?;
-            return Err(StorageError::RunRejected { running_task_id });
+            return Err(StorageError::Rejected { running_task_id });
         }
         let result = async {
             let mut run = call
@@ -682,9 +682,9 @@ impl Turn {
         .await;
         match result {
             // the lane was taken between the check and the open: the run that took it is named
-            Err(StorageError::LeaseHeld(_)) => {
+            Err(StorageError::Rejected { .. }) => {
                 let running_task_id = self.running_task(call).await?;
-                Err(StorageError::RunRejected { running_task_id })
+                Err(StorageError::Rejected { running_task_id })
             }
             other => other,
         }
@@ -873,7 +873,7 @@ impl Turn {
                         return Ok(out);
                     }
                     None => {
-                        return Err(StorageError::Protocol(
+                        return Err(StorageError::Invalid(
                             "the handler's stream ended without its output".into(),
                         ));
                     }

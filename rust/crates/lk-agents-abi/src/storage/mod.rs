@@ -10,14 +10,32 @@ use serde_json::{Map, Value};
 
 pub use rows::*;
 
-/// A storage failure. `Unavailable` is the one retryable error; a task that ends on it fails
-/// with reason `storage-unavailable`. The host raises the classes of `livekit.agents.storage`.
+/// A storage failure (decision 82). Every database failure is one of six: `Uncertain`,
+/// `Rejected`, `LeaseLost`, `Unavailable`, `NotFound`, `VersionConflict`; the rest are the
+/// caller's (`Invalid`, `NotSerializable`, `TooLarge`, `Unauthorized`) or a cancelled turn.
+/// `Unavailable` is the one retryable error. The host raises the classes of
+/// `livekit.agents.storage`.
 #[crate::host(error(with = crate::storage::storage_error_to_py))]
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum StorageError {
-    /// An unknown, deleted or expired thread, or a database agent-db does not have.
-    #[error("thread not found: {0}")]
-    ThreadNotFound(String),
+    /// A write sent and never answered: it may or may not have committed. Resolved by the run's
+    /// identity before anything is reported or retried; never proof of a rollback.
+    #[error("write outcome unknown: {0}")]
+    Uncertain(String),
+    /// The lane refused the run: another holder has it (`reject`, or a waiter whose wait ran
+    /// out). The running task, when the journal names it.
+    #[error("the lane is held by another run")]
+    Rejected { running_task_id: Option<String> },
+    /// The run's lease was taken, released or could not be renewed before it could lapse.
+    #[error("lease lost: {0}")]
+    LeaseLost(String),
+    /// Retryable: a connection lost mid-request, a severed or unreachable database, a busy lock,
+    /// an answer that did not decode.
+    #[error("storage unavailable: {0}")]
+    Unavailable(String),
+    /// An unknown, deleted or expired thread, or a stream, task or database that is not there.
+    #[error("not found: {0}")]
+    NotFound(String),
     /// A fenced write that matched no row: the lane moved past the version the run loaded, or
     /// the lease token is no longer the lane's.
     #[error("version conflict on lane {lane}: expected version {expected}")]
@@ -27,47 +45,15 @@ pub enum StorageError {
     NotSerializable(String, String),
     #[error("{what} exceeds the limit of {limit} bytes")]
     TooLarge { what: String, limit: usize },
-    /// Retryable: a connection lost mid-request, a severed database, a lease that lapsed.
-    #[error("agent-store unavailable: {0}")]
-    Unavailable(String),
-    /// A write sent and never answered: it may or may not have committed. Resolved by the run's
-    /// identity before anything is reported or retried; never proof of a rollback.
-    #[error("write outcome unknown: {0}")]
-    Uncertain(String),
-    /// `Lane::open` with `wait: false` found the lease held.
-    #[error("lease held: {0}")]
-    LeaseHeld(String),
-    /// A waiter that did not acquire the lane within the wait (reason `lease-timeout`).
-    #[error("lease timeout: {0}")]
-    LeaseTimeout(String),
-    /// The `reject` policy refused the message while a turn runs; the running task, if known.
-    #[error("the lane is running a turn; the message was rejected")]
-    RunRejected { running_task_id: Option<String> },
-    /// The host cancelled the handler mid-turn: the run ended `canceled` and nothing was written.
-    #[error("the turn was cancelled: {0}")]
-    Cancelled(String),
     /// A refused token on either plane.
     #[error("unauthorized: {0}")]
     Unauthorized(String),
-    /// An HTTP resource that is not there: a stream, a database on the management API.
-    #[error("not found: {0}")]
-    NotFound(String),
-    /// A server-reported error with its stable code, from the data plane or Twirp.
-    #[error("{code}: {message}")]
-    Server { code: String, message: String },
-    /// A non-2xx the streams API answered that the mapping above does not name.
-    #[error("http {status}: {message}")]
-    Http { status: u16, message: String },
-    /// A frame or a row that did not decode.
-    #[error("decode: {0}")]
-    Decode(String),
-    /// An unexpected frame.
-    #[error("protocol: {0}")]
-    Protocol(String),
-    /// A database whose `schema_version` this client does not write.
-    #[error("schema: {0}")]
-    Schema(String),
-    #[error("invalid argument: {0}")]
+    /// The host cancelled the handler mid-turn: the run ended `canceled` and nothing was written.
+    #[error("the turn was cancelled: {0}")]
+    Cancelled(String),
+    /// A request the database or this client refuses as made: a bad argument, a statement the
+    /// database rejected, a schema this client does not write.
+    #[error("invalid: {0}")]
     Invalid(String),
 }
 
@@ -87,19 +73,20 @@ pub fn storage_error_to_py(error: StorageError) -> pyo3::PyErr {
 
     let message = error.to_string();
     let class = match &error {
-        StorageError::ThreadNotFound(_) => "ThreadNotFound",
+        StorageError::NotFound(_) => "ThreadNotFound",
+        StorageError::LeaseLost(_) => "LeaseLost",
         StorageError::VersionConflict { .. } => "VersionConflict",
         StorageError::NotSerializable(..) => "NotSerializable",
         StorageError::TooLarge { .. } => "TooLarge",
         StorageError::Unavailable(_) => "StorageUnavailable",
-        StorageError::RunRejected { .. } => "RunRejected",
+        StorageError::Rejected { .. } => "RunRejected",
         StorageError::Invalid(_) => return pyo3::exceptions::PyValueError::new_err(message),
         StorageError::Cancelled(_) => {
             return pyo3::exceptions::asyncio::CancelledError::new_err(message);
         }
         _ => "StorageError",
     };
-    if let StorageError::RunRejected { running_task_id } = error {
+    if let StorageError::Rejected { running_task_id } = error {
         return Python::attach(|py| {
             let build = || -> pyo3::PyResult<_> {
                 let kwargs = pyo3::types::PyDict::new(py);

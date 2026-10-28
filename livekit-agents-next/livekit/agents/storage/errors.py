@@ -25,12 +25,16 @@ class TooLarge(StorageError):
 
 
 class StorageUnavailable(StorageError):
-    """Retryable: the connection was lost, the lease lapsed, or a transaction was discarded by
-    a reconnect."""
+    """Retryable: the connection was lost, the database is unreachable or busy, or it answered
+    something that did not decode."""
+
+
+class LeaseLost(StorageError):
+    """The run's lane lease was taken, released or could not be renewed in time."""
 
 
 class RunRejected(StorageError):
-    """The reject policy refused the message while a turn runs."""
+    """The lane refused the run: the reject policy refused the message while a turn runs."""
 
     running_task_id: str | None
     """The running turn's task, when the journal names it."""
@@ -41,6 +45,7 @@ class RunRejected(StorageError):
 
 
 __all__ = [
+    "LeaseLost",
     "NotSerializable",
     "RunRejected",
     "StorageError",

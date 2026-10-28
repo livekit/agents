@@ -61,5 +61,5 @@ impl Position {
 }
 
 pub(super) fn invalid(message: &str) -> StorageError {
-    StorageError::Decode(format!("stream cursor: {message}"))
+    StorageError::Invalid(format!("stream cursor: {message}"))
 }

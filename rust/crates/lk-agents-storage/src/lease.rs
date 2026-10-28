@@ -103,7 +103,7 @@ impl Lease {
         let mut rx = self.inner.lost.subscribe();
         let reason = rx.wait_for(Option::is_some).await.map(|r| r.clone().unwrap_or_default());
         match reason {
-            Ok(reason) => StorageError::Unavailable(reason),
+            Ok(reason) => StorageError::LeaseLost(reason),
             Err(_) => std::future::pending().await,
         }
     }

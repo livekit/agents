@@ -60,7 +60,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
         .await
         .err()
         .expect("lease");
-    assert!(matches!(refused, StorageError::LeaseHeld(_)), "{refused}");
+    assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
     let started = Instant::now();
     let timed_out = lane2
         .open(RunOptions {
@@ -70,7 +70,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
         .await
         .err()
         .expect("lease");
-    assert!(matches!(timed_out, StorageError::LeaseTimeout(_)), "{timed_out}");
+    assert!(matches!(timed_out, StorageError::Rejected { .. }), "{timed_out}");
     assert!(started.elapsed() >= Duration::from_millis(250));
 
     // The waiter under `interrupt`: the holder sees it at its boundary.
@@ -392,7 +392,7 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
     }
     let second = || RunOptions { wait: false, pickup: true, ..RunOptions::new("r2", "AST_second") };
     let refused = lane.open(second()).await.err().expect("the older waiter goes first");
-    assert!(matches!(refused, StorageError::LeaseHeld(_)), "{refused}");
+    assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
     let first = RunOptions { wait: false, pickup: true, ..RunOptions::new("r1", "AST_first") };
     let mut run = lane.open(first).await.unwrap();
     assert!(run.picked_up);

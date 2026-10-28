@@ -189,10 +189,7 @@ impl SqliteConnection for Faulty {
                 self.inner.batch(statements).await?;
                 Err(StorageError::Uncertain("lost after".into()))
             }
-            Some(CommitFault::Refuse) => Err(StorageError::Server {
-                code: "sqlite".into(),
-                message: "disk I/O error".into(),
-            }),
+            Some(CommitFault::Refuse) => Err(StorageError::Invalid("sqlite: disk I/O error".into())),
         }
     }
 

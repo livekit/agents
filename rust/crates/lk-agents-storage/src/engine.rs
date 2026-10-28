@@ -124,7 +124,7 @@ impl ThreadDb {
         let rows = self.conn.query(db::schema_version()).await?;
         match db::decode_schema_version(&rows)? {
             Some(version) => Ok(Some(version)),
-            None => Err(StorageError::Schema("schema_version has no valid version".into())),
+            None => Err(StorageError::Invalid("schema_version has no valid version".into())),
         }
     }
 
@@ -133,7 +133,7 @@ impl ThreadDb {
     async fn reconcile_schema(&self, original: StorageError) -> Result<(), StorageError> {
         match self.probe_schema().await {
             Ok(Some(_)) => Ok(()),
-            Err(error @ StorageError::Schema(_)) => Err(error),
+            Err(error @ StorageError::Invalid(_)) => Err(error),
             _ => Err(original),
         }
     }
@@ -376,7 +376,7 @@ pub struct RunOptions {
     pub task_id: String,
     /// `false` is the `concurrent` policy: no lease, append-only commit.
     pub exclusive: bool,
-    /// Wait for a lease another holder has; `false` fails with [`StorageError::LeaseHeld`].
+    /// Wait for a lease another holder has; `false` fails with [`StorageError::Rejected`].
     pub wait: bool,
     /// Record this worker as the lane's `waiter` while it waits, so the holder yields.
     pub interrupt: bool,
@@ -667,8 +667,7 @@ impl Lane {
                 }
             }
             if !opts.wait {
-                let name = self.name();
-                return Err(StorageError::LeaseHeld(format!("lane {name} is held by another run")));
+                return Err(StorageError::Rejected { running_task_id: None });
             }
             if opts.interrupt && !marked {
                 marked = self.db.set_waiter(holder).await?;
@@ -677,11 +676,8 @@ impl Lane {
                 }
             }
             let Some(at) = poll.next(epoch.elapsed()) else {
-                return Err(StorageError::LeaseTimeout(format!(
-                    "lane {} was not released within {}s",
-                    self.name(),
-                    opts.wait_timeout.as_secs_f64()
-                )));
+                log::debug!(target: "livekit.agents", lane = self.name(); "the lane was not released within {}s", opts.wait_timeout.as_secs_f64());
+                return Err(StorageError::Rejected { running_task_id: None });
             };
             tokio::time::sleep_until(epoch + at).await;
         }

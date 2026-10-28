@@ -68,7 +68,7 @@ impl VoiceStore {
         let (history, version) = snapshot?;
         let items = history
             .iter()
-            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Decode))
+            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Unavailable))
             .collect::<Result<Vec<_>, _>>()?;
         let known = explicit_history
             .as_ref()
@@ -115,7 +115,7 @@ impl VoiceStore {
             return Err(StorageError::Invalid("the voice store has closed".into()));
         }
         if self.lease_lost() {
-            return Err(StorageError::Unavailable("the voice lane lease was lost".into()));
+            return Err(StorageError::LeaseLost("the voice lane lease was lost".into()));
         }
         if let Some(active) = &mut state.active {
             active.speeches.insert(speech);
@@ -140,7 +140,7 @@ impl VoiceStore {
                 let mut stored = run
                     .history
                     .iter()
-                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Decode))
+                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Unavailable))
                     .collect::<Result<Vec<_>, _>>()?;
                 let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
                 let (mut instructions, pending): (Vec<_>, Vec<_>) =

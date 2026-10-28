@@ -28,7 +28,7 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
     let other = SqliteStorage::in_memory(LeaseTiming::default()).await.unwrap();
     assert!(matches!(
         other.get_thread(&info.thread_id).await,
-        Err(StorageError::ThreadNotFound(_))
+        Err(StorageError::NotFound(_))
     ));
     let streams = storage.response_streams();
     let stream = streams.create(None).await.unwrap();
@@ -41,7 +41,7 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
     storage.delete_thread(&info.thread_id).await.unwrap();
     assert!(matches!(
         storage.open(&info.thread_id, "late").await,
-        Err(StorageError::ThreadNotFound(_))
+        Err(StorageError::NotFound(_))
     ));
     storage.close().await;
     other.close().await;

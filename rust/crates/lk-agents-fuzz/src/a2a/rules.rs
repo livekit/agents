@@ -326,14 +326,14 @@ pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
     for r in &record.seen.responses {
         let Err(e) = &r.answer else { continue };
         let actionable = match e {
-            StorageError::RunRejected { .. } => {
+            StorageError::Rejected { .. } => {
                 record.policies.get(&r.message_id) == Some(&Policy::Reject)
             }
             StorageError::Unavailable(_)
             | StorageError::Uncertain(_)
             | StorageError::VersionConflict { .. }
             | StorageError::Cancelled(_) => true,
-            StorageError::Server { code, .. } => code == FOLLOW_UP_REFUSED,
+            StorageError::Invalid(m) => m.starts_with(FOLLOW_UP_REFUSED),
             _ => false,
         };
         if !actionable {
@@ -554,7 +554,7 @@ mod tests {
     fn an_internal_error_answered_is_rejected() {
         breaks(answer_is_an_outcome, |r| {
             let message_id = r.seen.responses[0].message_id.clone();
-            let answer = Err(StorageError::LeaseHeld("front-desk".into()));
+            let answer = Err(StorageError::Rejected { running_task_id: None });
             r.seen.responses.push(Response { request: 99, message_id, answer, uncertain: false });
         });
     }

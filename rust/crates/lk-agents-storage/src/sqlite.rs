@@ -148,7 +148,7 @@ fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection, StorageErr
     }
     let conn = rusqlite::Connection::open_with_flags(path, flags).map_err(|e| match e {
         rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::CannotOpen => {
-            StorageError::ThreadNotFound(path.display().to_string())
+            StorageError::NotFound(path.display().to_string())
         }
         e => sqlite_error(e),
     })?;
@@ -165,7 +165,7 @@ fn valid_thread_id(id: &str) -> Result<&str, StorageError> {
     let ok = !rest.is_empty()
         && rest.len() <= 64
         && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    if ok { Ok(id) } else { Err(StorageError::ThreadNotFound(id.to_owned())) }
+    if ok { Ok(id) } else { Err(StorageError::NotFound(id.to_owned())) }
 }
 
 const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
@@ -243,11 +243,11 @@ impl SqliteStorage {
             params: vec![thread_id.into()],
         };
         let rows = self.registry.query(select).await?;
-        let row = rows.first().ok_or_else(|| StorageError::ThreadNotFound(thread_id.into()))?;
+        let row = rows.first().ok_or_else(|| StorageError::NotFound(thread_id.into()))?;
         let (record, expires_at) = thread_record(row)?;
         if expires_at != 0 && expires_at <= unix_now() {
             self.delete_thread(thread_id).await?;
-            return Err(StorageError::ThreadNotFound(thread_id.into()));
+            return Err(StorageError::NotFound(thread_id.into()));
         }
         Ok(record)
     }
@@ -268,7 +268,7 @@ fn thread_record(row: &Row) -> Result<(ThreadRecord, i64), StorageError> {
     let int = |i: usize| row.get(i).and_then(SqlValue::as_i64).unwrap_or(0);
     let text = |i: usize| row.get(i).and_then(SqlValue::as_str).unwrap_or("").to_owned();
     let attributes: HashMap<String, String> = serde_json::from_str(&text(2))
-        .map_err(|e| StorageError::Decode(format!("thread attributes: {e}")))?;
+        .map_err(|e| StorageError::Unavailable(format!("thread attributes: {e}")))?;
     let expires_at = int(6);
     let record = ThreadRecord {
         thread_id: text(0),
@@ -457,7 +457,7 @@ impl Storage for SqliteStorage {
                     .await
                     .get(thread_id)
                     .cloned()
-                    .ok_or_else(|| StorageError::ThreadNotFound(thread_id.into()))?;
+                    .ok_or_else(|| StorageError::NotFound(thread_id.into()))?;
                 Arc::new(MemoryConnection(connection))
             }
         };
@@ -489,7 +489,7 @@ mod tests {
     fn only_plain_at_ids_name_a_file() {
         assert!(valid_thread_id("AT_abc-1_2").is_ok());
         for bad in ["", "AT_", "AT_../x", "AT_a/b", "DB_abc", "abc", "AT_a.sqlite"] {
-            assert!(matches!(valid_thread_id(bad), Err(StorageError::ThreadNotFound(_))), "{bad}");
+            assert!(matches!(valid_thread_id(bad), Err(StorageError::NotFound(_))), "{bad}");
         }
     }
 }

@@ -86,7 +86,7 @@ impl Streams {
             .map_err(transport)?;
         let resp = http_ok(resp).await?;
         let created: Created =
-            resp.json().await.map_err(|e| StorageError::Decode(e.to_string()))?;
+            resp.json().await.map_err(|e| StorageError::Unavailable(e.to_string()))?;
         Ok(StreamInfo { stream_id: created.stream_id, expires_at: created.expires_at })
     }
 
@@ -253,9 +253,10 @@ impl StreamReader {
     }
 
     /// The next record, or `None` at the end: the tail for a catch-up read, the close for a live one.
+    /// Any failure settles the reader.
     pub async fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
         let result = self.next_inner().await;
-        if matches!(result, Err(StorageError::Decode(_))) {
+        if result.is_err() {
             self.closed = true;
             self.buffered.clear();
             self.sse = None;
@@ -293,18 +294,18 @@ impl StreamReader {
 
     fn records(&mut self, body: &[u8]) -> Result<(), StorageError> {
         if body.len() > MAX_BYTES {
-            return Err(invalid("response exceeds byte budget"));
+            return Err(malformed("response exceeds byte budget"));
         }
         if self.replay > 0 {
             self.replay_bytes = self
                 .replay_bytes
                 .checked_add(body.len())
                 .filter(|n| *n <= MAX_BYTES)
-                .ok_or_else(|| invalid("replay exceeds byte budget"))?;
+                .ok_or_else(|| malformed("replay exceeds byte budget"))?;
         }
         let records = split_records(body)?;
         if records.len() > MAX_RECORDS {
-            return Err(invalid("response exceeds record budget"));
+            return Err(malformed("response exceeds record budget"));
         }
         let skip = self.replay.min(records.len());
         self.replay -= skip;
@@ -318,7 +319,7 @@ impl StreamReader {
             return Err(invalid("replay position is beyond retained records"));
         }
         if boundary.next == self.position.anchor && !boundary.up_to_date && !boundary.closed {
-            return Err(invalid("upstream offset did not advance"));
+            return Err(malformed("upstream offset did not advance"));
         }
         self.position = Position::at(boundary.next)?;
         if self.replay == 0 {
@@ -354,7 +355,7 @@ impl StreamReader {
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk.map_err(transport)?;
             if chunk.len() > MAX_BYTES.saturating_sub(body.len()) {
-                return Err(invalid("response exceeds byte budget"));
+                return Err(malformed("response exceeds byte budget"));
             }
             body.extend_from_slice(&chunk);
         }
@@ -383,7 +384,7 @@ impl StreamReader {
         if self.replay > 0 {
             self.replay_pages += 1;
             if self.replay_pages > 128 {
-                return Err(invalid("replay exceeds page budget"));
+                return Err(malformed("replay exceeds page budget"));
             }
         }
         Ok(())
@@ -417,16 +418,16 @@ impl StreamReader {
                     }
                     "control" => {
                         let c: Control = serde_json::from_str(&event.data)
-                            .map_err(|e| StorageError::Decode(e.to_string()))?;
+                            .map_err(|e| StorageError::Unavailable(e.to_string()))?;
                         if let Some(err) = c.error {
                             self.sse = None;
-                            return Err(StorageError::Http { status: 0, message: err.to_owned() });
+                            return Err(StorageError::Unavailable(err.to_owned()));
                         }
                         self.replay_page()?;
                         self.advance(Boundary {
                             next: c
                                 .stream_next_offset
-                                .ok_or_else(|| invalid("control omitted next offset"))?,
+                                .ok_or_else(|| malformed("control omitted next offset"))?,
                             up_to_date: c.up_to_date,
                             closed: c.stream_closed,
                         })?;
@@ -444,7 +445,7 @@ impl StreamReader {
                     let mut events = Vec::new();
                     sse.decoder
                         .feed(&chunk, &mut events)
-                        .map_err(|e| StorageError::Decode(e.to_string()))?;
+                        .map_err(|e| StorageError::Unavailable(e.to_string()))?;
                     sse.events.extend(events);
                 }
                 Some(Err(e)) => {
@@ -454,7 +455,7 @@ impl StreamReader {
                 None => {
                     let finished = sse.decoder.finish();
                     self.sse = None;
-                    finished.map_err(|e| StorageError::Decode(e.to_string()))?;
+                    finished.map_err(|e| StorageError::Unavailable(e.to_string()))?;
                     // No control may have arrived. Replay the official anchor and skip only
                     // records actually yielded before rotation.
                     self.rewind();
@@ -471,16 +472,21 @@ fn split_records(body: &[u8]) -> Result<Vec<Vec<u8>>, StorageError> {
         return Ok(Vec::new());
     }
     let records: Vec<Box<serde_json::value::RawValue>> = serde_json::from_slice(body)
-        .map_err(|e| StorageError::Decode(format!("stream body: {e}")))?;
+        .map_err(|e| StorageError::Unavailable(format!("stream body: {e}")))?;
     Ok(records.into_iter().map(|r| r.get().as_bytes().to_vec()).collect())
 }
 
 fn required_next(resp: &reqwest::Response) -> Result<String, StorageError> {
-    header(resp, "Stream-Next-Offset").ok_or_else(|| invalid("response omitted next offset"))
+    header(resp, "Stream-Next-Offset").ok_or_else(|| malformed("response omitted next offset"))
 }
 
 fn header(resp: &reqwest::Response, name: &str) -> Option<String> {
     resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned)
+}
+
+/// An answer the streams service should not have given: refused, not retried.
+fn malformed(message: &str) -> StorageError {
+    StorageError::Unavailable(format!("stream answer: {message}"))
 }
 
 fn transport(e: reqwest::Error) -> StorageError {

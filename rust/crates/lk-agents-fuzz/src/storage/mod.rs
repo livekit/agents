@@ -77,7 +77,7 @@ pub struct Outcome {
 }
 
 /// The scheduler's own random stream off the seed: the bytes `sched`.
-const SCHED_STREAM: u64 = 0x7363_6865_64;
+const SCHED_STREAM: u64 = 0x73_6368_6564;
 
 /// One seeded run with `workers` workers serving `messages` messages, the due processes (ids
 /// `0..workers` are workers, `workers` the canceling client) stepped in the `sampling` order.

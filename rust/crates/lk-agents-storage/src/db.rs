@@ -163,7 +163,7 @@ pub fn decode_schema_exists(rows: &[Row]) -> Result<bool, StorageError> {
             _ => {}
         }
     }
-    Err(StorageError::Decode("schema catalog probe did not return one boolean".into()))
+    Err(StorageError::Unavailable("schema catalog probe did not return one boolean".into()))
 }
 
 /// The version of an existing schema.
@@ -176,7 +176,7 @@ pub fn schema_version() -> Statement {
 pub fn decode_schema_version(rows: &[Row]) -> Result<Option<i64>, StorageError> {
     match first_cell(rows).and_then(SqlValue::as_i64) {
         Some(v) if v == THREAD_SCHEMA_VERSION => Ok(Some(v)),
-        Some(v) => Err(StorageError::Schema(format!(
+        Some(v) => Err(StorageError::Invalid(format!(
             "database schema is version {v}, this client writes {THREAD_SCHEMA_VERSION}"
         ))),
         None => Ok(None),
@@ -311,7 +311,7 @@ impl Decode for AcquireDecode {
             .at(self.lane)?
             .rows()
             .first()
-            .ok_or_else(|| StorageError::Decode("acquire: no lane row".into()))?;
+            .ok_or_else(|| StorageError::Unavailable("acquire: no lane row".into()))?;
         let picked_up = match self.pickup {
             Some(i) => out.at(i)?.rows_affected() > 0,
             None => false,
@@ -390,7 +390,7 @@ impl Decode for ReceiveDecode {
 
     fn decode(self, out: &BatchResult) -> Result<Receive, StorageError> {
         let crate::sql::StatementResult::Exec { rows_affected, .. } = out.at(self.inbox)? else {
-            return Err(StorageError::Protocol("receive: the inbox insert answered rows".into()));
+            return Err(StorageError::Unavailable("receive: the inbox insert answered rows".into()));
         };
         if *rows_affected == 0 {
             let task_id = first_cell(out.at(self.existing)?.rows())
@@ -458,7 +458,7 @@ impl Decode for CheckpointDecode {
         let status = first_cell(out.at(self.status)?.rows())
             .map(TaskState::from_cell)
             .transpose()
-            .map_err(StorageError::Decode)?;
+            .map_err(StorageError::Unavailable)?;
         Ok((waiter, status))
     }
 }
@@ -488,7 +488,7 @@ impl Decode for PickupDecode {
         first_cell(out.at(self.before)?.rows())
             .map(TaskState::from_cell)
             .transpose()
-            .map_err(StorageError::Decode)
+            .map_err(StorageError::Unavailable)
     }
 }
 
@@ -681,7 +681,7 @@ impl Decode for CommitDecode {
             (Some(fence), None) => {
                 Err(StorageError::VersionConflict { lane: self.lane, expected: fence.version })
             }
-            (None, None) => Err(StorageError::Decode("commit: no lane row".into())),
+            (None, None) => Err(StorageError::Unavailable("commit: no lane row".into())),
         }
     }
 }
@@ -863,7 +863,7 @@ impl Decode for ItemPageDecode {
             let pos = row.first().and_then(SqlValue::as_i64);
             let lane = row.get(1).and_then(SqlValue::as_str);
             let (Some(pos), Some(lane)) = (pos, lane) else {
-                return Err(StorageError::Decode("an item page row".into()));
+                return Err(StorageError::Unavailable("an item page row".into()));
             };
             if items.len() as i64 == self.limit {
                 return Ok(ItemPage { items, next: Some(item_cursor(self.lane.as_deref(), last)) });

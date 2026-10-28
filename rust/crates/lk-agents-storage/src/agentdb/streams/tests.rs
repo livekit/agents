@@ -176,7 +176,7 @@ async fn invalid_and_expired_positions_fail_explicitly() {
         Position { anchor: "-1".into(), consumed: 4 }.encode(),
     ] {
         let mut reader = peer.streams.read("AST_test", Some(&cursor), false);
-        assert!(matches!(reader.next().await, Err(StorageError::Decode(_))));
+        assert!(matches!(reader.next().await, Err(StorageError::Invalid(_))));
         assert!(reader.next().await.unwrap().is_none(), "invalid reader remains settled");
     }
     let expired = Position::at("expired-official-anchor".into()).unwrap().encode();
@@ -225,8 +225,8 @@ async fn a_missing_official_next_offset_is_never_an_empty_cursor() {
     let peer = Peer::start().await;
     assert!(matches!(
         peer.streams.append_now("AST_missing_next", b"1").await,
-        Err(StorageError::Decode(_))
+        Err(StorageError::Unavailable(_))
     ));
     let mut reader = peer.streams.read("AST_missing_next", None, false);
-    assert!(matches!(reader.next().await, Err(StorageError::Decode(_))));
+    assert!(matches!(reader.next().await, Err(StorageError::Unavailable(_))));
 }

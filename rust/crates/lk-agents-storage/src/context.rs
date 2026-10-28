@@ -34,13 +34,13 @@ impl ContextActivation {
         let mut base_revisions = BTreeMap::new();
         for scope in scopes {
             if scope.scope_id.is_empty() || scope.revision < 0 {
-                return Err(StorageError::Decode(
+                return Err(StorageError::Unavailable(
                     "invalid context scope identity or revision".into(),
                 ));
             }
             base_revisions.insert(scope.scope_id.clone(), scope.revision);
             if by_id.insert(scope.scope_id.clone(), scope).is_some() {
-                return Err(StorageError::Decode("duplicate context scope".into()));
+                return Err(StorageError::Unavailable("duplicate context scope".into()));
             }
         }
         Ok(Self {
@@ -192,7 +192,7 @@ fn check_manifest(
     if let Some(previous) = scope.manifests.iter().find(|manifest| manifest.identity == identity) {
         for name in &previous.fields {
             if !names.contains(name.as_str()) {
-                return Err(StorageError::Schema(format!(
+                return Err(StorageError::Invalid(format!(
                     "context {identity} removed or renamed persisted field {name}; a migration is required"
                 )));
             }
@@ -202,7 +202,7 @@ fn check_manifest(
         if let Some(previous) = scope.contracts.get(&field.name)
             && previous != &field.schema
         {
-            return Err(StorageError::Schema(format!(
+            return Err(StorageError::Invalid(format!(
                 "context scope {} has an incompatible contract for field {}",
                 scope.scope_id, field.name
             )));
@@ -295,13 +295,13 @@ mod tests {
         assert_eq!(restored.writes()[0].expected_revision, 1);
         assert!(matches!(
             restored.load("booking_a", "Booking", &[field("renamed", json!("default"))]),
-            Err(StorageError::Schema(_))
+            Err(StorageError::Invalid(_))
         ));
         let mut incompatible = field("draft", json!(0));
         incompatible.schema = json!({"type": "integer"});
         assert!(matches!(
             restored.load("booking_a", "Shared", &[incompatible]),
-            Err(StorageError::Schema(_))
+            Err(StorageError::Invalid(_))
         ));
         assert_eq!(restored.writes()[0].scope.fields["draft"], json!("second"));
     }

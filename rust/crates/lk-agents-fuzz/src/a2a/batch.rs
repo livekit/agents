@@ -141,7 +141,7 @@ impl Request {
             Ok(AcquireOutcome::Held { .. }) => {
                 return match then {
                     After::Await(a) => self.after_drain(now, db, seen, After::Await(a)),
-                    After::Answer => self.fail(seen, StorageError::LeaseHeld(LANE.to_owned())),
+                    After::Answer => self.fail(seen, StorageError::Rejected { running_task_id: None }),
                 };
             }
             Err(e) => return self.fail(seen, e),

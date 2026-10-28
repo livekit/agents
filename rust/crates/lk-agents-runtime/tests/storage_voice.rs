@@ -56,7 +56,7 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
         tokio::time::timeout(Duration::from_secs(1), store.wait_lost()).await.unwrap().unwrap()
     );
     assert!(store.lease_lost());
-    assert!(matches!(store.acquire(2, Vec::new()).await, Err(StorageError::Unavailable(_))));
+    assert!(matches!(store.acquire(2, Vec::new()).await, Err(StorageError::LeaseLost(_))));
     store.abort(1).await.unwrap();
     let thread = fixture.thread("reader").await;
     assert!(thread.lane("desk").db().history().await.unwrap().is_empty());

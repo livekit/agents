@@ -39,11 +39,11 @@ impl From<WsdbError> for StorageError {
                     StorageError::Unavailable(message)
                 }
                 "outcome_unknown" => StorageError::Uncertain(message),
-                "not_found" => StorageError::ThreadNotFound(message),
+                "not_found" => StorageError::NotFound(message),
                 "unauthenticated" | "permission_denied" => StorageError::Unauthorized(message),
-                _ => StorageError::Server { code, message },
+                _ => StorageError::Invalid(format!("{code}: {message}")),
             },
-            WsdbError::Protocol(m) => StorageError::Protocol(m),
+            WsdbError::Protocol(m) => StorageError::Unavailable(m),
             WsdbError::TooLarge(_) => {
                 StorageError::TooLarge { what: "request".into(), limit: conn::MAX_FRAME }
             }
@@ -63,20 +63,13 @@ pub fn service_error(e: ServiceError) -> StorageError {
             "unavailable" | "deadline_exceeded" | "resource_exhausted" => {
                 StorageError::Unavailable(c.msg)
             }
-            _ => StorageError::Server { code: c.code, message: c.msg },
+            _ => StorageError::Invalid(format!("{}: {}", c.code, c.msg)),
         },
-        ServiceError::Twirp(e) => StorageError::Decode(e.to_string()),
+        ServiceError::Twirp(e) => StorageError::Unavailable(e.to_string()),
         other => StorageError::Invalid(other.to_string()),
     }
 }
 
-/// A threads service failure, with a missing thread as [`StorageError::ThreadNotFound`].
-pub fn thread_error(e: ServiceError) -> StorageError {
-    match service_error(e) {
-        StorageError::NotFound(m) => StorageError::ThreadNotFound(m),
-        other => other,
-    }
-}
 
 /// A non-2xx with the body read: 503 is retryable (`Unavailable`), 404 is `NotFound`.
 pub(crate) async fn http_ok(resp: reqwest::Response) -> Result<reqwest::Response, StorageError> {
@@ -95,7 +88,8 @@ pub(crate) async fn http_ok(resp: reqwest::Response) -> Result<reqwest::Response
         404 => StorageError::NotFound(message),
         502..=504 => StorageError::Unavailable(message),
         401 | 403 => StorageError::Unauthorized(message),
-        s => StorageError::Http { status: s, message },
+        500..=599 => StorageError::Unavailable(message),
+        s => StorageError::Invalid(format!("http {s}: {message}")),
     })
 }
 
@@ -172,7 +166,7 @@ impl AgentDbStorage {
         &self.streams
     }
 
-    /// The threads service: map its errors with [`thread_error`].
+    /// The threads service: map its errors with [`service_error`].
     pub fn threads(&self) -> &ThreadClient {
         self.api.threads()
     }
@@ -213,24 +207,24 @@ impl AgentDbStorage {
 #[async_trait]
 impl Storage for AgentDbStorage {
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError> {
-        self.threads().create(request).await.map_err(thread_error)
+        self.threads().create(request).await.map_err(service_error)
     }
 
     async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError> {
-        self.threads().get(thread_id).await.map_err(thread_error)
+        self.threads().get(thread_id).await.map_err(service_error)
     }
 
     async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError> {
-        self.threads().list(request).await.map_err(thread_error)
+        self.threads().list(request).await.map_err(service_error)
     }
 
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError> {
-        self.threads().update(request).await.map_err(thread_error)
+        self.threads().update(request).await.map_err(service_error)
     }
 
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        match self.threads().delete(thread_id).await.map_err(thread_error) {
-            Err(StorageError::ThreadNotFound(_)) => Ok(()),
+        match self.threads().delete(thread_id).await.map_err(service_error) {
+            Err(StorageError::NotFound(_)) => Ok(()),
             out => out,
         }
     }

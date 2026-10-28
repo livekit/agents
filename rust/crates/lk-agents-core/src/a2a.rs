@@ -169,9 +169,10 @@ pub fn host_error(e: ProviderError) -> StorageError {
     let message = error.message.clone();
     match error.host_kind() {
         "CancelledError" => StorageError::Cancelled(message),
-        "ThreadNotFound" => StorageError::ThreadNotFound(message),
+        "ThreadNotFound" => StorageError::NotFound(message),
         "StorageUnavailable" => StorageError::Unavailable(message),
-        kind => StorageError::Server { code: kind.to_owned(), message },
+        "LeaseLost" => StorageError::LeaseLost(message),
+        kind => StorageError::Invalid(format!("{kind}: {message}")),
     }
 }
 
@@ -491,10 +492,10 @@ mod tests {
             matches!(host_error(host("CancelledError")), StorageError::Cancelled(m) if m == "m")
         );
         assert!(matches!(host_error(host("StorageUnavailable")), StorageError::Unavailable(_)));
-        assert!(matches!(host_error(host("ThreadNotFound")), StorageError::ThreadNotFound(_)));
+        assert!(matches!(host_error(host("ThreadNotFound")), StorageError::NotFound(_)));
         assert!(matches!(
             host_error(host("VersionConflict")),
-            StorageError::Server { code, .. } if code == "VersionConflict"
+            StorageError::Invalid(m) if m.starts_with("VersionConflict")
         ));
     }
 }

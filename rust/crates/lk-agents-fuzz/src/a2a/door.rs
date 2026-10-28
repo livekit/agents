@@ -341,7 +341,7 @@ impl Request {
                 Ok(Some(r)) if r.terminal() => {
                     seen.follow_ups_refused += 1;
                     let message = format!("{named} is {:?}: a follow-up is a new task", r.status);
-                    let refused = StorageError::Server { code: FOLLOW_UP_REFUSED.into(), message };
+                    let refused = StorageError::Invalid(format!("{FOLLOW_UP_REFUSED}: {message}"));
                     return self.fail(seen, refused);
                 }
                 Ok(_) => {}
@@ -807,7 +807,7 @@ impl Request {
             .filter_map(|r| lk_agents_storage::schema::LaneRow::from_row(r).ok())
             .any(|l| l.lease_until >= now / 1000);
         seen.refusals.push(Refusal { request: self.id, task_id: self.task_id.clone(), held });
-        self.fail(seen, StorageError::RunRejected { running_task_id })
+        self.fail(seen, StorageError::Rejected { running_task_id })
     }
 
     /// `reject` under its lease: the row picked up, the dead holders' rows failed, the turn.

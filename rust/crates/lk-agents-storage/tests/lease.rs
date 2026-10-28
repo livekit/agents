@@ -16,7 +16,7 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
         .open(RunOptions { wait: false, ..RunOptions::new("second", "AST_second") })
         .await;
     let refused = match result {
-        Err(StorageError::LeaseHeld(_)) => true,
+        Err(StorageError::Rejected { .. }) => true,
         Ok(mut stolen) => {
             stolen.abandon(RunOutcome::Failed, "test cleanup").await.unwrap();
             false

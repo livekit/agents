@@ -46,7 +46,7 @@ pub fn from_rows(rows: &[Row]) -> Result<Vec<ContextScope>, StorageError> {
 }
 
 fn decode(error: serde_json::Error) -> StorageError {
-    StorageError::Decode(format!("context scope: {error}"))
+    StorageError::Unavailable(format!("context scope: {error}"))
 }
 
 /// A revision mismatch fails a NOT NULL constraint, rolling back the enclosing batch. A

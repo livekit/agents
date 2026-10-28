@@ -361,18 +361,14 @@ impl TaskMachine {
             }
             (Phase::Target, Completion::Task(Some(row))) if row.lane == self.lane => {
                 if row.status.is_terminal() {
-                    return Err(StorageError::Server {
-                        code: "UnsupportedOperationError".into(),
-                        message: "a follow-up to a terminal task must start a new task".into(),
-                    });
+                    return Err(StorageError::Invalid(
+                        "a follow-up to a terminal task must start a new task".into(),
+                    ));
                 }
                 self.arrive()
             }
             (Phase::Target, Completion::Task(_)) => {
-                return Err(StorageError::Server {
-                    code: "TaskNotFoundError".into(),
-                    message: "the addressed task is not in this lane".into(),
-                });
+                return Err(StorageError::NotFound("the addressed task is not in this lane".into()));
             }
             (Phase::RejectSubmit, Completion::Submitted(false)) => {
                 self.phase = Phase::DuplicateClose;
@@ -448,7 +444,7 @@ impl TaskMachine {
             (Phase::Close, Completion::Done) => {
                 if self.result.is_none() {
                     let row = self.observed.take().ok_or_else(|| {
-                        StorageError::Protocol("A2A task disappeared after acceptance".into())
+                        StorageError::Invalid("A2A task disappeared after acceptance".into())
                     })?;
                     self.result = Some(crate::a2a::result_for(
                         row,
@@ -589,9 +585,9 @@ impl TaskMachine {
             (Phase::RecoveryClose, Completion::Done) => self.observe(),
             (Phase::Failed, Completion::Done) => self.observe(),
             (Phase::Refused, Completion::RunningTask(running_task_id)) => {
-                return Err(StorageError::RunRejected { running_task_id });
+                return Err(StorageError::Rejected { running_task_id });
             }
-            _ => return Err(StorageError::Protocol("unexpected A2A operation outcome".into())),
+            _ => return Err(StorageError::Invalid("unexpected A2A operation outcome".into())),
         };
         Ok(Some(operation))
     }
@@ -612,15 +608,15 @@ impl TaskMachine {
 
     fn error(&mut self, error: StorageError, now: Duration) -> Vec<Effect> {
         match (&self.phase, &error) {
-            (Phase::Open, StorageError::LeaseHeld(_)) if self.policy == Policy::Reject => {
+            (Phase::Open, StorageError::Rejected { .. }) if self.policy == Policy::Reject => {
                 self.phase = Phase::Refused;
                 self.issue(Operation::RunningTask)
             }
-            (Phase::DrainOpen | Phase::RecoveryOpen, StorageError::LeaseHeld(_)) => {
+            (Phase::DrainOpen | Phase::RecoveryOpen, StorageError::Rejected { .. }) => {
                 self.poll(now);
                 Vec::new()
             }
-            (Phase::Open, StorageError::LeaseTimeout(_)) => {
+            (Phase::Open, StorageError::Rejected { .. }) => {
                 self.phase = Phase::Failed;
                 self.issue(Operation::FailOrphan {
                     task_id: self.task_id.clone(),
