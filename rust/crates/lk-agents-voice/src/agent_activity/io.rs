@@ -3,12 +3,12 @@
 
 use crate::agent_session::effects::{AudioOp, Effect, Out, ProviderCall, StreamKind};
 use crate::agent_session::{Driver, IoKind};
-use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended, spawn_drain, tagged};
+use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended};
 use crate::data_plane::ForwarderCommand;
-use crate::room_io::{InputProviders, Opened, StreamOpened};
+use crate::room_io::InputProviders;
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::io::{AudioInput, VideoInput};
+use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
 use std::sync::Arc;
 
@@ -21,17 +21,15 @@ pub(crate) struct AgentInput {
     /// The STT stream whose items the loop consumes: retired by a replacement or a removal, not
     /// by the stream's own end.
     pub(crate) live_stt: Option<ResourceId>,
+    pub(crate) stt_provider: Option<lk_agents_abi::ProviderId>,
     /// The verdict last sent to the data plane; `None` before the first, so it is an edge.
     pub(crate) gate_discard: Option<bool>,
     /// `input.set_audio_enabled(..)`.
     pub(crate) audio_enabled: bool,
     /// When audio started flowing from the current source, as the data plane reported it.
     pub(crate) first_input_at: Option<Ts>,
-    video_forwarder_parts: crate::audio::VideoForwarderParts,
-    video_forwarder: Option<lk_agents_abi::AbortHandle>,
-    pending_video_in: Option<Option<Arc<dyn VideoInput>>>,
-    /// So the same leg handed back is a no-op.
-    video_in: Option<Arc<dyn VideoInput>>,
+    /// So the same leg handed back is a no-op. Runtime retains the object.
+    pub(crate) video_instance: Option<usize>,
     /// Shared: its rates are public attributes a caller may change mid-call.
     video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
     /// A pipeline session has nowhere to push a frame: said the first time only.
@@ -60,23 +58,17 @@ impl AgentInput {
     /// was attached), nothing pending.
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
-        (video_forwarder_parts, video_forwarder, video_in): (
-            crate::audio::VideoForwarderParts,
-            Option<lk_agents_abi::AbortHandle>,
-            Option<Arc<dyn VideoInput>>,
-        ),
+        video_instance: Option<usize>,
         video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
     ) -> Self {
         AgentInput {
             live_stt: sinks.get(&crate::audio::AudioChannel::Stt).copied(),
+            stt_provider: None,
             sinks,
             gate_discard: None,
             audio_enabled: true,
             first_input_at: None,
-            video_forwarder_parts,
-            video_forwarder,
-            pending_video_in: None,
-            video_in,
+            video_instance,
             video_sampler,
             video_sink_warned: false,
             next_open: 0,
@@ -86,59 +78,17 @@ impl AgentInput {
             vad_metrics: VadMetricsFold::default(),
         }
     }
-
-    /// The parked camera replaces the pumped one, the old pump aborted first.
-    pub(crate) fn swap_video_forwarder(&mut self, spawner: &dyn lk_agents_abi::Spawner) {
-        let Some(input) = self.pending_video_in.take() else { return };
-        if let Some(old) = self.video_forwarder.take() {
-            old.abort();
-        }
-        self.video_forwarder = input.map(|input| {
-            lk_agents_abi::SpawnerExt::spawn_unboxed(
-                spawner,
-                self.video_forwarder_parts.clone().pump(input),
-            )
-        });
-    }
-
-    /// The camera handed over, parked for the performer. `false` when it is the leg already read
-    /// (nothing to swap).
-    pub(crate) fn replace_video_in(&mut self, input: Option<Arc<dyn VideoInput>>) -> bool {
-        let same = match (&self.video_in, &input) {
-            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
-            (None, None) => true,
-            (Some(_), None) | (None, Some(_)) => false,
-        };
-        if same {
-            return false;
-        }
-        if let Some(old) = self.video_in.take() {
-            old.on_detached();
-        }
-        if let Some(new) = &input {
-            new.on_attached();
-        }
-        self.video_in = input.clone();
-        self.pending_video_in = Some(input);
-        true
-    }
 }
 
 impl Driver {
-    /// Register `sink` and put it on `channel`; the data plane ends the sink it replaces.
-    fn install_sink(
-        &mut self,
-        channel: AudioChannel,
-        sink: lk_agents_abi::SttSink,
-        out: &mut Out,
-    ) -> ResourceId {
-        let sink = self.shared.resources.register_audio_sink(Arc::from(sink));
+    /// The runtime prepared the sink; acceptance installs it on the data plane.
+    fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId, out: &mut Out) {
         self.input.sinks.insert(channel, sink);
         if channel == AudioChannel::Stt {
             self.input.live_stt = Some(sink);
         }
         out.machine().push(Effect::Forwarder(ForwarderCommand::Install { channel, sink }));
-        sink
+        out.machine().push(Effect::ActivateLeg { channel, sink });
     }
 
     /// Take `channel`'s sink down, its input ended. `Agent(stt=None)`: this agent does not listen.
@@ -224,8 +174,14 @@ impl Driver {
 
     /// A superseded open is closed unused (`LegOpenDiscarded`); a refused one leaves the old row
     /// running.
-    pub(crate) fn on_leg_opened(&mut self, now: Ts, opened: StreamOpened, out: &mut Out) {
-        let StreamOpened { open, leg, outcome } = opened;
+    pub(crate) fn on_leg_opened(
+        &mut self,
+        now: Ts,
+        open: u64,
+        leg: StreamKind,
+        outcome: Result<ResourceId, lk_agents_abi::errors::ProviderError>,
+        out: &mut Out,
+    ) {
         let wanted = match leg {
             StreamKind::Stt => self.input.stt_open,
             StreamKind::Vad => self.input.vad_open,
@@ -238,48 +194,26 @@ impl Driver {
                     StreamKind::Vad => "the new agent's VAD could not be opened",
                 }));
             }
-            (Ok(stream), false) => {
+            (Ok(sink), false) => {
                 out.trace(InputStep::LegOpenDiscarded { leg: leg.label() });
-                self.discard_open(stream);
+                out.machine().push(Effect::DiscardLeg(sink));
             }
-            (Ok(Opened::Stt(sink, mut source)), true) => {
-                source.report_retries(crate::audio::report_to(self.queue.clone()));
-                if let Some(stt) = &self.session.stt {
-                    out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
-                }
-                // A different recogniser is told the full list.
-                let same_stt = self.input.stt_open_same;
-                self.keyterms_on_stt_swap(now, same_stt, out);
-                let sink = self.install_sink(AudioChannel::Stt, sink, out);
-                spawn_drain(
-                    &self.shared.spawner,
-                    self.shared.time.clone(),
-                    self.shared.closing.subscribe(),
-                    tagged(sink, source),
-                    self.queue.clone(),
-                    (AudioChannel::Stt, sink),
-                );
-                out.trace(InputStep::StreamOpened { leg: AudioChannel::Stt.label() });
-            }
-            (Ok(Opened::Vad(sink, source)), true) => {
-                let sink = self.install_sink(AudioChannel::Vad, sink, out);
-                spawn_drain(
-                    &self.shared.spawner,
-                    self.shared.time.clone(),
-                    self.shared.closing.subscribe(),
-                    source,
-                    self.queue.clone(),
-                    (AudioChannel::Vad, sink),
-                );
-                out.trace(InputStep::StreamOpened { leg: AudioChannel::Vad.label() });
+            (Ok(sink), true) => {
+                let channel = match leg {
+                    StreamKind::Stt => {
+                        if let Some(stt) = &self.session.stt {
+                            out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
+                        }
+                        self.input.stt_provider = None;
+                        self.keyterms_on_stt_swap(now, self.input.stt_open_same, out);
+                        AudioChannel::Stt
+                    }
+                    StreamKind::Vad => AudioChannel::Vad,
+                };
+                self.install_sink(channel, sink, out);
+                out.trace(InputStep::StreamOpened { leg: channel.label() });
             }
         }
-    }
-
-    /// A stream nobody wants: closed on a bounded task (dropping a host stream doesn't cancel it).
-    pub(crate) fn discard_open(&self, stream: Opened) {
-        let deadline = self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, stream.close(deadline));
     }
 
     /// Only a given leg is reopened.
@@ -337,8 +271,9 @@ impl Driver {
     ) {
         let attached = input.is_some();
         out.trace(InputStep::AudioInputSet { attached });
-        let source = input.map(|input| self.shared.resources.register_audio_input(input));
-        out.machine().push(Effect::Forwarder(ForwarderCommand::SetSource(source)));
+        out.machine().push(Effect::Audio(AudioOp::SetAudioInput(
+            input.map(crate::agent_session::commands::HostAudio),
+        )));
         if attached {
             self.input.first_input_at = None;
             self.activity.audio_recognition.input_started_at = None;
@@ -372,9 +307,9 @@ impl Driver {
                 changed
             }
             IoKind::AudioOutput => {
-                let changed =
-                    self.set_outputs(|o| std::mem::replace(&mut o.audio_enabled, enabled))
-                        != enabled;
+                let changed = self
+                    .set_outputs(|o| std::mem::replace(&mut o.audio_enabled, enabled))
+                    != enabled;
                 if changed {
                     let output = OutputKind::Audio;
                     let sink = self.session.outputs.audio.as_ref().map(|a| a.id);
@@ -385,9 +320,9 @@ impl Driver {
                 changed
             }
             IoKind::Transcription => {
-                let changed =
-                    self.set_outputs(|o| std::mem::replace(&mut o.transcription_enabled, enabled))
-                        != enabled;
+                let changed = self
+                    .set_outputs(|o| std::mem::replace(&mut o.transcription_enabled, enabled))
+                    != enabled;
                 if changed {
                     let output = OutputKind::Transcription;
                     let sink = self.session.outputs.transcription.as_ref().map(|t| t.id);
@@ -396,7 +331,6 @@ impl Driver {
                 }
                 changed
             }
-
         };
         if !changed {
             return;

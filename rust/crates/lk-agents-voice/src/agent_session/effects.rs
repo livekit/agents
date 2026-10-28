@@ -1,6 +1,5 @@
-//! The driver's [`Out`]: the [`Effect`]s the components hand it, in order, the timers they arm,
-//! the [`Signal`]s one part of the session raises for another within the step, and the performer,
-//! which runs them under the frame that asked.
+//! Typed transition outputs and private signals settled by the driver.
+//! Runtime executes external effects after the core returns.
 
 use crate::agent_activity::drain::{Drain, DrainEvent};
 use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
@@ -8,20 +7,15 @@ use crate::agent_activity::handoff::{Handoff, HandoffEvent, HandoffId};
 use crate::agent_activity::hooks::Leave;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::{
-    AgentUpdate, Answer, ClosePhase, Driver, HandoffRefused, HookCall, HookId, HostEvent,
-    RequestId,
+    AgentUpdate, Answer, ClosePhase, Driver, HandoffRefused, HookCall, HookId, HostEvent, RequestId,
 };
-use crate::audio::AudioChannel;
 use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionMode};
 use crate::events::SessionEvent;
 use crate::run_result::Owned;
-use crate::trace::{
-    CoreStep, InputStep, InterruptStep, Journal, RealtimeStep, Step, ToolStep, TurnStep,
-};
+use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, TurnStep};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
-use lk_agents_abi::voice::io::AudioOutputExt;
 use lk_agents_abi::{FrameId, Ts};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -32,9 +26,8 @@ pub struct Out {
     todo: Vec<Effect>,
     /// What a machine writes into. Drained into `todo` by [`Out::absorb`].
     machine: Effects,
-    signals: VecDeque<Signal>,
-    answers: Vec<(RequestId, Answer)>,
-    journal: Journal,
+    pub(crate) signals: VecDeque<Signal>,
+    journal: bool,
 }
 
 impl std::fmt::Debug for Out {
@@ -45,30 +38,21 @@ impl std::fmt::Debug for Out {
 
 impl Out {
     /// `frame` is the driver's `current` at the moment the event was dequeued.
-    pub fn new(frame: FrameId, journal: Journal) -> Self {
-        Out {
-            frame,
-            todo: Vec::new(),
-            machine: Effects::new(),
-            signals: VecDeque::new(),
-            answers: Vec::new(),
-            journal,
-        }
+    pub fn new(frame: FrameId, journal: bool) -> Self {
+        Out { frame, todo: Vec::new(), machine: Effects::new(), signals: VecDeque::new(), journal }
     }
 
     pub(crate) fn signal(&mut self, signal: Signal) {
+        self.absorb();
         self.signals.push_back(signal);
     }
 
     /// A host call answered, sent when the cycle is performed.
     pub(crate) fn answer(&mut self, call: Option<RequestId>, answer: Answer) {
         if let Some(call) = call {
-            self.answers.push((call, answer));
+            self.absorb();
+            self.todo.push(Effect::Answer(call, answer));
         }
-    }
-
-    pub(crate) fn take_answers(&mut self) -> Vec<(RequestId, Answer)> {
-        std::mem::take(&mut self.answers)
     }
 
     pub fn frame(&self) -> FrameId {
@@ -84,36 +68,83 @@ impl Out {
     /// instant it was decided. Called after every transition, so the journal reads in causal
     /// order; `perform` records nothing.
     pub fn absorb(&mut self) {
-        let effects = self.machine.take();
-        if self.journal.is_on() {
-            effects.iter().for_each(|effect| self.journal_effect(effect));
+        for transition in self.machine.take() {
+            match transition {
+                Transition::Effect(effect) => {
+                    if self.journal {
+                        self.journal_effect(&effect);
+                    }
+                    self.todo.push(effect);
+                }
+                Transition::Signal(signal) => {
+                    if self.journal {
+                        let step = match &signal {
+                            Signal::SessionEvent(event) => {
+                                Some(Step::Emitted(event.journal_form()))
+                            }
+                            Signal::Recognition(decision) => Some(Step::Decided(decision.clone())),
+                            _ => None,
+                        };
+                        if let Some(step) = step {
+                            self.todo.push(Effect::Journal(Box::new(step)));
+                        }
+                    }
+                    self.signals.push_back(signal);
+                }
+            }
         }
-        self.todo.extend(effects);
     }
 
-    fn journal_effect(&self, effect: &Effect) {
+    fn journal_effect(&mut self, effect: &Effect) {
         let step = match effect {
             // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
-            Effect::Emit(ev) => Step::Emitted(ev.journal_form()),
+            Effect::Emit(_) => return,
             Effect::Arm(t, at) => Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }),
             Effect::Cancel(t) => Step::Core(CoreStep::TimerCancelled((*t).into())),
             Effect::Provider(call) => Step::Input(InputStep::ProviderCalled(*call)),
             Effect::Detector(call) => Step::Input(InputStep::DetectorCalled(*call)),
+            Effect::EotPredict { req, .. } => {
+                Step::Input(InputStep::DetectorCalled(DetectorCall::RequestEot { req: *req }))
+            }
             Effect::Audio(AudioOp::Gate { speech, op, cause, output: _ }) => {
                 let (speech, op, cause) = (*speech, *op, *cause);
                 Step::Interrupt(InterruptStep::PlayoutGate { speech, op, cause })
             }
             // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
             Effect::Audio(
-                AudioOp::SetVideoInput
+                AudioOp::SetVideoInput(_)
+                | AudioOp::SetAudioInput(_)
                 | AudioOp::SetAudioOutput { .. }
                 | AudioOp::SetTranscriptionOutput { .. }
                 | AudioOp::SetOutputEnabled { .. },
             ) => return,
-            Effect::Decision(d) => Step::Decided(d.clone()),
+            Effect::Journal(_)
+            | Effect::Answer(..)
+            | Effect::Host(_)
+            | Effect::ChatContext(_)
+            | Effect::Outputs(_)
+            | Effect::Tap(_)
+            | Effect::LaunchHold(_)
+            | Effect::SessionView(_)
+            | Effect::Draining
+            | Effect::Closing
+            | Effect::SttConversationItem { .. }
+            | Effect::SpeechStart { .. }
+            | Effect::PushKeyterms { .. }
+            | Effect::RequestKeyterms { .. }
+            | Effect::CancelKeyterms(_)
+            | Effect::AttachRecorder { .. }
+            | Effect::DetachRecorder(_)
+            | Effect::FlushRecorder(_)
+            | Effect::RealtimePlayer { .. }
+            | Effect::CloseRealtimePlayer(_)
+            | Effect::CloseRealtimePlayers
+            | Effect::CancelSpeech(_)
+            | Effect::FlushStream(_)
+            | Effect::InterruptionSignal { .. } => return,
             // Journalled through the data plane's reports.
-            Effect::Forwarder(_) => return,
-            Effect::Realtime(cmd) => Step::Realtime(RealtimeStep::Sent {
+            Effect::Forwarder(_) | Effect::ActivateLeg { .. } | Effect::DiscardLeg(_) => return,
+            Effect::Realtime { command: cmd, .. } => Step::Realtime(RealtimeStep::Sent {
                 kind: cmd.kind(),
                 req_id: cmd.req_id().map(str::to_owned),
             }),
@@ -121,13 +152,15 @@ impl Out {
                 Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
             }
         };
-        self.journal.record(step);
+        self.todo.push(Effect::Journal(Box::new(step.into())));
     }
 
     /// Record a driver decision, after the effects decided before it.
     pub fn trace(&mut self, step: impl Into<Step>) {
         self.absorb();
-        self.journal.record(step);
+        if self.journal {
+            self.todo.push(Effect::Journal(Box::new(step.into())));
+        }
     }
 
     pub fn take(&mut self) -> Vec<Effect> {
@@ -153,10 +186,36 @@ impl Out {
                 Effect::Emit(_)
                 | Effect::Provider(_)
                 | Effect::Detector(_)
+                | Effect::EotPredict { .. }
                 | Effect::Audio(_)
-                | Effect::Decision(_)
-                | Effect::Realtime(_)
+                | Effect::Journal(_)
+                | Effect::Answer(..)
+                | Effect::Host(_)
+                | Effect::ChatContext(_)
+                | Effect::Outputs(_)
+                | Effect::Tap(_)
+                | Effect::LaunchHold(_)
+                | Effect::SessionView(_)
+                | Effect::Draining
+                | Effect::Closing
+                | Effect::SttConversationItem { .. }
+                | Effect::SpeechStart { .. }
+                | Effect::Realtime { .. }
                 | Effect::Forwarder(_)
+                | Effect::PushKeyterms { .. }
+                | Effect::RequestKeyterms { .. }
+                | Effect::AttachRecorder { .. }
+                | Effect::DetachRecorder(_)
+                | Effect::RealtimePlayer { .. }
+                | Effect::CloseRealtimePlayer(_)
+                | Effect::CloseRealtimePlayers
+                | Effect::CancelSpeech(_)
+                | Effect::FlushStream(_)
+                | Effect::InterruptionSignal { .. }
+                | Effect::FlushRecorder(_)
+                | Effect::CancelKeyterms(_)
+                | Effect::ActivateLeg { .. }
+                | Effect::DiscardLeg(_)
                 | Effect::CancelTool { .. } => None,
             })
             .collect()
@@ -175,7 +234,7 @@ impl Out {
 
 /// One ordered list, not per-kind fields: order within and across kinds is inherited from the
 /// reference, where these ran inline in exactly this order.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Effect {
     /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
     Arm(Timer, Ts),
@@ -184,11 +243,72 @@ pub enum Effect {
     /// Buffered because reaching it needs `&mut` on the driver.
     Provider(ProviderCall),
     Emit(SessionEvent),
-    Decision(Decision),
+    Journal(Box<Step>),
+    Answer(RequestId, Answer),
+    Host(HostEvent),
+    ChatContext(Arc<lk_agents_abi::ChatContext>),
+    Outputs(crate::agent_session::Outputs),
+    Tap(crate::agent_session::SystemTap),
+    LaunchHold(std::collections::BTreeSet<SpeechId>),
+    SessionView(Arc<crate::agent_session::SessionView>),
+    Draining,
+    Closing,
+    SttConversationItem {
+        stt: ResourceId,
+        role: String,
+        text: String,
+    },
+    SpeechStart {
+        handle: Arc<crate::speech_handle::SpeechHandle>,
+        context: Box<crate::generation::ReplyContext>,
+        llm: Option<ResourceId>,
+        tts: Option<ResourceId>,
+    },
     /// Per-frame `PushAudio` never comes this way.
-    Realtime(lk_agents_abi::RealtimeCommand),
+    Realtime {
+        session: ResourceId,
+        command: lk_agents_abi::RealtimeCommand,
+    },
+    FlushStream(Option<ResourceId>),
+    InterruptionSignal {
+        overlap: Option<ReqId>,
+        signal: InterruptionSignal,
+    },
     Audio(AudioOp),
     Detector(DetectorCall),
+    EotPredict {
+        req: ReqId,
+        timeout: Option<std::time::Duration>,
+    },
+    RealtimePlayer {
+        speech: SpeechId,
+        event: Box<lk_agents_abi::llm::realtime::Event>,
+    },
+    CloseRealtimePlayer(SpeechId),
+    CloseRealtimePlayers,
+    CancelSpeech(Arc<crate::speech_handle::SpeechHandle>),
+    AttachRecorder {
+        recorder: crate::agent_session::commands::HostRecorder,
+        output: Option<ResourceId>,
+    },
+    DetachRecorder(Option<ResourceId>),
+    FlushRecorder(f64),
+    PushKeyterms {
+        stt: Option<ResourceId>,
+        terms: Vec<String>,
+        warn_unsupported: bool,
+    },
+    RequestKeyterms {
+        llm: ResourceId,
+        req: u64,
+        request: Box<lk_agents_abi::ChatRequest>,
+    },
+    CancelKeyterms(u64),
+    ActivateLeg {
+        channel: crate::audio::AudioChannel,
+        sink: ResourceId,
+    },
+    DiscardLeg(ResourceId),
     /// Sent to the data plane through the queue.
     Forwarder(crate::data_plane::ForwarderCommand),
     /// The body running under `call_id` is cancelled; the driver has told its end.
@@ -198,10 +318,16 @@ pub enum Effect {
     },
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 #[must_use = "effects a transition asked for must reach the driver's out"]
 pub struct Effects {
-    effects: Vec<Effect>,
+    pub(crate) transitions: Vec<Transition>,
+}
+
+#[derive(Debug)]
+pub(crate) enum Transition {
+    Effect(Effect),
+    Signal(Signal),
 }
 
 impl Effects {
@@ -209,22 +335,17 @@ impl Effects {
         Effects::default()
     }
 
-    pub fn take(&mut self) -> Vec<Effect> {
-        std::mem::take(&mut self.effects)
-    }
-
-    #[cfg(test)]
-    pub fn as_slice(&self) -> &[Effect] {
-        &self.effects
+    pub(crate) fn take(&mut self) -> Vec<Transition> {
+        std::mem::take(&mut self.transitions)
     }
 
     pub fn push(&mut self, e: Effect) {
-        self.effects.push(e);
+        self.transitions.push(Transition::Effect(e));
     }
 
     /// What a component returned, after what is already here, in its order.
     pub fn append(&mut self, returned: Effects) {
-        self.effects.extend(returned.effects);
+        self.transitions.extend(returned.transitions);
     }
 
     pub fn arm(&mut self, timer: Timer, at: Ts) {
@@ -236,11 +357,11 @@ impl Effects {
     }
 
     pub fn emit(&mut self, ev: SessionEvent) {
-        self.push(Effect::Emit(ev));
+        self.transitions.push(Transition::Signal(Signal::SessionEvent(ev)));
     }
 
-    pub fn request_eot(&mut self, req: ReqId) {
-        self.push(Effect::Detector(DetectorCall::RequestEot { req }));
+    pub fn request_eot(&mut self, req: ReqId, timeout: Option<std::time::Duration>) {
+        self.push(Effect::EotPredict { req, timeout });
     }
 
     pub fn cancel_eot(&mut self, req: ReqId, timed_out: bool) {
@@ -252,7 +373,7 @@ impl Effects {
     }
 
     pub fn decide(&mut self, decision: Decision) {
-        self.push(Effect::Decision(decision));
+        self.transitions.push(Transition::Signal(Signal::Recognition(decision)));
     }
 
     pub fn flush_turn_detector(&mut self, reason: FlushReason) {
@@ -381,7 +502,7 @@ impl FlushReason {
 
 /// The outputs are named by id, as the core decided them when it raised the op: the data plane
 /// keeps no record of its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum AudioOp {
     /// Pushed only when a sink exists, so the journal's `PlayoutGate` is exactly the sink's
     /// history.
@@ -391,7 +512,8 @@ pub enum AudioOp {
         cause: GateCause,
         output: ResourceId,
     },
-    SetVideoInput,
+    SetVideoInput(Option<crate::agent_session::commands::HostVideo>),
+    SetAudioInput(Option<crate::agent_session::commands::HostAudio>),
     /// `AgentOutput.audio`'s setter (`io.py`): `previous` is detached, `next` attached or detached
     /// as the switch says. A reply in flight keeps the sink it started with.
     SetAudioOutput {
@@ -434,7 +556,6 @@ pub enum GateCause {
     Released,
 }
 
-
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum Decision {
     /// `decide_commit`, tell the host, answer the machine, and maybe reply.
@@ -463,49 +584,146 @@ pub enum AudioInterruptGuard {
 }
 
 impl Driver {
-    /// Perform the buffered port calls, under the frame that produced them.
-    pub(crate) fn execute(&mut self, mut out: Out) {
-        let frames = Arc::clone(&self.shared.frames);
-        let _scope = frames.enter(out.frame());
-        let now = self.step.now;
-
-        // A performed decision or a signal may ask for more, so drain until nothing is left, in
-        // order: the effects raised, then the next signal.
+    /// Settle private signals in FIFO order before returning external work to the runtime.
+    pub(crate) fn settle_step(&mut self, mut out: Out) -> Vec<Effect> {
+        let mut effects = Vec::new();
         loop {
-            for (call, answer) in out.take_answers() {
-                self.answer(Some(call), answer);
-            }
-            let effects = out.take();
-            if !effects.is_empty() {
-                for effect in effects {
-                    self.perform(now, effect, &mut out);
+            effects.append(&mut self.pending_effects.borrow_mut());
+            for effect in out.take() {
+                match effect {
+                    Effect::Arm(timer, at) => {
+                        self.timers.arm(timer, at);
+                    }
+                    Effect::Cancel(timer) => {
+                        self.timers.cancel(timer);
+                    }
+                    Effect::Provider(call @ (ProviderCall::FlushStt | ProviderCall::FlushVad)) => {
+                        let channel = if matches!(call, ProviderCall::FlushStt) {
+                            crate::audio::AudioChannel::Stt
+                        } else {
+                            crate::audio::AudioChannel::Vad
+                        };
+                        effects.push(Effect::FlushStream(self.input.sinks.get(&channel).copied()));
+                    }
+                    Effect::Detector(DetectorCall::Signal(signal)) => {
+                        let overlap = self.activity.audio_recognition.open_overlap();
+                        effects.push(Effect::InterruptionSignal { overlap, signal });
+                    }
+                    effect => effects.push(effect),
                 }
-                continue;
             }
             if let Some(signal) = out.signals.pop_front() {
                 self.dispatch(signal, &mut out);
                 continue;
             }
-            // The current speech is read last, so `FloorChanged` is the cycle's last emit;
-            // announcing it may itself be an effect to perform, hence the `continue`.
+            if self.settle_reply_plans(&mut out) {
+                continue;
+            }
             if !self.publish_current_speech(&mut out) {
                 break;
             }
         }
         self.flush_activity();
-        self.publish_scheduling();
+        effects.push(Effect::SessionView(Arc::new(crate::agent_session::SessionView {
+            config: self.session.config.clone(),
+            agent: self.activity.agent.clone(),
+            vad: self.session.vad.clone(),
+        })));
+        effects.append(&mut self.pending_effects.borrow_mut());
+        effects
     }
 
-    /// Whether a new speech would be refused, as the host's `say()` reads it: at the end of every
-    /// cycle, and before a hook reaches the host, whose callback may speak at once (a new agent's
-    /// `on_enter`, issued in the cycle that ends the drain).
-    pub(crate) fn publish_scheduling(&self) {
-        let gate = crate::agent_session::SchedulingGate {
-            paused: self.activity.speech_scheduler.is_paused(),
-            handoff_draining: self.activity.handoff.draining() && self.session.closing.is_none(),
-            closing: self.session.closing_past_edge(),
-        };
-        self.shared.scheduling.send_if_modified(|g| std::mem::replace(g, gate) != gate);
+    fn on_recognition_decision(&mut self, now: Ts, decision: Decision, out: &mut Out) {
+        match decision {
+            Decision::EndOfTurn(info) => {
+                self.on_end_of_turn(now, info, out);
+                // Scheduled in the same cycle: a reply created here is authorised now.
+                self.pump_schedule(now, out);
+            }
+            // `_on_turn_settled`: a pause left in `AwaitingTurn` resolves the way the
+            // false-interruption timer would have.
+            Decision::TurnSettled(settled) => self.on_turn_settled(now, settled, out),
+            Decision::AudioInterruptGuard(AudioInterruptGuard::Set(value)) => {
+                self.session.by_audio_activity = value;
+            }
+            Decision::AudioInterruptGuard(AudioInterruptGuard::Restore) => {
+                self.restore_audio_activity_guard();
+            }
+            // Through `interrupt_by_audio_activity`, so all its guards still apply. The flush is
+            // skipped when the pause already ran `on_end_of_agent_speech`: running it twice would
+            // shrink the `min`-folded ignore window again.
+            Decision::InterruptByAudioActivity(trigger) => {
+                self.interrupt_by_audio_activity(now, out, trigger);
+                if let AudioInterruptTrigger::DetectorVerdict { ignore_user_transcript_until } =
+                    trigger
+                    && self.activity.paused_speech.paused_handle().is_none()
+                {
+                    let eff = self
+                        .activity
+                        .audio_recognition
+                        .on_end_of_agent_speech(now, ignore_user_transcript_until);
+                    out.machine().append(eff);
+                }
+            }
+            Decision::EndpointingDelayUpdated { .. } | Decision::TurnDeclared { .. } => {}
+        }
+    }
+
+    fn on_session_event(&mut self, now: Ts, ev: SessionEvent, out: &mut Out) {
+        // `on_backchannel_confirmed`: clear the realtime model's buffered audio so a
+        // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
+        // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
+        if matches!(ev, SessionEvent::BackchannelConfirmed)
+            && self.session.config.effective.turn.interruption.detection_enabled()
+            && self.activity.rt_session.is_some()
+        {
+            self.rt_send(
+                lk_agents_abi::RealtimeCommand::ClearAudio(
+                    lk_agents_abi::llm::realtime::ClearAudio {},
+                ),
+                out,
+            );
+        }
+        // The journal names the utterance's segments by one id: the realtime item's, else
+        // one minted here (the pure tier cannot). The event carries only the provider's, as
+        // the reference's STT path carries none.
+        if let SessionEvent::UserInputTranscribed(t) = &ev {
+            let minted = self.session.ids.user_transcript_item(t.is_final);
+            let id = t.item_id.clone().unwrap_or(minted);
+            let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
+            out.trace(Step::Turn(TurnStep::TranscriptSegment {
+                id: id.clone(),
+                text,
+                is_final: t.is_final,
+            }));
+        }
+        // The user state and away deadline are decided on the way to the host.
+        self.on_session_edge(now, &ev, out);
+        // The span edges this event makes go out right before it.
+        let mut spans = Vec::new();
+        let step = &self.step;
+        let wall = |at: Ts| step.wall_secs_at(at);
+        let agent = self.activity.agent.as_str();
+        self.session.trace.observe(wall(now), &wall, agent, &ev, &mut spans);
+        for span in spans {
+            if self.journalled {
+                out.trace(Step::Emitted(span.journal_form()));
+            }
+            out.machine().push(Effect::Emit(span));
+        }
+        let closed = matches!(ev, SessionEvent::Close { .. });
+        if let SessionEvent::PreemptiveGeneration(pg) = &ev {
+            self.on_preemptive_generation(
+                now,
+                pg.new_transcript.clone(),
+                pg.started_speaking_at,
+                out,
+            );
+        }
+        out.machine().push(Effect::Emit(ev));
+        if closed {
+            self.on_session_closed();
+        }
     }
 
     /// Speech boundaries move the user state, dated to the boundary's instant; a final transcript
@@ -589,12 +807,12 @@ impl Driver {
         }
         let Some(message) = item.as_message() else { return };
         let Some(text) = message.text_content().filter(|t| !t.is_empty()) else { return };
-        let Some(stt) = self.session.stt.as_ref().and_then(|s| self.shared.resources.stt(s.id)) else {
-            return;
-        };
-        if stt.capabilities().chat_context {
-            stt.push_conversation_item(message.role.as_str(), &text);
-        }
+        let Some(stt) = self.session.stt.as_ref() else { return };
+        self.pending_effects.borrow_mut().push(Effect::SttConversationItem {
+            stt: stt.id,
+            role: message.role.as_str().to_owned(),
+            text,
+        });
     }
 
     /// `SessionEvent::FloorChanged` when `_current_speech` differs from the last announced one.
@@ -605,294 +823,14 @@ impl Driver {
         out.machine().emit(SessionEvent::FloorChanged { holder });
         true
     }
-
-    pub(crate) fn perform(
-        &mut self,
-        now: Ts,
-        effect: crate::agent_session::effects::Effect,
-        out: &mut Out,
-    ) {
-        use crate::agent_session::effects::{
-            AudioInterruptGuard, AudioOp, Decision, DetectorCall as D, Effect as E, GateOp,
-            ProviderCall as P,
-        };
-        // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
-        match effect {
-            E::Arm(t, at) => {
-                self.timers.arm(t, at);
-            }
-            E::Cancel(t) => {
-                self.timers.cancel(t);
-            }
-            // Not traced here: `Out::absorb` journalled it where it was decided.
-            E::Emit(ev) => {
-                // `on_backchannel_confirmed`: clear the realtime model's buffered audio so a
-                // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
-                // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
-                if matches!(ev, SessionEvent::BackchannelConfirmed)
-                    && self.session.config.effective.turn.interruption.detection_enabled()
-                    && self.activity.rt_session.is_some()
-                {
-                    self.rt_send(
-                        lk_agents_abi::RealtimeCommand::ClearAudio(
-                            lk_agents_abi::llm::realtime::ClearAudio {},
-                        ),
-                        out,
-                    );
-                }
-                // The journal names the utterance's segments by one id: the realtime item's, else
-                // one minted here (the pure tier cannot). The event carries only the provider's, as
-                // the reference's STT path carries none.
-                if let SessionEvent::UserInputTranscribed(t) = &ev {
-                    let minted = self.session.ids.user_transcript_item(t.is_final);
-                    let id = t.item_id.clone().unwrap_or(minted);
-                    let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
-                    self.journal(Step::Turn(TurnStep::TranscriptSegment {
-                        id: id.clone(),
-                        text,
-                        is_final: t.is_final,
-                    }));
-                }
-                // The user state and away deadline are decided on the way to the host.
-                self.on_session_edge(now, &ev, out);
-                // The span edges this event makes go out right before it.
-                let mut spans = Vec::new();
-                let step = &self.step;
-                let wall = |at: Ts| step.wall_secs_at(at);
-                let agent = self.activity.agent.as_str();
-                self.session.trace.observe(wall(now), &wall, agent, &ev, &mut spans);
-                spans.into_iter().for_each(|span| self.emit_now(span));
-                let closed = matches!(ev, SessionEvent::Close { .. });
-                // The peers read what the host reads (`SystemTap::Session`), in the same order.
-                if !self.watch.is_empty() {
-                    self.watch.publish(crate::agent_session::SystemTap::Session(ev.clone()));
-                }
-                let _ = self.events.send(HostEvent::Session(ev));
-                // `delete_room_on_close`: asked of the host on the `close` event, after it.
-                if closed {
-                    self.on_session_closed();
-                }
-            }
-            E::Provider(call @ (P::FlushStt | P::FlushVad)) => {
-                let leg =
-                    if matches!(call, P::FlushStt) { AudioChannel::Stt } else { AudioChannel::Vad };
-                let sink =
-                    self.input.sinks.get(&leg).and_then(|s| self.shared.resources.audio_sink(*s));
-                if let Some(sink) = sink {
-                    let _ = sink.flush();
-                }
-            }
-            // A session without a turn detector asks for no flush.
-            E::Detector(D::Flush(reason)) => {
-                if let Some(d) = self.activity.audio_recognition.eot() {
-                    d.flush(reason.as_str());
-                }
-            }
-            E::Detector(D::RequestEot { req }) => self.request_eot_prediction(req),
-            // `_generate_reply` is the one `timed_out=True` site. A session without a detector
-            // asks for none.
-            E::Detector(D::CancelEot { req: _, timed_out }) => {
-                if let Some(d) = self.activity.audio_recognition.eot() {
-                    d.cancel(timed_out);
-                }
-            }
-            // Not awaited, like the reference's `send_nowait` on `_interruption_ch`. A session
-            // with no detector raises no signals.
-            E::Detector(D::Signal(signal)) => {
-                if let Some(d) = self.activity.audio_recognition.interruption().cloned() {
-                    match signal {
-                        crate::audio_recognition::InterruptionSignal::OverlapStarted { .. } => {
-                            let overlap = self
-                                .activity
-                                .audio_recognition
-                                .open_overlap()
-                                .unwrap_or(lk_agents_abi::turn::detector::ReqId(0));
-                            d.signal_overlap(overlap, signal);
-                        }
-                        crate::audio_recognition::InterruptionSignal::AgentSpeechStarted
-                        | crate::audio_recognition::InterruptionSignal::AgentSpeechEnded
-                        | crate::audio_recognition::InterruptionSignal::OverlapEnded { .. } => {
-                            d.signal(signal)
-                        }
-                    }
-                }
-            }
-            // The turn -> reply hop, in order with everything else the transition asked for.
-            E::Decision(Decision::EndOfTurn(info)) => {
-                self.on_end_of_turn(now, info, out);
-                // Scheduled in the same cycle: a reply created here is authorised now.
-                self.pump_schedule(now, out);
-            }
-            // `_on_turn_settled`: a pause left in `AwaitingTurn` resolves the way the
-            // false-interruption timer would have.
-            E::Decision(Decision::TurnSettled(settled)) => self.on_turn_settled(now, settled, out),
-            E::Decision(Decision::AudioInterruptGuard(AudioInterruptGuard::Set(value))) => {
-                self.session.by_audio_activity = value;
-            }
-            E::Decision(Decision::AudioInterruptGuard(AudioInterruptGuard::Restore)) => {
-                self.restore_audio_activity_guard();
-            }
-            // Through `interrupt_by_audio_activity`, so all its guards still apply. The flush is
-            // skipped when the pause already ran `on_end_of_agent_speech`: running it twice would
-            // shrink the `min`-folded ignore window again.
-            E::Decision(Decision::InterruptByAudioActivity(trigger)) => {
-                self.interrupt_by_audio_activity(now, out, trigger);
-                if let AudioInterruptTrigger::DetectorVerdict { ignore_user_transcript_until } =
-                    trigger
-                    && self.activity.paused_speech.paused_handle().is_none()
-                {
-                    let eff = self
-                        .activity
-                        .audio_recognition
-                        .on_end_of_agent_speech(now, ignore_user_transcript_until);
-                    out.machine().append(eff);
-                }
-            }
-            // Journal-only: the learn is the machine's. The open runs off the loop (the provider
-            // awaits a connection); the stream comes back as `Input::StreamOpened`.
-            E::Provider(P::OpenLeg { leg, open, resource }) => {
-                enum Pending {
-                    Stt(Arc<dyn lk_agents_abi::Stt>),
-                    Vad(Arc<dyn lk_agents_abi::Vad>),
-                }
-                let resources = &self.shared.resources;
-                let pending = match leg {
-                    StreamKind::Stt => resources.stt(resource).map(Pending::Stt),
-                    StreamKind::Vad => resources.vad(resource).map(Pending::Vad),
-                };
-                let Some(pending) = pending else { return };
-                let tx = self.queue.clone();
-                let time = self.shared.time.clone();
-                lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
-                    use crate::room_io::Opened;
-                    use crate::room_io::StreamOpened;
-                    let outcome = match pending {
-                        Pending::Stt(stt) => match stt.stream(None, None).await {
-                            Some(Ok((sink, source))) => Ok(Opened::Stt(sink, source)),
-                            Some(Err(e)) => Err(e),
-                            None => Err(lk_agents_abi::errors::ProviderError::Local(
-                                lk_agents_abi::errors::ApiError::new(
-                                    "the new agent's STT does not stream",
-                                ),
-                            )),
-                        },
-                        Pending::Vad(vad) => {
-                            vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
-                        }
-                    };
-                    // Opened after the loop stopped: nobody will take it, so it is closed here.
-                    if tx.is_closed() {
-                        if let Ok(stream) = outcome {
-                            let teardown = lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
-                            stream.close(time.now().saturating_add(teardown)).await;
-                        }
-                        return;
-                    }
-                    let _ = tx.send(StreamOpened { open, leg, outcome });
-                });
-            }
-            E::Provider(P::Prewarm(id)) => self.shared.resources.prewarm(id),
-            E::Provider(P::Release(id)) => self.shared.resources.release(id),
-            E::Provider(P::CloseRealtime(id)) => {
-                let Some(session) = self.shared.resources.realtime(id) else { return };
-                let tx = self.queue.clone();
-                lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
-                    session.aclose().await;
-                    let _ = tx.send(crate::agent_activity::realtime::RealtimeWake::Closed);
-                });
-            }
-            E::Detector(D::Close) => {
-                if let Some(leg) = self.activity.audio_recognition.eot() {
-                    leg.close();
-                }
-            }
-            E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
-                let Some(sink) = self.shared.resources.audio_output(output) else { return };
-                match op {
-                    GateOp::Pause => sink.pause(),
-                    GateOp::Resume => sink.resume(),
-                    // `cut`, never a bare `clear_buffer`: the flush closes the segment in the
-                    // trackers, or the next speech's wait resolves on this clear's event.
-                    GateOp::ClearBuffer => sink.cut(),
-                }
-            }
-            // A synchroniser left behind would otherwise keep pacing into the old leaf. The same
-            // sink set again (under a new id) is neither detached nor re-attached.
-            E::Audio(AudioOp::SetAudioOutput { previous, next, enabled }) => {
-                let resources = &self.shared.resources;
-                let old = previous.and_then(|id| resources.audio_output(id));
-                let new = next.and_then(|id| resources.audio_output(id));
-                if !same_sink(&old, &new) {
-                    if let Some(old) = &old {
-                        old.on_detached();
-                    }
-                    if let Some(new) = &new {
-                        if enabled { new.on_attached() } else { new.on_detached() }
-                    }
-                }
-                self.observe_recorder(old.as_deref(), next);
-            }
-            E::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
-                let resources = &self.shared.resources;
-                let old = previous.and_then(|id| resources.text_output(id));
-                let new = next.and_then(|id| resources.text_output(id));
-                if !same_sink(&old, &new) {
-                    if let Some(old) = &old {
-                        old.on_detached();
-                    }
-                    if let Some(new) = &new {
-                        if enabled { new.on_attached() } else { new.on_detached() }
-                    }
-                }
-            }
-
-            E::Audio(AudioOp::SetOutputEnabled { output, sink, enabled }) => {
-                let resources = &self.shared.resources;
-                match output {
-                    crate::trace::OutputKind::Audio => {
-                        if let Some(sink) = sink.and_then(|id| resources.audio_output(id)) {
-                            if enabled { sink.on_attached() } else { sink.on_detached() }
-                        }
-                    }
-                    crate::trace::OutputKind::Transcription => {
-                        if let Some(sink) = sink.and_then(|id| resources.text_output(id)) {
-                            if enabled { sink.on_attached() } else { sink.on_detached() }
-                        }
-                    }
-                }
-            }
-            E::Forwarder(command) => {
-                let _ = self.queue.send(command);
-            }
-            E::Audio(AudioOp::SetVideoInput) => {
-                self.input.swap_video_forwarder(&*self.shared.spawner)
-            }
-            E::Realtime(cmd) => {
-                let session = self.activity.rt_session.as_ref();
-                if let Some(session) = session.and_then(|s| self.shared.resources.realtime(s.id)) {
-                    session.send(cmd);
-                }
-            }
-            E::CancelTool { call_id, runner } => runner.cancel(&call_id),
-            E::Decision(Decision::EndpointingDelayUpdated { min_delay: _ }) => {}
-            // Journal-only: the owner's declaration, read by the rules.
-            E::Decision(Decision::TurnDeclared { owner: _ }) => {}
-        }
-    }
-}
-
-/// The setter's `if sink is self._sink: return`.
-fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b)),
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 /// What one part of the session tells another within a step: raised into [`Out`], dispatched in
 /// the order raised until none is left, never seen outside the step.
+#[derive(Debug)]
 pub(crate) enum Signal {
+    SessionEvent(SessionEvent),
+    Recognition(Decision),
     /// `_pause_scheduling_task` for `cause`, answered with `Paused`.
     PauseScheduling(PauseCause),
     Paused(PauseCause, PauseResult),
@@ -942,6 +880,8 @@ impl Driver {
     pub(crate) fn dispatch(&mut self, signal: Signal, out: &mut Out) {
         let now = self.step.now;
         match signal {
+            Signal::SessionEvent(event) => self.on_session_event(now, event, out),
+            Signal::Recognition(decision) => self.on_recognition_decision(now, decision, out),
             Signal::PauseScheduling(cause) => self.pause_scheduling(now, cause, out),
             Signal::Paused(PauseCause::Handoff, result) => {
                 self.handoff_step(HandoffEvent::Paused(result), out)

@@ -16,10 +16,8 @@ use crate::audio_recognition::{
 };
 use crate::generation::ReplySource;
 use crate::trace::{
-    CloseAct, CloseStep, CoreStep, InputStep, InterruptCause, InterruptStep, Step,
-    TurnStep,
+    CloseAct, CloseStep, CoreStep, InputStep, InterruptCause, InterruptStep, TurnStep,
 };
-use lk_agents_abi::turn::detector::DetectorLeg as _;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, Role, SpeechEvent, SpeechEventType, Ts, VadEvent,
@@ -48,7 +46,7 @@ impl Driver {
     /// The session STT's identity as it is now: a `FallbackAdapter` names the instance serving.
     pub(crate) fn stt_identity(&self) -> Option<lk_agents_abi::ProviderId> {
         let stt = self.session.stt.as_ref()?;
-        Some(self.shared.resources.stt(stt.id).map_or_else(|| stt.provider.clone(), |s| s.id()))
+        Some(self.input.stt_provider.clone().unwrap_or_else(|| stt.provider.clone()))
     }
 
     pub(crate) fn on_stt(&mut self, now: Ts, ev: Tagged<SpeechEvent>, out: &mut Out) {
@@ -87,9 +85,9 @@ impl Driver {
             return;
         }
         // The recogniser's item for the peers (the AMD reads the finals).
-        if !self.watch.is_empty() {
-            self.watch.publish(crate::agent_session::SystemTap::Stt(ev.clone()));
-        }
+        out.machine().push(crate::agent_session::effects::Effect::Tap(
+            crate::agent_session::SystemTap::Stt(ev.clone()),
+        ));
         let eff = self.activity.audio_recognition.on_stt_event(now, &ev);
         out.machine().append(eff);
         // `_commit_user_turn` waits on `_final_transcript_received`; the commit follows this final.
@@ -150,9 +148,9 @@ impl Driver {
         self.anchor_stt_stream(now);
         self.fold_vad_metrics(&ev, out);
         // The VAD's edges for the peers (the AMD).
-        if !self.watch.is_empty() {
-            self.watch.publish(crate::agent_session::SystemTap::Vad(ev.clone()));
-        }
+        out.machine().push(crate::agent_session::effects::Effect::Tap(
+            crate::agent_session::SystemTap::Vad(ev.clone()),
+        ));
         let eff = self.activity.audio_recognition.on_vad_event(now, &ev);
         out.machine().append(eff);
 
@@ -554,20 +552,6 @@ impl Driver {
         }
     }
 
-    /// Ask the end-of-turn model; the answer returns as `Input::Eot`. A signal, not an await: the
-    /// driver is mid-borrow here, and the countdown's own timeout bounds a slow answer.
-    pub(crate) fn request_eot_prediction(&mut self, req: lk_agents_abi::turn::detector::ReqId) {
-        // Unreachable: the machine asks only when a detector was configured.
-        let Some(leg) = self.activity.audio_recognition.eot() else { return };
-        let timeout = self.activity.audio_recognition.prediction_timeout();
-        // Any outstanding request is superseded; its late answer is dropped.
-        self.journal(Step::Input(InputStep::LegRequested {
-            leg: crate::trace::DetectorName::Eot,
-            req: req.0,
-        }));
-        leg.signal(Some(req), lk_agents_abi::EotRequest { timeout });
-    }
-
     /// A prediction arrived for `req`, or will not. Only the request the phase holds applies: a
     /// stale answer would shorten the next pause's delay. A failure is an input, not a forged timer.
     pub(crate) fn on_eot(
@@ -583,10 +567,6 @@ impl Driver {
         let result = p.map_err(|_| {
             out.trace(InputStep::LegFailed { leg: DetectorName::Eot, recoverable: true });
         });
-        // Judged by the detector's thresholds as they are now: the user's overrides, the gateway's
-        // defaults and a fallback's rescale all live on the detector.
-        let thresholds = self.activity.audio_recognition.eot().and_then(|leg| leg.thresholds());
-        self.activity.audio_recognition.set_thresholds(thresholds);
         let eff = self.activity.audio_recognition.on_prediction(now, req, result);
         out.machine().append(eff);
     }
@@ -623,7 +603,7 @@ impl Driver {
         // configured recogniser, so a dead stream still waits the timeout, as in the reference.
         if !self.activity.audio_recognition.stt_enabled() || self.session.closing.is_some() {
             out.trace(TurnStep::CommitAnswered { transcript: String::new() });
-            self.answer(call, Answer::Commit(Ok(String::new())));
+            out.answer(call, Answer::Commit(Ok(String::new())));
             return;
         }
         self.begin_commit(
@@ -650,7 +630,7 @@ impl Driver {
         // A newer commit cancels the waiting one (`_commit_user_turn_atask`).
         if let Some(previous) = self.activity.audio_recognition.take_pending_commit() {
             out.trace(TurnStep::CommitSuperseded);
-            self.answer(previous.call, Answer::Commit(Err(CommitSuperseded)));
+            out.answer(previous.call, Answer::Commit(Err(CommitSuperseded)));
         }
         // A final within the last 0.5 s is fresh: commit at once, no flush, no wait.
         let fresh = self.activity.audio_recognition.final_is_fresh(now);
@@ -687,7 +667,7 @@ impl Driver {
         } else {
             out.trace(TurnStep::CommitAnswered { transcript: transcript.clone() });
         }
-        self.answer(pending.call, Answer::Commit(Ok(transcript)));
+        out.answer(pending.call, Answer::Commit(Ok(transcript)));
     }
 
     /// `on_preemptive_generation`: ask the model now, speak later. Guards in the reference's order;

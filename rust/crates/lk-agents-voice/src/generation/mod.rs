@@ -31,7 +31,7 @@ pub const RUNNING_PLACEHOLDER_KEY: &str = "__lk_running_placeholder__";
 
 /// The id of the rendered prompt in every request. Must not change (persisted contexts carry it).
 #[lk_agents_abi::host(export(pid = false, name = "instructions_message_id"))]
-pub const INSTRUCTIONS_MESSAGE_ID: &str = "lk.agent_task.instructions";
+pub const INSTRUCTIONS_MESSAGE_ID: &str = lk_agents_core::request::INSTRUCTIONS_MESSAGE_ID;
 
 /// `remove_instructions(chat_ctx)` as a plan: the positions of every
 /// [`INSTRUCTIONS_MESSAGE_ID`] item, ascending, given the items' ids.
@@ -448,7 +448,8 @@ impl ExpressiveLayers {
         if llm_instructions.is_empty() {
             return Some(String::new());
         }
-        let data = serde_json::json!({ "tts": { "markup": { "llm_instructions": llm_instructions } } });
+        let data =
+            serde_json::json!({ "tts": { "markup": { "llm_instructions": llm_instructions } } });
         Some(safe_render(&template.render(Some(modality)), &data).text)
     }
 }
@@ -633,22 +634,19 @@ pub enum ReplySource {
     Text(String),
     /// **One segment per chunk**, so the caller's chunk boundaries set the prosody. Taken once
     /// (`say` has no follow-up step).
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     TextStream(std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<String>>>),
     /// **Pre-synthesised** audio, played instead of asking the TTS; `text` is still committed.
     Audio {
         text: String,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         rx: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<lk_agents_abi::AudioFrame>>>,
     },
-    /// Held for the speech's life: a tool follow-up waits for the next generation on the same
-    /// channel. `wake` is the loop's queue, ordered against the socket's events.
-    Realtime {
-        events: tokio::sync::Mutex<
-            tokio::sync::mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>,
-        >,
-        wake: crate::agent_session::Tx,
-    },
+    /// Runtime installs this speech's player after admission.
+    Realtime,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub struct ReplyContext {
     /// Resolved from the active agent at creation.
     pub preemptive_tts: bool,
@@ -657,6 +655,12 @@ pub struct ReplyContext {
     /// The first request is re-planned once the speech playing at creation is on the record.
     pub replan: Option<Replan>,
     pub source: ReplySource,
+    /// Runtime-owned stream; the core always constructs contexts without it.
+    pub(crate) realtime_events: Option<
+        tokio::sync::Mutex<
+            tokio::sync::mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>,
+        >,
+    >,
     /// Every host call inherits it.
     pub frame: FrameId,
     /// Fixed before the first frame; the anchor for `e2e_latency`.
@@ -677,6 +681,15 @@ pub struct ReplyContext {
     pub answering: Option<crate::tool_executor::Answering>,
     /// Made while a `VoiceTask`'s agent held the floor: a `Completed` from its tools ends the task.
     pub task: bool,
+}
+
+impl std::fmt::Debug for ReplyContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplyContext")
+            .field("frame", &self.frame)
+            .field("message_id", &self.message_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a
@@ -758,9 +771,19 @@ impl PlanSpec {
         instructions: &str,
         now: std::time::SystemTime,
     ) -> crate::generation::Request {
+        self.plan_pending(record, instructions, &[], now)
+    }
+
+    pub(crate) fn plan_pending(
+        &self,
+        record: &ChatContext,
+        instructions: &str,
+        pending: &[ChatItem],
+        now: SystemTime,
+    ) -> Request {
         crate::generation::plan_request(crate::generation::RequestInputs {
             record: self.record.as_ref().unwrap_or(record),
-            pending: &[],
+            pending,
             new_message: self.new_message.as_ref(),
             instructions: self.instructions.as_deref().unwrap_or(instructions),
             turn_instructions: self.turn_instructions.as_ref(),
@@ -776,10 +799,29 @@ impl PlanSpec {
     }
 }
 
+/// A correlated request to plan against the core's accepted conversation and instructions.
+#[derive(Debug)]
+pub struct ReplyPlan {
+    pub call: crate::agent_session::RequestId,
+    pub speech: SpeechId,
+    pub after: SpeechId,
+    pub step: Option<u32>,
+    pub spec: PlanSpec,
+    pub pending: Vec<ChatItem>,
+    pub tool_choice: Option<lk_agents_abi::ToolChoice>,
+}
+
+#[derive(Debug)]
+pub struct PlannedReply {
+    pub request: Request,
+    pub tool_choice: Option<lk_agents_abi::ToolChoice>,
+}
+
 /// Chunks never travel here; only the moments the session machines must hear about, each a
 /// cross-machine write the task may not make itself.
 #[derive(Debug)]
 pub enum GenEvent {
+    Plan(Box<ReplyPlan>),
     /// With an audio output the edge is [`GenEvent::PlaybackStarted`]'s. Between them the only
     /// setters of `_agent_speaking`.
     FirstFrame {
@@ -857,7 +899,7 @@ pub enum GenEvent {
         runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
         /// A hosted call's approval, decided by the loop as it hears the start: the body waits
         /// for it (`needs_approval`).
-        grant: Option<tokio::sync::oneshot::Sender<bool>>,
+        grant: Option<crate::agent_session::RequestId>,
     },
     /// `None` when there is nothing to say.
     ToolCallEnded {

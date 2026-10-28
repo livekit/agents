@@ -1,19 +1,17 @@
-//! [`SessionApi`]'s host methods: the one `#[host(object)]` block the Python and Node
-//! `AgentSession` call, each assembling, opening, closing or sending one command.
+//! Host methods assembling, opening, closing or commanding a VoiceSession.
 
 use super::{
-    CLOSE_TIMEOUT, CommandRefused, HostParts,
-    InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
-    Ready, Reply, SessionApi, SessionEvents, SessionRefused, SessionRoom,
-    SessionJob, SessionRunner, Stage, StartFailed, UnknownCloseReason, UpdateAgentArgs,
-    host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
+    CLOSE_TIMEOUT, CommandRefused, HostParts, InterruptionPortFactory, ModelRefs, NodeFactory,
+    NotAnImage, NotInterruptible, OpenRefused, Ready, Reply, SessionApi, SessionEvents, SessionJob,
+    SessionRefused, SessionRoom, SessionRunner, Stage, StartFailed, UnknownCloseReason,
+    UpdateAgentArgs, host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
-    ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId,
-    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
-    ToolUpdate, TurnCommand,
+    ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HostAudio,
+    HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand, ToolUpdate,
+    TurnCommand,
 };
 use crate::agent_session::nodes::{Nodes, OutputNodes};
 use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
@@ -129,9 +127,7 @@ impl SessionApi {
         job: Option<Arc<dyn SessionJob>>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Self {
-        use crate::room_io::{
-            AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig,
-        };
+        use crate::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig};
         let agents = super::HostAgents::default();
         agents.install(&agent, agent_host);
         let time = room.timebase();
@@ -176,8 +172,7 @@ impl SessionApi {
                     host,
                     anchor,
                     spawner.clone(),
-                ))
-                    as Arc<dyn lk_agents_abi::Realtime>
+                )) as Arc<dyn lk_agents_abi::Realtime>
             })
         });
         let expressive = crate::generation::ExpressiveLayers {
@@ -206,7 +201,6 @@ impl SessionApi {
         let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone(), &conn.stt, clock.clone())));
         let llm = llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
         let tts = tts.map(|t| nodes.tts(tts_leg(t, clock.clone(), &conn.tts)));
-        let vad_leg = vad.clone();
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let toolset = host_toolset(tools, tools_host, tool_runner);
@@ -296,7 +290,15 @@ impl SessionApi {
         };
 
         let resources = lk_agents_abi::resources::Resources::default();
+        let config = DriverConfig::new(stack, legs);
+        let (view_tx, view) =
+            tokio::sync::watch::channel(Arc::new(crate::agent_session::SessionView {
+                config: config.clone(),
+                agent: agent.clone(),
+                vad: None,
+            }));
         let builder = DriverBuilder {
+            view: view_tx,
             journal: Default::default(),
             resources: resources.clone(),
             session_id: session_id.unwrap_or_else(crate::agent_session::mint_session_id),
@@ -308,7 +310,7 @@ impl SessionApi {
                 Arc::new(crate::room_io::_input::VideoSampler::new(speaking, silent))
             }),
             // **The one resolution**; no default restated beside it.
-            config: DriverConfig::new(stack, legs),
+            config,
             instructions: instructions.unwrap_or_default(),
             dynamic_instructions,
             // Opened at each use, above the synchroniser: the node rewrites, the synchroniser paces.
@@ -353,9 +355,7 @@ impl SessionApi {
 
         let mut api = SessionApi {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready { builder, interruption })))),
-            legs: Mutex::new(legs),
-            vad: Mutex::new(vad_leg),
-            stack: Mutex::new(stack),
+            view,
             room_io,
             synchronizer,
             spawner,
@@ -587,13 +587,7 @@ impl SessionApi {
         let origin = origin_of(origin)?;
         let (call, rx) = self.call(Answer::voice_task)?;
         let tx = self.api()?;
-        // `session.options` keeps the parent's layer: the task's is temporary.
-        let vad = self.vad.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        let (stack, legs) = (self.stack(), self.legs());
         let update = self.frame(frame);
-        *self.stack.lock().unwrap_or_else(|p| p.into_inner()) = stack;
-        *self.legs.lock().unwrap_or_else(|p| p.into_inner()) = legs;
-        *self.vad.lock().unwrap_or_else(|p| p.into_inner()) = vad;
         self.send_frame(origin, update, move |update| {
             let run = VoiceTaskRun { update: Box::new(update), opens_with_reply, call };
             VoiceTaskCommand::Run(Box::new(run)).into()
@@ -634,7 +628,8 @@ impl SessionApi {
         // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
         // here; the setup's host bridge runs in the task, with its own waker.
         let mut turn = Box::pin(Arc::clone(&self.host.handoffs).lock_owned());
-        let held = turn.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let held =
+            turn.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
         let handoff = async move {
             let _turn = match held {
                 std::task::Poll::Ready(guard) => guard,
@@ -719,8 +714,9 @@ impl SessionApi {
         &self,
         update: crate::agent_activity::options::UpdateKwargs,
     ) -> Result<(), CommandRefused> {
-        if let Maybe::Given(crate::agent_activity::options::TurnDetectionKwarg::Detector { .. }) =
-            update.turn_detection
+        if let Maybe::Given(crate::agent_activity::options::TurnDetectionKwarg::Detector {
+            ..
+        }) = update.turn_detection
         {
             return Err(CommandRefused::Invalid(
                 "update_options(turn_detection=) takes a mode on a running session; a turn \
@@ -738,7 +734,6 @@ impl SessionApi {
         if patch == crate::agent_activity::options::AgentSessionOptions::default() {
             return Ok(());
         }
-        self.configure(&patch);
         Ok(self.send(TurnCommand::Configure(patch))?)
     }
 
@@ -750,12 +745,10 @@ impl SessionApi {
         #[host(required)] duration: Option<f64>,
     ) -> Result<(), SessionRefused> {
         let patch = crate::agent_activity::options::aec_warmup_layer(duration);
-        self.configure(&patch);
         self.send(TurnCommand::Configure(patch))
     }
 
-    /// The configuration the driver runs on, as the dict `session.options` views, current the
-    /// instant a change is sent. `None` for a session built with no options object.
+    /// The core's accepted configuration; `None` for a session built without options.
     #[host(method)]
     pub fn resolved_options(
         &self,
@@ -763,10 +756,10 @@ impl SessionApi {
         if !self.host.has_options {
             return None;
         }
-        let stack = self.stack();
+        let view = Arc::clone(&self.view.borrow());
         Some(crate::agent_activity::options::resolved_session_options(
-            &stack.resolve(&self.legs()),
-            &stack.session,
+            &view.config.effective,
+            &view.config.stack.session,
         ))
     }
 
@@ -821,7 +814,6 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
-        self.refuse_paused(&origin)?;
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
@@ -1234,7 +1226,8 @@ impl SessionApi {
         add_to_chat_ctx: bool,
         origin: Option<&str>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
-        let (speech, pusher) = self.say_text_channel(allow_interruptions, add_to_chat_ctx, origin)?;
+        let (speech, pusher) =
+            self.say_text_channel(allow_interruptions, add_to_chat_ctx, origin)?;
         self.spawner.spawn_unboxed(pusher.feed(text, self.time.clock()));
         Ok(speech)
     }
@@ -1328,10 +1321,11 @@ impl SessionApi {
     /// history of every agent. Empty before `start()`.
     #[host(method)]
     pub fn agent_chat_ctx(&self) -> Vec<lk_agents_abi::ChatItem> {
-        match &*self.lock() {
-            Stage::Running(r) => r.activity.borrow().chat_ctx.items.clone(),
-            _ => Vec::new(),
-        }
+        let context = match &*self.lock() {
+            Stage::Running(r) => Some(Arc::clone(&r.chat_ctx.borrow())),
+            _ => None,
+        };
+        context.map(|context| context.items.clone()).unwrap_or_default()
     }
 
     /// `KeytermDetector.set_static_keyterms` / `update_options(keyterms=)`: the user's list,
@@ -1377,5 +1371,7 @@ fn session_usage_updated(
     let mut usage = usage.lock().unwrap_or_else(|p| p.into_inner());
     usage.collect(&m.metrics);
     let model_usage = usage.flatten();
-    Some(HostWire::SessionUsageUpdated(lk_agents_abi::voice::events::SessionUsageWire { model_usage }))
+    Some(HostWire::SessionUsageUpdated(lk_agents_abi::voice::events::SessionUsageWire {
+        model_usage,
+    }))
 }

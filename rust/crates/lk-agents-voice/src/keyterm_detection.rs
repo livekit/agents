@@ -2,14 +2,12 @@ use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::{Driver, SessionShared};
 use crate::generation::GenEvent;
 use crate::trace::{DetectorName, DetectorStep, InputStep};
-use lk_agents_abi::AbortHandle;
 use lk_agents_abi::metrics::base::LlmMetrics;
+use lk_agents_abi::resources::ResourceId;
 pub use lk_agents_abi::turn::keyterms::{
     DetectionLlm, KeytermDetectionConfig, KeytermUpdate, KeytermsChanged, ResolvedKeytermDetection,
 };
-use lk_agents_abi::{
-    ChatContext, ChatItem, ChatMessage, HostRef, Llm, Role, SpawnerExt, Ts, Vocabulary,
-};
+use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, HostRef, Llm, Role, Ts, Vocabulary};
 use std::sync::Arc;
 
 /// Bound on a single pass so a stuck LLM call can't hold the single-flight guard; a timeout changes
@@ -66,9 +64,9 @@ pub struct KeytermSetup {
 pub(super) struct KeytermSlot {
     pass: KeytermPass,
     detection: KeytermDetection,
-    llm: Option<Arc<dyn Llm>>,
+    llm: Option<ResourceId>,
     tools_host: Option<HostRef>,
-    inflight: Option<(u64, AbortHandle)>,
+    inflight: Option<u64>,
     /// Whether an STT without the `keyterms` capability was told so once already.
     warned_unsupported: bool,
 }
@@ -96,14 +94,17 @@ fn record_keyterms_spec() -> lk_agents_abi::ToolSpec {
 }
 
 impl KeytermSlot {
+    pub(crate) fn resource(&self) -> Option<ResourceId> {
+        self.llm
+    }
     /// `KeytermDetector.start(session, stt)`: the slot, and the static terms to push at once.
-    pub(super) fn start(setup: KeytermSetup) -> (Self, Vec<String>) {
+    pub(super) fn start(setup: KeytermSetup, llm: Option<ResourceId>) -> (Self, Vec<String>) {
         let pass = KeytermPass::new(&setup.detection, &setup.static_keyterms);
         let initial = pass.keyterms();
         let slot = KeytermSlot {
             pass,
             detection: setup.detection,
-            llm: setup.llm,
+            llm,
             tools_host: setup.tools_host,
             inflight: None,
             warned_unsupported: false,
@@ -126,28 +127,21 @@ impl KeytermSlot {
 
     /// The answer to `req` arrived: `true` when it was the request in flight (its timer goes).
     pub(super) fn answered(&mut self, req: u64) -> bool {
-        if self.inflight.as_ref().is_some_and(|(r, _)| *r == req) {
+        if self.inflight == Some(req) {
             self.inflight = None;
             return true;
         }
         false
     }
 
-    /// The request in flight timed out: aborted, its id returned.
+    /// The request in flight timed out; runtime cancels its resource.
     pub(super) fn time_out(&mut self) -> Option<u64> {
-        let (req, handle) = self.inflight.take()?;
-        handle.abort();
-        Some(req)
+        self.inflight.take()
     }
 
-    /// The pass cancelled `req`: aborted if it is the one in flight.
     pub(super) fn cancel(&mut self, req: u64) {
-        if let Some((inflight, handle)) = self.inflight.take() {
-            if inflight == req {
-                handle.abort();
-            } else {
-                self.inflight = Some((inflight, handle));
-            }
+        if self.inflight == Some(req) {
+            self.inflight = None;
         }
     }
 
@@ -762,8 +756,14 @@ impl Pass {
 impl Driver {
     /// `KeytermDetector.start(session, stt)`: the state survives handoffs, and static terms reach
     /// the recogniser at once.
-    pub(crate) fn keyterms_start(&mut self, setup: KeytermSetup, out: &mut Out) {
-        let (slot, initial) = KeytermSlot::start(setup);
+    pub(crate) fn keyterms_start(
+        &mut self,
+        setup: KeytermSetup,
+        llm: Option<ResourceId>,
+        out: &mut Out,
+    ) {
+        let (slot, initial) = KeytermSlot::start(setup, llm);
+        self.session.providers.extend(llm);
         self.session.keyterms = Some(slot);
         if !initial.is_empty() {
             self.push_keyterms(initial, out);
@@ -807,9 +807,11 @@ impl Driver {
         out: &mut Out,
     ) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
-        if slot.answered(req) {
-            out.machine().cancel(Timer::KeytermTimeout);
+        if !slot.answered(req) {
+            return;
         }
+        out.machine().push(crate::agent_session::effects::Effect::CancelKeyterms(req));
+        out.machine().cancel(Timer::KeytermTimeout);
         // Rides the session stream like the reply LLM's metrics, with no speech.
         if let Some(m) = &metrics {
             out.machine().emit(crate::events::SessionEvent::MetricsCollected {
@@ -839,6 +841,7 @@ impl Driver {
     pub(crate) fn on_keyterm_timeout(&mut self, now: Ts, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(req) = slot.time_out() else { return };
+        out.machine().push(crate::agent_session::effects::Effect::CancelKeyterms(req));
         self.keyterms_failed(now, req, None, out);
     }
 
@@ -861,6 +864,7 @@ impl Driver {
                     if let Some(slot) = self.session.keyterms.as_mut() {
                         slot.cancel(req);
                     }
+                    out.machine().push(crate::agent_session::effects::Effect::CancelKeyterms(req));
                     out.machine().cancel(Timer::KeytermTimeout);
                 }
             }
@@ -868,25 +872,25 @@ impl Driver {
     }
 
     fn push_keyterms(&mut self, terms: Vec<String>, out: &mut Out) {
-        if let Some(stt) = self.session.stt.as_ref().and_then(|s| self.shared.resources.stt(s.id)) {
-            // The reference's `STT._update_session_keyterms` default: said once, then ignored.
-            if !stt.capabilities().keyterms
-                && let Some(slot) = self.session.keyterms.as_mut()
-                && !std::mem::replace(&mut slot.warned_unsupported, true)
-            {
-                log::warn!(target: "livekit.agents", stt = stt.label().as_str();
-                    "keyterms are not supported by this STT, ignoring keyterms update");
-            }
-            stt.update_keyterms(&terms);
-        }
-        self.shared.keyterms.send_replace(Some(terms.clone()));
+        let stt = self.session.stt.as_ref();
+        let warn_unsupported = stt.is_some_and(|stt| !stt.capabilities.keyterms)
+            && self
+                .session
+                .keyterms
+                .as_mut()
+                .is_some_and(|slot| !std::mem::replace(&mut slot.warned_unsupported, true));
+        out.machine().push(crate::agent_session::effects::Effect::PushKeyterms {
+            stt: stt.map(|stt| stt.id),
+            terms: terms.clone(),
+            warn_unsupported,
+        });
         out.trace(DetectorStep::KeytermsPushed { terms });
     }
 
     /// One request, bounded by the pass's timeout, run off the loop.
     fn request_keyterms(&mut self, now: Ts, req: u64, prompt: String, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
-        let Some(llm) = slot.llm.clone() else {
+        let Some(llm) = slot.llm else {
             // The machine asked with no model to ask: fed back as a failure so the slot frees.
             self.keyterms_step(now, KeytermIn::Failed { req }, out);
             return;
@@ -897,9 +901,11 @@ impl Driver {
         out.machine().arm(Timer::KeytermTimeout, now.saturating_add(timeout));
         self.session.trace.keyterm_requested(self.step.wall_secs_at(now));
         let request = slot.request(prompt, self.step.wall());
-        let shared = Arc::clone(&self.shared);
-        let handle =
-            shared.spawner.clone().spawn_unboxed(detection_pass(shared.clone(), llm, request, req));
-        slot.inflight = Some((req, handle));
+        slot.inflight = Some(req);
+        out.machine().push(crate::agent_session::effects::Effect::RequestKeyterms {
+            llm,
+            req,
+            request: Box::new(request),
+        });
     }
 }

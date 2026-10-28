@@ -3,13 +3,12 @@
 //! errors it speaks through. Its host methods are in `host`.
 
 use crate::agent_activity::options::{
-    AgentSessionOptions, RECORDING_ALL_OFF, RecordingRequest, records_anything,
-    resolve_recording_options,
+    RECORDING_ALL_OFF, RecordingRequest, records_anything, resolve_recording_options,
 };
 use crate::agent_session::builder::DriverBuilder;
 use crate::agent_session::commands::{
-    AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText, SpeechCall,
-    SpeechCommand,
+    AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText,
+    SpeechCall, SpeechCommand,
 };
 use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
@@ -28,37 +27,31 @@ use lk_agents_abi::{
     TtsSource, Vad,
 };
 use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-/// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
-/// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
-/// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-///
-/// The host's end of a session: assembled by [`host_new`](Self::host_new), opened once, commanded through
-/// [`send`](Self::send), closed through [`close`](Self::close). Every method takes `&self`; one
-/// `Mutex` around a small enum, off every per-frame path.
+/// The host's session handle: assembled at construction, opened once, commanded, and closed.
+/// Startup owns the runtime resources; accepted core effects supply the readable views.
 #[lk_agents_abi::class(name = "VoiceSession")]
 pub struct SessionApi {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,
-    /// The driver's legs, kept in step with every provider swap ([`swap`](Self::swap)).
-    legs: Mutex<crate::agent_activity::options::LegSet>,
-    /// The driver's option stack, kept in step with every `Configure` and agent update a host
-    /// sends, so `session.options` resolves the instant a change is sent.
-    stack: Mutex<crate::agent_activity::options::ConfigStack>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    view: tokio::sync::watch::Receiver<Arc<crate::agent_session::SessionView>>,
     room_io: Arc<crate::room_io::RoomIo>,
-    /// The VAD the session runs on now, which a recognize-only STT given later goes over.
-    pub(super) vad: Mutex<Option<Arc<dyn Vad>>>,
     /// The transcript synchroniser, held only so `close_io` can close it.
     synchronizer: Option<Arc<crate::transcription::synchronizer::TranscriptSynchronizer>>,
     spawner: Arc<dyn Spawner>,
     /// The driver's clock: `close` on a virtual clock moves it.
     time: Timebase,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The read-back guard of the last DTMF collection, read by
     /// [`dtmf_reply_running`](Self::dtmf_reply_running).
     dtmf_reply: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The last `with_filler` scope numbered by [`filler_start`](Self::filler_start).
     last_filler: std::sync::atomic::AtomicU64,
     /// Every `Agent` by its id, as the host installed it: the events naming an agent hand
@@ -122,21 +115,11 @@ impl SessionApi {
     }
 
     pub fn legs(&self) -> crate::agent_activity::options::LegSet {
-        *self.legs.lock().unwrap_or_else(|p| p.into_inner())
+        self.view.borrow().config.legs
     }
 
     pub fn stack(&self) -> crate::agent_activity::options::ConfigStack {
-        *self.stack.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    /// Merged here too, as the driver does.
-    pub fn configure(&self, update: &AgentSessionOptions) {
-        self.stack.lock().unwrap_or_else(|p| p.into_inner()).session.merge(update);
-    }
-
-    /// Its `turn_handling` becomes the agent layer, replaced whole.
-    pub fn set_agent_layer(&self, agent: Option<AgentSessionOptions>) {
-        self.stack.lock().unwrap_or_else(|p| p.into_inner()).agent = agent;
+        self.view.borrow().config.stack
     }
 
     /// Refuses synchronously when there is nothing to open; does not wait for a participant.
@@ -191,10 +174,9 @@ impl SessionApi {
             let SessionHandle {
                 api,
                 events,
-                answers,
+                calls,
                 keyterms,
-                activity,
-                scheduling,
+                chat_ctx,
                 peer,
                 ivr_detection,
                 speech_ids,
@@ -205,7 +187,7 @@ impl SessionApi {
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
-            runtime.driver.open(time.read());
+            runtime.open(time.read());
             let (opening_tx, opening_rx) = tokio::sync::oneshot::channel();
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
@@ -223,8 +205,6 @@ impl SessionApi {
             if let Some(mut runtime) = runtime {
                 tasks.push(spawner.spawn_unboxed(async move { runtime.run().await }));
             }
-            let calls = Calls::default();
-            tasks.push(spawner.spawn_unboxed(calls.clone().pump(answers)));
             // Drained whether or not anybody listens: the queue is unbounded.
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
             let runner = SessionRunner {
@@ -242,8 +222,7 @@ impl SessionApi {
                 api,
                 calls,
                 keyterms,
-                activity,
-                scheduling,
+                chat_ctx,
                 peer,
                 amd: None,
                 tasks,
@@ -316,7 +295,9 @@ impl SessionApi {
         let allow = allow_interruptions
             .unwrap_or_else(|| self.stack().resolve(&self.legs()).turn.interruption.enabled());
         self.running(|r| {
-            let id = crate::agent_activity::scheduling::SpeechId(r.speech_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+            let id = crate::agent_activity::scheduling::SpeechId(
+                r.speech_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            );
             let speech = SpeechHandle::pending(r.api.clone(), id, allow);
             let id = r.calls.open_speech(&speech);
             Ok((Arc::clone(&speech), SpeechCall { id, speech }))
@@ -445,33 +426,24 @@ impl SessionApi {
                 Maybe::NotGiven => Maybe::NotGiven,
             }
         }
-        fn slot<T>(slot: &mut bool, arg: &Maybe<Option<T>>) {
-            if let Maybe::Given(given) = arg {
-                *slot = given.is_some();
-            }
-        }
         let clock = self.time.clock();
         let r = &self.resources;
-        let vad_now = {
-            let mut current = self.vad.lock().unwrap_or_else(|p| p.into_inner());
-            if let Maybe::Given(given) = &vad {
-                current.clone_from(given);
+        let vad_now = match &vad {
+            Maybe::Given(given) => given.clone(),
+            Maybe::NotGiven => {
+                let id = self.view.borrow().vad.as_ref().map(|v| v.id);
+                id.and_then(|id| self.resources.vad(id))
             }
-            current.clone()
         };
         let models = ModelRefs {
             llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l, &self.conn.llm)))),
             tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock.clone(), &self.conn.tts)))),
-            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt, clock.clone())))),
+            stt: map(stt, |s| {
+                r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt, clock.clone())))
+            }),
             vad: map(vad, |v| r.register_vad(v)),
         };
-        {
-            let mut legs = self.legs.lock().unwrap_or_else(|p| p.into_inner());
-            slot(&mut legs.stt, &models.stt);
-            slot(&mut legs.vad, &models.vad);
-            slot(&mut legs.llm, &models.llm);
-            slot(&mut legs.tts, &models.tts);
-        }
+
         models
     }
 
@@ -506,7 +478,6 @@ impl SessionApi {
             min_consecutive_speech_delay,
             use_tts_aligned_transcript,
         );
-        self.set_agent_layer(Some(options));
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
         AgentUpdate {
@@ -537,7 +508,6 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
-        self.refuse_paused(&origin)?;
         let (speech, call) = self.speech_call(allow_interruptions)?;
         let call = Some(call);
         self.send_from(
@@ -547,19 +517,7 @@ impl SessionApi {
         Ok(speech)
     }
 
-    /// `_schedule_speech`'s `RuntimeError` while scheduling drains, raised by the call itself. A
-    /// pause that lands after this check refuses the speech in the loop instead (interrupted).
-    fn refuse_paused(&self, origin: &Origin) -> Result<(), CommandRefused> {
-        let gate = match &*self.lock() {
-            Stage::Running(r) => *r.scheduling.borrow(),
-            Stage::Ready(_) | Stage::Closed => return Ok(()),
-        };
-        match gate.refusal(origin) {
-            Some(rejected) => Err(CommandRefused::Rejected(rejected)),
-            None => Ok(()),
-        }
-    }
-
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A `say` of streamed words: the speech and its feeding end.
     pub fn say_text_channel(
         &self,
@@ -702,8 +660,7 @@ struct Running {
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
-    activity: tokio::sync::watch::Receiver<crate::agent_session::ActivitySnapshot>,
-    scheduling: tokio::sync::watch::Receiver<crate::agent_session::SchedulingGate>,
+    chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
     peer: PeerHandle,
     /// One per session.
     amd: Option<crate::amd::detector::AmdHandle>,
@@ -961,7 +918,11 @@ async fn answer_hook(
             None => Ok(HookOutcome::Failed),
         },
         HookCall::OnUserTurnCompleted {
-            agent, chat_ctx, new_transcript, transcript_confidence, ..
+            agent,
+            chat_ctx,
+            new_transcript,
+            transcript_confidence,
+            ..
         } => match agents.get(&agent) {
             Some(agent) => hooks
                 .on_user_turn_completed(&agent, chat_ctx, &new_transcript, transcript_confidence)
@@ -1006,8 +967,7 @@ async fn answer_hook(
                 FillerReply::Spoke => HookOutcome::Filler { text: None, spoke: true },
                 FillerReply::Declined => HookOutcome::Filler { text: None, spoke: false },
             })
-        }
-        // Unanswered: the reference's templates.
+        } // Unanswered: the reference's templates.
     };
     let outcome = outcome.unwrap_or_else(|e| {
         hooks.hook_failed(kind.as_str(), e.host_ref.clone());
@@ -1195,11 +1155,7 @@ fn host_toolset(
     host: Option<lk_agents_abi::HostRef>,
     runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
 ) -> Toolset {
-    Toolset {
-        specs: tools.unwrap_or_default(),
-        host,
-        runner,
-    }
+    Toolset { specs: tools.unwrap_or_default(), host, runner }
 }
 
 /// The objects are the pool a host-backed LLM is handed beside the agent's.
@@ -1341,10 +1297,12 @@ mod host;
 
 /// The caller's side of awaited commands: a call gets an id for its command and a typed receiver,
 /// settled from the session's answer stream.
+
 type Settle = Box<dyn FnOnce(Answer) + Send>;
 
 /// One session's open calls, shared by everyone who sends it commands.
 #[derive(Clone, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct Calls(Arc<Mutex<Table>>);
 
 #[derive(Default)]
@@ -1395,7 +1353,6 @@ impl Calls {
         call
     }
 
-
     /// A late or unknown call's answer is dropped.
     pub fn settle(&self, call: RequestId, answer: Answer) {
         let settle = self.lock().open.remove(&call);
@@ -1411,14 +1368,6 @@ impl Calls {
             std::mem::take(&mut table.open)
         };
         drop(open);
-    }
-
-    /// Settles every answer until the session's stream ends, then closes what is left.
-    pub async fn pump(self, mut answers: Rx<(RequestId, Answer)>) {
-        while let Some((call, answer)) = answers.recv().await {
-            self.settle(call, answer);
-        }
-        self.close();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Table> {

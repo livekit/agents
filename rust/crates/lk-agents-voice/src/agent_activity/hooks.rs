@@ -8,8 +8,8 @@ use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, Host
 use crate::audio_recognition::PendingTurn;
 use crate::run_result::Owned;
 use crate::trace::{CoreStep, HandoffStep, HookEnd, TurnStep};
-use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::Ts;
+use lk_agents_abi::voice::events::AgentState;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -66,13 +66,12 @@ impl Driver {
             HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None),
         };
         out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn });
-        self.publish_scheduling();
-        let hosted =
-            self.activity.hook_bound.is_some() && self.events.send(HostEvent::Hook(call)).is_ok();
+        let hosted = self.activity.hook_bound.is_some();
         if !hosted {
             out.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
             return false;
         }
+        out.machine().push(crate::agent_session::effects::Effect::Host(HostEvent::Hook(call)));
         self.activity.hooks.wait_for(id, kind);
         let mut spans = Vec::new();
         let wall = self.step.wall_secs_at(now);
@@ -176,8 +175,7 @@ impl Driver {
             (
                 HookKind::OnExit | HookKind::OnEnter | HookKind::OnUserTurnExceeded,
                 Returned | Failed
-            )
-                | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
+            ) | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
                 | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
                 | (
                     HookKind::FunctionToolsExecuted,
@@ -215,9 +213,7 @@ impl Driver {
                 let answered = match outcome {
                     Filler { text, spoke } => Some((text, spoke)),
                     Failed => None,
-                    Returned | Turn(_) | FunctionToolsExecuted { .. } => {
-                        Some((None, false))
-                    }
+                    Returned | Turn(_) | FunctionToolsExecuted { .. } => Some((None, false)),
                 };
                 self.on_filler_source(now, id, answered, out)
             }

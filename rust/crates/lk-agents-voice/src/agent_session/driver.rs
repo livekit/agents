@@ -1,9 +1,7 @@
-//! The session's actor: the loop, its input queue and timers, and the handle a host and its peer
-//! systems hold.
+//! The session decision core and the input vocabulary its runtime queue carries.
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::VoiceSession;
-use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{
     Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent, SpeechCall,
 };
@@ -16,12 +14,13 @@ use crate::generation::GenEvent;
 use crate::room_io::StreamOpened;
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{
-    CloseAct, CloseStep, CoreStep, PlayoutStep, RoomStep, SpeechStep, Step, Journal,
+    CloseAct, CloseStep, CoreStep, Journal, PlayoutStep, RoomStep, SpeechStep, Step,
 };
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{FrameId, SpeechEvent, TimerSet, Ts, VadEvent};
 use lk_agents_rtc::RoomEvent;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 /// Only what a host could read, in loop order; never machine state.
@@ -138,33 +137,36 @@ pub struct SessionHandle {
     /// Every event, in the order the driver emitted it.
     pub events: Rx<HostEvent>,
     /// Each awaited command's answer, once, by its call id.
-    pub answers: Rx<(RequestId, Answer)>,
+    pub calls: crate::agent_session::api::Calls,
     /// The last keyterm list pushed to the recogniser; `None` before any push.
     pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// The driving agent's context and state, as last published.
-    pub activity: tokio::sync::watch::Receiver<crate::agent_session::ActivitySnapshot>,
-    /// Whether a new speech would be refused now.
-    pub scheduling: tokio::sync::watch::Receiver<crate::agent_session::SchedulingGate>,
+    pub chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
     pub ivr_detection: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The session's id counter: a host speech call takes its speech's id from it.
     pub speech_ids: Arc<std::sync::atomic::AtomicU64>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub(super) type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
 /// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
 /// event sequence. What each source sends becomes an event by its `From` impl below.
 #[derive(Clone)]
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub struct Tx(tokio::sync::mpsc::UnboundedSender<Event>);
 
 impl Tx {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) fn new(inner: tokio::sync::mpsc::UnboundedSender<Event>) -> Self {
         Tx(inner)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// A queue nobody reads: what a handle made outside a session sends on.
     pub fn disconnected() -> Self {
         Tx(tokio::sync::mpsc::unbounded_channel().0)
@@ -172,6 +174,13 @@ impl Tx {
 
     pub fn send(&self, event: impl Into<Event>) -> Result<(), QueueClosed> {
         self.0.send(event.into()).map_err(|_| QueueClosed)
+    }
+
+    pub(crate) fn send_opened(&self, opened: StreamOpened) -> Result<(), StreamOpened> {
+        self.0.send(Event::LegOpened(opened)).map_err(|error| {
+            let Event::LegOpened(opened) = error.0 else { unreachable!() };
+            opened
+        })
     }
 
     pub fn send_from(&self, origin: Origin, command: Command) -> Result<(), QueueClosed> {
@@ -208,7 +217,7 @@ queue_events! {
     Input => |input| Event::Input(input);
     crate::data_plane::ForwarderCommand => |command| Event::Forwarder(command);
     Command => |command| Event::Input(Input::Host(Sent { origin: Origin::Host, command }));
-    crate::audio::Tagged<SpeechEvent> => |ev| Event::Input(Input::Stt(ev));
+    crate::audio::Tagged<SpeechEvent> => |ev| Event::Input(Input::Stt(ev, None));
     VadEvent => |ev| Event::Input(Input::Vad(ev));
     RoomEvent => |ev| Event::Input(Input::Room(ev));
     crate::room_io::RoomIoEvent => |ev| Event::Input(Input::RoomIo(ev));
@@ -219,7 +228,7 @@ queue_events! {
     lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict> =>
         |ev| Event::Input(Input::Overlap(ev));
     ChannelEnd => |end| Event::Input(Input::ChannelEnded(end));
-    StreamOpened => |opened| Event::Input(Input::StreamOpened(opened));
+    StreamOpened => |opened| Event::LegOpened(opened);
     lk_agents_rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
 }
 
@@ -227,9 +236,11 @@ queue_events! {
 fn eot_input(ev: lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPrediction>) -> Input {
     use lk_agents_abi::turn::detector::{LegEvent, ReqId};
     match ev {
-        LegEvent::Verdict { req, verdict } => Input::Eot(req.unwrap_or(ReqId(0)), Ok(verdict)),
+        LegEvent::Verdict { req, verdict } => {
+            Input::Eot(req.unwrap_or(ReqId(0)), Ok(verdict), None)
+        }
         LegEvent::Error { req, recoverable: _, err } => {
-            Input::Eot(req.unwrap_or(ReqId(0)), Err(err))
+            Input::Eot(req.unwrap_or(ReqId(0)), Err(err), None)
         }
         LegEvent::Closed => Input::ChannelEnded(ChannelEnd {
             leg: "eot",
@@ -248,7 +259,7 @@ pub struct QueueClosed;
 #[derive(lk_agents_abi::Vocabulary)]
 pub enum Input {
     Host(Sent),
-    Stt(crate::audio::Tagged<SpeechEvent>),
+    Stt(crate::audio::Tagged<SpeechEvent>, Option<lk_agents_abi::ProviderId>),
     Vad(VadEvent),
     Room(RoomEvent),
     /// Forwarded from the loop so they share one arrival order.
@@ -258,12 +269,17 @@ pub enum Input {
     Eot(
         lk_agents_abi::turn::detector::ReqId,
         Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
+        Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     ),
     Overlap(lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict>),
     ChannelEnded(ChannelEnd),
     /// The STT stream failed an attempt it retries.
     SttRetried(lk_agents_abi::errors::ProviderError),
-    StreamOpened(crate::room_io::StreamOpened),
+    StreamOpened {
+        open: u64,
+        leg: crate::agent_session::effects::StreamKind,
+        outcome: Result<lk_agents_abi::resources::ResourceId, ProviderError>,
+    },
     Video(lk_agents_rtc::VideoFrameRef),
     /// The data plane's reports. The source's first frame forwarded (`input_started_at`).
     InputStarted {
@@ -279,6 +295,8 @@ pub enum Input {
 pub enum Event {
     /// For the decision core.
     Input(Input),
+    /// A provider completion, adopted into runtime resources before entering the core.
+    LegOpened(StreamOpened),
     /// For the data plane, from the decision core.
     Forwarder(crate::data_plane::ForwarderCommand),
     Wake,
@@ -296,13 +314,7 @@ pub struct Driver {
     /// Machines never see it; [`Out`] carries it for them.
     pub(crate) current: FrameId,
     pub(crate) timers: TimerSet<Timer>,
-    /// What the spawned tasks share with the loop, the session clock among it.
-    pub(crate) shared: Arc<SessionShared>,
-    pub(crate) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
-    pub(super) answers: tokio::sync::mpsc::UnboundedSender<(RequestId, Answer)>,
-    pub(crate) journal: Journal,
-    /// The core knows no subscriber.
-    pub(crate) watch: WatchHub,
+    pub(crate) journalled: bool,
     /// Where the spawned work reports back, and the data plane's commands go, in one order.
     pub(crate) queue: Tx,
     /// Decides ownership (a tool's hold is its run's).
@@ -313,30 +325,36 @@ pub struct Driver {
     pub(super) opened: bool,
     /// The activity changed this cycle: published once, as the cycle's effects are done.
     pub(crate) activity_changed: std::cell::Cell<bool>,
+    pub(crate) pending_effects: std::cell::RefCell<Vec<crate::agent_session::effects::Effect>>,
 }
 
 impl Driver {
     /// Only while performing an effect, when no cycle exists.
     pub(crate) fn journal(&self, step: Step) {
-        self.journal.record(step);
+        if !self.journalled {
+            return;
+        }
+        self.pending_effects
+            .borrow_mut()
+            .push(crate::agent_session::effects::Effect::Journal(Box::new(step)));
     }
 
     /// An event sent to the host where no cycle exists, journalled first.
     pub(crate) fn emit_now(&self, ev: SessionEvent) {
-        if self.journal.is_on() {
+        if self.journalled {
             self.journal(Step::Emitted(ev.journal_form()));
         }
-        let _ = self.events.send(HostEvent::Session(ev));
+        self.pending_effects.borrow_mut().push(crate::agent_session::effects::Effect::Emit(ev));
     }
 
     pub(crate) fn out(&self) -> Out {
-        Out::new(self.current, self.journal.clone())
+        Out::new(self.current, self.journalled)
     }
 
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.
-    pub fn open(&mut self, now: Now) {
+    pub fn open(&mut self, now: Now) -> Vec<crate::agent_session::effects::Effect> {
         if std::mem::replace(&mut self.opened, true) {
-            return;
+            return Vec::new();
         }
         self.step.set(now);
         let now = now.at;
@@ -362,7 +380,7 @@ impl Driver {
             let mut spans = Vec::new();
             self.session.trace.opened(self.step.wall_secs_at(now), &mut spans);
             spans.into_iter().for_each(|ev| out.machine().emit(ev));
-            self.execute(out);
+            self.settle_step(out)
         }
     }
 
@@ -373,7 +391,9 @@ impl Driver {
     /// Answer an awaited command; `None` is a command nobody awaits.
     pub(crate) fn answer(&self, call: Option<RequestId>, answer: Answer) {
         if let Some(call) = call {
-            let _ = self.answers.send((call, answer));
+            self.pending_effects
+                .borrow_mut()
+                .push(crate::agent_session::effects::Effect::Answer(call, answer));
         }
     }
 
@@ -392,7 +412,7 @@ impl Driver {
             }
             None => {
                 let id = self.session.ids.next_speech_id();
-                let api = self.shared.queue.clone();
+                let api = self.queue.clone();
                 (id, Arc::new(SpeechHandle::new(id, allow_interruptions, api)))
             }
         }
@@ -408,7 +428,10 @@ impl Driver {
     /// The loop stopped. What was queued and never delivered is refused (a census is still
     /// journalled), then the session's last event goes out, then every waiter and task the loop
     /// leaves is released: nothing settles after `close`.
-    pub(crate) fn finish(&mut self, undelivered: Vec<Input>) {
+    pub(crate) fn finish(
+        &mut self,
+        undelivered: Vec<Input>,
+    ) -> Vec<crate::agent_session::effects::Effect> {
         let mut out = self.out();
         for input in undelivered {
             match input {
@@ -419,15 +442,22 @@ impl Driver {
                     self.refuse_command(command, &mut out)
                 }
                 Input::InputCensus(census) => self.on_input_census(census, &mut out),
-                Input::StreamOpened(StreamOpened { outcome: Ok(stream), .. }) => {
-                    self.discard_open(stream)
+                Input::StreamOpened { outcome: Ok(sink), .. } => {
+                    out.machine().push(crate::agent_session::effects::Effect::DiscardLeg(sink));
                 }
                 _ => {}
             }
         }
         // Only the refusals are sent: nothing else takes effect once the loop stopped.
-        for (call, answer) in out.take_answers() {
-            self.answer(Some(call), answer);
+        for effect in out.take() {
+            if matches!(
+                effect,
+                crate::agent_session::effects::Effect::Answer(..)
+                    | crate::agent_session::effects::Effect::DiscardLeg(_)
+                    | crate::agent_session::effects::Effect::Journal(_)
+            ) {
+                self.pending_effects.borrow_mut().push(effect);
+            }
         }
         self.run_close_at_end();
         let mut out = self.out();
@@ -436,9 +466,11 @@ impl Driver {
         {
             out.machine().emit(SessionEvent::Close { reason, error });
         }
-        self.execute(out);
+        let mut effects = self.settle_step(out);
         self.settle_waiters_at_end();
         self.release_all_providers();
+        effects.append(&mut self.pending_effects.borrow_mut());
+        effects
     }
 
     /// When the core next wants [`Event::Wake`]: its earliest deadline, or the last step's instant
@@ -463,7 +495,11 @@ impl Driver {
 
     /// One step: `input` at `now` (`None`: time reached [`Self::wake_at`]), then everything it
     /// made due in the same instant.
-    pub(crate) fn handle(&mut self, input: Option<Input>, now: Now) {
+    pub fn handle(
+        &mut self,
+        input: Option<Input>,
+        now: Now,
+    ) -> Vec<crate::agent_session::effects::Effect> {
         self.step.set(now);
         let now = now.at;
         let mut out = self.out();
@@ -473,7 +509,10 @@ impl Driver {
                     self.on_timers(now, &mut out);
                 }
             }
-            Some(Input::Stt(ev)) => self.on_stt(now, ev, &mut out),
+            Some(Input::Stt(ev, provider)) => {
+                self.input.stt_provider = provider;
+                self.on_stt(now, ev, &mut out);
+            }
             Some(Input::Vad(ev)) => self.on_vad(now, ev, &mut out),
             Some(Input::Room(ev)) => self.on_rtc(now, ev, &mut out),
             Some(Input::Host(Sent { origin, command })) => {
@@ -490,22 +529,35 @@ impl Driver {
                 if late {
                     self.refuse_command(command, &mut out);
                     self.pump_schedule(now, &mut out);
-                    self.execute(out);
+                    let mut effects = self.settle_step(out);
                     self.publish_gate();
-                    return;
+                    effects.append(&mut self.pending_effects.borrow_mut());
+                    return effects;
                 }
                 self.on_api(now, command, &mut out);
             }
             Some(Input::RoomIo(ev)) => self.on_room_io(now, ev, &mut out),
             Some(Input::Gen(ev)) => self.on_generation(now, ev, &mut out),
             Some(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
-            Some(Input::Eot(req, p)) => self.on_eot(now, req, p, &mut out),
+            Some(Input::Eot(req, p, thresholds)) => {
+                self.activity.audio_recognition.set_thresholds(thresholds);
+                self.on_eot(now, req, p, &mut out);
+            }
             Some(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut out),
             Some(Input::ChannelEnded(end)) => self.on_leg_ended(now, end, &mut out),
             Some(Input::SttRetried(error)) => {
-                self.report_error(now, crate::events::ErrorSource::Stt, true, error, None, &mut out);
+                self.report_error(
+                    now,
+                    crate::events::ErrorSource::Stt,
+                    true,
+                    error,
+                    None,
+                    &mut out,
+                );
             }
-            Some(Input::StreamOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
+            Some(Input::StreamOpened { open, leg, outcome }) => {
+                self.on_leg_opened(now, open, leg, outcome, &mut out);
+            }
             Some(Input::Video(frame)) => self.on_video_frame(now, frame, &mut out),
             Some(Input::InputStarted { at }) => self.input.first_input_at = Some(at),
             Some(Input::GateSilenced(silenced)) => {
@@ -517,7 +569,7 @@ impl Driver {
         }
         // Scheduled in the same cycle as the wake that changed it.
         self.pump_schedule(now, &mut out);
-        self.execute(out);
+        let mut effects = self.settle_step(out);
         // The run's settle check, after the wake's own effects; a re-prompt is scheduled in
         // this cycle.
         let mut out = self.out();
@@ -529,8 +581,11 @@ impl Driver {
         // in this cycle too, or it waits, the floor free, for some unrelated wake.
         self.pump_schedule(now, &mut out);
         self.release_providers(&mut out);
-        self.execute(out);
+        effects.extend(self.settle_step(out));
+        self.activity.live_speech_at_final = false;
         self.publish_gate();
+        effects.append(&mut self.pending_effects.borrow_mut());
+        effects
     }
 
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
@@ -563,7 +618,6 @@ impl Driver {
         self.emit_now(done);
         self.answer_speech(call);
     }
-
 
     pub(super) fn on_rtc(&mut self, now: Ts, ev: RoomEvent, out: &mut Out) {
         out.trace(RoomStep::Event(crate::trace::RoomEventKind::of(&ev)));
@@ -634,7 +688,8 @@ impl Driver {
                 out.trace(crate::trace::ToolStep::SessionToolsExtended { added });
             }
             Command::Ivr(command) => {
-                self.watch.publish(SystemTap::Ivr(command));
+                out.machine()
+                    .push(crate::agent_session::effects::Effect::Tap(SystemTap::Ivr(command)));
             }
         }
     }
@@ -707,7 +762,9 @@ impl Driver {
     /// Sent to the data plane and journalled only when the verdict changed. Through
     /// [`Driver::journal`]: no cycle exists here.
     pub(super) fn publish_gate(&mut self) {
-        self.shared.launch.publish(self.launch_hold());
+        self.pending_effects
+            .borrow_mut()
+            .push(crate::agent_session::effects::Effect::LaunchHold(self.launch_hold()));
         let session = &self.session;
         let inputs = crate::audio::GateInputs {
             agent_state: session.states.agent_state(),
@@ -725,7 +782,11 @@ impl Driver {
         };
         let discard = crate::audio::audio_gate(&inputs);
         if self.input.gate_discard.replace(discard) != Some(discard) {
-            let _ = self.queue.send(crate::data_plane::ForwarderCommand::SetGateDiscard(discard));
+            self.pending_effects.borrow_mut().push(
+                crate::agent_session::effects::Effect::Forwarder(
+                    crate::data_plane::ForwarderCommand::SetGateDiscard(discard),
+                ),
+            );
             self.journal(Step::Playout(PlayoutStep::GatePublished {
                 stt_real: !discard,
                 realtime_real: !discard,
@@ -738,15 +799,14 @@ impl Driver {
     /// Interruptible speeches only (an uninterruptible greeting plays over the user by design); a
     /// speech whose first frame is out is never held again.
     pub(super) fn launch_hold(&self) -> std::collections::BTreeSet<SpeechId> {
-        // Read off the gate, not the scheduling task's current speech, which a block or
-        // supersession can move away from a speech still parked at launch.
+        // A block or supersession can move the floor away from a speech still at launch.
         if !self.activity.audio_recognition.user_speaking() {
             return std::collections::BTreeSet::new();
         }
-        self.shared
-            .launch
-            .launching()
-            .into_iter()
+        self.activity
+            .launching
+            .iter()
+            .copied()
             .filter(|speech| {
                 self.activity.speech_scheduler.handle(*speech).is_some_and(|h| h.interruptible())
             })

@@ -106,8 +106,8 @@ impl ToolStep {
                 // reaches it: the body waits for the answer.
                 let (grant, granted) = match &runner {
                     Some(_) => {
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        (Some(tx), Some(rx))
+                        let (call, rx) = shared.calls.open(crate::agent_session::Answer::approval);
+                        (Some(call), Some(rx))
                     }
                     None => (None, None),
                 };

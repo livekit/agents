@@ -7,9 +7,11 @@ use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Close, Driver, HostEvent};
 use crate::room_io::_input::{ParticipantAudioInput, ParticipantVideoInput};
 use crate::room_io::_output::ParticipantAudioOutput;
-use crate::room_io::_output::transcription::{SegmentIds, ParticipantTranscriptionOutput};
+use crate::room_io::_output::transcription::{ParticipantTranscriptionOutput, SegmentIds};
 use crate::room_io::_pre_connect_audio::PreConnectAudioHandler;
+use crate::trace::{RoomLinkStep, RoomStep, Step};
 use lk_agents_abi::AbortHandle;
+use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::voice::io::{
     AudioInput as IoRoom_IoAudioInput, AudioOutput as IoRoom_IoAudioOutput, TextOutput,
@@ -18,8 +20,6 @@ pub use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, DeleteRoomRequested, ParticipantLinked,
     ParticipantUnlinked, RoomIoConfig, TextInput, TextOutputConfig,
 };
-use crate::trace::{RoomLinkStep, RoomStep, Step};
-use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, ATTRIBUTE_PUBLISH_ON_BEHALF, Clock, Monotone, Spawner, SpawnerExt,
     TOPIC_CHAT, Ts,
@@ -67,8 +67,7 @@ pub struct StreamOpened {
 }
 
 pub enum Opened {
-    /// The stream's two sides. The core registers the sink only if it takes the stream, so one
-    /// never delivered leaves nothing in the session's resources.
+    /// Runtime owns both sides until the core accepts or discards the prepared resource.
     Stt(lk_agents_abi::SttSink, lk_agents_abi::SttSource),
     Vad(lk_agents_abi::VadSink, lk_agents_abi::VadSource),
 }
@@ -287,7 +286,8 @@ impl RoomIo {
             while let Some(ev) = events.recv().await {
                 this.handle_event(&ev).await;
                 // A state the agent took before the room connected was not written: write it now.
-                if let RoomEvent::ConnectionStateChanged { state: ConnectionState::Connected } = ev {
+                if let RoomEvent::ConnectionStateChanged { state: ConnectionState::Connected } = ev
+                {
                     let last = this.agent_state.lock().unwrap().clone();
                     if let Some(state) = last {
                         this.on_agent_state_changed(&state);
@@ -716,15 +716,15 @@ impl Driver {
             }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }
-        let _ = self.events.send(HostEvent::Room(ev));
+        out.machine().push(crate::agent_session::effects::Effect::Host(HostEvent::Room(ev)));
     }
 
     pub(crate) fn on_session_closed(&mut self) {
         if let Some(room) = self.session.room.request_deletion() {
             self.journal(Step::Room(RoomStep::Link(RoomLinkStep::DeleteRoomRequested)));
-            let _ = self.events.send(HostEvent::Room(RoomIoEvent::DeleteRoomRequested(
-                DeleteRoomRequested { room },
-            )));
+            self.pending_effects.borrow_mut().push(crate::agent_session::effects::Effect::Host(
+                HostEvent::Room(RoomIoEvent::DeleteRoomRequested(DeleteRoomRequested { room })),
+            ));
         }
     }
 }

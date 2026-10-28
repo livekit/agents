@@ -157,9 +157,6 @@ struct Interruptions {
     allow: bool,
     holds: u32,
     restore: bool,
-    /// What the host set and the loop has not applied yet: before the loop created the speech, the
-    /// speech is created with it; after, the host reads it until the loop's write lands.
-    requested: Option<bool>,
 }
 
 /// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
@@ -266,7 +263,6 @@ impl SpeechHandle {
                 holds: 0,
                 // `_interruption_holds_restore = allow_interruptions` (`SpeechHandle.__init__`).
                 restore: allow_interruptions,
-                requested: None,
             }),
             generations: Mutex::new(Vec::new()),
             // `_num_steps = 1`, so `RunContext`'s `_initial_step_idx` is 0.
@@ -304,13 +300,15 @@ impl SpeechHandle {
         self.reserved
     }
 
-    /// The loop creates the speech behind this handle: its id, and its resolved interruptibility,
-    /// unless the host set one since its call (its later write wins).
+    /// The loop creates the speech behind this handle with its accepted interruptibility.
     pub fn create(&self, id: SpeechId, allow_interruptions: bool) {
         // The host cannot hold it before this.
         self.interruptions.send_modify(|s| {
-            let allow = s.requested.unwrap_or(allow_interruptions);
-            *s = Interruptions { allow, holds: 0, restore: allow, requested: None };
+            *s = Interruptions {
+                allow: allow_interruptions,
+                holds: 0,
+                restore: allow_interruptions,
+            };
         });
         let _ = self.speech_id.set(id.to_string().into());
         let _ = self.id.set(id);
@@ -420,9 +418,6 @@ impl SpeechHandle {
             return Err(SpeechError::AlreadyInterrupted);
         }
         self.interruptions.send_if_modified(|s| {
-            if s.requested == Some(value) {
-                s.requested = None;
-            }
             let changed = s.allow != value;
             s.allow = value;
             changed
@@ -456,8 +451,10 @@ impl SpeechHandle {
     pub fn release_interruptions(&self) {
         let interrupted = self.interrupted();
         self.interruptions.send_if_modified(|s| {
-            debug_assert!(s.holds > 0, "release_interruptions without a matching hold");
-            s.holds = s.holds.saturating_sub(1);
+            if s.holds == 0 {
+                return false;
+            }
+            s.holds -= 1;
             if s.holds != 0 {
                 return false;
             }
@@ -493,12 +490,16 @@ impl SpeechHandle {
     /// The watchdog body (`SpeechHandle._cancel`): cancel every linked task, then mark done.
     /// Returns whether it fired.
     pub fn on_interruption_timeout(&self) -> bool {
-        if !std::mem::replace(&mut self.inner.lock().unwrap().watchdog_armed, false) {
+        if !self.take_interruption_timeout() {
             return false;
         }
         self.cancel_tasks();
         self.mark_done(None);
         true
+    }
+
+    pub(crate) fn take_interruption_timeout(&self) -> bool {
+        std::mem::replace(&mut self.inner.lock().unwrap().watchdog_armed, false)
     }
 
     /// Cancel every linked task, as `_cancel` does, without marking the speech done.
@@ -752,38 +753,24 @@ impl SpeechHandle {
         self.done.get()
     }
 
-    /// `allow_interruptions`: the host's last write, until the loop has applied it.
+    /// The core's last accepted `allow_interruptions`.
     #[host(getter(name = "allow_interruptions"))]
     pub fn allow_interruptions_for_host(&self) -> bool {
-        let s = self.interruptions.borrow();
-        s.requested.unwrap_or(s.allow)
+        self.allow_interruptions()
     }
 
-    /// The setter: sent to the loop, the one writer of a speech's interruption state, which
-    /// journals it; the host reads its own write meanwhile. Raises the reference's `RuntimeError`
-    /// on an already-interrupted speech. Before the loop has created the speech, the value is the
-    /// one it is created with.
+    /// Enqueue the setter; the accepted view changes when the loop applies it.
     #[host(setter(name = "allow_interruptions"))]
     pub fn set_allow_interruptions_for_host(&self, value: bool) -> Result<(), SpeechRefused> {
-        if !value && self.interrupt_requested.load(Ordering::Acquire) {
+        if !value && (self.interrupt_requested.load(Ordering::Acquire) || self.interrupted()) {
             return Err(SpeechError::AlreadyInterrupted.into());
         }
         if *self.creation.borrow() == Creation::Detached {
             return Ok(self.set_allow_interruptions(value)?);
         }
-        let Some(speech) = self.created() else {
-            // Pending: nothing runs yet, so the request is the handle's until the loop creates it.
-            self.interruptions.send_modify(|s| {
-                s.allow = value;
-                s.requested = Some(value);
-            });
-            return Ok(());
+        let Some(speech) = self.created().or(self.reserved) else {
+            return Err(SpeechRefused::Detached);
         };
-        if !value && self.interrupted() {
-            return Err(SpeechError::AlreadyInterrupted.into());
-        }
-        self.interruptions.send_modify(|s| s.requested = Some(value));
-        // A closed loop has no speech left to protect.
         let _ = self.api.send(crate::agent_session::Command::from(
             crate::agent_session::SpeechCommand::SetAllowInterruptions { speech, allow: value },
         ));
@@ -851,15 +838,23 @@ impl SpeechHandle {
     /// attempt.
     #[host(method(name = "hold_interruptions"))]
     pub fn hold_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
-        self.attached()?;
-        Ok(self.hold_interruptions()?)
+        let speech = self.attached()?;
+        if self.interrupted() {
+            return Err(SpeechError::AlreadyInterrupted.into());
+        }
+        let _ = self.api.send(crate::agent_session::Command::from(
+            crate::agent_session::SpeechCommand::HoldInterruptions { speech, hold: true },
+        ));
+        Ok(())
     }
 
     /// `_release_interruptions`. Idempotent past zero, like the reference's.
     #[host(method(name = "release_interruptions"))]
     pub fn release_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
-        self.attached()?;
-        self.release_interruptions();
+        let speech = self.attached()?;
+        let _ = self.api.send(crate::agent_session::Command::from(
+            crate::agent_session::SpeechCommand::HoldInterruptions { speech, hold: false },
+        ));
         Ok(())
     }
 

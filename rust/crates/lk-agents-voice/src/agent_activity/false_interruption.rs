@@ -316,7 +316,6 @@ impl Driver {
         if let Some(output) = self.session.outputs.audio.as_ref().map(|a| a.id) {
             out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
-
     }
 
     /// Interrupt a paused speech the way `_cancel_speech_pause(interrupt=True)` does: refused for a
@@ -379,7 +378,8 @@ impl Driver {
         });
         // `on_overlap_speech`: every verdict is the session's event, before it is acted on.
         if let Some(event) = &v.reported {
-            out.machine().emit(crate::events::SessionEvent::OverlappingSpeech(std::sync::Arc::clone(event)));
+            out.machine()
+                .emit(crate::events::SessionEvent::OverlappingSpeech(std::sync::Arc::clone(event)));
         }
         // A verdict for an overlap no longer open changes nothing; one inside the boundary
         // cooldown is not trusted. The rest is on the effect list, in order.
@@ -790,7 +790,7 @@ impl Driver {
             out.trace(InterruptStep::InterruptSettled {
                 speeches: std::mem::take(&mut w.speeches),
             });
-            self.answer(w.call, Answer::Interrupt(Ok(())));
+            out.answer(w.call, Answer::Interrupt(Ok(())));
             false
         });
         self.activity.interrupt_waiters = waiters;

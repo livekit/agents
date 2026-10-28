@@ -31,12 +31,15 @@ pub(super) fn extend(acc: &mut Visible, more: &Visible) {
     acc.tags.extend(more.tags.iter().cloned());
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `_produce_segments`. The dispatched tools come back on every path, failure included.
 pub(super) async fn produce_segments(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
-    tx: mpsc::UnboundedSender<SegEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] tx: mpsc::UnboundedSender<
+        SegEvent,
+    >,
 ) -> (Result<LlmGenerationData, DriverError>, ToolStep) {
     let mut tools = ToolStep::new();
     // A closed receiver means the voice gave up; dropping the chunk is right.
@@ -47,7 +50,7 @@ pub(super) async fn produce_segments(
         }
     };
     match &ctx.source {
-        ReplySource::Llm | ReplySource::Realtime { .. } => {
+        ReplySource::Llm | ReplySource::Realtime => {
             let data = perform_llm_inference(shared, handle, ctx, &tx, &mut tools).await;
             return (data, tools);
         }
@@ -71,12 +74,15 @@ pub(super) async fn produce_segments(
     (Ok(LlmGenerationData::new(shared)), tools)
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `perform_llm_inference`, retried per the request's budget while nothing has been produced.
 async fn perform_llm_inference(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
-    tx: &mpsc::UnboundedSender<SegEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] tx: &mpsc::UnboundedSender<
+        SegEvent,
+    >,
     tools: &mut ToolStep,
 ) -> Result<LlmGenerationData, DriverError> {
     // Held for the step: a mid-reply handoff must not move the model under a request on the wire.
@@ -174,7 +180,9 @@ async fn read_llm_stream(
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     stream: &mut LlmStream,
-    tx: &mpsc::UnboundedSender<SegEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] tx: &mpsc::UnboundedSender<
+        SegEvent,
+    >,
     tools: &mut ToolStep,
     data: &mut LlmGenerationData,
 ) -> Result<(), (ProviderError, bool)> {

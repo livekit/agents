@@ -2,9 +2,7 @@
 //! `start_speech`, the generation's reports, the agent state, and `wait_for_idle`.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::false_interruption::{
-    InterruptOutcome, InterruptWaiter,
-};
+use crate::agent_activity::false_interruption::{InterruptOutcome, InterruptWaiter};
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind, Status};
 use crate::agent_session::effects::Out;
 use crate::agent_session::effects::{GateCause, GateOp};
@@ -14,7 +12,6 @@ use crate::agent_session::{
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
-use crate::generation::pipeline_reply::pipeline_reply_task;
 use crate::generation::{
     EndOfSpeech, Instructions, TurnInstructions, TurnOutcome as GenTurnOutcome, end_of_speech,
 };
@@ -28,11 +25,12 @@ use crate::trace::{
 };
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, SpawnerExt, Ts};
+use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};
 use std::sync::Arc;
 
 /// A `say(stream)` the realtime model would speak itself (no TTS): the wire carries one text item.
-pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str = "say(stream) on a realtime model with no TTS: the wire takes one text item";
+pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str =
+    "say(stream) on a realtime model with no TTS: the wire takes one text item";
 
 /// A text `say()` with no TTS while audio output is attached and enabled, refused before a handle
 /// exists (`AgentActivity.say`'s first `RuntimeError`).
@@ -244,7 +242,6 @@ impl Driver {
                     out,
                 );
                 self.answer_speech(call);
-
             }
             SpeechCommand::GenerateReply {
                 user_input,
@@ -303,7 +300,7 @@ impl Driver {
                         self.activity.interrupt_waiters.push(InterruptWaiter { speeches, call });
                     }
                     // The reference raises here, before the socket and the queue.
-                    Err(refused) => self.answer(call, Answer::Interrupt(Err(refused))),
+                    Err(refused) => out.answer(call, Answer::Interrupt(Err(refused))),
                 }
             }
             SpeechCommand::InterruptSpeech { speech: id, force } => {
@@ -335,6 +332,19 @@ impl Driver {
             }
             // `disallow_interruptions()` and its release: read live by interruption, so no scheduling
             // step. A done handle refuses quietly; an unknown id is a no-op.
+            SpeechCommand::HoldInterruptions { speech, hold } => {
+                if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
+                    if hold {
+                        let _ = handle.hold_interruptions();
+                    } else {
+                        handle.release_interruptions();
+                    }
+                    out.trace(InterruptStep::InterruptionsToggled {
+                        speech,
+                        allow: handle.allow_interruptions(),
+                    });
+                }
+            }
             SpeechCommand::SetAllowInterruptions { speech, allow } => {
                 if let Some(h) = self.activity.speech_scheduler.handle(speech) {
                     let _ = h.set_allow_interruptions(allow);
@@ -501,8 +511,8 @@ impl Driver {
     ) {
         use crate::agent_activity::options::TurnDetection;
         let detection = self.session.config.effective.turn.detection();
-        let metadata = match (self.activity.audio_recognition.eot(), detection) {
-            (Some(eot), _) => Some(eot.id().metadata()),
+        let metadata = match (self.activity.audio_recognition.eot_provider(), detection) {
+            (Some(eot), _) => Some(eot.metadata()),
             (None, TurnDetection::Vad) => Some(mode_metadata("vad")),
             (None, TurnDetection::Stt) => Some(mode_metadata("stt")),
             (None, TurnDetection::Manual) => Some(mode_metadata("manual")),
@@ -554,8 +564,8 @@ impl Driver {
     }
 
     /// Through the one write, in order with `thinking`.
-    /// The single entry point for every speech. The task is created **eagerly**, before
-    /// scheduling, which is what puts several replies in flight at once.
+    /// The single admission point for every speech. The runtime launches accepted work after
+    /// this step settles.
     pub(crate) fn start_speech(
         &mut self,
         now: Ts,
@@ -580,7 +590,7 @@ impl Driver {
         let advertised = self.activity.advertised_toolset(&self.session.tools);
         let turn_toolset = spec.toolset.clone().unwrap_or_else(|| Arc::clone(&advertised));
         let expressive = match &spec.source {
-            ReplySource::Realtime { .. } => None,
+            ReplySource::Realtime => None,
             source => self.session.expressive_guide(matches!(source, ReplySource::Llm)),
         };
         let plan = crate::generation::PlanSpec {
@@ -603,7 +613,7 @@ impl Driver {
             | ReplySource::Audio { .. } => plan.plan(&record, &instructions, wall),
             // No plan: the server decides what to say. The step needs the record and tools; there
             // is no TTS leg, but the words still go on the text stream.
-            ReplySource::Realtime { .. } => crate::generation::Request {
+            ReplySource::Realtime => crate::generation::Request {
                 chat_ctx: record,
                 tools: turn_toolset.specs.clone(),
                 tts_enabled: false,
@@ -632,7 +642,7 @@ impl Driver {
                 ReplySource::Text(_)
                 | ReplySource::TextStream(_)
                 | ReplySource::Audio { .. }
-                | ReplySource::Realtime { .. },
+                | ReplySource::Realtime,
             )
             | (None, _) => None,
         };
@@ -648,13 +658,14 @@ impl Driver {
             request,
             replan,
             source: spec.source,
+            realtime_events: None,
             tool_choice: spec.tool_choice,
             frame: self.current,
             toolset: spec.toolset,
             providers: Providers {
                 dynamic_instructions: self.activity.dynamic_instructions.clone(),
-                llm: self.session.llm.as_ref().and_then(|l| self.shared.resources.llm(l.id)),
-                tts: self.session.tts.as_ref().and_then(|t| self.shared.resources.tts(t.id)),
+                llm: None,
+                tts: None,
                 toolset: advertised,
                 tools_host_extra: self.session.tool_hosts.clone(),
                 output_nodes: self.activity.output_nodes.clone(),
@@ -668,22 +679,20 @@ impl Driver {
 
         // Past the close's hard edge no generation is started.
         let past_edge = self.session.closing_past_edge();
-        if !past_edge {
-            // Eager: the task parks in `wait_for_authorization` until it is the current speech or
-            // is interrupted.
-            let shared = Arc::clone(&self.shared);
-            let task = Arc::clone(&handle);
-            let abort = self
-                .shared
-                .spawner
-                .spawn_unboxed(async move { pipeline_reply_task(shared, task, ctx).await });
-            // The only way a spawned generation is cancellable; a dropped `JoinHandle` detaches.
-            handle.add_task(abort);
-        }
-
         // Announced, recorded and scheduled in `request`, the one place every speech passes.
         let admitted =
             self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, out);
+        if admitted && !past_edge {
+            out.machine().push(crate::agent_session::effects::Effect::SpeechStart {
+                handle: Arc::clone(&handle),
+                context: Box::new(ctx),
+                llm: self.session.llm.as_ref().map(|l| l.id),
+                tts: self.session.tts.as_ref().map(|t| t.id),
+            });
+        }
+        if !admitted && self.activity.speech_scheduler.contains(id) {
+            self.release_speech(now, id, out);
+        }
         if admitted && kind.scheduled() {
             handle.mark_scheduled();
         }
@@ -715,6 +724,7 @@ impl Driver {
 
     pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent, out: &mut Out) {
         match ev {
+            GenEvent::Plan(plan) => self.activity.reply_plans.push_back(*plan),
             // A text-only turn's first frame; with audio output the edge is `PlaybackStarted`'s.
             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
 
@@ -810,7 +820,7 @@ impl Driver {
 
             GenEvent::PlaybackStarted { speech } => {
                 // The launch hold is over for this speech: its first frame is out (I-06, I-07).
-                self.shared.launch.note_started(speech);
+                self.activity.launching.remove(&speech);
                 out.trace(PlayoutStep::PlaybackStarted { speech });
                 // `_on_first_frame` listens on the sink's `playback_started`: the edge is the sink's
                 // report, not the words half's (which waits for its segment).
@@ -841,7 +851,8 @@ impl Driver {
             }
             GenEvent::ToolCallStarted { speech, step, call, runner, grant } => {
                 if let Some(grant) = grant {
-                    let _ = grant.send(crate::tool_executor::grant(&self.shared, &call));
+                    let granted = crate::tool_executor::grant(&mut self.session.approvals, &call);
+                    out.answer(Some(grant), Answer::Approval(granted));
                 }
                 self.on_tool_started(now, speech, step, *call, runner, out);
             }
@@ -849,6 +860,60 @@ impl Driver {
                 self.on_tool_ended(now, speech, call_id, end, message, out);
             }
         }
+    }
+
+    pub(crate) fn settle_reply_plans(&mut self, out: &mut Out) -> bool {
+        let mut ready = false;
+        let mut waiting = std::collections::VecDeque::new();
+        while let Some(plan) = self.activity.reply_plans.pop_front() {
+            let cancelled = self.session.closing_past_edge()
+                || self
+                    .activity
+                    .speech_scheduler
+                    .handle(plan.speech)
+                    .is_none_or(|handle| handle.interrupted() || handle.done());
+            let committed = match plan.step {
+                Some(step) => self.activity.tools_committed.contains_key(&(plan.after, step)),
+                None => {
+                    self.activity.finished.contains(&plan.after)
+                        || self
+                            .activity
+                            .tools_committed
+                            .keys()
+                            .any(|(speech, _)| *speech == plan.after)
+                }
+            };
+            if !cancelled && !committed {
+                waiting.push_back(plan);
+                continue;
+            }
+            ready = true;
+            let reply = if cancelled {
+                None
+            } else {
+                let instructions = self.activity.instructions.render(Some(Modality::Audio));
+                let request = plan.spec.plan_pending(
+                    &self.session.chat_ctx.agent_chat_ctx(),
+                    &instructions,
+                    &plan.pending,
+                    self.step.wall(),
+                );
+                let draining = plan.step.is_some_and(|step| {
+                    self.activity.tools_committed.get(&(plan.after, step)) == Some(&true)
+                });
+                Some(Box::new(crate::generation::PlannedReply {
+                    request,
+                    tool_choice: if draining {
+                        Some(lk_agents_abi::ToolChoice::Forbidden)
+                    } else {
+                        plan.tool_choice
+                    },
+                }))
+            };
+            out.answer(Some(plan.call), Answer::ReplyPlan(reply));
+        }
+        self.activity.reply_plans = waiting;
+        ready
     }
 
     /// `_on_first_frame`: `speaking` and `_on_start_of_agent_speech` (which enables interruption) at
@@ -878,12 +943,16 @@ impl Driver {
         item: Option<Box<ChatMessage>>,
         out: &mut Out,
     ) {
+        if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
+            let _ = handle.mark_generation_done();
+        }
         out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
         // The step's edge is spent: the next step's first frame is a new one.
         self.activity.spoke.remove(&speech);
         // Read off the record kept past the release: a `say` cut by the close's edge reports its
         // step after the edge released it, and is still a `say`'s item.
-        let kind = self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
+        let kind =
+            self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
         let mut item = item.map(|msg| {
             let source = match kind {
                 Some(SpeechKind::Say) => Source::Say { speech },
@@ -987,6 +1056,7 @@ impl Driver {
 
     pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         self.activity.spoke.remove(&speech);
+        self.activity.launching.remove(&speech);
         // `_scheduling_task`'s post-await release: a finished speech that is the paused one drops
         // the pause and resumes the sink, current or not (the floor left it at its last step).
         // The release at `Authorized` can miss a pause taken in the same instant, which would
@@ -1003,7 +1073,8 @@ impl Driver {
         {
             self.end_live_tools(now, speech, out);
             if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-                h.cancel_tasks();
+                out.machine()
+                    .push(crate::agent_session::effects::Effect::CancelSpeech(Arc::clone(h)));
             }
         }
         if let Some(h) = self.activity.speech_scheduler.handle(speech) {
@@ -1107,7 +1178,7 @@ impl Driver {
         }
         for waiter in self.session.idle.admit() {
             out.trace(SpeechStep::IdleAnswered { hold: waiter.grant, closing: false });
-            self.answer(waiter.call, waiter.answer(Ok(())));
+            out.answer(waiter.call, waiter.answer(Ok(())));
         }
     }
 
@@ -1117,7 +1188,7 @@ impl Driver {
             if let Some(id) = w.grant {
                 self.run_release(crate::run_result::Owned::Hold(id), out);
             }
-            self.answer(w.call, w.answer(Err(IdleRefused::Closing)));
+            out.answer(w.call, w.answer(Err(IdleRefused::Closing)));
         }
     }
 
@@ -1129,7 +1200,7 @@ impl Driver {
             if let Some(id) = waiter.grant {
                 self.run_release(crate::run_result::Owned::Hold(id), out);
             }
-            self.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
+            out.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
         }
     }
 }

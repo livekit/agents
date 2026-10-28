@@ -64,6 +64,7 @@ pub(crate) struct AgentActivity {
     /// Per tool step: whether the activity that made the speech drains, so the step's reply
     /// offers no tools.
     pub(crate) tools_committed: BTreeMap<(SpeechId, u32), bool>,
+    pub(crate) reply_plans: std::collections::VecDeque<crate::generation::ReplyPlan>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
     pub(crate) tools_in_flight: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
@@ -107,9 +108,10 @@ pub(crate) struct AgentActivity {
     /// `_rt_session`. Exclusive with a pipeline.
     pub(crate) rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
     pub(crate) realtime_state: crate::agent_activity::realtime::RealtimeSessionState,
-    /// Dropping a sender ends its generation.
-    pub(crate) realtime_players:
-        BTreeMap<SpeechId, tokio::sync::mpsc::UnboundedSender<lk_agents_abi::llm::realtime::Event>>,
+    /// Speech identities whose runtime player is still open.
+    pub(crate) realtime_players: BTreeSet<SpeechId>,
+    /// Authorized speeches awaiting their first frame.
+    pub(crate) launching: BTreeSet<SpeechId>,
     /// The model's turn detection was switched off at the open.
     pub(crate) realtime_turn_detection_disabled: bool,
     /// Before the model's refinement, so a live change is one that moved this.
@@ -210,17 +212,6 @@ impl AgentActivity {
         self.realtime_resolved_mode = resolved;
         self.realtime_requested_detection = detection;
         moved
-    }
-
-    /// The event reaches `speech`'s player; a gone player (interrupted) is forgotten.
-    pub(crate) fn play_realtime(
-        &mut self,
-        speech: SpeechId,
-        ev: lk_agents_abi::llm::realtime::Event,
-    ) {
-        if self.realtime_players.get(&speech).is_some_and(|tx| tx.send(ev).is_err()) {
-            self.realtime_players.remove(&speech);
-        }
     }
 }
 
@@ -359,11 +350,13 @@ impl Driver {
                 let input = input.map(|HostVideo(input)| input);
                 let attached = input.is_some();
                 // The leg already read, handed back: nothing to swap.
-                if !self.input.replace_video_in(input) {
+                let instance = input.as_ref().map(|input| Arc::as_ptr(input).cast::<()>() as usize);
+                if self.input.video_instance == instance {
                     return;
                 }
+                self.input.video_instance = instance;
                 out.machine().push(crate::agent_session::effects::Effect::Audio(
-                    crate::agent_session::effects::AudioOp::SetVideoInput,
+                    crate::agent_session::effects::AudioOp::SetVideoInput(input.map(HostVideo)),
                 ));
                 out.trace(InputStep::VideoInputSet { attached });
             }
@@ -466,12 +459,9 @@ impl Driver {
             return;
         }
         self.prune_settled_speeches();
-        self.shared.activity.send_replace(crate::agent_session::ActivitySnapshot {
-            chat_ctx: self.session.chat_ctx.agent_chat_ctx(),
-            instructions: self.activity.instructions.clone(),
-            finished: self.activity.finished.clone(),
-            tools_committed: self.activity.tools_committed.clone(),
-        });
+        self.pending_effects
+            .borrow_mut()
+            .push(Effect::ChatContext(Arc::new(self.session.chat_ctx.agent_chat_ctx())));
     }
 
     /// What the driver keeps per speech outlives it only while something may still ask: the
@@ -553,7 +543,9 @@ impl Driver {
         );
         if let Some(chat_ctx) = chat_ctx {
             self.rt_send(
-                lk_agents_abi::RealtimeCommand::UpdateChatCtx(lk_agents_abi::UpdateChatCtx { chat_ctx }),
+                lk_agents_abi::RealtimeCommand::UpdateChatCtx(lk_agents_abi::UpdateChatCtx {
+                    chat_ctx,
+                }),
                 out,
             );
         }
@@ -592,19 +584,9 @@ impl Driver {
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
         let mut item = item;
-        {
-            let record =
-                self.shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            crate::tool_executor::mark_granted(&record, &mut item);
-        }
+        crate::tool_executor::mark_granted(&self.session.approvals, &mut item);
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit, out);
-    }
-
-    fn note_approval(&self, item: &ChatItem) {
-        let mut record =
-            self.shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::tool_executor::note_approval(&mut record, item);
     }
 
     /// An item on the record changed in place (an answered `InputRequired`'s output): the host
@@ -614,7 +596,7 @@ impl Driver {
         let (source, visibility, agent) =
             (entry.source.clone(), entry.visibility, entry.agent.clone());
         let (entry, _) = self.session.chat_ctx.commit(item, source, visibility, &agent);
-        self.note_approval(&entry.item);
+        crate::tool_executor::note_approval(&mut self.session.approvals, &entry.item);
         if entry.visibility.history() {
             let run = self.run_of_item(&entry.source);
             out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
@@ -630,7 +612,7 @@ impl Driver {
 
     /// The speech is told, the host learns of a new item, the activity is republished.
     fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), out: &mut Out) {
-        self.note_approval(&entry.item);
+        crate::tool_executor::note_approval(&mut self.session.approvals, &entry.item);
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));

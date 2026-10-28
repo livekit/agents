@@ -2,7 +2,7 @@
 //! streams, and the types it decides with.
 
 use crate::agent_activity::false_interruption::count_min_words;
-use crate::agent_activity::options::{DetectorKind, LegSet, AgentSessionOptions};
+use crate::agent_activity::options::{AgentSessionOptions, DetectorKind, LegSet};
 use crate::agent_session::effects::{Effects, Timer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
@@ -33,11 +33,7 @@ const NON_SPECIFIC_LANGUAGE_CODES: [&str; 2] = ["auto", "multi"];
 /// the user's turn, the end-of-turn countdown and its detector, the adaptive interruption channel,
 /// and a host `commit_user_turn()` waiting for its transcript.
 pub struct AudioRecognition {
-    /// `_turn_detector`; `None` commits turns on silence alone.
-    eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-    /// The interruption detector's port; `None` is VAD-only interruption.
-    interruption:
-        Option<std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
+    eot_provider: Option<lk_agents_abi::ProviderId>,
     /// `_commit_user_turn_atask` waiting for the final transcript.
     pending_commit: Option<PendingCommit>,
     cfg: TurnConfig,
@@ -131,8 +127,7 @@ impl AudioRecognition {
             },
         };
         AudioRecognition {
-            eot: None,
-            interruption: None,
+            eot_provider: None,
             pending_commit: None,
             overlap: OverlapJudge::new(turn.interruption_enabled),
             cfg: turn,
@@ -172,19 +167,8 @@ impl AudioRecognition {
 
     // --- reads: data out, host never touched ---------------------------------------------------
 
-    /// `_turn_detector`.
-    pub(crate) fn eot(
-        &self,
-    ) -> Option<&std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>> {
-        self.eot.as_ref()
-    }
-
-    /// The interruption detector's port.
-    pub(crate) fn interruption(
-        &self,
-    ) -> Option<&std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>
-    {
-        self.interruption.as_ref()
+    pub(crate) fn eot_provider(&self) -> Option<&lk_agents_abi::ProviderId> {
+        self.eot_provider.as_ref()
     }
 
     /// A host `commit_user_turn()` waits for its transcript.
@@ -279,16 +263,8 @@ impl AudioRecognition {
 
     // --- driver-owned inputs -----------------------------------------------------------------
 
-    /// The turn detector and the interruption port, as the session opened them.
-    pub(crate) fn set_detectors(
-        &mut self,
-        eot: Option<std::sync::Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-        interruption: Option<
-            std::sync::Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>,
-        >,
-    ) {
-        self.eot = eot;
-        self.interruption = interruption;
+    pub(crate) fn set_eot_provider(&mut self, provider: Option<lk_agents_abi::ProviderId>) {
+        self.eot_provider = provider;
     }
 
     /// The detector's own thresholds (`unlikely_threshold(language)`, ..), read by the driver

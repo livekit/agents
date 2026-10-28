@@ -289,7 +289,7 @@ pub struct StepTools {
 
 /// `FunctionCall.extra` key on a call of a tool that requires approval: `asked` when it returned
 /// the read-back, `granted` when it ran on the person's answer.
-pub const APPROVAL_KEY: &str = "lk.approval";
+pub use lk_agents_core::approval::APPROVAL_KEY;
 
 /// The output of an answered `InputRequired`: the person's words, or, for an approval's
 /// read-back, that the call has not run and how to run it (`APPROVAL_ANSWERED`).
@@ -315,11 +315,7 @@ pub(crate) fn answered_text(
             _ => None,
         })
         .unwrap_or_default();
-    format!(
-        "not run yet: the person answered {} to its read-back. If they agreed, call {name} again \
-         with exactly the same arguments to run it; if not, do not, and go on from what they said.",
-        python_repr(text)
-    )
+    lk_agents_core::approval::answered_text(&name, text)
 }
 
 /// `approval_granted`: whether `call` repeats the latest read-back of its tool, with the same
@@ -363,9 +359,8 @@ pub fn approval_granted(items: &[ChatItem], call: &FunctionCall) -> bool {
 /// Whether `call` runs on an answered read-back ([`approval_granted`]), decided as the model makes
 /// it, off the session's approval record: one answer grants one repeat, also to a call made before
 /// the granted one is committed.
-pub(crate) fn grant(shared: &crate::agent_session::SessionShared, call: &FunctionCall) -> bool {
-    let mut record = shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !approval_granted(&record, call) {
+pub(crate) fn grant(record: &mut Vec<ChatItem>, call: &FunctionCall) -> bool {
+    if !approval_granted(record, call) {
         return false;
     }
     let mut marked = call.clone();
@@ -389,7 +384,7 @@ pub(crate) fn mark_granted(record: &[ChatItem], item: &mut ChatItem) {
     }
 }
 
-/// The session's approval record (`SessionShared::approvals`): every agent's calls marked
+/// The session's approval record (`VoiceSession::approvals`): every agent's calls marked
 /// `lk.approval`, in order, with their outputs as last committed. What [`grant`] reads, in place of
 /// the whole history.
 pub(crate) fn note_approval(record: &mut Vec<ChatItem>, item: &ChatItem) {
@@ -412,49 +407,11 @@ pub(crate) fn note_approval(record: &mut Vec<ChatItem>, item: &ChatItem) {
 
 /// Arguments compared as JSON with sorted keys; a string that is not JSON compares as written.
 fn canonical_arguments(arguments: &str) -> String {
-    fn sorted(value: serde_json::Value) -> serde_json::Value {
-        match value {
-            serde_json::Value::Object(map) => {
-                let sorted: std::collections::BTreeMap<_, _> =
-                    map.into_iter().map(|(k, v)| (k, sorted(v))).collect();
-                serde_json::Value::Object(sorted.into_iter().collect())
-            }
-            serde_json::Value::Array(a) => {
-                serde_json::Value::Array(a.into_iter().map(sorted).collect())
-            }
-            other => other,
-        }
-    }
     let arguments = if arguments.is_empty() { "{}" } else { arguments };
     match serde_json::from_str::<serde_json::Value>(arguments) {
-        Ok(v) => sorted(v).to_string(),
+        Ok(v) => lk_agents_core::approval::canonical_json(&v),
         Err(_) => arguments.to_owned(),
     }
-}
-
-/// `repr(str)`, as the reference's `{answer!r}` writes it.
-fn python_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push(quote);
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32))
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
 }
 
 /// `{call_ids}` as Python's `str.format` spells a list: `['a', 'b']`.
@@ -659,7 +616,8 @@ impl std::fmt::Debug for dyn HostToolRunner {
 /// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
 pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
     let ToolReport { outcome, approval, transition } = report;
-    let shape = lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
+    let shape =
+        lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
     let mut output = FunctionCallOutput::new(
         format!("{}_out", call.id),
         call.call_id.clone(),
@@ -698,7 +656,8 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
             tool,
             transition,
         })),
-        other => lk_agents_core::tool_outcome::verbatim(&other).map(|text| Delivery::Say(text.to_owned())),
+        other => lk_agents_core::tool_outcome::verbatim(&other)
+            .map(|text| Delivery::Say(text.to_owned())),
     };
     ToolExecution { call, output, end, raw_update: None, delivery }
 }
@@ -1037,10 +996,7 @@ impl Driver {
                 }
             }));
         }
-        out.trace(ToolStep::Finished {
-            speech,
-            committed: n,
-        });
+        out.trace(ToolStep::Finished { speech, committed: n });
         let Some(executed) = executed else { return };
         // Not the host's to emit: after the commit, as before any hook existed for it.
         if !hosted {

@@ -9,6 +9,16 @@ fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
     Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()))
 }
 
+// A queued or refused setter must not change the accepted speech view.
+#[test]
+fn attached_options_wait_for_core_acceptance() {
+    let speech = created(true);
+    speech.set_allow_interruptions_for_host(false).unwrap();
+    assert!(speech.allow_interruptions_for_host(), "an undelivered setter changed the view");
+    speech.hold_interruptions_for_host().unwrap();
+    assert!(speech.allow_interruptions_for_host(), "an undelivered hold changed the view");
+}
+
 // Catches: a hold that is not counted, so one holder's release lifts another's, or a release that
 // restores the value at the last hold instead of the first holder's.
 #[test]
@@ -88,9 +98,11 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     // A setter before the loop created the speech is the value it is created with.
     let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(7), true);
     pending.set_allow_interruptions_for_host(false).unwrap();
-    assert!(!pending.allow_interruptions());
+    assert!(pending.allow_interruptions(), "a queued setter is not yet accepted");
     pending.create(SpeechId(7), true);
-    assert!(!pending.allow_interruptions(), "the host's later write wins over the resolved value");
+    assert!(pending.allow_interruptions(), "creation uses its accepted options");
+    pending.set_allow_interruptions(false).unwrap();
+    assert!(!pending.allow_interruptions());
 
     let lost = SpeechHandle::pending(Tx::disconnected(), SpeechId(8), true);
     lost.interrupt_for_host(false, spawner()).unwrap();
@@ -107,8 +119,12 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
 async fn host_calls_on_a_created_speech_reach_it() {
     let speech = created(true);
     speech.hold_interruptions_for_host().unwrap();
+    assert!(speech.allow_interruptions(), "the hold is queued");
+    speech.hold_interruptions().unwrap();
     assert!(!speech.allow_interruptions());
     speech.release_interruptions_for_host().unwrap();
+    assert!(!speech.allow_interruptions(), "the release is queued");
+    speech.release_interruptions();
     assert!(speech.allow_interruptions());
     assert!(matches!(
         speech.exception_for_host(),
@@ -148,7 +164,9 @@ async fn a_refused_host_interrupt_leaves_the_speech_uninterrupted() {
 
     let speech = Arc::new(created(true));
     speech.set_allow_interruptions_for_host(false).unwrap();
-    assert!(!speech.allow_interruptions_for_host(), "the host reads its own write");
+    assert!(speech.allow_interruptions_for_host(), "the setter is queued");
+    speech.set_allow_interruptions(false).unwrap();
+    assert!(!speech.allow_interruptions_for_host(), "the accepted setter is visible");
     assert!(speech.interrupt_for_host(false, spawner()).is_err());
 
     let speech = Arc::new(created(true));

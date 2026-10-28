@@ -341,7 +341,7 @@ impl AudioRecognition {
                 {
                     let (since, declared) = (*since, *declared);
                     let req = self.mint_req();
-                    eff.request_eot(req);
+                    eff.request_eot(req, self.prediction_timeout());
                     eff.append(self.set_phase(Phase::Speaking {
                         since,
                         prediction: Prediction::Pending(req),

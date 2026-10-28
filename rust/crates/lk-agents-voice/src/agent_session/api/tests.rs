@@ -71,6 +71,91 @@ fn unobserved(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
     assembled(room, hook_bound, None)
 }
 
+#[tokio::test(start_paused = true)]
+async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
+    let api = room_only(fake_room("effect-boundary").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+        panic!("session must be ready");
+    };
+    let (mut runtime, mut handle) = ready.builder.start().await.unwrap();
+    while handle.events.try_recv().is_ok() {}
+    let before = api.steps();
+    let effects = runtime.driver.open(api.time().read());
+    assert!(handle.events.try_recv().is_err(), "the decision step delivered a host event");
+    assert_eq!(api.steps(), before, "the decision step invoked the journal observer");
+    runtime.perform_voice(effects);
+    assert!(handle.events.try_recv().is_ok(), "runtime never delivered the opening event");
+    assert!(api.steps().len() > before.len(), "runtime never delivered journal observations");
+}
+
+#[tokio::test(start_paused = true)]
+async fn missing_provider_open_reports_correlated_failure() {
+    use crate::agent_session::effects::{Effect, ProviderCall, StreamKind};
+    let api = unobserved(fake_room("missing-provider").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+        panic!("session must be ready");
+    };
+    let (mut runtime, _) = ready.builder.start().await.unwrap();
+    while runtime.queue.try_recv().is_ok() {}
+    for leg in [StreamKind::Stt, StreamKind::Vad] {
+        runtime.perform_voice(vec![Effect::Provider(ProviderCall::OpenLeg {
+            leg,
+            open: 42,
+            resource: lk_agents_abi::resources::ResourceId(u64::MAX),
+        })]);
+        assert!(
+            matches!(
+                runtime.queue.try_recv(),
+                Ok(crate::agent_session::Event::LegOpened(
+                    crate::room_io::StreamOpened { open: 42, leg: reported, outcome: Err(_) }
+                )) if reported == leg
+            ),
+            "a failed launch must settle its request"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_is_serviced_before_ready_media() {
+    let api = unobserved(fake_room("saturated-media").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+        panic!("session must be ready");
+    };
+    let (mut runtime, handle) = ready.builder.start().await.unwrap();
+    let (media, frames) = tokio::sync::mpsc::channel(64);
+    for _ in 0..64 {
+        media.try_send(lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160)).unwrap();
+    }
+    runtime.frames = frames;
+    handle.api.send(Command::Close(Close::default())).unwrap();
+    runtime.run().await;
+    assert_eq!(runtime.frames.len(), 64, "ready media delayed close");
+}
+
+#[tokio::test(start_paused = true)]
+async fn accepted_views_are_published_before_receipts() {
+    use crate::agent_session::effects::Effect;
+    let api = unobserved(fake_room("view-before-receipt").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+        panic!("session must be ready");
+    };
+    let (mut runtime, handle) = ready.builder.start().await.unwrap();
+    let mut accepted = (**api.view.borrow()).clone();
+    accepted.config.configure(&crate::agent_activity::options::aec_warmup_layer(Some(9.0)));
+    let view = api.view.clone();
+    let call = handle.calls.insert(Box::new(move |_| {
+        assert_eq!(
+            view.borrow().config.effective.timers.aec_warmup(),
+            Some(Duration::from_secs(9)),
+            "receipt observed options from before acceptance"
+        );
+    }));
+    runtime.perform_voice(vec![
+        Effect::Answer(call, Answer::Speech),
+        Effect::SessionView(Arc::new(accepted)),
+    ]);
+}
+
 /// [`unobserved`], with the host's `SessionOptions` object when given.
 fn assembled(
     room: FixedRoom,
@@ -419,6 +504,7 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
             api.steps()
         );
         assert!(handle.interrupted(), "{origin:?}");
+        assert!(handle.done(), "refused speech waited for cleanup of work that never started");
     }
     api.close(CloseReason::UserInitiated, false, None).await;
 }
@@ -562,6 +648,7 @@ async fn rare_host_calls_reach_a_running_session() {
 
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     api.set_aec_warmup(None).unwrap();
+    api.interrupt(false).unwrap().await.unwrap();
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
     api.update_turn_options(Default::default()).unwrap();
 
@@ -588,6 +675,22 @@ async fn rare_host_calls_reach_a_running_session() {
         tokio::time::advance(Duration::from_secs(1)).await;
     }
     assert!(matches!(api.send(TurnCommand::Clear), Err(SessionRefused::Closed)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn options_view_changes_only_after_core_acceptance() {
+    use crate::agent_activity::options::{HostOptions, tests::kwargs};
+    let options = HostOptions::new(kwargs(None));
+    let api = running(assembled(fake_room("accepted-options").1, None, Some(&options))).await;
+    api.set_aec_warmup(None).unwrap();
+    assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
+    let (call, answer) = api.call(Answer::idle).unwrap();
+    api.send(SpeechCommand::WaitForIdle { hold: None, call: Some(call) }).unwrap();
+    assert!(answer.await.unwrap().is_ok());
+    assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
+    api.close(CloseReason::UserInitiated, false, None).await;
+    assert!(api.set_aec_warmup(Some(9.0)).is_err());
+    assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
 }
 
 // Catches: a session built with no `SessionOptions` answering a configuration it does not have.

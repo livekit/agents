@@ -165,9 +165,10 @@ fn label(event: &Event) -> &'static str {
     match event {
         Event::Wake => "Wake",
         Event::Forwarder(_) => "Forwarder",
+        Event::LegOpened(_) => "StreamOpened",
         Event::Input(input) => match input {
             Input::Host(sent) => sent.command.kind(),
-            Input::Stt(_) => "Stt",
+            Input::Stt(..) => "Stt",
             Input::Vad(_) => "Vad",
             Input::Room(_) => "Room",
             Input::RoomIo(_) => "RoomIo",
@@ -177,7 +178,7 @@ fn label(event: &Event) -> &'static str {
             Input::Overlap(_) => "Overlap",
             Input::ChannelEnded(_) => "ChannelEnded",
             Input::SttRetried(_) => "SttRetried",
-            Input::StreamOpened(_) => "StreamOpened",
+            Input::StreamOpened { .. } => "StreamOpened",
             Input::Video(_) => "Video",
             Input::InputStarted { .. } => "InputStarted",
             Input::GateSilenced(_) => "GateSilenced",
@@ -222,7 +223,7 @@ impl Source {
     fn of(event: &Event) -> Self {
         match event {
             Event::Input(Input::Host(sent)) => Source::Host(format!("{:?}", sent.origin)),
-            Event::Input(Input::Stt(tagged)) => Source::Stt(tagged.stream),
+            Event::Input(Input::Stt(tagged, _)) => Source::Stt(tagged.stream),
             Event::Input(Input::Vad(_)) => Source::Leg("vad"),
             Event::Input(Input::Eot(..)) => Source::Leg("eot"),
             Event::Input(Input::Overlap(_)) => Source::Leg("interruption"),

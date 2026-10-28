@@ -2,6 +2,8 @@
 //! ([`AudioForwarder`]), stepped by one queue owner, and what performs the data plane's effects.
 //! The queue owner only feeds it: [`Runtime::run`] in production, the fuzzer's run in tests.
 
+mod effects;
+
 use crate::agent_session::{Driver, Event, Now, Tx};
 use crate::audio::{AUDIO_IN_LEG, ChannelEnd};
 use crate::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
@@ -11,9 +13,14 @@ use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, SpawnerExt};
 use std::sync::Arc;
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub struct Runtime {
     pub driver: Driver,
+    pub(crate) shared: Arc<crate::agent_session::SessionShared>,
+    events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
+    watch: crate::agent_session::WatchHub,
     forwarder: AudioForwarder,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Every source's events, in arrival order. Frames never come this way.
     pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
     /// The microphone's frames, straight from its reader: a second of audio. A full queue holds
@@ -25,19 +32,62 @@ pub struct Runtime {
     frames_tx: tokio::sync::mpsc::Sender<AudioFrame>,
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, AbortHandle)>,
+    keyterms: Option<(u64, AbortHandle)>,
+    realtime_players: std::collections::BTreeMap<
+        crate::agent_activity::scheduling::SpeechId,
+        tokio::sync::mpsc::UnboundedSender<lk_agents_abi::llm::realtime::Event>,
+    >,
+    video_parts: crate::audio::VideoForwarderParts,
+    video_forwarder: Option<AbortHandle>,
+    video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
+    pending_legs: std::collections::BTreeMap<ResourceId, effects::PendingLeg>,
+    eot: Option<Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
+    interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
 }
 
 impl Runtime {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(crate) fn new(
         driver: Driver,
         forwarder: AudioForwarder,
-        queue: (Tx, tokio::sync::mpsc::UnboundedReceiver<Event>),
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] queue: (
+            Tx,
+            tokio::sync::mpsc::UnboundedReceiver<Event>,
+        ),
         source: Option<ResourceId>,
+        eot: Option<Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
+        interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
+        (video_parts, video_forwarder, video_in): (
+            crate::audio::VideoForwarderParts,
+            Option<AbortHandle>,
+            Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
+        ),
+        shared: Arc<crate::agent_session::SessionShared>,
+        events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
+        watch: crate::agent_session::WatchHub,
     ) -> Self {
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
         let (reports, queue) = queue;
-        let mut runtime =
-            Runtime { driver, forwarder, queue, frames, reports, frames_tx, source: None };
+        let mut runtime = Runtime {
+            driver,
+            shared,
+            events,
+            watch,
+            forwarder,
+            queue,
+            frames,
+            reports,
+            frames_tx,
+            source: None,
+            pending_legs: Default::default(),
+            keyterms: None,
+            realtime_players: Default::default(),
+            video_parts,
+            video_forwarder,
+            video_in,
+            eot,
+            interruption,
+        };
         // The session's first microphone is the host's attached one: nothing to tell it.
         if let Some(source) = source {
             runtime.read(source);
@@ -45,11 +95,12 @@ impl Runtime {
         runtime
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
     /// Every event in arrival order, every frame as it comes, and a wake when
     /// [`Driver::wake_at`] comes, a due wake before any same-instant event.
     pub async fn run(&mut self) {
-        let time = self.driver.shared.time.clone();
-        self.driver.open(time.read());
+        let time = self.shared.time.clone();
+        self.open(time.read());
         while !self.driver.stopped() {
             let wake_at = self.driver.wake_at();
             if wake_at.is_some_and(|at| at <= time.now()) {
@@ -59,11 +110,11 @@ impl Runtime {
             tokio::select! {
                 biased;
                 () = time.wait_until_opt(wake_at) => self.handle(Event::Wake, time.read()),
-                Some(frame) = self.frames.recv() => self.on_frame(frame, time.read()),
                 next = self.queue.recv() => match next {
                     Some(event) => self.handle(event, time.read()),
                     None => break,
                 },
+                Some(frame) = self.frames.recv() => self.on_frame(frame, time.read()),
             }
         }
         // Closed first, so a command sent from now on is refused to its sender rather than lost.
@@ -72,11 +123,39 @@ impl Runtime {
         self.finish(undelivered);
     }
 
+    pub fn open(&mut self, now: Now) {
+        let effects = self.driver.open(now);
+        self.perform_voice(effects);
+    }
+
     /// One event: an input or a wake to the decision core, a command to the data plane.
     pub fn handle(&mut self, event: Event, now: Now) {
         match event {
-            Event::Input(input) => self.driver.handle(Some(input), now),
-            Event::Wake => self.driver.handle(None, now),
+            Event::Input(mut input) => {
+                if let crate::agent_session::Input::Stt(_, provider) = &mut input {
+                    *provider = self
+                        .driver
+                        .session
+                        .stt
+                        .as_ref()
+                        .and_then(|stt| self.shared.resources.stt(stt.id))
+                        .map(|stt| stt.id());
+                }
+                if let crate::agent_session::Input::Eot(_, _, thresholds) = &mut input {
+                    *thresholds = self.eot.as_ref().and_then(|leg| leg.thresholds());
+                }
+                let effects = self.driver.handle(Some(input), now);
+                self.perform_voice(effects);
+            }
+            Event::Wake => {
+                let effects = self.driver.handle(None, now);
+                self.perform_voice(effects);
+            }
+            Event::LegOpened(opened) => {
+                let input = self.prepare_leg(opened);
+                let effects = self.driver.handle(Some(input), now);
+                self.perform_voice(effects);
+            }
             Event::Forwarder(command) => self.command(command),
         }
     }
@@ -84,7 +163,7 @@ impl Runtime {
     pub fn on_frame(&mut self, frame: AudioFrame, now: Now) {
         // The session recorder hears every frame the forwarder does, muted ones excepted.
         if self.forwarder.input_enabled
-            && let Some(tap) = self.driver.shared.recorder_tap()
+            && let Some(tap) = self.shared.recorder_tap()
         {
             tap.recorder.on_input_frame(tap.now(), &frame);
         }
@@ -99,9 +178,10 @@ impl Runtime {
         for event in undelivered {
             match event {
                 Event::Input(input) => inputs.push(input),
+                Event::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
                 // A microphone attached too late to be read is let go, not left in the table.
                 Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
-                    self.driver.shared.resources.release(source);
+                    self.shared.resources.release(source);
                 }
                 Event::Forwarder(command) => {
                     for effect in self.forwarder.handle(command) {
@@ -114,7 +194,8 @@ impl Runtime {
                 Event::Wake => {}
             }
         }
-        self.driver.finish(inputs);
+        let effects = self.driver.finish(inputs);
+        self.perform_voice(effects);
         self.release();
     }
 
@@ -124,7 +205,7 @@ impl Runtime {
         let effects = self.forwarder.close();
         self.perform(effects);
         if let Some((source, _)) = self.source.take() {
-            self.driver.shared.resources.release(source);
+            self.shared.resources.release(source);
         }
     }
 
@@ -133,7 +214,7 @@ impl Runtime {
             ForwarderCommand::SetSource(input) => self.set_source(input),
             // The host object is told, as `AgentInput.set_audio_enabled` does.
             ForwarderCommand::SetInputEnabled(enabled) => {
-                let resources = &self.driver.shared.resources;
+                let resources = &self.shared.resources;
                 if let Some(input) =
                     self.source.as_ref().and_then(|(id, _)| resources.audio_input(*id))
                 {
@@ -154,7 +235,7 @@ impl Runtime {
     /// over themselves. The old source is detached, the new one attached if input is enabled
     /// (`AgentInput.audio`'s setter).
     fn set_source(&mut self, input: Option<ResourceId>) {
-        let resources = self.driver.shared.resources.clone();
+        let resources = self.shared.resources.clone();
         if let Some((old, reader)) = self.source.take() {
             reader.abort();
             if let Some(old) = resources.audio_input(old) {
@@ -172,18 +253,18 @@ impl Runtime {
     }
 
     fn read(&mut self, source: ResourceId) {
-        let Some(input) = self.driver.shared.resources.audio_input(source) else { return };
+        let Some(input) = self.shared.resources.audio_input(source) else { return };
         let reader = read_audio(
             input,
             self.frames_tx.clone(),
-            self.driver.shared.closing.subscribe(),
+            self.shared.closing.subscribe(),
             self.reports.clone(),
         );
-        self.source = Some((source, self.driver.shared.spawner.spawn_unboxed(reader)));
+        self.source = Some((source, self.shared.spawner.spawn_unboxed(reader)));
     }
 
     fn perform(&mut self, effects: Vec<ForwarderEffect>) {
-        let resources = &self.driver.shared.resources;
+        let resources = &self.shared.resources;
         for effect in effects {
             match effect {
                 // A dead host stream is the drain's to report, not the forwarder's per frame.
@@ -211,12 +292,16 @@ impl Runtime {
 /// releases everything both cores hold, as its finish would have.
 impl Drop for Runtime {
     fn drop(&mut self) {
-        self.driver.shared.closing.send_replace(true);
+        self.shared.closing.send_replace(true);
+        self.shared.calls.close();
         self.release();
         self.driver.release_all_providers();
+        let effects = std::mem::take(&mut *self.driver.pending_effects.borrow_mut());
+        self.perform_voice(effects);
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
 /// The microphone's reader: every frame to the queue owner, until the track ends or the session
 /// closes. The input is the host's, not a `HostStream`: nothing to close, so no `Closed`.
 async fn read_audio(

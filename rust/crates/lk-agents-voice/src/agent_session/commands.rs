@@ -77,7 +77,9 @@ pub enum HookOutcome {
     },
     /// `function_tools_executed` handled: each output's `reply_required`, in order, as the
     /// handlers left them.
-    FunctionToolsExecuted { reply_required: Vec<bool> },
+    FunctionToolsExecuted {
+        reply_required: Vec<bool>,
+    },
     /// `on_user_turn_completed` skips the reply.
     Failed,
 }
@@ -137,6 +139,8 @@ pub struct SpeechCall {
 pub enum Answer {
     /// The speech of a [`SpeechCall`] is created.
     Speech,
+    ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
+    Approval(bool),
     Interrupt(Result<(), InterruptRefusal>),
 
     Commit(Result<String, CommitSuperseded>),
@@ -163,6 +167,8 @@ macro_rules! answer_picks {
 }
 
 answer_picks! {
+    reply_plan: ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
+    approval: Approval(bool),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
     commit: Commit(Result<String, CommitSuperseded>),
     idle: Idle(Result<(), IdleRefused>),
@@ -189,7 +195,7 @@ impl Command {
         match self {
             Command::Speech(c) => leaf!(c; SpeechCommand: Say, GenerateReply, Interrupt,
                 InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
-                ReleaseUserTurn, SetAllowInterruptions, EndCall, SetRunOutput, ToolUpdate, FillerStart,
+                ReleaseUserTurn, SetAllowInterruptions, HoldInterruptions, EndCall, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
             Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
                 UpdateTools, UpdateExpressive, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
@@ -340,9 +346,15 @@ pub enum SpeechCommand {
     /// A pending preemptive generation is dropped; the current speech is interrupted (a refusal is
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first
     /// refusal, each speech whole.
-    Interrupt { force: bool, call: Option<RequestId> },
+    Interrupt {
+        force: bool,
+        call: Option<RequestId>,
+    },
     /// The whole speech: its playout, its tools and any follow-up; `force` past a protection.
-    InterruptSpeech { speech: SpeechId, force: bool },
+    InterruptSpeech {
+        speech: SpeechId,
+        force: bool,
+    },
     /// Flush, wait for the final (skipped if one landed in the last 0.5 s), commit. No STT or
     /// closing: `""`, no commit. A newer commit cancels a waiting one; realtime commits and asks
     /// for a reply first.
@@ -353,27 +365,49 @@ pub enum SpeechCommand {
         call: Option<RequestId>,
     },
     /// Idle: nothing current, queued or being decided, the user silent, no claim or foreign hold.
-    WaitForIdle { hold: Option<HoldId>, call: Option<RequestId> },
+    WaitForIdle {
+        hold: Option<HoldId>,
+        call: Option<RequestId>,
+    },
     /// `RunContext.foreground()`: wait for idle, then hold it until `ReleaseIdleHold`; a waiter naming
     /// the hold passes through.
-    WaitForIdleAndHold { call: Option<RequestId> },
+    WaitForIdleAndHold {
+        call: Option<RequestId>,
+    },
     /// Unknown ids are a no-op.
-    ReleaseIdleHold { hold: HoldId },
+    ReleaseIdleHold {
+        hold: HoldId,
+    },
     /// Pins the user state to `speaking` and holds idle open. Reentrant.
     ClaimUserTurn,
     /// The last release re-derives the user state.
     ReleaseUserTurn,
     /// Refused quietly on a done handle.
-    SetAllowInterruptions { speech: SpeechId, allow: bool },
+    SetAllowInterruptions {
+        speech: SpeechId,
+        allow: bool,
+    },
+    HoldInterruptions {
+        speech: SpeechId,
+        hold: bool,
+    },
     /// `EndCallTool`: close the session once `speech` (the tool's) is done; on a realtime model
     /// answering tool results by itself, once that answer is done.
-    EndCall { speech: SpeechId },
+    EndCall {
+        speech: SpeechId,
+    },
     /// an accepted output from `speech`'s tool: the run ending on that speech reads it as
     /// output.
-    SetRunOutput { speech: SpeechId, output: crate::run_result::RunOutput },
+    SetRunOutput {
+        speech: SpeechId,
+        output: crate::run_result::RunOutput,
+    },
     /// A background tool speaks again after its first `ctx.update()`: the driver mints and commits
     /// the `{call_id}_update_N` / `{call_id}_final` pair and coalesces one deferred reply at idle.
-    ToolUpdate { call_id: String, update: ToolUpdate },
+    ToolUpdate {
+        call_id: String,
+        update: ToolUpdate,
+    },
     /// While the tool runs, say the source after `delay` idle, then every `interval`. A repeated
     /// `id` is refused.
     FillerStart {
@@ -386,7 +420,9 @@ pub enum SpeechCommand {
         source: FillerSource,
     },
     /// The dwell or cooldown in flight is dropped; a fire already made stays.
-    FillerStop { id: FillerId },
+    FillerStop {
+        id: FillerId,
+    },
     /// `Origin::Amd` only: nothing is authorized until `ResumeAuthorization`. A flag, not a
     /// counter.
     PauseAuthorization,

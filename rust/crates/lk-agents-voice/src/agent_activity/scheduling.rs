@@ -754,20 +754,6 @@ impl Driver {
     pub(crate) fn pump_schedule(&mut self, now: Ts, out: &mut Out) {
         self.run_scheduling_pass(now, out);
         self.activity.speech_scheduler.check_invariants(self.session.closing_past_edge());
-        let preflights: Vec<(String, Option<Ts>)> = out
-            .peek()
-            .iter()
-            .filter_map(|e| match e {
-                crate::agent_session::effects::Effect::Emit(
-                    SessionEvent::PreemptiveGeneration(pg),
-                ) => Some((pg.new_transcript.clone(), pg.started_speaking_at)),
-                _ => None,
-            })
-            .collect();
-        for (transcript, started_speaking_at) in preflights {
-            self.on_preemptive_generation(now, transcript, started_speaking_at, out);
-        }
-        self.activity.live_speech_at_final = false;
     }
 
     /// `_scheduling_task`: due interruption watchdogs, then the current speech. Its timers fire
@@ -779,12 +765,16 @@ impl Driver {
             out.trace(SpeechStep::WatchdogCleared { speech });
             // `SpeechHandle._cancel`: cancel, mark done and release, since the aborted task will
             // never report `Done`.
-            if self
+            if let Some(handle) = self
                 .activity
                 .speech_scheduler
                 .handle(speech)
-                .is_some_and(|h| h.on_interruption_timeout())
+                .cloned()
+                .filter(|h| h.take_interruption_timeout())
             {
+                out.machine()
+                    .push(crate::agent_session::effects::Effect::CancelSpeech(Arc::clone(&handle)));
+                handle.mark_done(None);
                 out.trace(InterruptStep::InterruptionTimedOut { speech });
                 if self.session.closing.is_none() {
                     self.end_live_tools(now, speech, out);
@@ -821,7 +811,7 @@ impl Driver {
             self.release_paused_speech(paused, out);
         }
         out.trace(SpeechStep::Authorized { speech: candidate });
-        self.shared.launch.note_authorized(candidate);
+        self.activity.launching.insert(candidate);
         self.realtime_authorized(now, candidate, out);
     }
 

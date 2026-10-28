@@ -1,5 +1,5 @@
 use crate::agent_session::Driver;
-use crate::agent_session::effects::{Out, Timer};
+use crate::agent_session::effects::{Effect, Out, Timer};
 use crate::room_io::RECORDER_FLUSH;
 use crate::trace::PlayoutStep;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
@@ -66,29 +66,45 @@ impl Driver {
         recorder: Arc<dyn lk_agents_media::recorder::AudioRecorder>,
         out: &mut Out,
     ) {
-        let tap = crate::recorder_io::RecorderTap::new(recorder, self.shared.time.clock());
-        *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
-        self.observe_recorder(None, self.session.outputs.audio.as_ref().map(|o| o.id));
+        self.session.recorder_attached = true;
+        out.machine().push(Effect::AttachRecorder {
+            recorder: crate::agent_session::commands::HostRecorder(recorder),
+            output: self.session.outputs.audio.as_ref().map(|o| o.id),
+        });
         out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
     }
 
     /// One last flush, observer off, timer cancelled.
     pub(crate) fn detach_recorder(&mut self, now: Ts, out: &mut Out) {
-        if self.shared.recorder_tap().is_none() {
+        if !std::mem::replace(&mut self.session.recorder_attached, false) {
             return;
         }
-        self.flush_recorder(now, false, out);
-        if let Some(observer) =
-            self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
-            && let Some(sink) = &self.session.outputs.audio
-            && let Some(out) = self.shared.resources.audio_output(sink.id)
-
-        {
-            out.tracker().unobserve(&observer);
-        }
-        *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
+        out.machine().push(Effect::FlushRecorder(self.step.wall_secs_at(now)));
+        out.machine()
+            .push(Effect::DetachRecorder(self.session.outputs.audio.as_ref().map(|o| o.id)));
         out.machine().cancel(Timer::RecorderFlush);
         out.trace(PlayoutStep::RecorderDetached);
+    }
+
+    pub(crate) fn flush_recorder(&mut self, now: Ts, rearm: bool, out: &mut Out) {
+        if !self.session.recorder_attached {
+            return;
+        }
+        out.machine().push(Effect::FlushRecorder(self.step.wall_secs_at(now)));
+        if rearm && !self.session.closing_past_edge() {
+            out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
+        }
+    }
+}
+
+impl crate::runtime::Runtime {
+    pub(crate) fn unobserve_recorder(&self, output: Option<lk_agents_abi::resources::ResourceId>) {
+        if let Some(observer) =
+            self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
+            && let Some(output) = output.and_then(|id| self.shared.resources.audio_output(id))
+        {
+            output.tracker().unobserve(&observer);
+        }
     }
 
     /// Off `previous` first, onto `sink`.
@@ -105,20 +121,10 @@ impl Driver {
             prev.tracker().unobserve(&old);
         }
         if let Some(out) = sink.and_then(|id| self.shared.resources.audio_output(id)) {
-
             let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
                 Arc::new(crate::recorder_io::RecorderPlaybackObserver(tap));
             out.tracker().observe(observer.clone());
             *slot = Some(observer);
-        }
-    }
-
-    pub(crate) fn flush_recorder(&mut self, now: Ts, rearm: bool, out: &mut Out) {
-        let Some(tap) = self.shared.recorder_tap() else { return };
-        let ok = tap.recorder.flush(tap.now()).is_ok();
-        out.trace(PlayoutStep::RecorderFlushed { ok });
-        if rearm && !self.session.closing_past_edge() {
-            out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
         }
     }
 }

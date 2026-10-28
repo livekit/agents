@@ -149,8 +149,6 @@ pub struct LaunchGate {
     /// The speeches held at launch. A set: a speech blocked while parked is still held when the
     /// next is authorized behind it.
     held: tokio::sync::watch::Sender<std::collections::BTreeSet<SpeechId>>,
-    /// Every speech authorized whose first frame is not out yet: the speeches in their launch.
-    launching: std::sync::Mutex<std::collections::BTreeSet<SpeechId>>,
 }
 
 impl Default for LaunchGate {
@@ -160,20 +158,9 @@ impl Default for LaunchGate {
 }
 
 impl LaunchGate {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
-        LaunchGate {
-            held: tokio::sync::watch::channel(std::collections::BTreeSet::new()).0,
-            launching: std::sync::Mutex::new(std::collections::BTreeSet::new()),
-        }
-    }
-
-    /// The loop, at `Authorized`: this speech is in its launch from now until its first frame.
-    pub fn note_authorized(&self, speech: SpeechId) {
-        self.launching.lock().unwrap().insert(speech);
-    }
-
-    pub fn launching(&self) -> Vec<SpeechId> {
-        self.launching.lock().unwrap().iter().copied().collect()
+        LaunchGate { held: tokio::sync::watch::channel(std::collections::BTreeSet::new()).0 }
     }
 
     /// The loop: the level as of the end of this iteration.
@@ -186,10 +173,6 @@ impl LaunchGate {
                 true
             }
         });
-    }
-
-    pub fn note_started(&self, speech: SpeechId) {
-        self.launching.lock().unwrap().remove(&speech);
     }
 
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<std::collections::BTreeSet<SpeechId>> {

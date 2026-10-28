@@ -5,8 +5,8 @@ use super::driver::*;
 use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{AgentActivity, DriverConfig, PIPELINE_SAMPLE_RATE};
-use crate::agent_session::VoiceSession;
 use crate::agent_session::SessionShared;
+use crate::agent_session::VoiceSession;
 use crate::agent_session::commands::Origin;
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Timebase;
@@ -18,9 +18,7 @@ use crate::trace::{CoreStep, Journal, RealtimeStep, Step};
 use lk_agents_abi::turn::detector::DetectorLeg;
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
-use lk_agents_abi::{
-    FrameId, Llm, Spawner, SpawnerExt, Stt, TimerSet, Ts, Tts, Vad,
-};
+use lk_agents_abi::{FrameId, Llm, Spawner, SpawnerExt, Stt, TimerSet, Ts, Tts, Vad};
 use lk_agents_rtc::RoomEvent;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +26,7 @@ use std::time::Duration;
 type EotLeg = lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>;
 
 pub struct DriverBuilder {
+    pub view: tokio::sync::watch::Sender<Arc<crate::agent_session::SessionView>>,
     pub time: Timebase,
     pub spawner: Arc<dyn Spawner>,
     pub config: DriverConfig,
@@ -88,11 +87,15 @@ pub struct DriverBuilder {
 }
 
 impl DriverBuilder {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `async` because the provider factories must run on the host loop.
     pub async fn start(mut self) -> Result<(crate::runtime::Runtime, SessionHandle), DriverError> {
         // `agent_session` and `session_start` run from here.
         let built = self.time.wall_secs();
-        let keyterms = self.keyterms.take();
+        let keyterms = self.keyterms.take().map(|mut setup| {
+            let llm = setup.llm.take().map(|llm| self.resources.register_llm(llm).id);
+            (setup, llm)
+        });
         let forward_chat_context = self.forward_chat_context;
         // An advertised tool with nothing to run it is refused here, not at the first call.
         if !self.toolset.specs.is_empty() && self.toolset.runner.is_none() {
@@ -110,7 +113,6 @@ impl DriverBuilder {
         let (queue_tx, queue_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
         let queue = Tx::new(queue_tx);
         let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
-        let (answers_tx, answers_rx) = tokio::sync::mpsc::unbounded_channel();
         let watch = WatchHub::new();
         // Created first so forwarders and drains can subscribe.
         let closing = tokio::sync::watch::channel(false).0;
@@ -202,25 +204,28 @@ impl DriverBuilder {
         let requested_detection = session.config.effective.turn.detection();
         let input = crate::agent_activity::io::AgentInput::new(
             sinks,
-            (video_parts, video_forwarder, self.video_in.take()),
+            self.video_in.as_ref().map(|input| Arc::as_ptr(input).cast::<()>() as usize),
             self.video_sampler.take(),
         );
         let time = self.time.clone();
         let capture_run = self.capture_run.take();
-        let activity =
-            self.activity(eot, realtime, paused_speech, resolved_mode, requested_detection);
+        let interruption = self.interruption.take();
+        let activity = self.activity(
+            eot.as_ref(),
+            realtime,
+            paused_speech,
+            resolved_mode,
+            requested_detection,
+        );
         let mut driver = Driver {
             activity_changed: Default::default(),
+            pending_effects: Default::default(),
             session,
             activity,
             input,
             current: FrameId::ROOT,
             timers: TimerSet::new(),
-            shared,
-            events: ev_tx.clone(),
-            answers: answers_tx,
-            journal: journal.clone(),
-            watch: watch.clone(),
+            journalled: journal.is_on(),
             queue: queue.clone(),
             command_origin: Origin::Host,
             step: crate::agent_session::time::StepClock::new(),
@@ -238,9 +243,9 @@ impl DriverBuilder {
         driver.open_session(capture_run, forward_chat_context, keyterms);
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
         let ivr_detection = driver.session.config.effective.turn.ivr_detection();
-        let keyterms_pushed = driver.shared.keyterms.subscribe();
-        let activity = driver.shared.activity.subscribe();
-        let scheduling = driver.shared.scheduling.subscribe();
+        let keyterms_pushed = shared.keyterms.subscribe();
+        let chat_ctx = shared.chat_ctx.subscribe();
+        let calls = shared.calls.clone();
         let speech_ids = driver.session.ids.speech_ids();
         let peer = PeerHandle {
             queue: queue.clone(),
@@ -250,18 +255,31 @@ impl DriverBuilder {
             spawner: Arc::clone(&self.spawner),
             watch,
             resources: self.resources.clone(),
-            closing: driver.shared.closing.subscribe(),
+            closing: shared.closing.subscribe(),
         };
 
+        let mut runtime = crate::runtime::Runtime::new(
+            driver,
+            forwarder,
+            (queue.clone(), queue_rx),
+            audio_in,
+            eot,
+            interruption,
+            (video_parts, video_forwarder, self.video_in.take()),
+            shared,
+            peer.events.clone(),
+            peer.watch.clone(),
+        );
+        let effects = std::mem::take(&mut *runtime.driver.pending_effects.borrow_mut());
+        runtime.perform_voice(effects);
         Ok((
-            crate::runtime::Runtime::new(driver, forwarder, (queue.clone(), queue_rx), audio_in),
+            runtime,
             SessionHandle {
                 api: queue,
                 events: ev_rx,
-                answers: answers_rx,
+                calls,
                 keyterms: keyterms_pushed,
-                activity,
-                scheduling,
+                chat_ctx,
                 peer,
                 ivr_detection,
                 speech_ids,
@@ -278,6 +296,7 @@ impl DriverBuilder {
         outputs: crate::agent_session::Outputs,
     ) -> Arc<SessionShared> {
         Arc::new(SessionShared {
+            view: self.view.clone(),
             time: self.time.clone(),
             output: tokio::sync::watch::channel(outputs).0,
             recorder: Arc::new(std::sync::RwLock::new(None)),
@@ -296,12 +315,11 @@ impl DriverBuilder {
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id: self.session_id.clone(),
             resources: self.resources.clone(),
-            activity:
-                tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
+            chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
+                .0,
+            calls: Default::default(),
             keyterms: tokio::sync::watch::channel(None).0,
-            scheduling: tokio::sync::watch::channel(Default::default()).0,
             journal: self.journal.clone(),
-            approvals: Default::default(),
         })
     }
 
@@ -406,7 +424,7 @@ impl DriverBuilder {
     /// The opening agent's activity: nothing spoken, nothing pending.
     fn activity(
         &mut self,
-        eot: Option<Arc<EotLeg>>,
+        eot: Option<&Arc<EotLeg>>,
         realtime: Option<RealtimeStart>,
         paused_speech: PausedSpeech,
         resolved_mode: crate::audio_recognition::TurnDetectionMode,
@@ -417,8 +435,8 @@ impl DriverBuilder {
         audio_recognition.set_thresholds(eot.as_ref().and_then(|leg| leg.thresholds()));
         // `_adaptive_interruption_active` is "a detector was supplied"; without it the sentinels
         // are unreachable.
-        audio_recognition.set_interruption_active(self.interruption.is_some());
-        audio_recognition.set_detectors(eot, self.interruption.take());
+        audio_recognition.set_interruption_active(self.config.legs.adaptive_detector);
+        audio_recognition.set_eot_provider(eot.map(|leg| leg.id()));
         let (rt_session, caps, disabled) = match realtime {
             Some(rt) => (Some(self.resources.register_realtime(rt.session)), rt.caps, rt.disabled),
             None => (None, Default::default(), false),
@@ -436,6 +454,7 @@ impl DriverBuilder {
             speech_agents: Default::default(),
             finished: Default::default(),
             tools_committed: Default::default(),
+            reply_plans: Default::default(),
             tools_in_flight: Default::default(),
             spoke: Default::default(),
             announced_current_speech: None,
@@ -458,6 +477,7 @@ impl DriverBuilder {
             rt_session,
             realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(caps),
             realtime_players: Default::default(),
+            launching: Default::default(),
             realtime_turn_detection_disabled: disabled,
             realtime_resolved_mode: resolved_mode,
             realtime_requested_detection: requested_detection,
@@ -473,7 +493,10 @@ impl Driver {
         &mut self,
         capture_run: Option<crate::run_result::RunSpec>,
         forward_chat_context: bool,
-        keyterms: Option<crate::keyterm_detection::KeytermSetup>,
+        keyterms: Option<(
+            crate::keyterm_detection::KeytermSetup,
+            Option<lk_agents_abi::resources::ResourceId>,
+        )>,
     ) {
         self.publish_gate();
         {
@@ -489,14 +512,16 @@ impl Driver {
                 let opening = self.session.chat_ctx.for_realtime();
                 self.push_activity(Some(opening), &mut out);
             }
-            self.execute(out);
+            let effects = self.settle_step(out);
+            self.pending_effects.borrow_mut().extend(effects);
         }
         self.session.forward_chat_context = forward_chat_context;
         // `KeytermDetector.start`: the static terms reach the recogniser now.
-        if let Some(setup) = keyterms {
+        if let Some((setup, llm)) = keyterms {
             let mut out = self.out();
-            self.keyterms_start(setup, &mut out);
-            self.execute(out);
+            self.keyterms_start(setup, llm, &mut out);
+            let effects = self.settle_step(out);
+            self.pending_effects.borrow_mut().extend(effects);
         }
     }
 }

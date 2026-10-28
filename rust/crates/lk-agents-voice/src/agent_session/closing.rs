@@ -97,7 +97,7 @@ impl Driver {
         self.session.trace.closing(wall, reason.as_str(), drain, error_type, &mut spans);
         spans.into_iter().for_each(|ev| out.machine().emit(ev));
         // The systems (AMD, IVR) close themselves on this, in this instant.
-        self.watch.publish(crate::agent_session::SystemTap::CloseRequested);
+        out.machine().push(Effect::Tap(crate::agent_session::SystemTap::CloseRequested));
         // The keyterm pass: the request in flight is cancelled, no push after this.
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close, out);
         // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
@@ -174,7 +174,7 @@ impl Driver {
     fn close_drain(&mut self, now: Ts, out: &mut Out) {
         self.enter_close_phase(ClosePhase::Draining, Some(DRAIN_BOUND), now, out);
         // No reply plans a follow-up once the close began.
-        self.shared.draining.send_replace(true);
+        out.machine().push(Effect::Draining);
         self.pause_scheduling(now, PauseCause::Close, out);
     }
 
@@ -221,7 +221,7 @@ impl Driver {
         }
         out.trace(HandoffStep::Drained { refused: None });
         for call in waiters {
-            self.answer(Some(call), Answer::Drain(Ok(())));
+            out.answer(Some(call), Answer::Drain(Ok(())));
         }
     }
 
@@ -279,7 +279,7 @@ impl Driver {
         self.answer_close_drains(out);
         // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
         // never see the close.
-        self.shared.closing.send_replace(true);
+        out.machine().push(Effect::Closing);
         // The activity's `aclose()` cancels its tools before it closes the models.
         self.cancel_running_tools(now, out);
         out.machine().close_turn_detector();
@@ -396,7 +396,7 @@ impl Driver {
             }
             // A collection that never starts: answered as stopped, as after a `Stop`.
             Command::Dtmf(DtmfCommand::Start { call, .. }) => {
-                self.answer(call, Answer::Dtmf(DtmfOutcome::Stopped));
+                out.answer(call, Answer::Dtmf(DtmfOutcome::Stopped));
                 return;
             }
             // A drain somebody awaits: the close's drain is the one it waits on.
@@ -422,23 +422,23 @@ impl Driver {
             }
             // Past the edge nothing is speaking, so an interrupt is `Ok`; a wait is refused.
             Command::Speech(SpeechCommand::Interrupt { call, .. }) => {
-                self.answer(call, Answer::Interrupt(Ok(())));
+                out.answer(call, Answer::Interrupt(Ok(())));
                 return;
             }
             Command::Speech(SpeechCommand::WaitForIdle { call, .. }) => {
                 out.trace(SpeechStep::IdleAnswered { hold: None, closing: true });
-                self.answer(call, Answer::Idle(Err(IdleRefused::Closing)));
+                out.answer(call, Answer::Idle(Err(IdleRefused::Closing)));
                 return;
             }
             Command::Speech(SpeechCommand::WaitForIdleAndHold { call }) => {
                 out.trace(SpeechStep::IdleAnswered { hold: None, closing: true });
-                self.answer(call, Answer::Hold(Err(IdleRefused::Closing)));
+                out.answer(call, Answer::Hold(Err(IdleRefused::Closing)));
                 return;
             }
             // A commit the loop never ran: `""`, as the reference answers a closing session.
             Command::Speech(SpeechCommand::CommitUserTurn { call, .. }) => {
                 out.trace(TurnStep::CommitAnswered { transcript: String::new() });
-                self.answer(call, Answer::Commit(Ok(String::new())));
+                out.answer(call, Answer::Commit(Ok(String::new())));
                 return;
             }
             // Nothing awaits these: a dropped one is a lost instruction, not a lost promise.
@@ -448,6 +448,7 @@ impl Driver {
                 | SpeechCommand::ClaimUserTurn
                 | SpeechCommand::ReleaseUserTurn
                 | SpeechCommand::SetAllowInterruptions { .. }
+                | SpeechCommand::HoldInterruptions { .. }
                 | SpeechCommand::EndCall { .. }
                 | SpeechCommand::SetRunOutput { .. }
                 | SpeechCommand::ToolUpdate { .. }
@@ -537,11 +538,37 @@ impl Driver {
                     Effect::Arm(..)
                     | Effect::Provider(_)
                     | Effect::Emit(_)
-                    | Effect::Decision(_)
-                    | Effect::Realtime(_)
+                    | Effect::Journal(_)
+                    | Effect::Answer(..)
+                    | Effect::Host(_)
+                    | Effect::ChatContext(_)
+                    | Effect::Outputs(_)
+                    | Effect::Tap(_)
+                    | Effect::LaunchHold(_)
+                    | Effect::SessionView(_)
+                    | Effect::Draining
+                    | Effect::Closing
+                    | Effect::SttConversationItem { .. }
+                    | Effect::SpeechStart { .. }
+                    | Effect::Realtime { .. }
                     | Effect::Audio(_)
                     | Effect::Detector(_)
+                    | Effect::EotPredict { .. }
                     | Effect::Forwarder(_)
+                    | Effect::PushKeyterms { .. }
+                    | Effect::RequestKeyterms { .. }
+                    | Effect::AttachRecorder { .. }
+                    | Effect::DetachRecorder(_)
+                    | Effect::RealtimePlayer { .. }
+                    | Effect::CloseRealtimePlayer(_)
+                    | Effect::CloseRealtimePlayers
+                    | Effect::CancelSpeech(_)
+                    | Effect::FlushStream(_)
+                    | Effect::InterruptionSignal { .. }
+                    | Effect::FlushRecorder(_)
+                    | Effect::CancelKeyterms(_)
+                    | Effect::ActivateLeg { .. }
+                    | Effect::DiscardLeg(_)
                     | Effect::CancelTool { .. } => None,
                 })
                 .collect();

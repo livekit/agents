@@ -68,6 +68,7 @@ pub(crate) struct VoiceSession {
     pub(crate) forward_chat_context: bool,
     /// `start(record=..)`, attached by the opening.
     pub(crate) start_recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+    pub(crate) recorder_attached: bool,
     pub(crate) room: crate::room_io::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
     pub(crate) closing: Option<Closing>,
@@ -82,6 +83,7 @@ pub(crate) struct VoiceSession {
     pub(crate) amd_skips_replies: bool,
     /// The session's OTel span tree.
     pub(crate) trace: crate::telemetry::SessionTrace,
+    pub(crate) approvals: Vec<lk_agents_abi::ChatItem>,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -102,7 +104,6 @@ pub(crate) struct SessionParts {
     pub(crate) chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     pub(crate) session_id: String,
 }
-
 
 impl VoiceSession {
     pub(crate) fn new(config: DriverConfig, parts: SessionParts) -> Self {
@@ -142,6 +143,7 @@ impl VoiceSession {
             keyterms: None,
             forward_chat_context: true,
             start_recorder,
+            recorder_attached: false,
             room: crate::room_io::RoomLink::new(room_link),
             closing: None,
             runs: Default::default(),
@@ -150,6 +152,7 @@ impl VoiceSession {
             expressive: Default::default(),
             amd_skips_replies: false,
             trace: Default::default(),
+            approvals: Default::default(),
         }
     }
 
@@ -198,10 +201,7 @@ impl VoiceSession {
 
     /// `AgentSession._tools.extend(tools)`: new names join every request from this command on (no
     /// `AgentConfigUpdate`, as in the reference). The names added.
-    pub(crate) fn extend_tools(
-        &mut self,
-        tools: crate::tool_executor::Toolset,
-    ) -> Vec<String> {
+    pub(crate) fn extend_tools(&mut self, tools: crate::tool_executor::Toolset) -> Vec<String> {
         let mut added = Vec::new();
         for spec in tools.specs {
             if !self.tools.specs.iter().any(|o| o.name == spec.name) {
@@ -378,13 +378,24 @@ impl IdMint {
     }
 }
 
+/// Runtime-published values accepted by the session's decision core.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionView {
+    pub config: DriverConfig,
+    pub agent: String,
+    pub vad: Option<lk_agents_abi::resources::VadRef>,
+}
+
 pub struct SessionShared {
     pub time: Timebase,
+    pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
     pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
     pub output: tokio::sync::watch::Sender<Outputs>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub recorder_observer:
         std::sync::Mutex<Option<Arc<dyn lk_agents_abi::voice::io::PlaybackObserver>>>,
     /// Published by the loop every iteration, read by `perform_audio_forwarding` before its first
@@ -406,20 +417,18 @@ pub struct SessionShared {
     pub spawner: Arc<dyn Spawner>,
     /// The task enters its own frame; it never reads the driver's `current`.
     pub frames: Arc<lk_agents_abi::utils::frame::FrameTable>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub gen_ids: std::sync::atomic::AtomicU64,
     pub session_id: String,
-    pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
-    pub scheduling: tokio::sync::watch::Sender<SchedulingGate>,
+    pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
+    pub calls: crate::agent_session::api::Calls,
     /// The providers by id.
     pub resources: lk_agents_abi::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
     pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
     pub journal: crate::trace::Journal,
-    /// The approval record: calls marked `lk.approval` (committed, or granted and not yet
-    /// committed) and their outputs, every agent's (`tool_executor::grant`).
-    pub approvals: std::sync::Mutex<Vec<lk_agents_abi::ChatItem>>,
 }
 
 impl SessionShared {
@@ -467,44 +476,10 @@ impl SessionShared {
     }
 }
 
-/// Whether a new speech would be refused now, published at the end of every cycle so the host's
-/// `say()` / `generate_reply()` raise the reference's `RuntimeError` synchronously.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SchedulingGate {
-    /// `_scheduling_paused`.
-    pub paused: bool,
-    /// A handoff drains outside a close: the host's own speech is held for the arriving agent.
-    pub handoff_draining: bool,
-    /// Past the close's edge: refused quietly (the reference logs and returns).
-    pub closing: bool,
-}
-
-impl SchedulingGate {
-    /// The refusal `_schedule_speech` raises for a speech asked from `origin`.
-    pub fn refusal(&self, origin: &Origin) -> Option<crate::agent_activity::scheduling::Rejected> {
-        let held = *origin == Origin::Host && self.handoff_draining;
-        (self.paused && !self.closing && !held)
-            .then_some(crate::agent_activity::scheduling::Rejected::Draining)
-    }
-}
-
-/// **As they stand now**, published after every commit and instruction change (a tool may call
-/// `update_instructions`).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ActivitySnapshot {
-    pub chat_ctx: lk_agents_abi::ChatContext,
-    pub instructions: crate::generation::Instructions,
-    pub finished: std::collections::BTreeSet<SpeechId>,
-    /// What a step's follow-up waits for, and whether the activity that made the speech drains
-    /// (`self.scheduling_paused` when the step's tools were done).
-    pub tools_committed: std::collections::BTreeMap<(SpeechId, u32), bool>,
-}
-
 /// `session.output`: the outputs by id and their switches, decided by the core alone and published
 /// to the data plane, which reads its sinks from the core's word.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Outputs {
-
     pub audio: Option<AudioOutputRef>,
     /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
     pub audio_enabled: bool,
@@ -546,7 +521,7 @@ impl Driver {
     /// The one write of `session.output`, published to the data plane at once.
     pub(crate) fn set_outputs<R>(&mut self, f: impl FnOnce(&mut Outputs) -> R) -> R {
         let r = f(&mut self.session.outputs);
-        self.shared.output.send_replace(self.session.outputs.clone());
+        self.pending_effects.borrow_mut().push(Effect::Outputs(self.session.outputs.clone()));
         r
     }
 }
@@ -554,7 +529,6 @@ impl Driver {
 /// The providers the core holds by id: received in commands, kept by the session or a switch. One
 /// no longer held anywhere at the end of a step is released.
 impl Driver {
-
     /// What the core holds now.
     pub(crate) fn providers_held(&self) -> BTreeSet<ResourceId> {
         let s = &self.session;
@@ -563,6 +537,7 @@ impl Driver {
             s.tts.as_ref().map(|r| r.id),
             s.stt.as_ref().map(|r| r.id),
             s.vad.as_ref().map(|r| r.id),
+            s.keyterms.as_ref().and_then(crate::keyterm_detection::KeytermSlot::resource),
             self.activity.rt_session.as_ref().map(|r| r.id),
             s.outputs.audio.as_ref().map(|r| r.id),
             s.outputs.transcription.as_ref().map(|r| r.id),
@@ -584,7 +559,7 @@ impl Driver {
     pub(crate) fn release_all_providers(&mut self) {
         self.session.providers.extend(self.providers_held());
         for id in std::mem::take(&mut self.session.providers) {
-            self.shared.resources.release(id);
+            self.pending_effects.borrow_mut().push(Effect::Provider(ProviderCall::Release(id)));
         }
     }
 }
@@ -719,10 +694,13 @@ mod label_tests {
     }
 
     fn arms(eff: &Effects) -> Vec<Ts> {
-        eff.as_slice()
+        eff.transitions
             .iter()
             .filter_map(|e| match e {
-                Effect::Arm(Timer::AecWarmup, at) => Some(*at),
+                crate::agent_session::effects::Transition::Effect(Effect::Arm(
+                    Timer::AecWarmup,
+                    at,
+                )) => Some(*at),
                 _ => None,
             })
             .collect()
@@ -738,10 +716,12 @@ mod label_tests {
         assert!(arms(&eff).is_empty(), "armed with no audio output: {eff:?}");
         assert!(!s.aec.armed());
         let events: Vec<_> = eff
-            .as_slice()
+            .transitions
             .iter()
-            .filter_map(|e| match e {
-                Effect::Emit(ev) => Some(ev.clone()),
+            .filter_map(|signal| match signal {
+                crate::agent_session::effects::Transition::Signal(
+                    crate::agent_session::effects::Signal::SessionEvent(event),
+                ) => Some(event.clone()),
                 _ => None,
             })
             .collect();
@@ -773,7 +753,15 @@ mod label_tests {
         assert!(s.aec.armed());
 
         let eff = s.aec.set(None);
-        assert!(matches!(eff.as_slice(), [Effect::Cancel(Timer::AecWarmup)]), "{eff:?}");
+        assert!(
+            matches!(
+                eff.transitions.as_slice(),
+                [crate::agent_session::effects::Transition::Effect(Effect::Cancel(
+                    Timer::AecWarmup
+                ))]
+            ),
+            "{eff:?}"
+        );
         assert!(!s.aec.armed());
         assert_eq!(s.aec.remaining(), Duration::ZERO);
 

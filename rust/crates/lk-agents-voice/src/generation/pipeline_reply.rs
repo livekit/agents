@@ -6,21 +6,14 @@ use super::tools::run_tools;
 use crate::agent_session::DriverError;
 use crate::agent_session::SessionShared;
 use crate::generation::realtime_generation::realtime_generation_task;
-use crate::generation::{
-    FinishInputs, RequestInputs, TurnAccumulator, TurnOutcome, TurnStats, plan_request,
-};
+use crate::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use crate::generation::{GenEvent, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::NextStep;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
-
-/// How long a follow-up waits for the loop to commit this step's items before planning against
-/// the frame plus `pending`.
-const FRAME_SYNC: Duration = Duration::from_secs(1);
 
 /// `_pipeline_reply_task`, and **the one task every speech runs** (`say` and realtime generations
 /// too). Spawned through the injected [`Spawner`](lk_agents_abi::Spawner), never `tokio::spawn`.
@@ -33,9 +26,6 @@ pub async fn pipeline_reply_task(
     let error = match run(&shared, &handle, ctx).await {
         Ok(Finished { outcome, interrupted }) => {
             shared.report(GenEvent::Done { speech, outcome: Box::new(outcome), interrupted });
-            // Releases the scheduling loop's wait. A never-authorized reply has no cell to mark.
-            mark_generation_done(&handle);
-            handle.mark_done(None);
             return;
         }
         Err(DriverError::Provider(error)) => error,
@@ -43,11 +33,7 @@ pub async fn pipeline_reply_task(
         Err(DriverError::Missing(what)) => {
             fatal(format!("cannot generate a reply: the session has no {what}"))
         }
-        Err(other) => {
-            debug_assert!(false, "pipeline_reply_task: {other}");
-            handle.mark_done(None);
-            return;
-        }
+        Err(other) => fatal(other.to_string()),
     };
     // **Moved, never formatted**: only the binding can release a `ProviderError::Host`'s side-table
     // entry. Not marked here: the loop's `Failed` arm moves the error onto the handle.
@@ -57,14 +43,6 @@ pub async fn pipeline_reply_task(
 pub(crate) struct Finished {
     pub(crate) outcome: TurnOutcome,
     pub(crate) interrupted: bool,
-}
-
-/// A never-authorized reply has no cell to mark.
-fn mark_generation_done(handle: &SpeechHandle) {
-    match handle.mark_generation_done() {
-        Ok(()) | Err(crate::speech_handle::SpeechError::NoGenerationToMark) => {}
-        Err(e) => debug_assert!(false, "mark_generation_done: {e}"),
-    }
 }
 
 fn step_spoken(
@@ -93,15 +71,33 @@ async fn run(
     mut ctx: ReplyContext,
 ) -> Result<Finished, DriverError> {
     if let Some(replan) = ctx.replan.take() {
-        ctx.request = replan_after(shared, handle, replan).await;
+        let Some(planned) = request_plan(
+            shared,
+            crate::generation::ReplyPlan {
+                call: crate::agent_session::RequestId(0),
+                speech: handle.id(),
+                after: replan.after,
+                step: None,
+                spec: replan.spec,
+                pending: Vec::new(),
+                tool_choice: ctx.tool_choice.clone(),
+            },
+        )
+        .await
+        else {
+            return Ok(Finished { outcome: empty_outcome(shared, &ctx, true), interrupted: true });
+        };
+        ctx.request = planned.request;
     }
     // The last step spoken on the realtime path, kept in case its follow-up never arrives.
     let mut last: Option<Finished> = None;
     loop {
         let outcome = match &ctx.source {
             // Borrowed: the channel outlives the step, because the follow-up arrives on it.
-            ReplySource::Realtime { events, wake } => {
-                realtime_generation_task(shared, handle, &ctx, events, wake).await?
+            ReplySource::Realtime => {
+                let events =
+                    ctx.realtime_events.as_ref().expect("runtime installed realtime player");
+                realtime_generation_task(shared, handle, &ctx, events, &shared.queue).await?
             }
             _ => pipeline_reply_task_impl(shared, handle, &ctx).await?,
         };
@@ -112,7 +108,15 @@ async fn run(
                 let spoken_step = handle.num_steps();
                 handle.step();
                 shared.report(GenEvent::ToolStep { speech: handle.id(), step: handle.num_steps() });
-                ctx = follow_up(shared, handle, &ctx, spoken_step, request, pending).await;
+                let Some(next) =
+                    follow_up(shared, handle, &ctx, spoken_step, request, pending).await
+                else {
+                    return Ok(Finished {
+                        outcome: empty_outcome(shared, &ctx, true),
+                        interrupted: true,
+                    });
+                };
+                ctx = next;
             }
             StepOutcome::Next(finished) => last = Some(finished),
             StepOutcome::Released => {
@@ -191,12 +195,13 @@ pub(crate) fn finish_step_with(
     if let Some(msg) = outcome.assistant_message.as_mut() {
         msg.metrics.provider_request_ids = provider_request_ids;
     }
-    mark_generation_done(handle);
     let item = outcome.assistant_message.clone();
     step_spoken(shared, handle, interrupted, has_tool_output, tools_running, item);
     Finished { outcome, interrupted }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// One step of `_pipeline_reply_task_impl` (or `_tts_task`): the words and the voice, two futures
 /// on one task.
 async fn pipeline_reply_task_impl(
@@ -229,7 +234,6 @@ async fn pipeline_reply_task_impl(
             if matches!(spoken, Ok(Some(_))) {
                 let has_tools = !tools.is_empty();
                 let tools_running = has_tools && !handle.interrupted();
-                mark_generation_done(handle);
                 step_spoken(shared, handle, handle.interrupted(), has_tools, tools_running, None);
             }
             let _ = run_tools(shared, handle, ctx, tools, true).await;
@@ -242,7 +246,6 @@ async fn pipeline_reply_task_impl(
         // own playout does not deadlock.
         if handle.authorized() {
             handle.clear_authorization();
-            mark_generation_done(handle);
             step_spoken(shared, handle, true, !tools.is_empty(), false, None);
         }
         let _ = run_tools(shared, handle, ctx, tools, true).await;
@@ -310,40 +313,39 @@ async fn follow_up(
     spoken_step: u32,
     request: crate::tool_executor::ReplyRequest,
     pending: Vec<ChatItem>,
-) -> ReplyContext {
-    // Once the loop has performed this step's `ToolsFinished` (and every command queued before it).
-    let key = (handle.id(), spoken_step);
-    let frame =
-        wait_frame(shared, handle, FRAME_SYNC, |f| f.tools_committed.contains_key(&key)).await;
-    // A draining activity's reply offers no tools.
-    let mut request = request;
-    if frame.tools_committed.get(&key) == Some(&true) {
-        request.tool_choice = lk_agents_abi::ToolChoice::Forbidden;
-    }
-    let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
-    let planned = plan_request(RequestInputs {
-        record: &frame.chat_ctx,
-        pending: &pending,
-        new_message: None,
-        instructions: &instructions,
-        turn_instructions: None,
-        tools: &prev.request.tools,
-        // The on-enter exclusion was applied to `prev.request.tools` already.
-        on_enter: false,
-        running_tool_calls: &[],
-        modality: lk_agents_abi::Modality::Audio,
-        audio_output_enabled: prev.request.tts_enabled,
-        text_output_enabled: prev.request.text_output_enabled,
-        now: shared.time.wall(),
-        expressive: prev.request.expressive.as_deref(),
-    });
-    ReplyContext {
+) -> Option<ReplyContext> {
+    let planned = request_plan(
+        shared,
+        crate::generation::ReplyPlan {
+            call: crate::agent_session::RequestId(0),
+            speech: handle.id(),
+            after: handle.id(),
+            step: Some(spoken_step),
+            spec: crate::generation::PlanSpec {
+                record: None,
+                new_message: None,
+                instructions: None,
+                turn_instructions: None,
+                tools: prev.request.tools.clone(),
+                on_enter: false,
+                running_tool_calls: Vec::new(),
+                audio_output_enabled: prev.request.tts_enabled,
+                text_output_enabled: prev.request.text_output_enabled,
+                expressive: prev.request.expressive.clone(),
+            },
+            pending,
+            tool_choice: Some(request.tool_choice),
+        },
+    )
+    .await?;
+    Some(ReplyContext {
         preemptive_tts: prev.preemptive_tts,
-        request: planned,
+        request: planned.request,
         replan: None,
         source: ReplySource::Llm,
+        realtime_events: None,
         // Always concrete on a follow-up: `"none"` or `"auto"`, never `"required"`.
-        tool_choice: Some(request.tool_choice),
+        tool_choice: planned.tool_choice,
         frame: prev.frame,
         toolset: prev.toolset.clone(),
         providers: prev.providers.clone(),
@@ -354,51 +356,18 @@ async fn follow_up(
         speech: prev.speech,
         answering: None,
         task: prev.task,
-    }
+    })
 }
 
-/// The first request of a reply created behind a playing or cut speech, planned once its item is on
-/// the record: the speech finished, or the step it was playing committed with its tools. Not the
-/// speech's end then: its follow-up step needs the floor this reply may hold. Bounded, and cut
-/// short by interruption or closing.
-async fn replan_after(
-    shared: &Arc<SessionShared>,
-    handle: &Arc<SpeechHandle>,
-    replan: crate::generation::Replan,
-) -> crate::generation::Request {
-    let crate::generation::Replan { after, spec } = replan;
-    let bound = crate::speech_handle::INTERRUPTION_TIMEOUT + Duration::from_secs(1);
-    let recorded = |f: &crate::agent_session::ActivitySnapshot| {
-        f.finished.contains(&after) || f.tools_committed.keys().any(|(speech, _)| *speech == after)
-    };
-    let frame = wait_frame(shared, handle, bound, recorded).await;
-    let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
-    spec.plan(&frame.chat_ctx, &instructions, shared.time.wall())
-}
-
-/// Cut short by interruption or closing, and by `bound` on the clock.
-async fn wait_frame(
-    shared: &Arc<SessionShared>,
-    handle: &Arc<SpeechHandle>,
-    bound: Duration,
-    ready: impl Fn(&crate::agent_session::ActivitySnapshot) -> bool,
-) -> crate::agent_session::ActivitySnapshot {
-    let mut rx = shared.activity.subscribe();
-    let mut closing = shared.closing.subscribe();
-    let published = async {
-        while !ready(&rx.borrow_and_update()) {
-            if rx.changed().await.is_err() {
-                return;
-            }
-        }
-    };
-    tokio::select! {
-        biased;
-        () = handle.wait_for_interrupted() => {}
-        _ = closing.wait_for(|c| *c) => {}
-        _ = shared.time.timeout(bound, published) => {}
-    }
-    shared.activity.borrow().clone()
+/// The runtime owns the waiter; the core owns when the accepted record is ready.
+async fn request_plan(
+    shared: &SessionShared,
+    mut plan: crate::generation::ReplyPlan,
+) -> Option<crate::generation::PlannedReply> {
+    let (call, result) = shared.calls.open(crate::agent_session::Answer::reply_plan);
+    plan.call = call;
+    shared.report(GenEvent::Plan(Box::new(plan)));
+    result.await.ok().flatten().map(|planned| *planned)
 }
 
 pub(super) fn empty_outcome(

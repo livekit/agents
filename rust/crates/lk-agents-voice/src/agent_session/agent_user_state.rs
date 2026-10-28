@@ -198,7 +198,12 @@ mod tests {
     use crate::agent_session::effects::Effect;
 
     fn armed(eff: &Effects) -> bool {
-        eff.as_slice().iter().any(|e| matches!(e, Effect::Arm(Timer::UserAway, _)))
+        eff.transitions.iter().any(|e| {
+            matches!(
+                e,
+                crate::agent_session::effects::Transition::Effect(Effect::Arm(Timer::UserAway, _))
+            )
+        })
     }
 
     // Catches: the away timer ignoring the room's link. The linked participant leaving must stop
@@ -210,7 +215,10 @@ mod tests {
         let mut s = AgentUserState::new(Some(Duration::from_secs(15)));
         assert!(armed(&s.reconcile_away_timer(t, false)));
         let eff = s.on_link(t, false, false);
-        assert!(eff.as_slice().iter().any(|e| matches!(e, Effect::Cancel(Timer::UserAway))));
+        assert!(eff.transitions.iter().any(|e| matches!(
+            e,
+            crate::agent_session::effects::Transition::Effect(Effect::Cancel(Timer::UserAway))
+        )));
         assert!(!armed(&s.reconcile_away_timer(t, false)), "re-armed with nobody linked");
         assert!(armed(&s.on_link(t, true, false)), "a link restarts the window");
         let _ = s.on_user_away(t);
