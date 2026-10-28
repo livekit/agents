@@ -109,7 +109,7 @@ impl ToolStep {
                     shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
                     return None;
                 }
-                let (grant, granted) = shared.calls.open(crate::agent_session::Answer::approval);
+                let (grant, granted) = shared.open_call(crate::agent_session::Answer::approval);
                 let started =
                     GenEvent::ToolCallStarted { speech, step, call, runner, grant: Some(grant.id) };
                 shared.report_awaited(started, grant);

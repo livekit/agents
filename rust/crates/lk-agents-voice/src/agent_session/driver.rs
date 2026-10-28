@@ -136,8 +136,6 @@ pub struct SessionHandle {
     pub api: Tx,
     /// Every event, in the order the driver emitted it.
     pub events: Rx<HostEvent>,
-    /// The ids of awaited calls.
-    pub calls: crate::agent_session::api::CallIds,
     /// The last keyterm list pushed to the recogniser; `None` before any push.
     pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// The driving agent's context and state, as last published.

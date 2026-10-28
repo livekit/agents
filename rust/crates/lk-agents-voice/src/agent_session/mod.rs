@@ -427,7 +427,6 @@ pub struct SessionShared {
     pub gen_ids: std::sync::atomic::AtomicU64,
     pub session_id: String,
     pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
-    pub calls: crate::agent_session::api::CallIds,
     /// The providers by id.
     pub resources: lk_agents_abi::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
@@ -445,6 +444,15 @@ impl SessionShared {
     /// A closed channel means the session is ending; not an error.
     pub fn report(&self, ev: GenEvent) {
         let _ = self.queue.send(ev);
+    }
+
+    /// A call a task awaits, answered with what `pick` takes.
+    pub fn open_call<T>(
+        &self,
+        pick: fn(crate::agent_session::Answer) -> Option<T>,
+    ) -> (crate::agent_session::api::Call, crate::agent_session::api::Awaited<T>) {
+        let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::agent_session::api::open(crate::agent_session::RequestId::task(n), pick)
     }
 
     /// `ev`, naming `call`, with its reply.

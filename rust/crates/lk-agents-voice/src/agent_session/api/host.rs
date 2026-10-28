@@ -440,7 +440,10 @@ impl SessionApi {
                             let Some(wire) = ev.wire(anchor) else { continue };
                             // `_on_metrics_collected`: a record is folded into the session's
                             // usage, then `session_usage_updated` follows it.
-                            let updated = session_usage_updated(&usage, &wire);
+                            let updated = session_usage_updated(
+                                &mut usage.lock().unwrap_or_else(|p| p.into_inner()),
+                                &wire,
+                            );
                             for mut wire in std::iter::once(wire).chain(updated) {
                                 match (&forwarding, &events, &wire) {
                                     (Some(remote), Some(events), HostWire::Error(error)) => {
@@ -1070,8 +1073,9 @@ impl SessionApi {
         &self,
         force: bool,
     ) -> Result<Reply<Result<(), NotInterruptible>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::interrupt, |call| {
-            SpeechCommand::Interrupt { force, call: Some(call) }.into()
+        let rx = self.ask(Origin::Host, Answer::interrupt, |call| SpeechCommand::Interrupt {
+            force,
+            call: Some(call),
         })?;
         Ok(Reply::new(async move {
             match rx.await {
@@ -1087,9 +1091,8 @@ impl SessionApi {
     /// speech is left; the session stays open. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(method)]
     pub fn drain(&self) -> Result<Reply<Option<String>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::drain, |call| {
-            ActivityCommand::Drain { call: Some(call) }.into()
-        })?;
+        let rx = self
+            .ask(Origin::Host, Answer::drain, |call| ActivityCommand::Drain { call: Some(call) })?;
         Ok(Reply::new(async move {
             match rx.await {
                 Ok(Ok(())) => None,
@@ -1121,8 +1124,9 @@ impl SessionApi {
         let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let guard = collector.reply_flag();
-        let rx = self.ask(Origin::Host, Answer::dtmf, |call| {
-            DtmfCommand::Start { collector, call: Some(call) }.into()
+        let rx = self.ask(Origin::Host, Answer::dtmf, |call| DtmfCommand::Start {
+            collector,
+            call: Some(call),
         })?;
         *self.dtmf_reply.lock().unwrap_or_else(|p| p.into_inner()) = Some(guard);
         Ok(Reply::new(async move { rx.await.unwrap_or(DtmfOutcome::Stopped).wire() }))
@@ -1163,8 +1167,9 @@ impl SessionApi {
         &self,
         hold: Option<u64>,
     ) -> Result<Reply<Result<(), IdleRefused>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::idle, |call| {
-            SpeechCommand::WaitForIdle { hold: hold.map(HoldId), call: Some(call) }.into()
+        let rx = self.ask(Origin::Host, Answer::idle, |call| SpeechCommand::WaitForIdle {
+            hold: hold.map(HoldId),
+            call: Some(call),
         })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)) }))
     }
@@ -1177,9 +1182,8 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<Reply<Result<u64, IdleRefused>>, CommandRefused> {
         let origin = origin_of(origin)?;
-        let rx = self.ask(origin, Answer::hold, |call| {
-            SpeechCommand::WaitForIdleAndHold { call: Some(call) }.into()
-        })?;
+        let rx = self
+            .ask(origin, Answer::hold, |c| SpeechCommand::WaitForIdleAndHold { call: Some(c) })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)).map(|h| h.0) }))
     }
 
@@ -1362,14 +1366,11 @@ impl SessionApi {
         stt_flush_duration: f64,
         skip_reply: bool,
     ) -> Result<Reply<Result<String, CommitSuperseded>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::commit, |call| {
-            SpeechCommand::CommitUserTurn {
-                transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
-                stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
-                skip_reply,
-                call: Some(call),
-            }
-            .into()
+        let rx = self.ask(Origin::Host, Answer::commit, |call| SpeechCommand::CommitUserTurn {
+            transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
+            stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
+            skip_reply,
+            call: Some(call),
         })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }

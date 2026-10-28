@@ -248,7 +248,6 @@ impl DriverBuilder {
         let ivr_detection = driver.session.config.effective.turn.ivr_detection();
         let keyterms_pushed = shared.keyterms.subscribe();
         let chat_ctx = shared.chat_ctx.subscribe();
-        let calls = shared.calls.clone();
         let speech_ids = driver.session.ids.speech_ids();
         let peer = PeerHandle {
             queue: queue.clone(),
@@ -281,7 +280,6 @@ impl DriverBuilder {
             SessionHandle {
                 api: queue,
                 events: ev_rx,
-                calls,
                 keyterms: keyterms_pushed,
                 chat_ctx,
                 peer,
@@ -321,7 +319,6 @@ impl DriverBuilder {
             resources: self.resources.clone(),
             chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
                 .0,
-            calls: Default::default(),
             keyterms: tokio::sync::watch::channel(None).0,
             journal: self.journal.clone(),
         })

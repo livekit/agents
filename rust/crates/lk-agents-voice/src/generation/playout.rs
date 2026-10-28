@@ -127,7 +127,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         // The next frame or the interruption, folding sink reports meanwhile: a slow provider
         // must not delay the cut, and a pushed frame's `PlaybackStarted` must not wait for the
         // next frame. Dropping `next()` here is what interruption means for it.
-        let next = playing.watched(segment.next()).await;
+        let next = playing.watched(segment.next(), |_| false).await.done();
         playing.settle(segment);
         let frame = match next {
             None => break Ended::Cut,
@@ -355,6 +355,23 @@ enum Ended {
     Provider(DriverError),
 }
 
+/// How a watched future ended.
+enum Watched<T> {
+    Done(T),
+    Interrupted,
+    /// An event made the caller's condition hold first.
+    Stopped,
+}
+
+impl<T> Watched<T> {
+    fn done(self) -> Option<T> {
+        match self {
+            Watched::Done(v) => Some(v),
+            Watched::Interrupted | Watched::Stopped => None,
+        }
+    }
+}
+
 /// One segment on its way to the sink. Never off a push. The segment is not held here, so its
 /// `next()` can be pending while reports are folded (`watched`) and settled once it is free
 /// (`settle`).
@@ -520,24 +537,34 @@ impl Playing<'_> {
     }
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    /// `biased`, so an event already reported is folded before the push it may explain.
-    async fn watched<T>(&mut self, fut: impl std::future::Future<Output = T>) -> Option<T> {
+    /// `fut`, with the sink's reports folded meanwhile; [`Watched::Stopped`] once a folded report
+    /// makes `stop` hold. `biased`, so an event already reported is folded before the push it may
+    /// explain.
+    async fn watched<T>(
+        &mut self,
+        fut: impl std::future::Future<Output = T>,
+        stop: impl Fn(&Self) -> bool,
+    ) -> Watched<T> {
         tokio::pin!(fut);
         let mut listening = true;
         loop {
             tokio::select! {
                 biased;
-                () = self.handle.wait_for_interrupted() => return None,
+                () = self.handle.wait_for_interrupted() => return Watched::Interrupted,
                 ev = self.events.recv(), if listening => match ev {
-                    Some(ev) => self.on_event(ev),
+                    Some(ev) => {
+                        self.on_event(ev);
+                        if stop(self) {
+                            return Watched::Stopped;
+                        }
+                    }
                     None => listening = false,
                 },
-                v = &mut fut => return Some(v),
+                v = &mut fut => return Watched::Done(v),
             }
         }
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The sink's finish for what was pushed; `None` when interrupted. A finish lost on its way
     /// would hold the speech until the close: once the sink reported all it owes played, the finish
     /// gets [`LOST_FINISH_MARGIN`], then it is reported for the sink. Before that nothing bounds it:
@@ -548,7 +575,6 @@ impl Playing<'_> {
         let mut wait = std::pin::pin!(out.wait_for_playout());
         let time = self.shared.time.clone();
         let mut due = None;
-        let mut listening = true;
         loop {
             if due.is_none() && self.played_all() {
                 let at = time.now().saturating_add(LOST_FINISH_MARGIN);
@@ -557,18 +583,13 @@ impl Playing<'_> {
             }
             let left =
                 due.map_or(LOST_FINISH_MARGIN, |at| at.saturating_duration_since(time.now()));
-            tokio::select! {
-                biased;
-                () = self.handle.wait_for_interrupted() => return None,
-                report = self.events.recv(), if listening => match report {
-                    Some(report) => self.on_event(report),
-                    None => listening = false,
-                },
-                finished = time.timeout(left, wait.as_mut()) => match finished {
-                    Ok(ev) => return Some(ev),
-                    Err(_) if due.is_some() => break,
-                    Err(_) => {}
-                },
+            let armed = due.is_some();
+            let finished = time.timeout(left, wait.as_mut());
+            match self.watched(finished, |this| !armed && this.played_all()).await {
+                Watched::Interrupted => return None,
+                Watched::Done(Ok(ev)) => return Some(ev),
+                Watched::Done(Err(_)) if armed => break,
+                Watched::Done(Err(_)) | Watched::Stopped => {}
             }
         }
         let lost = self.report_lost_finish();
@@ -610,7 +631,7 @@ impl Playing<'_> {
         for frame in &frames {
             // Safe to race: a Rust-native future, dropping it only declines one push.
             let out = self.out;
-            let pushed = self.watched(out.capture_frame(frame)).await;
+            let pushed = self.watched(out.capture_frame(frame), |_| false).await.done();
             self.settle(segment);
             match pushed {
                 Some(Ok(())) => {

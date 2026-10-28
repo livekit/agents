@@ -283,7 +283,7 @@ async fn accepted_views_are_published_before_receipts() {
             );
         }
     }
-    let (call, mut receipt) = handle.calls.open(Answer::interrupt);
+    let (call, mut receipt) = open(RequestId(0), Answer::interrupt);
     let call_id = call.id;
     let waker = std::task::Waker::from(Arc::new(ReadsView(api.view.clone())));
     let polled = std::pin::Pin::new(&mut receipt).poll(&mut std::task::Context::from_waker(&waker));

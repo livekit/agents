@@ -166,16 +166,8 @@ impl SessionApi {
             builder.room_io_events = room_io.events();
 
             let (mut runtime, handle) = builder.start().await?;
-            let SessionHandle {
-                api,
-                events,
-                calls,
-                keyterms,
-                chat_ctx,
-                peer,
-                ivr_detection,
-                speech_ids,
-            } = handle;
+            let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
+                handle;
             #[cfg(feature = "dst")]
             let (host_event, queue_owner) = probe.unzip();
             // The IVR navigator's task, subscribed before the opening cycle.
@@ -215,7 +207,6 @@ impl SessionApi {
 
             *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Running(Running {
                 api,
-                calls,
                 keyterms,
                 chat_ctx,
                 peer,
@@ -278,7 +269,7 @@ impl SessionApi {
         &self,
         pick: fn(Answer) -> Option<T>,
     ) -> Result<(Call, Awaited<T>), SessionRefused> {
-        self.running(|r| Ok(r.calls.open(pick)))
+        self.running(|r| Ok(open(r.next_call(), pick)))
     }
 
     /// A `say()` / `generate_reply()`: the handle the host gets now, with its id and the
@@ -295,7 +286,8 @@ impl SessionApi {
                 r.speech_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             );
             let speech = SpeechHandle::pending(r.api.clone(), id, allow);
-            let call = r.calls.open_speech(&speech);
+            let reply_to = ReplyTo::Speech(SpeechReply(Arc::clone(&speech)));
+            let call = Call { id: r.next_call(), reply_to };
             Ok((Arc::clone(&speech), SpeechCall { id: call.id, speech }, call))
         })
     }
@@ -310,11 +302,11 @@ impl SessionApi {
 
     /// The command `make` builds around a new call's id, sent with its reply; `pick` takes the
     /// answer.
-    pub fn ask<T>(
+    pub fn ask<T, C: Into<Command>>(
         &self,
         origin: Origin,
         pick: fn(Answer) -> Option<T>,
-        make: impl FnOnce(RequestId) -> Command,
+        make: impl FnOnce(RequestId) -> C,
     ) -> Result<Awaited<T>, SessionRefused> {
         let (call, answer) = self.call(pick)?;
         self.send_awaited(origin, make(call.id), call)?;
@@ -685,7 +677,6 @@ struct Ready {
 
 struct Running {
     api: Tx,
-    calls: CallIds,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
@@ -700,6 +691,13 @@ struct Running {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The loop's id counter: a speech call's handle has its id before the loop creates it.
     speech_ids: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Running {
+    /// A host call's id, from the session's counter.
+    fn next_call(&self) -> RequestId {
+        RequestId(self.speech_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 /// Owns the turn-detector stream it closes once the loop is gone (the driver's legs never owned
@@ -727,11 +725,10 @@ struct HostParts {
     usage: Arc<Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
 /// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
 fn session_usage_updated(
-    usage: &Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>,
+    usage: &mut lk_agents_abi::metrics::usage::ModelUsageCollector,
     wire: &lk_agents_abi::voice::events::HostWire,
 ) -> Option<lk_agents_abi::voice::events::HostWire> {
     use lk_agents_abi::metrics::base::AgentMetrics;
@@ -739,7 +736,6 @@ fn session_usage_updated(
     if matches!(m.metrics, AgentMetrics::Eou(_) | AgentMetrics::Avatar(_)) {
         return None;
     }
-    let mut usage = usage.lock().unwrap_or_else(|p| p.into_inner());
     usage.collect(&m.metrics);
     let model_usage = usage.flatten();
     Some(lk_agents_abi::voice::events::HostWire::SessionUsageUpdated(
@@ -1323,24 +1319,19 @@ impl<T> std::future::Future for Awaited<T> {
     }
 }
 
-/// The session's call ids, shared by everyone who sends it awaited inputs.
-#[derive(Clone, Default)]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-pub struct CallIds(Arc<std::sync::atomic::AtomicU64>);
+/// A call awaiting the answer `pick` takes.
+pub(crate) fn open<T>(id: RequestId, pick: fn(Answer) -> Option<T>) -> (Call, Awaited<T>) {
+    let (tx, rx) = oneshot::channel();
+    (Call { id, reply_to: ReplyTo::Answer(tx) }, Awaited { rx, pick })
+}
 
-impl CallIds {
-    fn next(&self) -> RequestId {
-        RequestId(self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
-    }
+impl RequestId {
+    /// The calls a session's own tasks await take ids with this bit set, apart from the host's.
+    const TASK: u64 = 1 << 63;
 
-    /// `pick` takes the answer's payload.
-    pub fn open<T>(&self, pick: fn(Answer) -> Option<T>) -> (Call, Awaited<T>) {
-        let (tx, rx) = oneshot::channel();
-        (Call { id: self.next(), reply_to: ReplyTo::Answer(tx) }, Awaited { rx, pick })
-    }
-
-    pub fn open_speech(&self, speech: &Arc<SpeechHandle>) -> Call {
-        Call { id: self.next(), reply_to: ReplyTo::Speech(SpeechReply(Arc::clone(speech))) }
+    /// The id of the `n`th call the session's tasks await.
+    pub(crate) fn task(n: u64) -> Self {
+        RequestId(n | Self::TASK)
     }
 }
 
