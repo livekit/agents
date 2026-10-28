@@ -129,8 +129,10 @@ class LLM(llm.LLM):
     for longer than it.
 
     When a reply holds several message items, only the first one that emits text is
-    spoken. If that message is ``commentary``, the next message is spoken after it, and
-    so on until a non-commentary message; later messages and their tool calls are dropped.
+    spoken. If that message is ``commentary``, the next message that emits text is
+    spoken after it, and so on until a non-commentary message. Each later message that
+    emits text is dropped, and so is any tool call that completes after the first
+    dropped message starts speaking.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
