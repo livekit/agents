@@ -433,3 +433,92 @@ pub fn python_reason(e: &StorageError) -> String {
         other => format!("StorageError: {other}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::HandlerOutput;
+    use serde_json::json;
+
+    fn msg(id: &str, text: &str) -> Message {
+        let raw: a2a::Message = serde_json::from_value(
+            json!({"messageId": id, "role": "ROLE_USER", "parts": [{"text": text}]}),
+        )
+        .unwrap();
+        Message::from_a2a(&raw, 1.0, None).unwrap()
+    }
+
+    fn ids() -> TurnIds {
+        TurnIds {
+            assistant_item: "item_a".into(),
+            status_message: "msg_s".into(),
+            artifact: "art_1".into(),
+        }
+    }
+
+    fn settled(out: HandlerOutput, stop: Option<Stop>, answer_canceled: bool) -> Settlement {
+        let batch = [msg("m1", "where"), msg("m2", "are you")];
+        let task_ids = ["AST_1".to_owned(), "AST_2".to_owned()];
+        let mut history = Vec::new();
+        settle(
+            &mut history,
+            Settle {
+                batch: &batch,
+                task_ids: &task_ids,
+                answer_task: "AST_2",
+                user_message: crate::batch_to_chat_message(&batch, 2.0, "item_u".into()),
+                out: &out,
+                stop,
+                answer_canceled,
+                now: 2.0,
+                ids: ids(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn statuses(s: &Settlement) -> Vec<(&str, TaskState)> {
+        s.transitions.iter().map(|t| (t.task_id.as_str(), t.status)).collect()
+    }
+
+    #[test]
+    fn a_checkpoint_yields_to_a_waiter_under_interrupt_and_to_a_client_cancel_always() {
+        let stop = |i, w, s| checkpoint_stop(i, w, "me", s);
+        assert_eq!(stop(true, Some("other"), None), Some(Stop::Interrupted));
+        assert_eq!(stop(true, Some("me"), None), None, "its own waiter mark");
+        assert_eq!(stop(false, Some("other"), None), None, "queue does not yield to a waiter");
+        assert_eq!(stop(false, None, Some(TaskState::Canceled)), Some(Stop::ClientCanceled));
+        assert_eq!(stop(true, None, Some(TaskState::Working)), None);
+    }
+
+    #[test]
+    fn a_turn_settles_each_row_by_how_the_handler_ended() {
+        let text = |t: &str| HandlerOutput { output: Some(json!(t)), ..HandlerOutput::default() };
+        let done = settled(text("here"), None, false);
+        assert_eq!(
+            statuses(&done),
+            vec![("AST_1", TaskState::Completed), ("AST_2", TaskState::Completed)]
+        );
+        assert_eq!(done.transitions[0].patch.metadata, Some(merged_into("AST_2")));
+        assert_eq!(done.outcome, RunOutcome::Completed);
+
+        let raised = HandlerOutput { error: Some("boom".into()), ..HandlerOutput::default() };
+        let failed = settled(raised, None, false);
+        assert_eq!(failed.transitions.last().unwrap().status, TaskState::Failed);
+        assert_eq!(failed.outcome, RunOutcome::Failed);
+
+        let asked =
+            HandlerOutput { input_required: Some("when?".into()), ..HandlerOutput::default() };
+        let waiting = settled(asked, None, false);
+        let last = waiting.transitions.last().unwrap();
+        assert_eq!(last.status, TaskState::InputRequired);
+        assert_eq!(last.patch.ask.as_ref().map(|a| a.question.as_str()), Some("when?"));
+
+        let interrupted = settled(text("late"), Some(Stop::Interrupted), false);
+        assert_eq!(interrupted.transitions.last().unwrap().status, TaskState::Canceled);
+        // the client's cancel owns the row: the turn writes no row at all
+        let canceled = settled(text("late"), Some(Stop::ClientCanceled), true);
+        assert!(canceled.transitions.is_empty());
+        assert_eq!(canceled.outcome, RunOutcome::Canceled);
+    }
+}

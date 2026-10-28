@@ -855,3 +855,44 @@ fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSubmittedTask
         internal: SqlValue::opt_json(task.ask.as_ref()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::StatementResult;
+
+    fn fence() -> Fence {
+        Fence {
+            lane: "front-desk".into(),
+            holder: "w1".into(),
+            token: "lease_a".into(),
+            version: 3,
+        }
+    }
+
+    /// The lookup's answer: whether `run_ended` is there, and the lane's version and token.
+    fn answer(committed: bool, version: i64, token: Option<&str>) -> BatchResult {
+        let ended = if committed { vec![vec![SqlValue::Int(1)]] } else { vec![] };
+        let lane = vec![vec![SqlValue::Int(version), token.map_or(SqlValue::Null, Into::into)]];
+        BatchResult { results: vec![StatementResult::Rows(ended), StatementResult::Rows(lane)] }
+    }
+
+    fn resolve(fence: Option<&Fence>, out: BatchResult) -> Resolution {
+        resolve_commit("front-desk", "r1", fence, None).decoder.decode(&out).unwrap()
+    }
+
+    // Decision 39: a lost acknowledgment is decided by the run's own record, never guessed.
+    #[test]
+    fn a_lost_commit_resolves_by_its_run_ended_and_the_fence() {
+        let f = fence();
+        let committed = Resolution::Committed(Committed { version: 4, task: None });
+        assert_eq!(resolve(Some(&f), answer(true, 4, None)), committed);
+        assert_eq!(resolve(Some(&f), answer(false, 3, Some("lease_a"))), Resolution::NotApplied);
+        assert_eq!(resolve(Some(&f), answer(false, 3, Some("lease_b"))), Resolution::Rejected);
+        assert_eq!(resolve(Some(&f), answer(false, 4, None)), Resolution::Rejected);
+        assert_eq!(resolve(None, answer(false, 0, None)), Resolution::NotApplied);
+        // an answer missing a statement's result is malformed, not an empty success
+        let short = BatchResult { results: vec![StatementResult::Rows(vec![])] };
+        assert!(resolve_commit("front-desk", "r1", Some(&f), None).decoder.decode(&short).is_err());
+    }
+}
