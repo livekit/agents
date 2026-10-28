@@ -10,12 +10,27 @@ from typing import Any
 import httpx
 import pytest
 
-from livekit.agents import Agent, AgentServer, InputRequired, RunContext
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    InputRequired,
+    LiveSession,
+    RunContext,
+    ToolResult,
+    utils,
+)
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import KIND, KIND_DELEGATION, MERGED_INTO, VERBATIM
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionCallOutput
+from livekit.agents.llm import (
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    GenerationCreatedEvent,
+    MessageGeneration,
+)
 from livekit.agents.storage import AgentDBStorage
 
 from .a2a_driver import (
@@ -31,6 +46,7 @@ from .a2a_driver import (
     rpc,
     wire,
 )
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
 pytestmark = [pytest.mark.unit]
 
@@ -88,8 +104,8 @@ async def experts(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...
     """``experts(handler)``: an expert's door on the same store, its client and a delegate."""
     made: list[Expert] = []
 
-    def make(handler: Any) -> Expert:
-        made.append(Expert(agentdb_storage, handler))
+    def make(handler: Any, name: str = EXPERT) -> Expert:
+        made.append(Expert(agentdb_storage, handler, name))
         return made[-1]
 
     yield make
@@ -99,21 +115,22 @@ async def experts(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...
 
 
 class Expert:
-    def __init__(self, storage: AgentDBStorage, handler: Any) -> None:
+    def __init__(self, storage: AgentDBStorage, handler: Any, name: str = EXPERT) -> None:
         server = AgentServer(
-            storage=storage, agent_name=EXPERT, api_key=API_KEY, api_secret=API_SECRET
+            storage=storage, agent_name=name, api_key=API_KEY, api_secret=API_SECRET
         )
-        server.a2a_session(endpoint=EXPERT, description="Books visits.")(handler)
+        server.a2a_session(endpoint=name, description="Books visits.")(handler)
+        self.name = name
         self.http = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.http.app),
             base_url="http://experts.test",
             timeout=30.0,
         )
-        self.delegate = A2ADelegate(f"http://experts.test/{EXPERT}", httpx_client=self.http)
+        self.delegate = A2ADelegate(f"http://experts.test/{name}", httpx_client=self.http)
 
     async def tasks(self, context_id: str) -> list[dict[str, Any]]:
         r = await self.http.post(
-            f"/{EXPERT}/v1",
+            f"/{self.name}/v1",
             json={
                 "jsonrpc": "2.0",
                 "id": "list",
@@ -409,6 +426,129 @@ async def test_a_non_answer_goes_to_the_experts_model_in_the_same_task(
     assert done.task["id"] == asked.task["id"]
     assert done.state == "completed" and done.answer == "You are booked."
     assert [t["id"] for t in await expert_tasks()] == [expert_task]
+
+
+@pytest.mark.rule("R32", "R40")
+async def test_a_nested_experts_question_is_answered_through_each_task(
+    door: Callable[..., Door], experts: Callable[..., Expert]
+) -> None:
+    specialist_model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "s1")], when=said("book a cleaning")),
+        Reply(
+            tool_calls=[call("book", "s2", email="ana@example.com")], when=said("ana@example.com")
+        ),
+    )
+    specialist_agent = Agent(instructions="bookings", llm=specialist_model)
+
+    @specialist_agent.tool
+    async def book(ctx: RunContext, email: str = "") -> InputRequired | ToolResult:
+        """Book the visit.
+
+        Args:
+            email: the person's email, when they gave it
+        """
+        if not email:
+            return InputRequired(QUESTION, verbatim=True)
+        return ToolResult(f"Booked, {email}.", verbatim=True, reply_required=False)
+
+    specialist = experts(runs(specialist_agent), "specialist")
+    expert_model = ScriptedLLM(
+        Reply(tool_calls=[call("ask", "e1", request="book a cleaning")], when=said("book a visit"))
+    )
+    expert = experts(runs(front_desk(specialist.delegate, expert_model)))
+    desk_model = ScriptedLLM(
+        Reply(tool_calls=[call("ask", "c1", request="book a visit")], when=said("book me in"))
+    )
+    desk = door(runs(front_desk(expert.delegate, desk_model)))
+    thread = await desk.thread()
+
+    asked = await desk.send("book me in", context_id=thread)
+    assert asked.state == "input_required" and asked.status_text == QUESTION
+
+    async def task_opened_by(request: str) -> dict[str, Any]:
+        # the thread's one task whose history starts with the request
+        tasks = [await desk.get_task(t["id"], thread) for t in await expert.tasks(thread)]
+        [task] = [t for t in tasks if t["history"][0]["parts"][0].get("text") == request]
+        return task
+
+    waiting = [await task_opened_by(r) for r in ("book a visit", "book a cleaning")]
+    assert all(t["status"]["state"] == "TASK_STATE_INPUT_REQUIRED" for t in waiting)
+
+    done = await desk.send("ana@example.com", context_id=thread)
+    assert done.task["id"] == asked.task["id"]
+    assert done.state == "completed" and done.answer == "Booked, ana@example.com."
+    # the person's answer continued the expert's task, then the specialist's, as said
+    for before in waiting:
+        after = await task_opened_by(before["history"][0]["parts"][0]["text"])
+        assert after["id"] == before["id"]
+        assert after["status"]["state"] == "TASK_STATE_COMPLETED"
+        assert after["history"][-1]["parts"][0]["text"] == "ana@example.com"
+    # no model forwarded the answer; the specialist's model read it
+    assert len(desk_model.requests) == len(expert_model.requests) == 1
+    assert user_texts(specialist_model.requests[-1])[-1] == "ana@example.com"
+
+
+@pytest.mark.rule("R32", "R40")
+@pytest.mark.xfail(
+    strict=True, reason="R32: on a call the answer reaches the expert with no task id, a new task"
+)
+async def test_on_a_call_the_answer_to_an_experts_question_continues_its_task(
+    experts: Callable[..., Expert],
+) -> None:
+    expert_model = ScriptedLLM(
+        Reply(tool_calls=[call("book", "e1")], when=said("book a visit")),
+        Reply(
+            tool_calls=[call("book", "e2", email="ana@example.com")], when=said("ana@example.com")
+        ),
+        Reply("Booked.", when=output_of("e2")),
+    )
+    expert_agent = asking(expert_model, verbatim=False)
+    turns: list[tuple[str, str]] = []
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        turns.append((ctx.task_id, ctx.message.text_content or ""))
+        return await expert_agent.run(ctx.message, message_history=ctx.message_history)
+
+    expert = experts(handler)
+    delegate = A2ADelegate(
+        f"http://experts.test/{EXPERT}", httpx_client=expert.http, announce=False
+    )
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+
+    async def reply(*calls: FunctionCall) -> None:
+        # the next response the session asked for: these calls and no message
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+        messages, functions = utils.aio.Chan[MessageGeneration](), utils.aio.Chan[FunctionCall]()
+        for c in calls:
+            functions.send_nowait(c)
+        messages.close()
+        functions.close()
+        model.active_session._reply_futs.pop(0).set_result(
+            GenerationCreatedEvent(
+                message_stream=messages, function_stream=functions, user_initiated=True
+            )
+        )
+
+    try:
+        async with LiveSession(llm=model) as session:
+            await session.start(Agent(instructions="front desk", tools=[delegate]))
+            session.generate_reply()
+            await reply(
+                FunctionCall(call_id="c1", name="ask", arguments='{"request": "book a visit"}')
+            )
+            await reply()  # the question, asked in the model's words
+            session.generate_reply(user_input="ana@example.com")
+            # the model's wording of the call is replaced by what the person said
+            await reply(FunctionCall(call_id="c2", name="ask", arguments='{"request": "an email"}'))
+            while len(turns) < 2 or len(expert_model.requests) < 3:
+                await asyncio.sleep(0.01)
+    finally:
+        await delegate.aclose()
+
+    (asked, _), (answered, text) = turns
+    assert answered == asked and text == "ana@example.com"
+    assert user_texts(expert_model.requests[1])[-1] == "ana@example.com"
 
 
 # ---------------------------------------------------------------------------------------------
