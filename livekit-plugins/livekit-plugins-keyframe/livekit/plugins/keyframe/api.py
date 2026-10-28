@@ -4,7 +4,7 @@ import asyncio
 from types import TracebackType
 
 import aiohttp
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -17,6 +17,10 @@ from livekit.agents.utils import http_context
 from .log import logger
 
 DEFAULT_API_URL = "https://api.keyframelabs.com"
+
+
+class SessionResponse(BaseModel):
+    reservation_id: str | None = None
 
 
 class KeyframeAPI:
@@ -59,7 +63,7 @@ class KeyframeAPI:
         livekit_url: str,
         livekit_token: str,
         source_participant_identity: str,
-    ) -> dict[str, JsonValue]:
+    ) -> SessionResponse:
         """Create a plugin session via POST /v1/sessions/plugins/livekit.
 
         Returns dict with reservation_id and avatar_participant_identity.
@@ -83,7 +87,7 @@ class KeyframeAPI:
 
     async def _post(
         self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
-    ) -> dict[str, JsonValue]:
+    ) -> SessionResponse:
         url = f"{self._api_url}{endpoint}"
         session = self._session or aiohttp.ClientSession()
         try:
@@ -105,10 +109,8 @@ class KeyframeAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return TypeAdapter(dict[str, JsonValue]).validate_python(
-                                await response.json()
-                            )
-                    except ValidationError as exc:
+                            return SessionResponse.model_validate(await response.json())
+                    except (ValueError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "Keyframe returned an invalid response", retryable=False
                         ) from exc

@@ -17,11 +17,33 @@ import pathlib
 
 import setuptools
 from setuptools import Extension
+from setuptools.command.build_ext import build_ext
 
 here = pathlib.Path(__file__).parent.resolve()
 about = {}
 with open(os.path.join(here, "livekit", "blockguard", "version.py")) as f:
     exec(f.read(), about)
+
+
+class _BuildExt(build_ext):
+    def _stub_paths(self) -> tuple[pathlib.Path, pathlib.Path]:
+        directory = pathlib.Path(self.get_ext_fullpath("blockguard")).parent
+        return directory / "blockguard.pyi", directory / "blockguard-stubs" / "__init__.pyi"
+
+    def run(self) -> None:
+        super().run()
+        source = here / "blockguard.pyi"
+        for target in self._stub_paths():
+            self.mkpath(str(target.parent))
+            if source.resolve() != target.resolve():
+                self.copy_file(str(source), str(target))
+
+    def get_outputs(self) -> list[str]:
+        return [*super().get_outputs(), *(str(path) for path in self._stub_paths())]
+
+    def get_source_files(self) -> list[str]:
+        return [*super().get_source_files(), "blockguard.pyi"]
+
 
 setuptools.setup(
     name="livekit-blockguard",
@@ -43,6 +65,7 @@ setuptools.setup(
     keywords=["asyncio", "blocking", "watchdog", "livekit"],
     license="Apache-2.0",
     zip_safe=False,
+    cmdclass={"build_ext": _BuildExt},
     ext_modules=[
         Extension("blockguard", sources=["src/blockguard.c"]),
     ],

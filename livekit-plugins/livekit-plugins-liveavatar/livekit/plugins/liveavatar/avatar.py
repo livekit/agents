@@ -6,10 +6,10 @@ import contextlib
 import os
 import uuid
 from collections.abc import Iterator
-from typing import Generic, Literal, TypeVar
+from typing import Literal
 
 import aiohttp
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -33,28 +33,14 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from .api import LiveAvatarAPI, LiveAvatarException
 from .log import logger
 
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
+
 SAMPLE_RATE = 24000
 KEEP_ALIVE_INTERVAL = 60
 _AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
 _AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
 VideoQuality = Literal["very_high", "high", "medium", "low"]
-
-
-class _SessionToken(BaseModel):
-    session_id: str
-    session_token: str
-
-
-class _SessionStart(BaseModel):
-    ws_url: str
-
-
-_DataT = TypeVar("_DataT")
-
-
-class _SessionResponse(BaseModel, Generic[_DataT]):
-    data: _DataT
 
 
 class AvatarSession(BaseAvatarSession):
@@ -170,7 +156,7 @@ class AvatarSession(BaseAvatarSession):
             is_sandbox=self._is_sandbox,
             video_quality=self._video_quality,
         )
-        token = _SessionResponse[_SessionToken].model_validate(session_config_data).data
+        token = session_config_data.data
         self._session_id = token.session_id
         self._session_token = token.session_token
         logger.info(f"LiveAvatar session created: {self._session_id}")
@@ -180,9 +166,7 @@ class AvatarSession(BaseAvatarSession):
         session_start_data = await self._api.start_streaming_session(
             self._session_id, self._session_token
         )
-        self._ws_url = (
-            _SessionResponse[_SessionStart].model_validate(session_start_data).data.ws_url
-        )
+        self._ws_url = session_start_data.data.ws_url
         logger.info("LiveAvatar streaming session started")
 
         @self._agent_session.on("agent_state_changed")
@@ -244,7 +228,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def _main_task(self) -> None:
         ws_conn = await utils.http_context.ws_connect(
-            self._api.http_session(), self._ws_url, conn_options=self._conn_options
+            self._api._ensure_http_session(), self._ws_url, conn_options=self._conn_options
         )
         closing = False
         ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
@@ -352,7 +336,7 @@ class AvatarSession(BaseAvatarSession):
                         raise APIConnectionError(
                             message="LiveAvatar connection closed unexpectedly."
                         )
-                event = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
+                event = _JSON_OBJECT.validate_json(msg.data)
                 self._handle_server_event(event)
 
         io_tasks = [
@@ -373,10 +357,7 @@ class AvatarSession(BaseAvatarSession):
                     data = await self._api.stop_streaming_session(
                         self._session_id, self._session_token
                     )
-                    code = data["code"]
-                    if not isinstance(code, int):
-                        raise LiveAvatarException("stop response did not contain an integer code")
-                    if code <= 200:
+                    if data.code <= 200:
                         logger.info(f"LiveAvatar session stopped: {self._session_id}")
             except Exception as e:
                 logger.warning(f"Failed to stop LiveAvatar session: {e}", exc_info=True)

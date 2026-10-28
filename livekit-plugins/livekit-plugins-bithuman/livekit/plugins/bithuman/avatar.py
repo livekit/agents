@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from importlib import import_module
-from typing import Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -41,6 +41,9 @@ from livekit.agents.voice.avatar import (
 )
 
 from .log import logger
+
+if TYPE_CHECKING:
+    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
@@ -154,7 +157,7 @@ class AvatarSession(BaseAvatarSession):
         api_token: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[BitHumanModel] = NOT_GIVEN,
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
-        runtime: NotGivenOr[_BithumanRuntime | None] = NOT_GIVEN,
+        runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -294,7 +297,7 @@ class AvatarSession(BaseAvatarSession):
         self._conn_options = conn_options
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
-        self._runtime: _BithumanRuntime | None = runtime or None
+        self._runtime = cast(_BithumanRuntime | None, runtime or None)
 
     @property
     def _is_expression_model(self) -> bool:
@@ -721,7 +724,7 @@ class AvatarSession(BaseAvatarSession):
         return self._http_session
 
     @property
-    def runtime(self) -> _BithumanRuntime:
+    def runtime(self) -> AsyncBithuman:
         if self._runtime is None:
             raise BitHumanException("Runtime not initialized")
         return self._runtime
@@ -733,8 +736,8 @@ class AvatarSession(BaseAvatarSession):
 
 
 class BithumanGenerator(VideoGenerator):
-    def __init__(self, runtime: _BithumanRuntime):
-        self._runtime = runtime
+    def __init__(self, runtime: AsyncBithuman):
+        self._runtime = cast(_BithumanRuntime, runtime)
 
     @property
     def video_resolution(self) -> tuple[int, int]:

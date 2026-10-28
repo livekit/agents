@@ -16,6 +16,8 @@ import logging
 
 import aiohttp
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIError, Plugin
@@ -208,65 +210,88 @@ class TestApiClient:
     NO_SLEEP = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
     _REQUEST_ID = "req_8c2f7d1e4b5a46f0a1b2c3d4e5f60718"
 
-    class _FakeResponse:
+    class _Reply:
+        truncated = False
+
         def __init__(self, status, *, body=None, headers=None, content_type="application/json"):
             self.status = status
-            self._body = body
+            self.body = body
             self.headers = headers or {}
             self.content_type = content_type
 
-        @property
-        def ok(self):
-            return 200 <= self.status < 300
-
-        async def json(self, *, content_type=None):
-            if self._body is None:
-                raise aiohttp.ContentTypeError(None, None)
-            if content_type is not None and self.content_type != content_type:
-                raise aiohttp.ContentTypeError(None, None)
-            return self._body
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-    class _RaisingCtx:
-        def __init__(self, exc):
-            self._exc = exc
-
-        async def __aenter__(self):
-            raise self._exc
-
-        async def __aexit__(self, *exc):
-            return False
-
-    class _FakeSession:
-        """Records each POST and yields the next queued response or raises a queued error."""
-
+    class _Peer:
         def __init__(self, outcomes):
-            self._outcomes = list(outcomes)
+            self.outcomes = list(outcomes)
             self.calls = []
-            self.trace_configs = []
-            self.json_serialize = json.dumps
+            self.server = None
+            self.http = None
+            self.url = None
 
-        def request(self, method, url, *, headers=None, data=None, timeout=None):
-            assert method == "POST"
-            payload = json.loads(data.decode()) if data is not None else None
-            self.calls.append({"url": url, "headers": headers, "json": payload})
-            outcome = self._outcomes.pop(0)
-            if isinstance(outcome, Exception):
-                return TestApiClient._RaisingCtx(outcome)
-            return outcome
+        async def start(self):
+            async def respond(request):
+                self.calls.append(
+                    {
+                        "url": str(request.url),
+                        "headers": dict(request.headers),
+                        "json": await request.json(),
+                    }
+                )
+                outcome = self.outcomes.pop(0)
+                if isinstance(outcome, Exception):
+                    request.transport.close()
+                    return web.Response()
+                if outcome.truncated:
+                    response = web.StreamResponse(
+                        status=outcome.status,
+                        headers={"Content-Type": outcome.content_type, "Content-Length": "100"},
+                    )
+                    await response.prepare(request)
+                    await response.write(b"{")
+                    request.transport.close()
+                    return response
+                if outcome.body is None:
+                    return web.Response(
+                        status=outcome.status,
+                        headers=outcome.headers,
+                        content_type=outcome.content_type,
+                    )
+                return web.json_response(
+                    outcome.body,
+                    status=outcome.status,
+                    headers=outcome.headers,
+                    content_type=outcome.content_type,
+                )
 
-    def _client(self, session, conn_options=None):
-        return SynthesiaAPI(
+            app = web.Application()
+            app.router.add_post("/{path:.*}", respond)
+            self.server = TestServer(app)
+            await self.server.start_server()
+            self.url = str(self.server.make_url("")).rstrip("/")
+            self.http = aiohttp.ClientSession()
+
+        async def close(self):
+            if self.http is not None:
+                await self.http.close()
+            if self.server is not None:
+                await self.server.close()
+
+    @pytest.fixture(autouse=True)
+    async def _http_peers(self):
+        self._peers = []
+        yield
+        for peer in self._peers:
+            await peer.close()
+
+    async def _start(self, peer, request, conn_options=None):
+        self._peers.append(peer)
+        await peer.start()
+        client = SynthesiaAPI(
             api_key=self.API_KEY,
-            api_url=self.API_URL,
-            session=session,
+            api_url=peer.url,
+            session=peer.http,
             conn_options=conn_options or self.NO_SLEEP,
         )
+        return await client.start_session(request)
 
     def _request(self, avatar_ids=("avatar-1",)):
         return StartSessionRequest(
@@ -286,14 +311,14 @@ class TestApiClient:
         }
 
     async def test_success_returns_session_id(self):
-        session = self._FakeSession([self._FakeResponse(200, body={"session_id": "sess_123"})])
-        result = await self._client(session).start_session(self._request())
+        session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
+        result = await self._start(session, self._request())
         assert result == StartSessionResponse(session_id="sess_123")
 
     async def test_request_body_uses_the_published_wire_names(self):
         created = {"id": "ses_9f3c", "status": "active"}
-        session = self._FakeSession([self._FakeResponse(201, body=created)])
-        await self._client(session).start_session(self._request(["ada-uuid", "kenji-uuid"]))
+        session = self._Peer([self._Reply(201, body=created)])
+        await self._start(session, self._request(["ada-uuid", "kenji-uuid"]))
         assert session.calls[0]["json"] == {
             "avatarIds": ["av_ada-uuid", "av_kenji-uuid"],
             "livekitUrl": "wss://room.livekit.cloud",
@@ -302,14 +327,14 @@ class TestApiClient:
 
     async def test_avatar_ids_are_not_double_prefixed(self):
         created = {"id": "ses_9f3c", "status": "active"}
-        session = self._FakeSession([self._FakeResponse(201, body=created)])
-        await self._client(session).start_session(self._request(["av_already-prefixed"]))
+        session = self._Peer([self._Reply(201, body=created)])
+        await self._start(session, self._request(["av_already-prefixed"]))
         assert session.calls[0]["json"]["avatarIds"] == ["av_already-prefixed"]
 
     async def test_created_response_yields_the_public_session_id(self):
         created = {"id": "ses_9f3c", "status": "active"}
-        session = self._FakeSession([self._FakeResponse(201, body=created)])
-        result = await self._client(session).start_session(self._request())
+        session = self._Peer([self._Reply(201, body=created)])
+        result = await self._start(session, self._request())
         assert result == StartSessionResponse(session_id="ses_9f3c")
 
     async def test_problem_json_detail_becomes_the_error_message(self):
@@ -319,51 +344,41 @@ class TestApiClient:
             title="Invalid request",
             detail="The supplied livekitToken cannot be used to join the room.",
         )
-        session = self._FakeSession(
-            [self._FakeResponse(400, body=body, content_type="application/problem+json")]
-        )
+        session = self._Peer([self._Reply(400, body=body, content_type="application/problem+json")])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert str(exc.value) == "The supplied livekitToken cannot be used to join the room."
         assert exc.value.type is ErrorType.INVALID_SESSION_REQUEST
         assert exc.value.body == body
 
     async def test_problem_body_without_code_falls_back_to_status(self):
         body = self._problem("not_found", status=404, title="Not found", with_code=False)
-        session = self._FakeSession(
-            [self._FakeResponse(404, body=body, content_type="application/problem+json")]
-        )
+        session = self._Peer([self._Reply(404, body=body, content_type="application/problem+json")])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is ErrorType.UNKNOWN_AVATAR
 
     async def test_unmapped_problem_code_is_untyped(self):
         body = self._problem("not_found", status=404, title="Not found")
-        session = self._FakeSession(
-            [self._FakeResponse(404, body=body, content_type="application/problem+json")]
-        )
+        session = self._Peer([self._Reply(404, body=body, content_type="application/problem+json")])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is None
         assert str(exc.value) == "Not found"
 
     @pytest.mark.parametrize("detail", [None, [{"msg": "x"}]], ids=["absent", "not-a-string"])
     async def test_problem_title_used_when_detail_is_unusable(self, detail):
         body = self._problem("not_found", status=404, title="Not found", detail=detail)
-        session = self._FakeSession(
-            [self._FakeResponse(404, body=body, content_type="application/problem+json")]
-        )
+        session = self._Peer([self._Reply(404, body=body, content_type="application/problem+json")])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert str(exc.value) == "Not found"
 
     async def test_errors_carry_status_and_request_id(self):
         body = self._problem("forbidden", status=403, title="Forbidden", request_id="req_1")
-        session = self._FakeSession(
-            [self._FakeResponse(403, body=body, content_type="application/problem+json")]
-        )
+        session = self._Peer([self._Reply(403, body=body, content_type="application/problem+json")])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is ErrorType.AUTH
         assert (exc.value.status, exc.value.request_id) == (403, "req_1")
 
@@ -386,11 +401,11 @@ class TestApiClient:
     )
     async def test_problem_type_maps_to_error_type(self, code, status, expected):
         body = self._problem(code, status=status, title="t", detail="d")
-        session = self._FakeSession(
-            [self._FakeResponse(status, body=body, content_type="application/problem+json")]
+        session = self._Peer(
+            [self._Reply(status, body=body, content_type="application/problem+json")]
         )
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is expected
 
     @pytest.mark.parametrize(
@@ -405,9 +420,9 @@ class TestApiClient:
         self, code, expected, headers, retry_after
     ):
         body = self._problem(code, status=429, title="t", detail="d")
-        session = self._FakeSession(
+        session = self._Peer(
             [
-                self._FakeResponse(
+                self._Reply(
                     429,
                     body=body,
                     headers=headers,
@@ -416,27 +431,20 @@ class TestApiClient:
             ]
         )
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is expected
         assert exc.value.retry_after == retry_after
 
     async def test_session_url_matches_the_published_route(self):
-        session = self._FakeSession([self._FakeResponse(200, body={"session_id": "sess_123"})])
-        client = SynthesiaAPI(
-            api_key=self.API_KEY,
-            api_url="https://developers.example",
-            session=session,
-        )
-        await client.start_session(self._request())
-        assert (
-            session.calls[0]["url"] == "https://developers.example/api/interactive-avatars/sessions"
-        )
+        session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
+        await self._start(session, self._request())
+        assert session.calls[0]["url"] == session.url + SESSION_PATH
 
     async def test_request_carries_auth_header_and_payload(self):
-        session = self._FakeSession([self._FakeResponse(200, body={"session_id": "sess_123"})])
-        await self._client(session).start_session(self._request())
+        session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
+        await self._start(session, self._request())
         call = session.calls[0]
-        assert call["url"] == self.API_URL + SESSION_PATH
+        assert call["url"] == session.url + SESSION_PATH
         assert call["headers"]["Authorization"] == self.API_KEY
         assert call["json"] == {
             "avatarIds": ["av_avatar-1"],
@@ -445,8 +453,8 @@ class TestApiClient:
         }
 
     async def test_request_payload_carries_avatar_ids_in_order(self):
-        session = self._FakeSession([self._FakeResponse(200, body={"session_id": "sess_123"})])
-        await self._client(session).start_session(self._request(["lead", "second", "third"]))
+        session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
+        await self._start(session, self._request(["lead", "second", "third"]))
         assert session.calls[0]["json"]["avatarIds"] == ["av_lead", "av_second", "av_third"]
 
     @pytest.mark.parametrize(
@@ -464,11 +472,11 @@ class TestApiClient:
         ],
     )
     async def test_error_code_maps_to_error_type(self, code, status, expected):
-        session = self._FakeSession(
-            [self._FakeResponse(status, body={"error": {"code": code, "message": "nope"}})]
+        session = self._Peer(
+            [self._Reply(status, body={"error": {"code": code, "message": "nope"}})]
         )
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is expected
 
     async def test_livekit_credentials_rejection_is_not_an_auth_error(self):
@@ -477,39 +485,39 @@ class TestApiClient:
             "code": "invalid_livekit_credentials",
             "context": {"lk_token": ["LiveKit rejected the supplied credentials"]},
         }
-        session = self._FakeSession([self._FakeResponse(401, body=body)])
+        session = self._Peer([self._Reply(401, body=body)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is ErrorType.LIVEKIT_CREDENTIALS_REJECTED
 
     async def test_bare_401_without_a_code_is_still_an_auth_error(self):
-        session = self._FakeSession([self._FakeResponse(401, body={"message": "Unauthorized"})])
+        session = self._Peer([self._Reply(401, body={"message": "Unauthorized"})])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is ErrorType.AUTH
 
     async def test_unmapped_error_code_carries_backend_body(self):
         body = {"error": {"code": "teapot", "message": "avatar_ids is required"}}
-        session = self._FakeSession([self._FakeResponse(400, body=body)])
+        session = self._Peer([self._Reply(400, body=body)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is None
         assert exc.value.body == body
 
     async def test_flat_error_body_surfaces_context_message(self):
         body = {"error": "Forbidden", "context": "User is not authenticated"}
-        session = self._FakeSession([self._FakeResponse(403, body=body)])
+        session = self._Peer([self._Reply(403, body=body)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert str(exc.value) == "User is not authenticated"
         assert exc.value.type is ErrorType.AUTH
         assert exc.value.body == body
 
     async def test_flat_string_error_used_when_no_context(self):
         body = {"error": "Forbidden"}
-        session = self._FakeSession([self._FakeResponse(403, body=body)])
+        session = self._Peer([self._Reply(403, body=body)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert str(exc.value) == "Forbidden"
         assert exc.value.type is ErrorType.AUTH
 
@@ -519,9 +527,9 @@ class TestApiClient:
             "context": {"livekit_url": ["Must be a wss:// URL"]},
             "error": "InvalidSessionRequestError",
         }
-        session = self._FakeSession([self._FakeResponse(400, body=body)])
+        session = self._Peer([self._Reply(400, body=body)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         text = str(exc.value)
         assert "livekit_url" in text
         assert "Must be a wss:// URL" in text
@@ -532,17 +540,15 @@ class TestApiClient:
         assert "boom" in str(exc)
 
     async def test_terminal_error_is_not_retried(self):
-        session = self._FakeSession(
-            [self._FakeResponse(401, body={"error": {"code": "unauthorized"}})]
-        )
+        session = self._Peer([self._Reply(401, body={"error": {"code": "unauthorized"}})])
         with pytest.raises(SynthesiaError):
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert len(session.calls) == 1
 
     async def test_rate_limited_retry_after_from_header(self):
-        session = self._FakeSession(
+        session = self._Peer(
             [
-                self._FakeResponse(
+                self._Reply(
                     429,
                     body={"error": {"code": "rate_limited"}},
                     headers={"Retry-After": "7"},
@@ -550,23 +556,23 @@ class TestApiClient:
             ]
         )
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.retry_after == 7.0
 
     async def test_rate_limited_retry_after_from_body(self):
-        session = self._FakeSession(
-            [self._FakeResponse(429, body={"error": {"code": "rate_limited"}, "retry_after": 3.5})]
+        session = self._Peer(
+            [self._Reply(429, body={"error": {"code": "rate_limited"}, "retry_after": 3.5})]
         )
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.retry_after == 3.5
 
     async def test_rate_limited_retry_after_from_nested_error(self):
-        session = self._FakeSession(
-            [self._FakeResponse(429, body={"error": {"code": "rate_limited", "retry_after": 9}})]
+        session = self._Peer(
+            [self._Reply(429, body={"error": {"code": "rate_limited", "retry_after": 9}})]
         )
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.retry_after == 9.0
 
     async def test_5xx_surfaces_the_api_detail_and_request_id(self):
@@ -577,12 +583,10 @@ class TestApiClient:
             detail="The session could not be started. Retry.",
             request_id=self._REQUEST_ID,
         )
-        session = self._FakeSession(
-            [self._FakeResponse(503, body=body, content_type="application/problem+json")]
-        )
+        session = self._Peer([self._Reply(503, body=body, content_type="application/problem+json")])
         one_attempt = dataclasses.replace(self.NO_SLEEP, max_retry=0)
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session, one_attempt).start_session(self._request())
+            await self._start(session, self._request(), one_attempt)
         assert str(exc.value) == (
             "could not start a Synthesia session; last attempt: HTTP 503: "
             f"The session could not be started. Retry. (request {self._REQUEST_ID})"
@@ -593,20 +597,18 @@ class TestApiClient:
 
     async def test_5xx_legacy_body_message_is_kept(self):
         body = {"error": {"code": "internal", "message": "upstream is down"}}
-        session = self._FakeSession([self._FakeResponse(500, body=body)])
+        session = self._Peer([self._Reply(500, body=body)])
         one_attempt = dataclasses.replace(self.NO_SLEEP, max_retry=0)
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session, one_attempt).start_session(self._request())
+            await self._start(session, self._request(), one_attempt)
         assert str(exc.value) == (
             "could not start a Synthesia session; last attempt: HTTP 500: upstream is down"
         )
 
     async def test_5xx_on_every_attempt_names_the_last_status(self):
-        session = self._FakeSession(
-            [self._FakeResponse(502) for _ in range(self.NO_SLEEP.max_retry + 1)]
-        )
+        session = self._Peer([self._Reply(502) for _ in range(self.NO_SLEEP.max_retry + 1)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert len(session.calls) == self.NO_SLEEP.max_retry + 1
         assert str(exc.value) == (
             f"could not start a Synthesia session after {self.NO_SLEEP.max_retry + 1} attempts;"
@@ -616,14 +618,13 @@ class TestApiClient:
         assert exc.value.status == 502
 
     async def test_5xx_whose_body_fails_to_arrive_is_still_a_5xx(self):
-        class _TruncatedResponse(self._FakeResponse):
-            async def json(self, *, content_type=None):
-                raise aiohttp.ClientPayloadError("truncated")
+        class _TruncatedReply(self._Reply):
+            truncated = True
 
         two_attempts = dataclasses.replace(self.NO_SLEEP, max_retry=1)
-        session = self._FakeSession([_TruncatedResponse(503) for _ in range(2)])
+        session = self._Peer([_TruncatedReply(503) for _ in range(2)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session, two_attempts).start_session(self._request())
+            await self._start(session, self._request(), two_attempts)
         assert str(exc.value) == (
             "could not start a Synthesia session after 2 attempts; last attempt: HTTP 503"
         )
@@ -632,21 +633,21 @@ class TestApiClient:
 
     async def test_last_attempt_decides_the_message_when_outcomes_mix(self):
         body = self._problem("service_unavailable", status=503, title="Service unavailable")
-        answered = self._FakeResponse(503, body=body, content_type="application/problem+json")
+        answered = self._Reply(503, body=body, content_type="application/problem+json")
         two_attempts = dataclasses.replace(self.NO_SLEEP, max_retry=1)
 
-        session = self._FakeSession([aiohttp.ClientError(), answered])
+        session = self._Peer([aiohttp.ClientError(), answered])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session, two_attempts).start_session(self._request())
+            await self._start(session, self._request(), two_attempts)
         assert str(exc.value) == (
             "could not start a Synthesia session after 2 attempts;"
             " last attempt: HTTP 503: Service unavailable"
         )
         assert (exc.value.body, exc.value.status) == (body, 503)
 
-        session = self._FakeSession([answered, aiohttp.ClientError()])
+        session = self._Peer([answered, aiohttp.ClientError()])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session, two_attempts).start_session(self._request())
+            await self._start(session, self._request(), two_attempts)
         assert str(exc.value) == (
             "could not start a Synthesia session after 2 attempts; last attempt: connection error"
         )
@@ -654,33 +655,29 @@ class TestApiClient:
         assert isinstance(exc.value.__cause__, aiohttp.ClientError)
 
     async def test_transport_error_retries_then_connection_error(self):
-        session = self._FakeSession(
-            [aiohttp.ClientError() for _ in range(self.NO_SLEEP.max_retry + 1)]
-        )
+        session = self._Peer([aiohttp.ClientError() for _ in range(self.NO_SLEEP.max_retry + 1)])
         with pytest.raises(SynthesiaError) as exc:
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
         assert exc.value.type is ErrorType.CONNECTION
         assert len(session.calls) == self.NO_SLEEP.max_retry + 1
 
     async def test_retry_count_honors_conn_options(self):
         conn = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0, max_retry=1)
-        session = self._FakeSession([aiohttp.ClientError() for _ in range(2)])
+        session = self._Peer([aiohttp.ClientError() for _ in range(2)])
         with pytest.raises(SynthesiaError):
-            await self._client(session, conn).start_session(self._request())
+            await self._start(session, self._request(), conn)
         assert len(session.calls) == 2
 
     async def test_recovers_after_transient_failure(self):
-        session = self._FakeSession(
-            [self._FakeResponse(503), self._FakeResponse(200, body={"session_id": "sess_ok"})]
-        )
-        result = await self._client(session).start_session(self._request())
+        session = self._Peer([self._Reply(503), self._Reply(200, body={"session_id": "sess_ok"})])
+        result = await self._start(session, self._request())
         assert result.session_id == "sess_ok"
         assert len(session.calls) == 2
 
     async def test_malformed_success_body_raises(self):
-        session = self._FakeSession([self._FakeResponse(200, body={"unexpected": True})])
+        session = self._Peer([self._Reply(200, body={"unexpected": True})])
         with pytest.raises(SynthesiaError):
-            await self._client(session).start_session(self._request())
+            await self._start(session, self._request())
 
     def test_request_repr_redacts_token(self):
         text = repr(self._request())
@@ -688,11 +685,11 @@ class TestApiClient:
 
     async def test_secrets_never_logged(self, caplog):
         caplog.set_level(logging.DEBUG, logger="livekit.plugins.synthesia")
-        ok = self._FakeSession([self._FakeResponse(200, body={"session_id": "sess_ok"})])
-        await self._client(ok).start_session(self._request())
-        bad = self._FakeSession([self._FakeResponse(401, body={"error": {"code": "unauthorized"}})])
+        ok = self._Peer([self._Reply(200, body={"session_id": "sess_ok"})])
+        await self._start(ok, self._request())
+        bad = self._Peer([self._Reply(401, body={"error": {"code": "unauthorized"}})])
         with pytest.raises(SynthesiaError):
-            await self._client(bad).start_session(self._request())
+            await self._start(bad, self._request())
         assert self.API_KEY not in caplog.text
         assert "lk-token-secret" not in caplog.text
 

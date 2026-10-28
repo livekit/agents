@@ -14,15 +14,14 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
 import pytest
-from typing_extensions import Self
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.plugins.boson_avatar.api import (
@@ -36,58 +35,25 @@ from livekit.plugins.boson_avatar.errors import BosonAvatarException
 pytestmark = pytest.mark.unit
 
 
-class _Response:
-    def __init__(
-        self,
-        status: int,
-        payload: object | None = None,
-        *,
-        headers: dict[str, str] | None = None,
-        raw_text: str | None = None,
-    ) -> None:
+class _Reply:
+    def __init__(self, status, payload=None, *, headers=None, raw_text=None, truncated=False):
         self.status = status
+        self.payload = payload
         self.headers = headers or {}
-        self._payload = payload
-        self._text = (
-            raw_text if raw_text is not None else ("" if payload is None else json.dumps(payload))
-        )
-
-    @property
-    def ok(self) -> bool:
-        return 200 <= self.status < 400
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-    async def text(self) -> str:
-        return self._text
-
-    async def json(self, *, content_type: str | None = None) -> object:
-        del content_type
-        if self._payload is None:
-            raise ValueError("empty body")
-        return self._payload
+        self.raw_text = raw_text
+        self.truncated = truncated
 
 
-class _Session:
-    def __init__(self, outcomes: list[_Response | BaseException]) -> None:
-        self._outcomes = outcomes
-        self.calls: list[dict[str, object]] = []
-        self.trace_configs: list[aiohttp.TraceConfig] = []
-        self.json_serialize = json.dumps
+class _Peer:
+    def __init__(self, server, http, calls):
+        self.server = server
+        self.http = http
+        self.calls = calls
+        self.url = str(server.make_url("")).rstrip("/")
 
-    def request(self, method: str, url: str, **kwargs: object) -> _Response:
-        data = kwargs.pop("data", None)
-        if isinstance(data, aiohttp.payload.Payload):
-            kwargs["json"] = json.loads(data.decode())
-        self.calls.append({"method": method, "url": url, **kwargs})
-        outcome = self._outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
+    async def close(self):
+        await self.http.close()
+        await self.server.close()
 
 
 def _active_session(
@@ -102,6 +68,60 @@ def _active_session(
 
 
 class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self._peers = []
+
+    async def asyncTearDown(self):
+        for peer in self._peers:
+            await peer.close()
+
+    async def _session(self, outcomes):
+        calls = []
+
+        async def respond(request):
+            call = {
+                "method": request.method,
+                "url": str(request.url),
+                "headers": dict(request.headers),
+            }
+            if request.can_read_body:
+                call["json"] = await request.json()
+            calls.append(call)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                request.transport.close()
+                return web.Response()
+            if outcome.truncated:
+                response = web.StreamResponse(
+                    status=outcome.status,
+                    headers={"Content-Type": "application/json", "Content-Length": "100"},
+                )
+                await response.prepare(request)
+                await response.write(b"{")
+                request.transport.close()
+                return response
+            if outcome.raw_text is not None:
+                return web.Response(
+                    status=outcome.status,
+                    text=outcome.raw_text,
+                    headers=outcome.headers,
+                    content_type="application/json",
+                )
+            if outcome.payload is None:
+                return web.Response(status=outcome.status, headers=outcome.headers)
+            return web.json_response(
+                outcome.payload, status=outcome.status, headers=outcome.headers
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", respond)
+        server = TestServer(app)
+        await server.start_server()
+        peer = _Peer(server, aiohttp.ClientSession(), calls)
+        self._peers.append(peer)
+        os.environ["BOSON_AVATAR_API_URL"] = peer.url + "/v1"
+        return peer
+
     def setUp(self) -> None:
         self.env = patch.dict(
             os.environ,
@@ -114,9 +134,9 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.env.stop()
 
     async def test_list_avatars_uses_provider_catalog(self) -> None:
-        session = _Session(
+        session = await self._session(
             [
-                _Response(
+                _Reply(
                     200,
                     {
                         "object": "avatar.list",
@@ -130,9 +150,9 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         )
         client = BosonAvatarAPI(
             api_key="boson-key",
-            api_url="https://avatar.example/v1",
+            api_url=session.url + "/v1",
             conn_options=APIConnectOptions(max_retry=0),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
 
         avatars = await client.list_avatars()
@@ -145,7 +165,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(session.calls[0]["method"], "GET")
-        self.assertEqual(session.calls[0]["url"], "https://avatar.example/v1/avatars")
+        self.assertEqual(session.calls[0]["url"], session.url + "/v1/avatars")
         self.assertEqual(
             session.calls[0]["headers"]["Authorization"],
             "Bearer boson-key",
@@ -168,27 +188,28 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         )
         for payload in invalid_payloads:
             with self.subTest(payload=payload):
+                session = await self._session([_Reply(200, payload)])
                 client = BosonAvatarAPI(
                     api_key="boson-key",
-                    api_url="https://avatar.example/v1",
+                    api_url=session.url + "/v1",
                     conn_options=APIConnectOptions(max_retry=0),
-                    session=_Session([_Response(200, payload)]),  # type: ignore[arg-type]
+                    session=session.http,
                 )
                 with self.assertRaises(BosonAvatarException):
                     await client.list_avatars()
 
     async def test_start_and_end_use_hosted_contract(self) -> None:
-        session = _Session(
+        session = await self._session(
             [
-                _Response(201, _active_session()),
-                _Response(204),
+                _Reply(201, _active_session()),
+                _Reply(204),
             ]
         )
         client = BosonAvatarAPI(
             api_key="boson-key",
-            api_url="https://avatar.example/v1/",
+            api_url=session.url + "/v1/",
             conn_options=APIConnectOptions(max_retry=0),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
 
         info = await client.start_session(
@@ -210,8 +231,8 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [call["url"] for call in session.calls],
             [
-                "https://avatar.example/v1/sessions",
-                "https://avatar.example/v1/sessions/avatar-session-1",
+                session.url + "/v1/sessions",
+                session.url + "/v1/sessions/avatar-session-1",
             ],
         )
         post = session.calls[0]
@@ -236,20 +257,20 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_retry_reuses_one_idempotency_key(self) -> None:
-        session = _Session(
+        session = await self._session(
             [
-                _Response(
+                _Reply(
                     503,
                     {"error": {"code": "busy"}},
                     headers={"Retry-After": "5"},
                 ),
-                _Response(201, _active_session()),
+                _Reply(201, _active_session()),
             ]
         )
         client = BosonAvatarAPI(
             api_key="boson-key",
             conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
         with (
             patch("livekit.plugins.boson_avatar.api.asyncio.sleep", new=AsyncMock()) as sleep,
@@ -275,9 +296,9 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
     async def test_non_retryable_auth_error_preserves_status_and_request_id(
         self,
     ) -> None:
-        session = _Session(
+        session = await self._session(
             [
-                _Response(
+                _Reply(
                     401,
                     {"error": {"code": "invalid_api_key", "request_id": "req-1"}},
                 )
@@ -286,7 +307,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         client = BosonAvatarAPI(
             api_key="bad-key",
             conn_options=APIConnectOptions(max_retry=3),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
         with self.assertRaises(APIStatusError) as raised:
             await client.start_session(
@@ -301,17 +322,17 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.request_id, "req-1")
         self.assertEqual(len(session.calls), 1)
 
-    async def test_transport_failure_is_wrapped_after_retries(self) -> None:
-        session = _Session(
+    async def test_incomplete_delete_response_is_wrapped_after_retries(self) -> None:
+        session = await self._session(
             [
-                aiohttp.ClientConnectionError("offline"),
-                asyncio.TimeoutError(),
+                _Reply(200, truncated=True),
+                _Reply(200, truncated=True),
             ]
         )
         client = BosonAvatarAPI(
             api_key="boson-key",
             conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
         with (
             patch("livekit.plugins.boson_avatar.api.asyncio.sleep", new=AsyncMock()),
@@ -334,14 +355,14 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
             {**_active_session(), "status": "pending"},
         ):
             with self.subTest(payload=payload):
-                outcomes = [_Response(201, payload)]
+                outcomes = [_Reply(201, payload)]
                 if payload.get("id"):
-                    outcomes.append(_Response(204))
-                session = _Session(outcomes)
+                    outcomes.append(_Reply(204))
+                session = await self._session(outcomes)
                 client = BosonAvatarAPI(
                     api_key="boson-key",
                     conn_options=APIConnectOptions(max_retry=0),
-                    session=session,  # type: ignore[arg-type]
+                    session=session.http,
                 )
                 with self.assertRaises(BosonAvatarException):
                     await client.start_session(
@@ -357,16 +378,16 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
 
     async def test_compensation_log_does_not_expose_provider_error(self) -> None:
         provider_secret = "private-provider-response"
-        session = _Session(
+        session = await self._session(
             [
-                _Response(201, _active_session(avatar_identity="wrong-avatar")),
-                _Response(503, {"error": {"message": provider_secret}}),
+                _Reply(201, _active_session(avatar_identity="wrong-avatar")),
+                _Reply(503, {"error": {"message": provider_secret}}),
             ]
         )
         client = BosonAvatarAPI(
             api_key="boson-key",
             conn_options=APIConnectOptions(max_retry=0),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
 
         with (
@@ -393,11 +414,11 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(provider_secret, "\n".join(logs.output))
 
     async def test_rejects_non_contract_success_status_without_retry(self) -> None:
-        session = _Session([_Response(202, _active_session())])
+        session = await self._session([_Reply(202, _active_session())])
         client = BosonAvatarAPI(
             api_key="boson-key",
             conn_options=APIConnectOptions(max_retry=3),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
 
         with self.assertRaises(APIStatusError) as raised:
@@ -415,9 +436,9 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(session.calls), 1)
 
     async def test_validates_json_delete_response(self) -> None:
-        session = _Session(
+        session = await self._session(
             [
-                _Response(
+                _Reply(
                     200,
                     {
                         "id": "avatar-session-1",
@@ -430,31 +451,20 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         client = BosonAvatarAPI(
             api_key="boson-key",
             conn_options=APIConnectOptions(max_retry=0),
-            session=session,  # type: ignore[arg-type]
+            session=session.http,
         )
 
         with self.assertRaises(BosonAvatarException):
             await client.end_session("avatar-session-1")
 
-        unexpected_body = _Session(
-            [
-                _Response(
-                    204,
-                    {
-                        "id": "avatar-session-1",
-                        "object": "avatar.livekit.session",
-                        "status": "terminated",
-                    },
-                )
-            ]
-        )
+        no_content = await self._session([_Reply(204)])
         client = BosonAvatarAPI(
             api_key="boson-key",
             conn_options=APIConnectOptions(max_retry=0),
-            session=unexpected_body,  # type: ignore[arg-type]
+            session=no_content.http,
         )
-        with self.assertRaises(BosonAvatarException):
-            await client.end_session("avatar-session-1")
+        await client.end_session("avatar-session-1")
+        self.assertEqual(len(no_content.calls), 1)
 
     def test_configuration_uses_documented_environment(self) -> None:
         with patch.dict(

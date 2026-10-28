@@ -19,6 +19,8 @@ from livekit.agents.utils import http_context
 
 from .log import logger
 
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
+
 
 class AvatarioException(Exception):
     """Exception for Avatario errors"""
@@ -138,9 +140,7 @@ class AvatarioAPI:
                                 status_code=response.status,
                                 body=text,
                             )
-                        return TypeAdapter(dict[str, JsonValue]).validate_python(
-                            await response.json()
-                        )
+                        return _JSON_OBJECT.validate_python(await response.json())
                 except ValidationError as exc:
                     raise APIConnectionError(
                         "Avatario returned an invalid response", retryable=False

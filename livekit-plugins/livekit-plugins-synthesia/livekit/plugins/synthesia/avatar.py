@@ -43,6 +43,8 @@ from .types import (
     StartSessionRequest,
 )
 
+_JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
+
 
 def _present(value: str | None) -> TypeGuard[str]:
     return bool(value and value.strip())
@@ -224,7 +226,7 @@ class AvatarSession(BaseAvatarSession):
                 await self._discard_partial_start()
                 raise
 
-            if self._ending():
+            if self._state is _State.CLOSED:
                 await self._close_done.wait()
                 await self._discard_partial_start()
                 raise SynthesiaError("avatar session was closed while starting")
@@ -280,7 +282,7 @@ class AvatarSession(BaseAvatarSession):
             raise SynthesiaError(f"avatar swap RPC failed: {e}", type=ErrorType.CONNECTION) from e
 
         try:
-            response = TypeAdapter[JsonValue](JsonValue).validate_json(raw)
+            response = _JSON_VALUE.validate_json(raw)
         except ValueError as e:
             raise SynthesiaError("avatar swap returned a malformed response") from e
         avatar_id_result = response.get("avatar_id") if isinstance(response, dict) else None

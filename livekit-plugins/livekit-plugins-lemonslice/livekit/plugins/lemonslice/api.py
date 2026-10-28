@@ -5,10 +5,11 @@ import io
 import json
 import os
 from types import TracebackType
+from typing import TypeVar
 
 import aiohttp
 from PIL import Image
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -30,6 +31,22 @@ class LemonSliceException(Exception):
 
 
 DEFAULT_API_URL = "https://lemonslice.com/api/liveai/sessions"
+
+
+class AgentSessionResponse(BaseModel):
+    session_id: str
+
+
+class JoinMeetingResponse(BaseModel):
+    websocket_url: str
+    meeting_bot_id: str
+
+
+class LeaveMeetingResponse(BaseModel):
+    pass
+
+
+_ResponseT = TypeVar("_ResponseT", bound=BaseModel)
 
 
 class LemonSliceAPI:
@@ -144,10 +161,12 @@ class LemonSliceAPI:
         if utils.is_given(agent_image):
             image_bytes = _encode_image(agent_image)
 
-        response_data = await self._post(payload, image_bytes=image_bytes)
-        session_id = response_data["session_id"]
+        response_data = await self._post(
+            payload, response_type=AgentSessionResponse, image_bytes=image_bytes
+        )
+        session_id = response_data.session_id
         logger.debug(f"LemonSlice Session ID = {session_id}")
-        return TypeAdapter(str).validate_python(session_id)
+        return session_id
 
     async def join_meeting(
         self,
@@ -182,10 +201,10 @@ class LemonSliceAPI:
             payload["bot_name"] = bot_name
 
         url = f"{self._api_url.rstrip('/')}/{session_id}/join-meeting"
-        data = await self._post(payload, url=url)
+        data = await self._post(payload, response_type=JoinMeetingResponse, url=url)
         return JoinMeetingResult(
-            websocket_url=str(data["websocket_url"]),
-            meeting_bot_id=str(data["meeting_bot_id"]),
+            websocket_url=data.websocket_url,
+            meeting_bot_id=data.meeting_bot_id,
         )
 
     async def leave_meeting(
@@ -203,6 +222,7 @@ class LemonSliceAPI:
         url = f"{self._api_url.rstrip('/')}/{session_id}/leave-meeting"
         await self._post(
             {"meeting_bot_id": meeting_bot_id},
+            response_type=LeaveMeetingResponse,
             url=url,
         )
 
@@ -210,9 +230,10 @@ class LemonSliceAPI:
         self,
         payload: dict[str, JsonValue],
         *,
+        response_type: type[_ResponseT],
         url: str | None = None,
         image_bytes: bytes | None = None,
-    ) -> dict[str, JsonValue]:
+    ) -> _ResponseT:
         """
         Make a POST request to the LemonSlice API with retry logic.
 
@@ -265,10 +286,8 @@ class LemonSliceAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return TypeAdapter(dict[str, JsonValue]).validate_python(
-                                await response.json()
-                            )
-                    except ValidationError as exc:
+                            return response_type.model_validate(await response.json())
+                    except (ValueError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "Lemonslice returned an invalid response", retryable=False
                         ) from exc

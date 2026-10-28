@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue, TypeAdapter
 
+_JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
+
 
 @dataclass(frozen=True, slots=True)
 class MeetingChatMessage:
@@ -32,7 +34,7 @@ def deserialize_chat(payload: str) -> MeetingChatMessage | None:
         Parsed chat message, or None if the payload is invalid or not a chat message.
     """
     try:
-        obj = TypeAdapter[JsonValue](JsonValue).validate_json(payload)
+        obj = _JSON_VALUE.validate_json(payload)
     except (ValueError, TypeError):
         return None
     if not isinstance(obj, dict) or obj.get("type") != "chat":

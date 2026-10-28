@@ -1,10 +1,11 @@
 import logging
 import os
+from typing import TypeVar
 
 import aiohttp
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue
 
-from livekit.agents import NOT_GIVEN, NotGivenOr
+from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,17 @@ DEFAULT_API_URL = "https://api.avatartalk.ai"
 
 class AvatarTalkException(Exception):
     """Exception for AvatarTalkAPI errors"""
+
+
+class SessionResponse(BaseModel):
+    task_id: str | None
+
+
+class StopResponse(BaseModel):
+    pass
+
+
+_ResponseT = TypeVar("_ResponseT", bound=BaseModel)
 
 
 class AvatarTalkAPI:
@@ -33,17 +45,24 @@ class AvatarTalkAPI:
         self._headers = {"Authorization": f"Bearer {self._api_key}"}
 
     async def _request(
-        self, method: str, path: str, *, json: dict[str, JsonValue] | None = None
-    ) -> dict[str, JsonValue]:
+        self,
+        method: str,
+        path: str,
+        *,
+        response_type: type[_ResponseT],
+        json: dict[str, JsonValue] | None = None,
+    ) -> _ResponseT:
         async with aiohttp.ClientSession() as session:
             async with session.request(
                 method, f"{self._api_url}{path}", headers=self._headers, json=json
             ) as response:
                 if response.ok:
-                    result = TypeAdapter(dict[str, JsonValue]).validate_python(
-                        await response.json()
-                    )
-                    return result
+                    try:
+                        return response_type.model_validate(await response.json())
+                    except (ValueError, aiohttp.ContentTypeError) as exc:
+                        raise APIConnectionError(
+                            "AvatarTalk returned an invalid response", retryable=False
+                        ) from exc
                 else:
                     r = await response.json()
                     raise AvatarTalkException(f"API request failed: {response.status} {r}")
@@ -57,10 +76,11 @@ class AvatarTalkAPI:
         livekit_listener_token: str,
         livekit_room_token: str,
         agent_identity: str,
-    ) -> dict[str, JsonValue]:
+    ) -> SessionResponse:
         return await self._request(
             "POST",
             "/livekit/create-session",
+            response_type=SessionResponse,
             json={
                 "livekit_url": livekit_url,
                 "avatar": avatar,
@@ -72,5 +92,7 @@ class AvatarTalkAPI:
             },
         )
 
-    async def stop_session(self, task_id: str) -> dict[str, JsonValue]:
-        return await self._request("DELETE", f"/livekit/delete-session/{task_id}")
+    async def stop_session(self, task_id: str) -> StopResponse:
+        return await self._request(
+            "DELETE", f"/livekit/delete-session/{task_id}", response_type=StopResponse
+        )

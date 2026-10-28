@@ -2,7 +2,7 @@ import asyncio
 import os
 
 import aiohttp
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -19,6 +19,10 @@ from .errors import DIDException
 from .log import logger
 
 DEFAULT_API_URL = "https://api.d-id.com"
+
+
+class JoinSessionResponse(BaseModel):
+    id: str
 
 
 class DIDAPI:
@@ -55,9 +59,9 @@ class DIDAPI:
             "audio_config": audio_config,
         }
         response_data = await self._post(f"v2/agents/{agent_id}/sessions/join", payload)
-        return TypeAdapter(str).validate_python(response_data["id"])
+        return response_data.id
 
-    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> JoinSessionResponse:
         url = f"{self._api_url}/{endpoint}"
         num_attempts = self._conn_options.max_retry + 1
         for attempt in range(num_attempts):
@@ -80,7 +84,11 @@ class DIDAPI:
                             status_code=response.status,
                             body=text,
                         )
-                    return TypeAdapter(dict[str, JsonValue]).validate_python(await response.json())
+                    return JoinSessionResponse.model_validate(await response.json())
+            except (ValueError, aiohttp.ContentTypeError) as exc:
+                raise APIConnectionError(
+                    "Did returned an invalid response", retryable=False
+                ) from exc
             except APIStatusError:
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:

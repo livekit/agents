@@ -41,6 +41,8 @@ from .errors import BosonAvatarException
 from .log import logger
 from .version import __version__
 
+_JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
+
 _USER_AGENT = f"livekit-plugins-boson-avatar/{__version__}"
 _SESSION_OBJECT = "avatar.livekit.session"
 
@@ -399,9 +401,7 @@ async def _read_payload(response: aiohttp.ClientResponse) -> JsonValue:
     if not text:
         return None
     try:
-        payload = TypeAdapter[JsonValue](JsonValue).validate_python(
-            await response.json(content_type=None)
-        )
+        payload = _JSON_VALUE.validate_python(await response.json(content_type=None))
         return payload
     except ValueError:
         return {"raw": text}

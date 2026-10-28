@@ -26,6 +26,8 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .log import logger
 
+_JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
+
 DEFAULT_API_URL = "https://api.dev.runwayml.com"
 API_VERSION = "2024-11-06"
 SAMPLE_RATE = 16000
@@ -183,9 +185,7 @@ class AvatarSession(BaseAvatarSession):
                                 status_code=response.status,
                                 body=text,
                             )
-                        payload = TypeAdapter[JsonValue](JsonValue).validate_python(
-                            await response.json()
-                        )
+                        payload = _JSON_VALUE.validate_python(await response.json())
                         session_id = payload.get("id") if isinstance(payload, dict) else None
                         if isinstance(session_id, str):
                             self._realtime_session_id = session_id

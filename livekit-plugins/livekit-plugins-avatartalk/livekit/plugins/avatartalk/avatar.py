@@ -1,7 +1,5 @@
 import os
 
-from pydantic import TypeAdapter
-
 from livekit import api, rtc
 from livekit.agents import NOT_GIVEN, NotGivenOr, VoiceSession, get_job_context
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -123,7 +121,7 @@ class AvatarSession(BaseAvatarSession):
             agent_identity=local_participant_identity,
         )
 
-        self.conversation_id = TypeAdapter(str | None).validate_python(resp["task_id"])
+        self.conversation_id = resp.task_id
         logger.debug(
             "Avatartalk agent session started",
             extra={

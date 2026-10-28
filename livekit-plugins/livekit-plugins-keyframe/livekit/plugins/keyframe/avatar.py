@@ -148,7 +148,7 @@ class AvatarSession(BaseAvatarSession):
             )
             logger.debug(
                 "Keyframe plugin session created: reservation_id=%s",
-                result.get("reservation_id"),
+                result.reservation_id,
             )
 
         self._room = room

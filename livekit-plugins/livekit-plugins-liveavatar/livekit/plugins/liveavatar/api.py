@@ -4,9 +4,9 @@ import asyncio
 import logging
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue
 
 if TYPE_CHECKING:
     from .avatar import VideoQuality
@@ -32,6 +32,29 @@ class LiveAvatarException(Exception):
 DEFAULT_API_URL = "https://api.liveavatar.com/v1/sessions"
 
 
+class _SessionToken(BaseModel):
+    session_id: str
+    session_token: str
+
+
+class _SessionStart(BaseModel):
+    ws_url: str
+
+
+_DataT = TypeVar("_DataT")
+
+
+class _SessionResponse(BaseModel, Generic[_DataT]):
+    data: _DataT
+
+
+class _SessionStop(BaseModel):
+    code: int
+
+
+_ResponseT = TypeVar("_ResponseT", bound=BaseModel)
+
+
 class LiveAvatarAPI:
     def __init__(
         self,
@@ -50,7 +73,7 @@ class LiveAvatarAPI:
         self._conn_options = conn_options
         self._session = session
 
-    def http_session(self) -> aiohttp.ClientSession:
+    def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
@@ -64,7 +87,7 @@ class LiveAvatarAPI:
         avatar_id: str,
         is_sandbox: bool = False,
         video_quality: VideoQuality | None = None,
-    ) -> dict[str, JsonValue]:
+    ) -> _SessionResponse[_SessionToken]:
         """Create a new streaming session, return a session id"""
 
         livekit_config: dict[str, JsonValue] = {
@@ -88,37 +111,52 @@ class LiveAvatarAPI:
             "content-type": "application/json",
             "X-API-KEY": self._api_key,
         }
-        response_data = await self._post(endpoint="/token", payload=payload, headers=self._headers)
+        response_data = await self._post(
+            endpoint="/token",
+            payload=payload,
+            headers=self._headers,
+            response_type=_SessionResponse[_SessionToken],
+        )
         return response_data
 
     async def start_streaming_session(
         self, session_id: str, session_token: str
-    ) -> dict[str, JsonValue]:
+    ) -> _SessionResponse[_SessionStart]:
         """Start the streaming session"""
         payload = {"session_id": session_id}
         headers = {"content-type": "application/json", "Authorization": f"Bearer {session_token}"}
-        response_data = await self._post(endpoint="/start", payload=payload, headers=headers)
+        response_data = await self._post(
+            endpoint="/start",
+            payload=payload,
+            headers=headers,
+            response_type=_SessionResponse[_SessionStart],
+        )
         return response_data
 
-    async def stop_streaming_session(
-        self, session_id: str, session_token: str
-    ) -> dict[str, JsonValue]:
+    async def stop_streaming_session(self, session_id: str, session_token: str) -> _SessionStop:
         """Stop the streaming session"""
         payload = {
             "session_id": session_id,
             "reason": "USER_DISCONNECTED",
         }
         headers = {"content-type": "application/json", "Authorization": f"Bearer {session_token}"}
-        response_data = await self._post(endpoint="/stop", payload=payload, headers=headers)
+        response_data = await self._post(
+            endpoint="/stop", payload=payload, headers=headers, response_type=_SessionStop
+        )
         return response_data
 
     async def _post(
-        self, *, endpoint: str, payload: Mapping[str, JsonValue], headers: Mapping[str, str]
-    ) -> dict[str, JsonValue]:
+        self,
+        *,
+        endpoint: str,
+        payload: Mapping[str, JsonValue],
+        headers: Mapping[str, str],
+        response_type: type[_ResponseT],
+    ) -> _ResponseT:
         url = self._api_url + endpoint
         for i in range(self._conn_options.max_retry + 1):
             try:
-                async with self.http_session().post(
+                async with self._ensure_http_session().post(
                     url=url, headers=headers, json=payload
                 ) as response:
                     if not response.ok:
@@ -128,8 +166,8 @@ class LiveAvatarAPI:
                             status_code=response.status,
                             body=text,
                         )
-                    return TypeAdapter(dict[str, JsonValue]).validate_python(await response.json())
-            except ValidationError as exc:
+                    return response_type.model_validate(await response.json())
+            except (ValueError, aiohttp.ContentTypeError) as exc:
                 raise APIConnectionError(
                     "LiveAvatar returned an invalid response", retryable=False
                 ) from exc

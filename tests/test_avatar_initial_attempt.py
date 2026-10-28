@@ -20,6 +20,8 @@ async def test_zero_retries_still_creates_avatar(provider):
 
     async def create(request):
         requests.append(await request.json())
+        if provider == "liveavatar":
+            return web.json_response({"data": {"session_id": "session", "session_token": "token"}})
         return web.json_response({"id": "session"})
 
     app = web.Application()

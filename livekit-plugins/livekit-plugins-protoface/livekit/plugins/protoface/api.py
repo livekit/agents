@@ -22,6 +22,8 @@ from .errors import ProtofaceException
 from .log import logger
 from .version import __version__
 
+_JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
+
 DEFAULT_API_URL = "https://api.protoface.com"
 _USER_AGENT = f"livekit-plugins-protoface/{__version__}"
 
@@ -193,9 +195,7 @@ async def _read_payload(response: aiohttp.ClientResponse) -> JsonValue:
         return {}
 
     try:
-        return TypeAdapter[JsonValue](JsonValue).validate_python(
-            await response.json(content_type=None)
-        )
+        return _JSON_VALUE.validate_python(await response.json(content_type=None))
     except ValueError:
         return {"raw": text}
 

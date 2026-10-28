@@ -6,7 +6,11 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError, APIConnectOptions
+from livekit.plugins.anam.api import AnamAPI
+from livekit.plugins.anam.types import PersonaConfig
 from livekit.plugins.avatario.api import AvatarioAPI
+from livekit.plugins.avatartalk.api import AvatarTalkAPI
+from livekit.plugins.did.api import DIDAPI
 from livekit.plugins.keyframe.api import KeyframeAPI
 from livekit.plugins.lemonslice.api import LemonSliceAPI
 from livekit.plugins.liveavatar.api import LiveAvatarAPI
@@ -14,7 +18,9 @@ from livekit.plugins.liveavatar.api import LiveAvatarAPI
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("provider", ["avatario", "keyframe", "lemonslice", "liveavatar"])
+@pytest.mark.parametrize(
+    "provider", ["anam", "avatario", "avatartalk", "did", "keyframe", "lemonslice", "liveavatar"]
+)
 async def test_invalid_success_response_does_not_repeat_creation(provider, monkeypatch):
     requests = []
 
@@ -27,7 +33,20 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
     async with TestServer(app) as server, aiohttp.ClientSession() as http:
         options = APIConnectOptions(max_retry=2, retry_interval=0)
         url = str(server.make_url("")).rstrip("/")
-        if provider == "keyframe":
+        if provider == "anam":
+            api = AnamAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            call = api.start_session(
+                PersonaConfig(name="avatar", avatarId="avatar"), "wss://livekit.test", "token"
+            )
+        elif provider == "did":
+            api = DIDAPI(api_key="key", api_url=url, session=http, conn_options=options)
+            call = api.join_session(agent_id="avatar", transport={}, audio_config={})
+        elif provider == "avatartalk":
+            api = AvatarTalkAPI(api_key="key", api_url=url)
+            call = api.start_session(
+                "wss://livekit.test", "avatar", "neutral", "room", "listener", "token", "agent"
+            )
+        elif provider == "keyframe":
             api = KeyframeAPI(api_key="key", api_url=url, session=http, conn_options=options)
             call = api.create_plugin_session(
                 room_name="room",

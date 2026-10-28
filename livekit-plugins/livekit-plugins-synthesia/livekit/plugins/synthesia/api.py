@@ -27,6 +27,8 @@ from .errors import ErrorType, SynthesiaError
 from .log import logger
 from .types import StartSessionRequest, StartSessionResponse
 
+_JSON_VALUE = TypeAdapter[JsonValue](JsonValue)
+
 SESSION_PATH = "/api/interactive-avatars/sessions"
 _AVATAR_ID_PREFIX = "av_"
 
@@ -277,8 +279,6 @@ async def _read_json(resp: aiohttp.ClientResponse) -> JsonValue:
     # Errors arrive as application/problem+json, which aiohttp refuses by default,
     # so the content type is checked here rather than delegated.
     try:
-        return TypeAdapter[JsonValue](JsonValue).validate_python(
-            await resp.json(content_type=resp.content_type)
-        )
+        return _JSON_VALUE.validate_python(await resp.json(content_type=resp.content_type))
     except (aiohttp.ContentTypeError, ValueError):
         return None

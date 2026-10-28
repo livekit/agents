@@ -1,8 +1,9 @@
 import asyncio
 import os
+from typing import TypeVar
 
 import aiohttp
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -29,7 +30,7 @@ DEFAULT_PAL_ID = "pb87e71797da"
 DEFAULT_FACE_ID = "r4067604db72"
 
 
-def coalesce_with_deprecated(
+def _coalesce_with_deprecated(
     new_value: NotGivenOr[str],
     deprecated_value: NotGivenOr[str],
     *,
@@ -48,6 +49,21 @@ def _deprecated_env(deprecated_name: str, new_name: str) -> str | None:
     if value:
         logger.warning(f"`{deprecated_name}` is deprecated, use `{new_name}` instead")
     return value
+
+
+class ConversationResponse(BaseModel):
+    conversation_id: str
+
+
+class PalResponse(BaseModel):
+    pal_id: str
+
+
+class PersonaResponse(BaseModel):
+    persona_id: str
+
+
+_ResponseT = TypeVar("_ResponseT", bound=BaseModel)
 
 
 class TavusAPI:
@@ -79,10 +95,10 @@ class TavusAPI:
         extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> str:
         # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
-        face_id = coalesce_with_deprecated(
+        face_id = _coalesce_with_deprecated(
             face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
         )
-        pal_id = coalesce_with_deprecated(
+        pal_id = _coalesce_with_deprecated(
             pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
         )
 
@@ -119,8 +135,10 @@ class TavusAPI:
         if "conversation_name" not in payload:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
 
-        response_data = await self._post("conversations", payload)
-        return TypeAdapter(str).validate_python(response_data["conversation_id"])
+        response_data = await self._post(
+            "conversations", payload, response_type=ConversationResponse
+        )
+        return response_data.conversation_id
 
     async def create_pal(
         self,
@@ -143,8 +161,8 @@ class TavusAPI:
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
-        response_data = await self._post("pals", payload)
-        return TypeAdapter(str).validate_python(response_data["pal_id"])
+        response_data = await self._post("pals", payload, response_type=PalResponse)
+        return response_data.pal_id
 
     async def create_persona(
         self,
@@ -167,10 +185,12 @@ class TavusAPI:
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
-        response_data = await self._post("personas", payload)
-        return TypeAdapter(str).validate_python(response_data["persona_id"])
+        response_data = await self._post("personas", payload, response_type=PersonaResponse)
+        return response_data.persona_id
 
-    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    async def _post(
+        self, endpoint: str, payload: dict[str, JsonValue], *, response_type: type[_ResponseT]
+    ) -> _ResponseT:
         """
         Make a POST request to the Tavus API with retry logic.
 
@@ -206,10 +226,8 @@ class TavusAPI:
                                 "Server returned an error", status_code=response.status, body=text
                             )
                         try:
-                            return TypeAdapter(dict[str, JsonValue]).validate_python(
-                                await response.json()
-                            )
-                        except ValueError as e:
+                            return response_type.model_validate(await response.json())
+                        except (ValueError, aiohttp.ContentTypeError) as e:
                             # Tavus already accepted the POST; retrying could create a duplicate.
                             raise APIConnectionError(
                                 "Tavus returned an invalid response", retryable=False
