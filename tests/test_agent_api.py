@@ -632,6 +632,51 @@ async def test_a_run_sets_up_and_closes_its_toolsets_once() -> None:
     assert (toolset.setups, toolset.closes) == (2, 2)
 
 
+async def test_a_call_holds_its_session_toolsets_across_agent_changes() -> None:
+    """``VoiceSession(tools=)`` toolsets live for the whole call (tools.md "Toolsets"): an agent
+    change neither sets them up again nor closes them; an agent's own toolset connects per
+    activation and is shared by agents holding it."""
+
+    class Counted(Toolset):
+        def __init__(self) -> None:
+            super().__init__(id="counted")
+            self.setups = self.closes = 0
+
+        async def setup(self) -> Counted:
+            self.setups += 1
+            return await super().setup()
+
+        async def aclose(self) -> None:
+            self.closes += 1
+            await super().aclose()
+
+    session_toolset, shared = Counted(), Counted()
+    first = Agent(instructions="first", name="first", tools=[shared])
+    second = Agent(instructions="second", name="second", tools=[shared])
+    third = Agent(instructions="third", name="third")
+    exited: list[str] = []
+
+    for agent in (first, second, third):
+
+        @agent.on_exit
+        async def leave(session: VoiceSession, name: str = agent.name) -> None:
+            exited.append(name)
+
+    async with VoiceSession(
+        vad=None, turn_handling={"turn_detection": None}, tools=[session_toolset]
+    ) as session:
+        await session.start(first)
+        session.update_agent(second)
+        while exited != ["first"]:
+            await asyncio.sleep(0.01)
+        session.update_agent(third)
+        while exited != ["first", "second"]:
+            await asyncio.sleep(0.01)
+        assert (session_toolset.setups, session_toolset.closes) == (1, 0)
+        assert (shared.setups, shared.closes) == (1, 1)
+    assert (session_toolset.setups, session_toolset.closes) == (1, 1)
+
+
 async def test_a_tool_in_an_a2a_turn_reads_its_task_and_thread(thread_storage: Storage) -> None:
     """``ctx.task_id`` is the turn's A2A task and ``ctx.thread`` its thread (agents.md
     "RunContext"); a text turn has no live session."""

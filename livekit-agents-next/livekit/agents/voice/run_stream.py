@@ -205,6 +205,10 @@ class RunStream(Generic[ResultT]):
             try:
                 update = await started.updates.recv()
             except Exception as e:
+                if self._closing is not None:
+                    # the stream cancel() closed refuses further reads: the cancellation settles
+                    await self._close()
+                    return None
                 await started.cleanup()
                 self._error = e
                 return None

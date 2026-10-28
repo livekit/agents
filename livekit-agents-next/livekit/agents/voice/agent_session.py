@@ -15,7 +15,7 @@ import inspect
 import time
 import weakref
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, overload
@@ -461,6 +461,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         hooks = _AgentHooks(self)
         frame = self._frame(agent)
+        await hooks._acquire(self._tools)
         frame["tools"] = await hooks._core_setup_tools(frame["tools_host"])
         model = frame.get("llm", self._llm)
         # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
@@ -476,46 +477,51 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         sampler = self._video_sampler
         keyterm_llm = _detection_llm(self._stt_context)
         self._room = room
-        self._core = _core.VoiceSession(
-            room,
-            instructions=frame["instructions"],
-            dynamic_instructions=frame["dynamic_instructions"],
-            agent=frame["agent"],
-            agent_host=frame["agent_host"],
-            chat_ctx=to_core_items(self._chat_ctx.items),
-            storage=self._voice_store,
-            stt=_bindings.core_leg(frame.get("stt", self._stt)),
-            vad=_bindings.core_leg(self._vad),
-            llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
-            realtime=native,
-            realtime_host=realtime,
-            tts=_bindings.core_leg(frame.get("tts", self._tts)),
-            host_audio_input=self._input.audio,
-            host_video_input=self._input.video,
-            host_audio_output=self._output.audio,
-            host_transcription_output=self._output.transcription,
-            on_event=self,
-            hooks=hooks,
-            options=self._options,
-            tools=frame["tools"],
-            tools_host=frame["tools_host"],
-            tool_runner=frame["tool_runner"],
-            room_io_config=room_options._to_core() if is_given(room_options) else None,
-            video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
-            using_default_vad=self._using_default_vad,
-            turn_detector=self._turn_detector,
-            hook_bound=_HOOK_BOUND,
-            max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
-            interruption_detector=self._interruption_detector(agent, model),
-            stt_context=self._stt_context,
-            keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
-            keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
-            **{node: frame[node] for node in _NODES if node in frame},
-            remote_session=SessionPort(self) if hosting else None,
-            console=console,
-            # the core connects the job's room beside its opening
-            job=job_ctx if in_job and console is None else None,
-        )
+        try:
+            self._core = _core.VoiceSession(
+                room,
+                instructions=frame["instructions"],
+                dynamic_instructions=frame["dynamic_instructions"],
+                agent=frame["agent"],
+                agent_host=frame["agent_host"],
+                chat_ctx=to_core_items(self._chat_ctx.items),
+                storage=self._voice_store,
+                stt=_bindings.core_leg(frame.get("stt", self._stt)),
+                vad=_bindings.core_leg(self._vad),
+                llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
+                realtime=native,
+                realtime_host=realtime,
+                tts=_bindings.core_leg(frame.get("tts", self._tts)),
+                host_audio_input=self._input.audio,
+                host_video_input=self._input.video,
+                host_audio_output=self._output.audio,
+                host_transcription_output=self._output.transcription,
+                on_event=self,
+                hooks=hooks,
+                options=self._options,
+                tools=frame["tools"],
+                tools_host=frame["tools_host"],
+                tool_runner=frame["tool_runner"],
+                room_io_config=room_options._to_core() if is_given(room_options) else None,
+                video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
+                using_default_vad=self._using_default_vad,
+                turn_detector=self._turn_detector,
+                hook_bound=_HOOK_BOUND,
+                max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
+                interruption_detector=self._interruption_detector(agent, model),
+                stt_context=self._stt_context,
+                keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
+                keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
+                **{node: frame[node] for node in _NODES if node in frame},
+                remote_session=SessionPort(self) if hosting else None,
+                console=console,
+                # the core connects the job's room beside its opening
+                job=job_ctx if in_job and console is None else None,
+            )
+        except BaseException:
+            # a core that never started never closes the toolsets
+            await hooks._core_close_toolsets(None)
+            raise
         self._agent = agent
         self._started_at = time.time()
         if in_job:
@@ -1224,13 +1230,6 @@ class VoiceTask(Generic[Output_T]):
             session._agent = binding.agent
 
 
-async def _setup_toolset(toolset: llm.Toolset) -> None:
-    try:
-        await toolset.setup()
-    except Exception:
-        logger.exception("failed to set up a toolset", extra={"toolset": type(toolset).__name__})
-
-
 def _host_value(value: Any) -> Any:
     return from_core_item(value) if isinstance(value, _core.ChatItem) else value
 
@@ -1273,6 +1272,22 @@ class _AgentHooks:
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
+        # the toolsets this call holds (tools.md "Toolsets"): the session's for the whole call,
+        # an agent's for each activation; shared ones are reference counted
+        self._held: list[llm.Toolset] = []
+
+    async def _acquire(self, tools: Iterable[llm.Tool | llm.Toolset]) -> None:
+        """Acquire the toolsets of ``tools``; one that fails to set up is logged and the call
+        runs without it."""
+        toolsets = [t for t in tools if isinstance(t, llm.Toolset)]
+        results = await asyncio.gather(*(t._acquire() for t in toolsets), return_exceptions=True)
+        for toolset, result in zip(toolsets, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "failed to set up a toolset", exc_info=result, extra={"toolset": toolset.id}
+                )
+            else:
+                self._held.append(toolset)
 
     async def _core_on_enter(self, agent: Agent) -> None:
         with _in_hook("on_enter", self._session, agent):
@@ -1287,13 +1302,23 @@ class _AgentHooks:
             await agent.on_user_turn_exceeded(UserTurnExceededEvent.model_validate(ev))
 
     async def _core_close_toolsets(self, agent: Agent | None) -> None:
-        tools = (agent or self._session).tools
-        await asyncio.gather(*(t.aclose() for t in tools if isinstance(t, llm.Toolset)))
+        """Release what ``agent``'s activation held, or, as the session closes, everything."""
+        if agent is None:
+            released, self._held = self._held, []
+        else:
+            released = [t for t in self._agent_toolsets(agent.tools) if t in self._held]
+            for toolset in released:
+                self._held.remove(toolset)
+        await asyncio.gather(*(t._release() for t in released))
 
     async def _core_setup_tools(self, tools: list[llm.Tool | llm.Toolset]) -> list[Any]:
-        # a toolset that fails to set up is logged and the agent runs without it
-        await asyncio.gather(*(_setup_toolset(t) for t in tools if isinstance(t, llm.Toolset)))
+        """An activation's tools: its agent's toolsets are acquired, the session's already
+        are."""
+        await self._acquire(self._agent_toolsets(tools))
         return tool_specs(tools)
+
+    def _agent_toolsets(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Toolset]:
+        return [t for t in tools if isinstance(t, llm.Toolset) and t not in self._session._tools]
 
     async def _core_closing(self) -> None:
         if self._session._amd is not None:

@@ -202,6 +202,31 @@ async def test_run_stream_cancel_settles_the_tool_and_raises_cancellation() -> N
     assert cancelled.is_set(), "the tool body was cancelled before the run settled"
 
 
+async def test_iterating_after_a_settled_cancel_raises_cancellation() -> None:
+    """Iteration resumed once cancel() closed the run raises ``CancelledError`` (agents.md
+    "Cancellation and cleanup"), not the closed stream's state error."""
+    entered = asyncio.Event()
+    llm = FakeLLM(fake_responses=[respond("wait", "", call("slow"))])
+    agent = Agent(instructions="slow", llm=llm)
+
+    @agent.tool
+    async def slow(ctx: RunContext) -> str:
+        """Slow."""
+        entered.set()
+        await asyncio.sleep(30)
+        return "done"
+
+    async with agent.run_stream("wait") as stream:
+        events = stream.stream_events()
+        assert (await anext(events)).type == "tool_call"
+        await entered.wait()
+        stream.cancel()
+        await asyncio.sleep(0.2)  # the close settles before anyone reads again
+        with pytest.raises(asyncio.CancelledError):
+            async for _ in events:
+                pass
+
+
 async def test_usage_is_the_invocation_delta_and_accumulates_into_the_caller() -> None:
     llm = FakeLLM(fake_responses=[respond("hi", "hello")])
     agent = Agent(instructions="hi", llm=llm)
