@@ -193,9 +193,10 @@ class RunResult(Generic[Run_T]):
 
     @property
     def verbatim(self) -> str | None:
-        """The part of the answer, or of the question, that reaches the person exactly as
-        written: what verbatim results and questions delivered, in order; ``None`` when none
-        did. The rest is the agent's own, for the one facing the person to phrase."""
+        """The answer, or the question, when it reaches the person exactly as written: what the
+        verbatim results the turn ended on said, in call order, a blank line between them, or a
+        question asked as written. ``None`` when the agent facing the person words it; what was
+        said as written before the end went out as it was said."""
         return self._verbatim
 
     @property

@@ -90,10 +90,10 @@ async def test_a_verbatim_result_without_reply_ends_the_turn_as_written() -> Non
     assert result.verbatim == DISCLAIMER
 
 
-async def test_a_verbatim_result_leads_the_answer_and_the_model_continues() -> None:
+async def test_a_verbatim_result_is_said_and_the_model_continues() -> None:
     result = await agent_saying(reply_required=True).run("hi")
-    assert result.output == f"{DISCLAIMER}\n\nHow can I help?"
-    assert result.verbatim == DISCLAIMER
+    assert result.output == "How can I help?"
+    assert result.verbatim is None
     outputs = [i for i in result.new_messages() if i.type == "function_call_output"]
     assert outputs[0].output == DELIVERED.format(text=DISCLAIMER)
 
@@ -115,4 +115,6 @@ async def test_a_verbatim_completed_from_a_conversation_tool_is_a_verbatim_resul
         )
     )
     result = await desk.run("code?")
-    assert result.output == "HTL-7A3K\n\nAnything else?"
+    assert result.output == "Anything else?"
+    outputs = [i for i in result.new_messages() if i.type == "function_call_output"]
+    assert outputs[0].output == DELIVERED.format(text="HTL-7A3K")

@@ -69,7 +69,7 @@ A stream is, in order:
 1. the `Task` in state `submitted`, sent once the task's row is durable, so a
    resubscribe on another worker finds it;
 2. zero or more `statusUpdate` events in state `working`, each with a text
-   message: the progress a handler or a tool sent with `ctx.update()`;
+   message: what a handler or a tool sent with `ctx.update()` or `ctx.say()`;
 3. zero or more `artifactUpdate` chunks of the one artifact named `answer`,
    the last with `lastChunk: true`;
 4. the final `statusUpdate`, with the metadata keys that apply.
@@ -132,7 +132,7 @@ the extension still receives the server-set keys and may ignore them.
 | `livekit/interrupted`        | the final status of a `canceled` task | `true` when the server ended the turn for a newer message |
 | `livekit/interruptionReason` | the same | `new-message` |
 | `livekit/mergedInto`         | the final status of a `completed` task | the task whose turn answered this message too |
-| `livekit/verbatim`           | the final status of a `completed` or `input-required` task | the part of the text that reaches the person exactly as written; the agent facing the person words the rest |
+| `livekit/verbatim`           | a text part | `true`: the part reaches the person exactly as written; see [a2a-live-ext.md](a2a-live-ext.md#exact-text) |
 | `livekit/reason`             | a `tasks/cancel` request and the final status of the task it canceled; the status message of a `failed` task | why: the client's words on a cancel, else the reasons below |
 
 A turn ended because the person sent a second message while it ran:

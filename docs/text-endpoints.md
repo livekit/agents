@@ -169,7 +169,7 @@ short. A stock client ignores them.
 | `livekit/interrupted`, `livekit/interruptionReason` | on a `canceled` task the server ended for a newer message                                    |
 | `livekit/mergedInto`                                | on a `completed` task whose message was answered by another task's turn                      |
 | `livekit/reason`                                    | why a task failed: `thread-not-found`, `lease-timeout`, `worker-lost`, `storage-unavailable` |
-| `livekit/verbatim`                                  | the part of an answer or a question that reaches the person exactly as written               |
+| `livekit/verbatim`                                  | `true` on a text part that reaches the person exactly as written: progress, answer, question |
 
 `livekit/mergedInto` marks three cases: a message a `batch` turn answered
 with a later one, a message that continued a waiting task, and a waiting

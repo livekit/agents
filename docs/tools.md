@@ -53,6 +53,23 @@ a module-level agent. A subclass declares its tools as methods with
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |
 | `Completed(value)` | the value is the call's output and the model continues; only a task's tool ends a task with it; see [agent-tasks.md](agent-tasks.md) |
 
+## Progress and exact text
+
+`ctx.update(text)` is progress the model words; `ctx.say(text)` is exact
+text, said as written with no model step and recorded as the agent's
+message: spoken on a call, a flagged `working` status in text
+([a2a-live-ext.md](a2a-live-ext.md#exact-text)). On a call the first of
+them releases the tool to the background, and a first `say` is the turn's
+reply; later ones are delivered at idle in call order, consecutive updates
+as one reply, and a `say` cut off before it played is said again. A model
+that cannot say text as written is asked to, with a warning.
+
+The calls of one step run together. A verbatim result the model goes on
+from is said when its tool returns. Those that end the turn are the
+answer, joined in call order with a blank line, unless another call asks
+for a reply: then they are said and the model goes on. On an agent whose
+`output_type` is not `str`, a verbatim result never ends the turn.
+
 ## Approval
 
 ```python
@@ -133,6 +150,10 @@ A toolset connects per run of the agent: `setup()` when the agent's
 activity starts, a call or a run, and `aclose()` when it ends. An
 `MCPToolset` connects to its server and lists its tools in `setup()`.
 Toolsets passed to `LiveSession(tools=)` live for the whole call.
+
+An agent and its toolsets are shared by every conversation in the
+process, so a toolset holds process resources only, a client or a pool,
+and reads a conversation's state from the `RunContext` and the history.
 
 The clients in `deps` are per run by design; see
 [state-and-deps.md](state-and-deps.md).

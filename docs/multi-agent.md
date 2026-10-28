@@ -70,7 +70,7 @@ the toolset's `setup()`: the toolset's id is the card's name, the tool is
 the card's description followed by one fixed sentence that says to state
 the request in full. The tool hands the request on with the
 run's thread and history, speaks the expert's progress through
-`ctx.update()`, returns the answer, or the question the expert has for the
+`ctx.update()` and its exact text through `ctx.say()`, returns the answer, or the question the expert has for the
 person, and records the expert's task on the call. On a call its first
 update releases the turn with a line the model acknowledges while the
 expert works; `announce=False` turns that off.
@@ -80,7 +80,7 @@ expert agent, and never contends for the caller's lease.
 
 ```python
 result = await delegate.run(
-    prompt, progress=ctx.update, context_id=None, message_history=None, usage=None
+    prompt, progress=ctx.update, say=ctx.say, context_id=None, message_history=None, usage=None
 )
 ```
 
@@ -89,7 +89,9 @@ the expert's task: `state` (`completed`, `input-required`, `canceled`),
 `task_id`, `context_id`, and, over A2A, `endpoint`, `transport` and
 `profile` (`livekit` when the extension was in force, else `a2a`). A
 `failed` task raises `DelegationFailed` with what the expert said.
-`progress` takes each status message the expert sends while it works.
+`progress` takes each status message the expert sends while it works, and
+`say` the flagged ones ([a2a-live-ext.md](a2a-live-ext.md#exact-text)), or
+`progress` without it; `verbatim` is the answer or question when flagged.
 `aclose()` releases what the delegate holds.
 
 ## A remote expert
@@ -116,11 +118,14 @@ the `contextId`, and the expert keeps its own lane in the caller's thread:
 its own history and state, beside the caller's. Inside `agent.run()` the
 delegate finds the run's thread by itself; `context_id=` names one
 explicitly. Any other A2A server gets the request as text and nothing else,
-and keeps a context of its own. The caller depends on nothing coming back
+and keeps a context of its own, which the delegate reads back from the
+call that recorded it in the history, since one delegate serves every
+conversation. The caller depends on nothing coming back
 but core A2A: the working statuses are the progress, the artifact is the
 answer. See [a2a.md](a2a.md), "Writing an expert in another framework".
 
-`A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True)`. With no `token`, an
+`A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True, conn_options=DEFAULT_API_CONNECT_OPTIONS)`.
+A dropped answer stream is read again up to `conn_options.max_retry` times. With no `token`, an
 expert on the project's own host (the host of `LIVEKIT_URL`) gets a project
 token minted from `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, which passes a
 `public=False` endpoint; an expert anywhere else gets none.
@@ -141,10 +146,10 @@ caller-canceled`.
 
 `record_delegation(function_call, result)` writes the expert's task on the
 call that delegated, in `FunctionCall.extra`: `lk.delegation.task_id`,
-`lk.delegation.endpoint`, `lk.delegation.transport` and
+`lk.delegation.context_id`, `lk.delegation.endpoint`, `lk.delegation.transport` and
 `lk.delegation.profile`, so a dashboard joins the two lanes. The delegate's
 own tool records it by itself; a tool of your own that calls `delegate.run`
-calls it.
+calls it and passes the history as `message_history`.
 
 ## Endpoints versus deployments
 

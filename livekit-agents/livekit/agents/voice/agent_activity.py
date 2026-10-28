@@ -23,6 +23,7 @@ from ..llm.tool_context import (
     APPROVAL_ANSWERED,
     APPROVAL_KEY,
     ASK_IN_OWN_WORDS,
+    SAY_EXACTLY,
     Completed,
     Failed,
     FunctionTool,
@@ -1862,6 +1863,23 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
+    def _say_exactly(self, text: str) -> SpeechHandle:
+        """Exact text, spoken as written with ``say()`` when a TTS or the realtime model can;
+        otherwise the model is asked to say it, with a warning each time."""
+        if (
+            self.tts is not None
+            or (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
+            or not (self._session.output.audio and self._session.output.audio_enabled)
+        ):
+            return self.say(text)
+
+        logger.warning(
+            "no TTS and the model cannot say text as written: the model was asked to say it, "
+            "and the wording is not guaranteed",
+            extra={"agent": self._agent.id, "text": text},
+        )
+        return self._generate_reply(instructions=SAY_EXACTLY.format(text=text), tool_choice="none")
+
     def _generate_reply(
         self,
         *,
@@ -3189,7 +3207,7 @@ class AgentActivity(RecognitionHooks):
                     fnc_call_out.reply_required = True
             elif not task.done():
                 if transition.verbatim:
-                    self.say(str(transition.value))
+                    self._say_exactly(str(transition.value))
                 task._complete(transition.value)
         elif isinstance(transition, (Failed, Rejected)):
             text = transition.error if isinstance(transition, Failed) else transition.reason
@@ -3208,7 +3226,7 @@ class AgentActivity(RecognitionHooks):
             if transition.verbatim:
                 if transition.tool is not None:
                     self._claim_next_turn(transition.tool.info.name)
-                handle = self.say(transition.question)
+                handle = self._say_exactly(transition.question)
             else:
                 # the model asks in its own words, with no tool to call; the answer's turn is
                 # claimed once it has asked, so the claim does not steer this reply

@@ -48,13 +48,16 @@ def widen(short_key: str) -> str:
 
 # the Live extension's keys, short
 KIND = "livekit/kind"
+CALLER_LANE = "livekit/callerLane"
+"""On a delegation in the caller's thread: the caller's lane, whose history holds the person's
+own words. The expert's handler may read it; the framework gives the expert's model none of it."""
 INTERRUPTED = "livekit/interrupted"
 INTERRUPTION_REASON = "livekit/interruptionReason"
 MERGED_INTO = "livekit/mergedInto"
 REASON = "livekit/reason"
 VERBATIM = "livekit/verbatim"
-"""The part of a reply that reaches the person exactly as written; the rest is phrased by the
-agent facing them."""
+"""``true`` on a text part that reaches the person exactly as written; the agent facing them
+words every other part."""
 
 KIND_DELEGATION = "delegation"
 KIND_CHAT_CTX = "chat_ctx"

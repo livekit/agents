@@ -61,6 +61,8 @@ class AgentClient:
         client = AgentClient(endpoint_url, token=token)
         reply = await client.send("Where is my order?", thread_id=thread_id)
         async for update in reply: ...
+
+    One client serves many conversations, so it keeps none: every call names its thread.
     """
 
     def __init__(
@@ -72,7 +74,6 @@ class AgentClient:
     ) -> None:
         self._url = endpoint_url.rstrip("/")
         self._token = token
-        self._thread_id: str | None = None
         self._echo: Extensions | None = None
         self._http = httpx_client or httpx.AsyncClient(timeout=None)
         self._owns_http = httpx_client is None
@@ -157,9 +158,6 @@ class AgentClient:
         events = client.send_message(request, context=self._call_context(thread_id))
         updates = updates_from_events(events)
         first = await updates.__anext__()
-        if first.task_id:
-            self._thread_id = first.context_id or self._thread_id
-
         if first.task_id and first.state == "submitted":
             return Reply(first.task_id, first.context_id, updates)
 
@@ -174,14 +172,55 @@ class AgentClient:
         card offers the extension (plan 3.3.8); a stock server gets the stock request."""
         await self.connect()
         params: dict[str, JsonValue] = {"id": task_id}
-        context_id = thread_id or self._thread_id
-        if context_id and self.offers_extension:
-            params["contextId"] = context_id
+        if thread_id and self.offers_extension:
+            params["contextId"] = thread_id
         if reason:
             params["metadata"] = metadata_to_wire({REASON: reason})
 
         result = await self._rpc("CancelTask", params)
         return json_format.ParseDict(result, pb.Task(), ignore_unknown_fields=True)
+
+    def resubscribe(self, task_id: str, *, thread_id: str | None = None) -> Reply:
+        """``tasks/resubscribe``: the task's answer stream again from the start, followed to its
+        last frame, and the task as it is now when the replay ends without one. The task's
+        session rides as ``contextId`` when the card offers the extension."""
+        params: dict[str, JsonValue] = {"id": task_id}
+        if thread_id and self.offers_extension:
+            params["contextId"] = thread_id
+
+        async def replay() -> AsyncIterator[pb.StreamResponse]:
+            # the task as it is now comes first and is read last: a finished task's snapshot
+            # holds its answer, not its progress or its flagged parts, which the replay has
+            snapshot: pb.StreamResponse | None = None
+            async for frame in self._stream_rpc("SubscribeToTask", params):
+                if snapshot is None:
+                    snapshot = frame
+                else:
+                    yield frame
+            if snapshot is not None:
+                yield snapshot
+
+        return Reply(task_id, thread_id or "", updates_from_events(replay()))
+
+    async def _stream_rpc(
+        self, method: str, params: dict[str, JsonValue]
+    ) -> AsyncIterator[pb.StreamResponse]:
+        """One streamed JSON-RPC call over SSE, its results as ``StreamResponse`` frames."""
+        await self.connect()
+        headers = dict(self._call_context(None).service_parameters or {})
+        headers["Accept"] = "text/event-stream"
+        body = {"jsonrpc": "2.0", "id": shortuuid("rpc_"), "method": method, "params": params}
+        async with self._http.stream("POST", self._rpc_url, json=body, headers=headers) as r:
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                answer = json.loads(line[len("data:") :])
+                if "error" in answer:
+                    raise A2AClientError(f"{method}: {json.dumps(answer['error'])}")
+                yield json_format.ParseDict(
+                    answer.get("result") or {}, pb.StreamResponse(), ignore_unknown_fields=True
+                )
 
     async def _rpc(self, method: str, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         """One JSON-RPC call the a2a-sdk's typed requests cannot carry; the result object."""
@@ -227,7 +266,7 @@ class AgentClient:
     ) -> StoredMessage:
         msg = _as_stored_message(message)
 
-        context_id = thread_id or msg.get("contextId") or self._thread_id
+        context_id = thread_id or msg.get("contextId")
         if context_id:
             msg["contextId"] = context_id
         if task_id:

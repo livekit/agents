@@ -39,13 +39,12 @@ The agent facing the person words what reaches them.
 |---|---|---|
 | `InputRequired(question)` | asks in its own words: one model request with no tools in text, a `generate_reply` on a call | passes the question up as written; the agent facing the person words it |
 | `InputRequired(question, verbatim=True)` | asks it exactly as written: the turn's reply in text, `say()` on a call | passes it up flagged `livekit/verbatim`; asked as written at the end |
-| `ToolResult(text, verbatim=True)`, `Completed(value, verbatim=True)` | delivers the text as written; the model reads `delivered to the person as written: ...` and continues, unless `reply_required=False` ends the turn there | the same, and the exact text leads the answer, flagged `livekit/verbatim` |
+| `ToolResult(text, verbatim=True)`, `Completed(value, verbatim=True)` | delivers the text as written; the model reads `delivered to the person as written: ...` and continues, unless `reply_required=False` ends the turn there | the same, sent as exact text: see [a2a-live-ext.md](a2a-live-ext.md#exact-text) |
 
 A run is another agent's when its turn's messages carry
 `livekit/kind: delegation`. An agent with no model, a graph or a code task,
-asks as written. `result.verbatim` is the part of the answer or the question
-that was exact; the door puts it on the task as `livekit/verbatim`, and the
-delegate delivers that part as written and hands the rest to its model.
+asks as written. `result.verbatim` is the answer or the question when it is
+exact, which the door flags and the delegate gives as written.
 A read-back from `requires_approval` is verbatim.
 
 The person's next message, whenever it comes and on whatever worker,

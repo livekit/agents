@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from ..llm.chat_context import ChatContext, ChatItem
+import httpx
+from a2a.client.errors import A2AClientError
+from pydantic import JsonValue
+
+from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
     InputRequired,
@@ -28,27 +32,36 @@ from ..llm.tool_context import (
     function_tool,
 )
 from ..log import logger
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..voice.agent_run import current_run_hooks
 from ..voice.events import RunContext
 from ..voice.run_result import RunUsage
 from .delegate import (
+    CONTEXT_ID_KEY,
+    ENDPOINT_KEY,
     Delegate,
     DelegationFailed,
     DelegationResult,
     Progress,
     answer_message,
+    record_delegation,
     report,
 )
-from .tool import DISPATCHED, record_delegation
 
 ASK = (
     "State the request in full, with everything the person said that bears on it; the "
     "answer, or the question it has for the person, is what you say next."
 )
+"""The second paragraph of the tool's description, after the card's own."""
+
+DISPATCHED = (
+    'Acknowledge in a few natural words, "one moment", "sure, let me check", "okay, looking '
+    'now", varying the wording, restating none of the request, asking nothing and promising '
+    "nothing about the outcome. The answer is a separate entry, not this one."
+)
+"""What the model reads on a call while the expert works: the line it acknowledges with."""
 
 if TYPE_CHECKING:
-    import httpx
-
     from ..a2a.client import AgentClient, Reply
     from ..a2a.codec import TaskUpdate
 
@@ -67,18 +80,24 @@ class A2ADelegate(Delegate, Toolset):
             return result.output
 
     As a toolset it is one tool, ``ask``, described by the card, read once in ``setup()``;
-    ``name=`` tells two experts on one agent apart. The tool hands the request on with the run's thread and
-    history, speaks the expert's progress through ``ctx.update()``, records the expert's task on
-    the call and returns the answer, or the question the expert has for the person. On a call
-    ``announce`` releases the turn with a line the model acknowledges while the expert works.
+    ``name=`` tells two experts on one agent apart. The tool hands the request on with the run's
+    thread and history, passes the expert's progress to ``ctx.update()`` and its exact text to
+    ``ctx.say()``, records the expert's task on the call and returns the answer, or the question
+    the expert has for the person; an answer or a question the expert flagged reaches the person
+    as written. On a call ``announce`` releases the turn with a line the model acknowledges
+    while the expert works.
 
     An expert whose card offers the Live extension gets the caller's session id as the
-    ``contextId`` and writes its own lane of that session; outside a turn, with no session to
-    name, it gets the conversation as a ``chat_ctx`` part and keeps a session of its own. Any
-    other A2A server gets the request as text and nothing else, and keeps a context of its own
-    (docs/multi-agent.md). ``token`` omitted, an expert on the project's
-    own host (``LIVEKIT_URL``) gets a project token minted per request from ``LIVEKIT_API_KEY``
-    and ``LIVEKIT_API_SECRET``; an expert anywhere else gets none.
+    ``contextId`` and the caller's lane as ``livekit/callerLane``, and writes its own lane of
+    that session; outside a turn, with no session to name, it gets the conversation as a
+    ``chat_ctx`` part and keeps a session of its own. Any other A2A server gets the request as
+    text and nothing else, and keeps a context of its own. A context the expert keeps is
+    recorded on the delegating call, and the next delegation to the same expert reads it from
+    the conversation: one delegate serves every conversation in the process and keeps none
+    (docs/multi-agent.md). ``token`` omitted, an expert on the project's own host
+    (``LIVEKIT_URL``) gets a project token minted per request from ``LIVEKIT_API_KEY`` and
+    ``LIVEKIT_API_SECRET``; an expert anywhere else gets none. A dropped answer stream is read
+    again up to ``conn_options.max_retry`` times.
     """
 
     def __init__(
@@ -89,12 +108,13 @@ class A2ADelegate(Delegate, Toolset):
         httpx_client: httpx.AsyncClient | None = None,
         name: str | None = None,
         announce: bool = True,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._url = url.rstrip("/")
         self._token = token
         self._httpx_client = httpx_client
+        self._conn_options = conn_options
         self._client: AgentClient | None = None
-        self._own_context: str | None = None
         self._cancels: set[asyncio.Future[None]] = set()
         self._tool_name = name
         self._announce = announce
@@ -127,34 +147,37 @@ class A2ADelegate(Delegate, Toolset):
             request: the request, in full
         """
         session = ctx._session
+        history: ChatContext
+        if session is not None:
+            history = session.history
+        else:
+            assert ctx._run is not None
+            history = ctx._run.chat_ctx
         if session is not None and self._announce:
             await ctx.update(DISPATCHED)
         try:
             result = await self.run(
                 request,
                 progress=ctx.update,
+                say=ctx.say,
                 context_id=session.thread.id if session and session.thread else None,
-                message_history=_history_of(ctx),
+                message_history=history,
                 usage=ctx.usage,
+                caller_lane=session.thread.agent_name if session and session.thread else None,
             )
         except DelegationFailed as e:
             raise ToolError(str(e) or "the delegation failed") from e
 
         record_delegation(ctx.function_call, result)
-        exact = result.verbatim
         if result.input_required:
             # the expert asked the person something: asked as it wrote it when it said so, and
             # what they say next is this tool's next request, as they said it
-            verbatim = exact is not None and exact.strip() == result.input_required.strip()
+            verbatim = result.verbatim is not None
             return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
-        answer = result.output if isinstance(result.output, str) else str(result.output or "")
-        if exact and answer.startswith(exact):
-            # the person gets the exact part as written; the rest is the model's to phrase
-            rest = answer[len(exact) :].strip()
-            said = ToolResult(exact, verbatim=True, reply_required=bool(rest))
-            said._more = rest  # type: ignore[attr-defined]
-            return said
-        return answer
+        if result.verbatim is not None:
+            # the person gets the answer as written, and the model does not word it
+            return ToolResult(result.verbatim, verbatim=True, reply_required=False)
+        return result.output if isinstance(result.output, str) else str(result.output or "")
 
     @property
     def transport(self) -> str | None:
@@ -172,37 +195,50 @@ class A2ADelegate(Delegate, Toolset):
         prompt: str,
         *,
         progress: Progress | None = None,
+        say: Progress | None = None,
         context_id: str | None = None,
         message_history: ChatContext | Sequence[ChatItem] | None = None,
         usage: RunUsage | None = None,
+        caller_lane: str | None = None,
     ) -> DelegationResult:
+        """One request; ``caller_lane`` is the caller's lane of ``context_id``, which an expert
+        of this project may read. Inside a turn both default to the turn's. ``say`` takes the
+        expert's exact text, ``progress`` when it is not given."""
         client = await self._connect()
         offers = client.offers_extension
-        context_id = self._caller_session(context_id)
-        reply = await self._send(client, prompt, context_id, message_history)
+        if context_id is None and (hooks := current_run_hooks()) is not None:
+            context_id, caller_lane = hooks.thread_id, hooks.lane
+        reply = await self._send(client, prompt, context_id, message_history, caller_lane)
 
         try:
-            update, text = await _answer(reply, progress)
+            update, text = await _answer(
+                reply,
+                progress,
+                say or progress,
+                lambda: client.resubscribe(reply.task_id, thread_id=reply.thread_id or None),
+                self._conn_options,
+            )
         except asyncio.CancelledError:
-            self._cancel_in_background(reply.task_id)
+            self._cancel_in_background(reply.task_id, reply.thread_id)
             raise
 
         if update.state == "failed":
             raise DelegationFailed(text or "the delegation failed")
+        asked = update.state == "input-required"
 
         return DelegationResult(
             output=text,
             state=update.state,
             task_id=update.task_id or reply.task_id,
             context_id=update.context_id or reply.thread_id,
-            input_required=text if update.state == "input-required" else None,
+            input_required=text if asked else None,
             new_messages=answer_message(text),
             usage=usage,
             interrupted=update.state == "canceled",
             endpoint=self._url,
             transport=client.transport or "",
             profile="livekit" if offers else "a2a",
-            verbatim=_verbatim(update.metadata),
+            verbatim=text if update.verbatim and text else None,
         )
 
     async def _send(
@@ -211,47 +247,59 @@ class A2ADelegate(Delegate, Toolset):
         prompt: str,
         context_id: str | None,
         message_history: ChatContext | Sequence[ChatItem] | None,
+        caller_lane: str | None,
     ) -> Reply:
-        """The request as the card allows: the caller's session, the delegation tag and, with
-        no session to name, the conversation, all only when the expert offers the extension."""
-        from ..a2a.extension import KIND, KIND_DELEGATION
+        """The request as the card allows: the caller's session and lane, the delegation tag
+        and, with no session to name, the conversation, all only when the expert offers the
+        extension."""
+        from ..a2a.extension import CALLER_LANE, KIND, KIND_DELEGATION
 
         offers = client.offers_extension
         shared = context_id if offers else None
-        reply = await client.send(
+        metadata: dict[str, JsonValue] = {KIND: KIND_DELEGATION}
+        if shared is not None and caller_lane:
+            metadata[CALLER_LANE] = caller_lane
+        own = None
+        if shared is None:
+            # the latest `FunctionCall` to this endpoint holds `lk.delegation.context_id` in `extra`
+            items = (
+                message_history.items
+                if isinstance(message_history, ChatContext)
+                else message_history or []
+            )
+            own = next(
+                (
+                    item.extra[CONTEXT_ID_KEY]
+                    for item in reversed(items)
+                    if isinstance(item, FunctionCall)
+                    and item.extra.get(ENDPOINT_KEY) == self._url
+                    and item.extra.get(CONTEXT_ID_KEY)
+                ),
+                None,
+            )
+        return await client.send(
             prompt,
-            thread_id=shared or self._own_context,
-            metadata={KIND: KIND_DELEGATION} if offers else None,
+            thread_id=shared or own,
+            metadata=metadata if offers else None,
             chat_ctx=_conversation(message_history) if offers and shared is None else None,
         )
 
-        if shared is None:
-            self._own_context = reply.thread_id or self._own_context
-        return reply
-
-    def _caller_session(self, context_id: str | None) -> str | None:
-        """From a tool inside a turn, the session the run belongs to; else what was given."""
-        if context_id is not None:
-            return context_id
-
-        hooks = current_run_hooks()
-        return hooks.thread_id if hooks is not None else None
-
-    def _cancel_in_background(self, task_id: str) -> None:
+    def _cancel_in_background(self, task_id: str, context_id: str) -> None:
         """The caller gave up (a barge-in, a closed call): tell the expert why, off the turn."""
         if not task_id:
             return
 
-        cancel = self.cancel(task_id, reason="caller-canceled")
+        cancel = self.cancel(task_id, context_id=context_id, reason="caller-canceled")
         self._cancels.add(asyncio.ensure_future(cancel))
 
-    async def cancel(self, task_id: str, *, reason: str = "") -> None:
-        """Ask the expert to stop a task; best-effort, a running tool finishes."""
+    async def cancel(self, task_id: str, *, context_id: str = "", reason: str = "") -> None:
+        """Ask the expert to stop a task of ``context_id``; best-effort, a running tool
+        finishes."""
         if self._client is None or not task_id:
             return
 
         try:
-            await self._client.cancel(task_id, reason=reason or None)
+            await self._client.cancel(task_id, thread_id=context_id or None, reason=reason or None)
         except Exception as e:
             logger.debug(
                 "the expert did not cancel the task",
@@ -293,22 +341,6 @@ class A2ADelegate(Delegate, Toolset):
         return Credentials(api_key, api_secret).project_token(identity="delegate")
 
 
-def _history_of(ctx: RunContext) -> ChatContext:
-    """The conversation as the expert may see it: the turns, no calls or instructions."""
-    history: ChatContext
-    if ctx._session is not None:
-        history = ctx._session.history
-    else:
-        assert ctx._run is not None
-        history = ctx._run.chat_ctx
-    return history.copy(
-        exclude_function_call=True,
-        exclude_handoff=True,
-        exclude_config_update=True,
-        exclude_instructions=True,
-    )
-
-
 def _conversation(
     message_history: ChatContext | Sequence[ChatItem] | None,
 ) -> ChatContext | None:
@@ -319,29 +351,48 @@ def _conversation(
     if not isinstance(message_history, ChatContext):
         message_history = ChatContext(list(message_history))
     return message_history.copy(
-        exclude_function_call=True, exclude_handoff=True, exclude_instructions=True
+        exclude_function_call=True,
+        exclude_handoff=True,
+        exclude_config_update=True,
+        exclude_instructions=True,
     )
 
 
-def _verbatim(metadata: object) -> str | None:
-    from ..a2a.extension import VERBATIM
+async def _answer(
+    reply: Reply,
+    progress: Progress | None,
+    say: Progress | None,
+    resubscribe: Callable[[], Reply],
+    conn_options: APIConnectOptions,
+) -> tuple[TaskUpdate, str]:
+    """Hands the progress to ``progress`` and the exact text to ``say`` as they arrive; returns
+    the terminal update and its own text, never a progress line. A stream that drops is read
+    again from the start with ``resubscribe``, and what was handed on is not handed on twice."""
+    reported = 0
+    updates = reply
+    for attempt in range(conn_options.max_retry + 1):
+        skip = reported
+        try:
+            async for update in updates:
+                if update.state not in ("working", "submitted"):
+                    return update, update.text
 
-    exact = metadata.get(VERBATIM) if isinstance(metadata, dict) else None
-    return exact if isinstance(exact, str) and exact else None
-
-
-async def _answer(reply: Reply, progress: Progress | None) -> tuple[TaskUpdate, str]:
-    """Reports the progress as it arrives; returns the terminal update and the answer text,
-    the last progress message when the terminal update carries none."""
-    last_text = ""
-
-    async for update in reply:
-        if update.state not in ("working", "submitted"):
-            return update, update.text or last_text
-
-        if update.text:
-            last_text = update.text
-            await report(progress, update.text)
+                if not update.text:
+                    continue
+                if skip > 0:
+                    skip -= 1
+                    continue
+                reported += 1
+                await report(say if update.verbatim else progress, update.text)
+        except (A2AClientError, httpx.HTTPError) as e:
+            logger.info(
+                "an expert's answer stream dropped",
+                extra={"taskId": reply.task_id, "attempt": attempt, "error": str(e)},
+            )
+        if not reply.task_id or attempt == conn_options.max_retry:
+            break
+        await asyncio.sleep(conn_options._interval_for_retry(attempt))
+        updates = resubscribe()
 
     raise DelegationFailed("the delegation ended without an answer")
 

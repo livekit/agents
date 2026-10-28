@@ -7,11 +7,21 @@ endpoint of this project or anyone's.
 """
 
 from .a2a import A2ADelegate
-from .delegate import Delegate, DelegationFailed, DelegationResult
-from .tool import ENDPOINT_KEY, PROFILE_KEY, TASK_ID_KEY, TRANSPORT_KEY, record_delegation
+from .delegate import (
+    CONTEXT_ID_KEY,
+    ENDPOINT_KEY,
+    PROFILE_KEY,
+    TASK_ID_KEY,
+    TRANSPORT_KEY,
+    Delegate,
+    DelegationFailed,
+    DelegationResult,
+    record_delegation,
+)
 
 __all__ = [
     "TASK_ID_KEY",
+    "CONTEXT_ID_KEY",
     "ENDPOINT_KEY",
     "TRANSPORT_KEY",
     "PROFILE_KEY",

@@ -73,13 +73,30 @@ ignored.
 | ---------------------------- | -- | ------ | ----- |
 | `livekit/channel`            | a message | the client | string: `a2a` (the default when absent), or the channel the platform's ingress received it on |
 | `livekit/kind`               | a message | a delegating agent | string: `delegation` |
+| `livekit/callerLane`         | a delegation in the caller's thread | a delegating agent | string: the caller's lane, whose history holds the person's own words; the expert's handler may read it |
 | `livekit/kind`               | a `DataPart` | a delegating agent | string: `chat_ctx` |
 | `livekit/reason`             | the `CancelTask` request's metadata | the client | string: why |
 | `livekit/reason`             | the final `TaskStatusUpdateEvent` of a task a client canceled; the status message of a `failed` task | the server | string: the client's reason, or section 5's |
 | `livekit/interrupted`        | the final `TaskStatusUpdateEvent` of a `canceled` task | the server | `true` |
 | `livekit/interruptionReason` | the same event | the server | string: `new-message` |
 | `livekit/mergedInto`         | the final `TaskStatusUpdateEvent` of a `completed` task | the server | string: a task id |
-| `livekit/verbatim`           | the final `TaskStatusUpdateEvent` of a `completed` or `input-required` task | the server | string: the part of the answer or the question that reaches the person exactly as written; it leads the text |
+| `livekit/verbatim`           | a text `Part` of a `working` status message, of the answer artifact, or of an `input-required` status message | the server | `true`: this part reaches the person exactly as written; the agent facing them words every other part |
+
+### Exact text
+
+The flag on a text part is the only encoding of exact text. A flagged
+`working` status is said to the person as written, at once; an unflagged
+one is progress the agent facing them words. The answer artifact is
+flagged only when the task ends on exact text, a question only when it is
+asked as written. A stock client reads the same text and ignores the flag.
+A tool says a notice, then the model answers in its own words:
+
+```json
+{"statusUpdate": {"taskId": "AST_1", "contextId": "AT_x", "status": {"state": "TASK_STATE_WORKING", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Checking the schedule."}]}}}}
+{"statusUpdate": {"taskId": "AST_1", "contextId": "AT_x", "status": {"state": "TASK_STATE_WORKING", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Calls are recorded for quality.", "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": true}}]}}}}
+{"artifactUpdate": {"taskId": "AST_1", "contextId": "AT_x", "artifact": {"artifactId": "art_1", "name": "answer", "parts": [{"text": "Tuesday at 10 is free."}]}, "lastChunk": true}}
+{"statusUpdate": {"taskId": "AST_1", "contextId": "AT_x", "status": {"state": "TASK_STATE_COMPLETED"}}}
+```
 
 ## 5. Server-set keys, sent either way
 
@@ -243,7 +260,7 @@ only the task id, so a stock client that sends just the id gets
 `TaskNotFoundError`.
 
 The order of events on a stream is: the `Task` (state `submitted`), zero
-or more `working` status events each carrying a text message (progress),
+or more `working` status events each carrying a text message (progress or exact text),
 zero or more chunks of the artifact named `answer` (the last with
 `lastChunk: true`), then the final status event with the keys of section 5
 that apply.
