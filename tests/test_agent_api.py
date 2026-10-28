@@ -9,13 +9,17 @@ import pytest
 
 from livekit.agents import (
     Agent,
+    AgentHandler,
+    AgentServer,
     InputRequired,
     ModelRetry,
     RunContext,
+    RunResult,
     VoiceSession,
     function_tool,
     persisted,
 )
+from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ChatContext, FunctionToolCall, Tool, Toolset
 from livekit.agents.storage import Storage
 from livekit.agents.storage.resolve import Thread
@@ -23,6 +27,8 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import new_session
+from .test_a2a_server import AGENT, API_KEY, API_SECRET, CREDENTIALS, http_client, wire
+from .test_doors import stream
 
 pytestmark = [pytest.mark.unit]
 
@@ -252,7 +258,7 @@ async def test_agent_run_returns_a_typed_result() -> None:
             city: the city
         """
         ctx.context.patient.looked_up += 1
-        assert ctx.task_id.startswith("run_")
+        assert ctx.task_id is None and ctx.live_session is None  # no A2A turn, no call
         return f"{city}: 21"
 
     retries: list[str] = []
@@ -347,7 +353,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     async def note(ctx: RunContext[AppContext]) -> str:
         """Note the state."""
         ctx.context.patient.looked_up += 1
-        seen.append((ctx.context.settings, ctx.context.patient, ctx.task_id))
+        seen.append((ctx.context.settings, ctx.context.patient, ctx.thread.id))
         await ctx.live_session.store.save_context(ctx.context)
         return "noted"
 
@@ -377,7 +383,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
         result.expect.contains_function_call(name="note")
         assert result.output == "ok"
 
-    assert seen[0][0] is deps and seen[0][1] is state and seen[0][2]
+    assert seen[0][0] is deps and seen[0][1] is state and seen[0][2] == sid
     assert state.looked_up == 1
     # the call's turn was committed to the agent's lane: history and state
     history = await thread.chat_history()
@@ -470,3 +476,46 @@ async def test_a_run_sets_up_and_closes_its_toolsets_once() -> None:
             if event.type == "tool_call":
                 break
     assert (toolset.setups, toolset.closes) == (2, 2)
+
+
+async def test_a_tool_in_an_a2a_turn_reads_its_task_and_thread(thread_storage: Storage) -> None:
+    """``ctx.task_id`` is the turn's A2A task and ``ctx.thread`` its thread (agents.md
+    "RunContext"); a text turn has no live session."""
+    seen: list[tuple[str | None, str, VoiceSession | None]] = []
+    agent = Agent(
+        instructions="x",
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="hi",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="note", arguments="{}", call_id="n1")],
+                ),
+                FakeLLMResponse(input="noted", content="ok", ttft=0, duration=0),
+            ]
+        ),
+    )
+
+    @agent.tool
+    async def note(ctx: RunContext) -> str:
+        """Note the turn."""
+        seen.append((ctx.task_id, ctx.thread.id, ctx.live_session))
+        return "noted"
+
+    handler = AgentHandler()
+
+    @handler.a2a_session(endpoint="frontend", description="the front desk")
+    async def text(ctx: A2ASessionContext) -> RunResult[str]:
+        return await agent.run(ctx.message, message_history=ctx.message_history)
+
+    server = AgentServer(
+        storage=thread_storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET
+    )
+    server.add(handler)
+    async with http_client(server, Authorization=f"Bearer {CREDENTIALS.project_token()}") as http:
+        events = await stream(http, "/frontend/v1", wire("hi", "m1"))
+
+    task = events[0]["task"]
+    assert seen == [(task["id"], task["contextId"], None)]

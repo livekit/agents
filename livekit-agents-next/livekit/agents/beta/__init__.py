@@ -87,8 +87,11 @@ class EndCallTool(Toolset):
         logger.debug("end_call tool called")
         # the core closes the session once this speech (or a realtime model's own reply to the
         # tool result) is done
-        ctx.session._core.end_call(ctx.speech_handle._core)
-        ctx.session.once("close", self._on_session_close)
+        session = ctx.live_session
+        if session is None:
+            raise RuntimeError("end_call ends a call; this tool runs outside one")
+        session._core.end_call(ctx.speech_handle._core)
+        session.once("close", self._on_session_close)
 
         if self._on_tool_called:
             await self._on_tool_called(Toolset.ToolCalledEvent(ctx=ctx, arguments={}))
@@ -122,7 +125,10 @@ async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
     Call when:
     - User wants to send DTMF events
     """
-    room = ctx.session._room or get_job_context().room
+    session = ctx.live_session
+    if session is None:
+        raise RuntimeError("DTMF tones are sent on a call; this tool runs outside one")
+    room = session._room or get_job_context().room
     return await _core.send_dtmf_events(room, [event.value for event in events])
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import inspect
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -35,11 +34,11 @@ from .._generated.events import (
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from ..llm import FunctionCall, FunctionCallOutput
-from ..utils import shortuuid
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
+    from ..storage.resolve import Thread
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
     from .run_result import RunUsage
@@ -77,10 +76,11 @@ Userdata_T = TypeVar("Userdata_T", default=Any)
 
 
 class RunContext(Generic[Context_T]):
-    """What a tool, an instructions function or an output validator receives.
+    """What a tool, an instructions function or an output function receives (agents.md
+    "RunContext").
 
-    ``ctx.context`` is the application object supplied for this invocation. On a call
-    the wrapper also carries the session and speech handle; direct runs carry the run.
+    ``ctx.context`` is the application object supplied for this invocation. On a call it also
+    carries the live session and the speech; a text run carries the run.
     """
 
     # private ctor
@@ -107,35 +107,49 @@ class RunContext(Generic[Context_T]):
         )
 
     @property
-    def session(self) -> VoiceSession[Any]:
-        """The live session, on a call.
-
-        Raises:
-            RuntimeError: in ``agent.run()``, which has no live session.
-        """
-        if self._session is None:
-            raise RuntimeError("no live session: this RunContext belongs to agent.run()")
+    def live_session(self) -> VoiceSession[Any] | None:
+        """The ``VoiceSession`` of the call; ``None`` outside a call."""
         return self._session
 
     @property
     def speech_handle(self) -> SpeechHandle:
+        """The speech this tool runs in, on a call.
+
+        Raises:
+            RuntimeError: outside a call.
+        """
         if self._speech_handle is None:
-            raise RuntimeError("no speech handle: this RunContext belongs to agent.run()")
+            raise RuntimeError("no speech handle: this RunContext is not on a call")
         return self._speech_handle
 
     @property
     def store(self) -> ContextStore:
-        """The host's activation-scoped store for explicit field persistence."""
+        """The managed store for explicit ``load_context`` and ``save_context`` calls."""
         if self._run is not None:
             return self._run.store
-        return self.session.store
+        return self._call().store
+
+    @property
+    def thread(self) -> Thread:
+        """The durable thread this run belongs to, the one its ``a2a_session`` handler gets.
+
+        Raises:
+            RuntimeError: when the run belongs to no thread.
+        """
+        if self._run is not None:
+            thread = self._run.hooks.thread if self._run.hooks is not None else None
+        else:
+            thread = self._call().thread
+        if thread is None:
+            raise RuntimeError("this run belongs to no thread")
+        return thread
 
     @property
     def context(self) -> Context_T:
         """The application context supplied to this invocation."""
         if self._run is not None:
             return self._run.context  # type: ignore[no-any-return]
-        return self.session.context  # type: ignore[no-any-return]
+        return self._call().context  # type: ignore[no-any-return]
 
     @property
     def usage(self) -> RunUsage:
@@ -144,20 +158,18 @@ class RunContext(Generic[Context_T]):
             return self._run.usage
         from .run_result import RunUsage
 
-        return RunUsage.from_session_usage(self.session.usage)
+        return RunUsage.from_session_usage(self._call().usage)
 
     @property
-    def task_id(self) -> str:
-        """The id of this run, also the idempotency key for outside calls."""
-        if self._run is not None:
-            return self._run.id
-        if self._speech_handle is not None:
-            return self._speech_handle.id
-        return self._fallback_task_id
+    def task_id(self) -> str | None:
+        """The A2A task id of the turn; ``None`` outside an A2A turn, such as on a call."""
+        hooks = self._run.hooks if self._run is not None else None
+        return hooks.task_id if hooks is not None else None
 
-    @functools.cached_property
-    def _fallback_task_id(self) -> str:
-        return shortuuid("task_")
+    def _call(self) -> VoiceSession[Any]:
+        if self._session is None:
+            raise RuntimeError("no live session: this RunContext is not on a call")
+        return self._session
 
     @property
     def function_call(self) -> FunctionCall:
@@ -198,7 +210,7 @@ class RunContext(Generic[Context_T]):
         ``None`` to skip this fire); with ``interval`` set it repeats, up to ``max_steps``.
         """
         text = source if isinstance(source, str) else None
-        core = self.session._core
+        core = self._call()._core
         filler = core.filler_start(
             self.function_call.call_id,
             self.speech_handle.id,
@@ -217,10 +229,11 @@ class RunContext(Generic[Context_T]):
     async def foreground(self) -> AsyncIterator[VoiceSession[Any]]:
         """Wait for idle, then hold the floor while interactive work runs (
         a ``say``), so no other speech or deferred tool reply lands in between."""
-        core = self.session._core
+        session = self._call()
+        core = session._core
         hold = await core.wait_for_idle_and_hold(origin=self._origin)
         try:
-            yield self.session
+            yield session
         finally:
             core.release_idle_hold(hold)
 
@@ -296,7 +309,7 @@ class RunContext(Generic[Context_T]):
             self._first_update.set_result((rendered, raw))
             return
         update = ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=raw))
-        self.session._core.tool_update(fnc_call.call_id, update)
+        self._call()._core.tool_update(fnc_call.call_id, update)
 
 
 EventTypes = Literal[

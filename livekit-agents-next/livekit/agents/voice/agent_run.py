@@ -46,6 +46,7 @@ from .run_result import Output_T, RunCompleted, RunInputRequired, RunResult, Run
 
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
+    from ..storage.resolve import Thread
     from .agent import Agent
 
 
@@ -57,9 +58,10 @@ class RunHooks:
     message waits for the lane, or a client canceled the task), and ``interrupted`` is set.
     ``on_result`` receives every result, so the door can commit what the run added.
     ``on_update`` receives a tool's ``ctx.update(text)``; ``on_token`` the model's text as it
-    arrives, from ``run()`` (``run_stream()`` hands delivery to its consumer). ``thread_id`` is
-    the session the run belongs to. ``answer_tool`` names the tool the message is handed to
-    before the model runs. ``delegated`` says the turn's message came from another agent: the
+    arrives, from ``run()`` (``run_stream()`` hands delivery to its consumer). ``thread`` and
+    ``task_id`` are the thread and the A2A task of the turn, what ``ctx.thread`` and
+    ``ctx.task_id`` read. ``answer_tool`` names the tool the message is handed to before the
+    model runs. ``delegated`` says the turn's message came from another agent: the
     run does not phrase its questions, the agent facing the person does.
     """
 
@@ -67,7 +69,8 @@ class RunHooks:
     on_result: Callable[[RunResult[Any]], None] | None = None
     on_update: Callable[[str], Any] | None = None
     on_token: Callable[[str], Awaitable[None]] | None = None
-    thread_id: str | None = None
+    thread: Thread | None = None
+    task_id: str | None = None
     store: ContextStore | None = None
     answer_tool: str | None = None
     delegated: bool = False
