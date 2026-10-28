@@ -183,7 +183,7 @@ pub fn mark_in_place(decls: &mut Declarations) {
 /// Every [`IN_PLACE`] entry is a declared record, and one the list did not hold at `HEAD` was a
 /// `#[derive(Host)]` record there: the list only trades a derive's trait impls for generated ones.
 pub fn check_in_place(root: &std::path::Path, decls: &Declarations) -> Result<(), String> {
-    legacy::check_proxies(root, decls)?;
+    legacy::check_proxies(decls)?;
     let at_head = |path: &str| -> Option<String> {
         let out = std::process::Command::new("git")
             .args(["show", &format!("HEAD:{path}")])
