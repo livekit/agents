@@ -13,7 +13,7 @@ use crate::agent_session::commands::{
 };
 use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
-use crate::agent_session::nodes::Nodes;
+use crate::agent_session::nodes::{Nodes, OutputNodes};
 use crate::agent_session::time::Timebase;
 use crate::events::SessionEvent;
 use crate::generation::Instructions;
@@ -490,6 +490,8 @@ impl SessionApi {
             llm_node,
             tts_node,
             stt_node,
+            transcription_node,
+            realtime_audio_output_node,
         } = frame;
         self.agents.install(&agent, agent_host);
         let mut options =
@@ -512,6 +514,10 @@ impl SessionApi {
             vad,
             options,
             expressive: expressive.given(),
+            output_nodes: OutputNodes {
+                transcription: transcription_node,
+                realtime_audio: realtime_audio_output_node,
+            },
             call: None,
         }
     }
@@ -1083,8 +1089,8 @@ impl HostAgents {
 }
 
 /// An `Agent`'s overridden nodes, as the core calls them. `transcription_node` and
-/// `realtime_audio_output_node` are built once at assembly over the core leg below (called under
-/// the GIL; what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
+/// `realtime_audio_output_node` are opened per segment and per realtime generation over the core
+/// leg below (called under the GIL; what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
 /// `stt_node` are opened per request in place of the provider ([`Node`](super::nodes)): one
 /// completion, one segment's synthesis, one recognition stream.
 #[lk_agents_abi::host(proxy(clock))]
@@ -1111,7 +1117,8 @@ pub trait NodeFactory: Send + Sync {
 /// `None` removes it, an object replaces it. `chat_ctx` replaces when present. The tools are one
 /// toolset, replaced together because the runner is per-agent. `turn_handling` is the agent layer.
 /// `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
-/// it: a leg kept from the previous agent keeps that agent's node.
+/// it: a leg kept from the previous agent keeps that agent's node. `transcription_node` and
+/// `realtime_audio_output_node` replace the previous agent's.
 #[lk_agents_abi::host(kwargs)]
 pub struct UpdateAgentArgs {
     pub instructions: Instructions,
@@ -1150,6 +1157,10 @@ pub struct UpdateAgentArgs {
     pub tts_node: Option<Arc<dyn NodeFactory>>,
     #[host(kwarg(default = None))]
     pub stt_node: Option<Arc<dyn NodeFactory>>,
+    #[host(kwarg(default = None))]
+    pub transcription_node: Option<Arc<dyn NodeFactory>>,
+    #[host(kwarg(default = None))]
+    pub realtime_audio_output_node: Option<Arc<dyn NodeFactory>>,
 }
 
 /// A host-backed LLM needs the host's own tool objects: Rust cannot rebuild a `Tool` from a spec.
@@ -1210,16 +1221,6 @@ fn tts_leg(
         clock,
         *conn,
     )
-}
-
-/// Why a host session could not be assembled. A node factory that raised comes back as the
-/// exception it raised: the host wrote the factory and catches its own type.
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum SessionBuildError {
-    #[error(transparent)]
-    #[host(delegate)]
-    Node(lk_agents_abi::errors::HostError),
 }
 
 /// `start()`'s awaited half failed: the loop, or what the host does beside it (the room's

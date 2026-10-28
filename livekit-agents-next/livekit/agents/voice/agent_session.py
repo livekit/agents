@@ -468,8 +468,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             **{node: frame[node] for node in _NODES if node in frame},
-            # built once, over the session's text and audio legs
-            **self._nodes(agent, ("transcription_node", "realtime_audio_output_node")),
             remote_session=SessionPort(self) if hosting else None,
             console=console,
             # the core connects the job's room beside its opening
@@ -740,12 +738,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 frame[leg] = _bindings.core_leg(value)
         return {**frame, **self._nodes(agent)}
 
-    def _nodes(
-        self, agent: Agent, names: tuple[str, ...] = ("llm_node", "tts_node", "stt_node")
-    ) -> dict[str, Any]:
-        """The nodes among ``names`` that ``agent`` overrides, as the core opens them, each call
-        in the agent's binding."""
-        overridden = [n for n in names if getattr(type(agent), n) is not getattr(Agent, n)]
+    def _nodes(self, agent: Agent) -> dict[str, Any]:
+        """The nodes ``agent`` overrides, as the core opens them, each call in the agent's
+        binding."""
+        overridden = [n for n in _NODES if getattr(type(agent), n) is not getattr(Agent, n)]
         if not overridden:
             return {}
         context = contextvars.copy_context()
@@ -1149,7 +1145,7 @@ class _AgentHooks:
         logger.error(f"error in the {hook} hook", exc_info=error)
 
 
-_NODES = ("llm_node", "tts_node", "stt_node")
+_NODES = ("llm_node", "tts_node", "stt_node", "transcription_node", "realtime_audio_output_node")
 
 
 class _AgentNodes:

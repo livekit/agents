@@ -35,6 +35,8 @@ pub struct DriverBuilder {
     pub agent: String,
     pub instructions: Instructions,
     pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    /// The opening agent's `transcription_node` and `realtime_audio_output_node`.
+    pub output_nodes: crate::agent_session::nodes::OutputNodes,
     /// The session starts from the agent's constructor context. Seeded before the instructions, so
     /// the system message lands in it.
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
@@ -66,8 +68,6 @@ pub struct DriverBuilder {
     pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     pub recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
-    /// `realtime_audio_output_node`, opened per realtime generation over that step's output.
-    pub realtime_audio_node: Option<Arc<dyn crate::agent_session::api::NodeFactory>>,
     pub text_out: Option<Arc<dyn TextOutput>>,
     pub room_events: Option<Rx<RoomEvent>>,
     pub room_io_events: Option<Rx<crate::room_io::RoomIoEvent>>,
@@ -284,7 +284,6 @@ impl DriverBuilder {
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
                 self.config.effective.speech.tts_text_transforms(),
             ),
-            realtime_audio: self.realtime_audio_node.clone(),
             conn: self.conn,
             queue: queue.clone(),
             closing,
@@ -426,6 +425,7 @@ impl DriverBuilder {
             agent: std::mem::take(&mut self.agent),
             instructions: std::mem::take(&mut self.instructions),
             dynamic_instructions: self.dynamic_instructions.take(),
+            output_nodes: std::mem::take(&mut self.output_nodes),
             toolset: Arc::new(std::mem::take(&mut self.toolset)),
             tools: Default::default(),
             audio_recognition,

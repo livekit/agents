@@ -63,10 +63,10 @@ pub(crate) async fn realtime_generation_task(
     let audio_out = shared.audio_output();
     // `text_output`, read once for the step as the reference does: each message's words go down it.
     let text_out = shared.transcription_enabled().then(|| shared.transcription_output());
-    let text_out = text_out.flatten();
+    let text_out = ctx.providers.output_nodes.text_output(text_out.flatten());
     // `realtime_audio_output_node`: frames go to a node opened for this step over its output,
     // which emits into that output itself. A node that fails to open plays nothing of the step.
-    let node = shared.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(|(nodes, out)| {
+    let node = ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(|(nodes, out)| {
         nodes
             .audio_node(crate::io::CoreAudioSink::new(Arc::clone(out)))
             .inspect_err(|e| {

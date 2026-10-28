@@ -183,6 +183,7 @@ was a driver bug).
 | P4 | `on_exit_once_per_frame` | each agent's `on_exit` runs at most once | 0 / 0 / 0 |
 | P4 | `output_replacement_is_clean` | a replaced output receives no further calls but a running step's and a synchroniser's closing flushes | 80 / 174 / 249 |
 | P4 | `released_provider_unused` | a provider the core released is never named again | 0 / 0 / 0 |
+| P4 | `nodes_are_the_active_agents` | every node the session opens (`llm`, `tts`, `stt`, `transcription`, `realtime_audio_output`) is an override of the agent active then | 0 / 0 / 0 (new 2026-10-27) |
 | P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced (on the speech or as its error event), abandoned with an interrupted speech, or closes the session | 9 / 23 / 35 |
 | P5 | `speech_error_is_injected` | a failed speech traces back to an injected failure or an explicit refusal | 1 / 6 / 19 |
 | P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
@@ -560,9 +561,10 @@ Drawn last in the setup, so a seed keeps the setup it had before they existed (2
   not; the model answers the passes with `record_keyterms`.
 - **`RoomOptions(video_input=True)`** on the room's legs: the person publishes a camera the case
   feeds, which the host's own camera would win over.
-- **Node factories**: the agents override `llm_node`, `tts_node` and `stt_node` as the defaults
-  do, over the session's providers, on the first agent and on every handoff (which then gives the
-  legs again, as `_frame` does).
+- **Node factories**: the agents override `llm_node`, `tts_node`, `stt_node` and
+  `transcription_node` as the defaults do, over the session's providers; the opening agent's set is
+  drawn and every agent a handoff installs flips some of it by its name, and the handoff gives the
+  legs again, as `_frame` does. Each opening is recorded with its agent.
 
 ## 7. How the search was chosen
 
@@ -1061,6 +1063,7 @@ with a fix guards that exact path; the search guards its neighbours.
 | A final transcript's pause never ended while a drain held scheduling | 4a8d5c8a6 | real calls (seed 2068) | gate search: `pause_resolves` (campaign seed 3693) |
 | A non-streaming TTS reported one TTSMetrics per reply, not per sentence | 863c3a853 | parity | parity (`say_cut`, `interruption`, `vad_*`, ...) |
 | An `llm_node` returning a str was metered | 12fb3f3fa | parity | gate: `node_text_not_metered` |
+| `transcription_node` and `realtime_audio_output_node` stayed the opening agent's after a handoff | 7015456df | review | gate: `nodes_are_the_active_agents` (probe; survey seed 43 with the install reverted), smoke |
 | A realtime session was not told to stop at a close | f73f4dbd3 | parity | gate: `realtime_close_interrupts` |
 | No VADMetrics, and no LLMMetrics for AMD's classification | 36057f580 | parity | gate: `model_metrics_reported` |
 | A manual-mode turn with no words was dropped at the close | b706c2c9b | parity | gate: `manual_turn_closed_empty` |

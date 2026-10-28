@@ -1,7 +1,9 @@
 //! `Agent.llm_node`, `tts_node` and `stt_node` overridden as the defaults are: each request
 //! opens the provider below, as `Agent.default.llm_node` does; `transcription_node` and
 //! `realtime_audio_output_node` pass what they read down the leg below. What the provider then does is the
-//! case's, so the node path is exercised with every answer the plain one gets.
+//! case's, so the node path is exercised with every answer the plain one gets. Each opening is
+//! recorded with the agent whose override it is: a request at its call, a transcript segment or a
+//! realtime generation at its first input, which is where the host's node is invoked.
 use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
@@ -12,7 +14,12 @@ use lk_agents_abi::{
 use lk_agents_voice::agent_session::api::NodeFactory;
 use lk_agents_voice::io::{CoreAudioSink, CoreTextOutput, RealtimeAudioNode, TextNode};
 
+use crate::record::NodeUse;
+
 pub struct FakeNodes {
+    registry: Arc<super::Registry>,
+    /// The agent whose overrides these are.
+    agent: String,
     llm: Option<Arc<dyn Llm>>,
     tts: Option<Arc<dyn Tts>>,
     stt: Option<Arc<dyn Stt>>,
@@ -22,12 +29,28 @@ pub struct FakeNodes {
 
 impl FakeNodes {
     pub fn new(
+        registry: Arc<super::Registry>,
+        agent: &str,
         llm: Option<Arc<dyn Llm>>,
         tts: Option<Arc<dyn Tts>>,
         stt: Option<Arc<dyn Stt>>,
         llm_text: Option<&'static str>,
     ) -> Arc<Self> {
-        Arc::new(FakeNodes { llm, tts, stt, llm_text })
+        Arc::new(FakeNodes { registry, agent: agent.to_owned(), llm, tts, stt, llm_text })
+    }
+
+    fn used(&self, node: NodeUse) {
+        self.registry.node_used(&self.agent, node);
+    }
+
+    /// The node's invocation as the host makes it: recorded at its first input.
+    fn invocation(&self, node: NodeUse) -> Invocation {
+        Invocation {
+            registry: self.registry.clone(),
+            agent: self.agent.clone(),
+            node,
+            open: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 }
 
@@ -50,30 +73,58 @@ impl StreamSource<LlmChunk> for NodeText {
     }
 }
 
+/// One invocation of a host node at a time: recorded as it opens, at its first input.
+struct Invocation {
+    registry: Arc<super::Registry>,
+    agent: String,
+    node: NodeUse,
+    open: std::sync::atomic::AtomicBool,
+}
+
+impl Invocation {
+    fn input(&self) {
+        if !self.open.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.registry.node_used(&self.agent, self.node);
+        }
+    }
+
+    fn end(&self) {
+        self.open.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// What the host's text node hands its drain: a delta, or the segment's end.
-struct EchoText(tokio::sync::mpsc::UnboundedSender<Option<TimedString>>);
+struct EchoText(tokio::sync::mpsc::UnboundedSender<Option<TimedString>>, Invocation);
 
 impl TextNode for EchoText {
     fn capture_text(&self, text: &str) {
+        self.1.input();
         let _ = self.0.send(Some(TimedString::new(text)));
     }
 
     fn capture_timed(&self, text: &TimedString) {
+        self.1.input();
         let _ = self.0.send(Some(text.clone()));
     }
 
     fn flush(&self) {
+        self.1.end();
         let _ = self.0.send(None);
     }
 }
 
 /// Its drain, and whether it was cut: from then on no frame goes down, not even one already
 /// queued.
-struct EchoAudio(tokio::sync::mpsc::UnboundedSender<AudioFrame>, Arc<std::sync::atomic::AtomicBool>);
+struct EchoAudio(
+    tokio::sync::mpsc::UnboundedSender<AudioFrame>,
+    Arc<std::sync::atomic::AtomicBool>,
+    Invocation,
+);
 
 #[async_trait::async_trait]
 impl RealtimeAudioNode for EchoAudio {
     async fn push(&self, frame: &AudioFrame) {
+        self.2.input();
         let _ = self.0.send(frame.clone());
     }
 
@@ -111,7 +162,7 @@ impl NodeFactory for FakeNodes {
                 }
             }
         });
-        Ok(Arc::new(EchoText(tx)))
+        Ok(Arc::new(EchoText(tx, self.invocation(NodeUse::Transcription))))
     }
 
     /// `realtime_audio_output_node` as the default: each frame to the leg below, in order, none
@@ -129,10 +180,11 @@ impl NodeFactory for FakeNodes {
                 }
             }
         });
-        Ok(Arc::new(EchoAudio(tx, cut)))
+        Ok(Arc::new(EchoAudio(tx, cut, self.invocation(NodeUse::RealtimeAudio))))
     }
 
     async fn llm_node(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
+        self.used(NodeUse::Llm);
         if let Some(text) = self.llm_text {
             return Ok(Box::new(NodeText(Some(text))));
         }
@@ -140,10 +192,12 @@ impl NodeFactory for FakeNodes {
     }
 
     async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
+        self.used(NodeUse::Tts);
         self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream().await
     }
 
     async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError> {
+        self.used(NodeUse::Stt);
         let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
         stt.stream(None, None).await.unwrap_or_else(|| Err(missing("streaming STT")))
     }

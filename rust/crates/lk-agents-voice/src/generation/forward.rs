@@ -6,6 +6,7 @@ use super::playout::{Next, Segment, first_frame, perform_audio_forwarding, silen
 use super::tts::{Aligned, Lost, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::DriverError;
+use crate::agent_session::nodes::OutputNodes;
 use crate::agent_session::SessionShared;
 use crate::generation::TurnAccumulator;
 use crate::generation::{GenEvent, ReplyContext, ReplySource};
@@ -71,6 +72,7 @@ pub(super) async fn voice_leg(
     let mut pump = Pump {
         shared,
         handle,
+        nodes: &ctx.providers.output_nodes,
         voice,
         aligned_transcript: ctx.speech.use_tts_aligned_transcript == Some(true),
         gate: &mut gate,
@@ -126,6 +128,8 @@ impl PlaybackGate {
 struct Pump<'a> {
     shared: &'a Arc<SessionShared>,
     handle: &'a Arc<SpeechHandle>,
+    /// The reply's agent's `transcription_node`, opened over each segment's transcript leg.
+    nodes: &'a OutputNodes,
     voice: Voice,
     /// `use_tts_aligned_transcript` is `True` (not-given is off).
     aligned_transcript: bool,
@@ -188,6 +192,7 @@ impl Pump<'_> {
         // interrupted), and a synchroniser swapped in between segments gets their words.
         let audio_out = self.audio_enabled.then(|| shared.audio_output()).flatten();
         let text = self.text_enabled.then(|| shared.transcription_output()).flatten();
+        let text = self.nodes.text_output(text);
         let synthesis = matches!(self.voice, Voice::Tts(_)) && audio_out.is_some();
         if !synthesis && !self.gate.wait(shared, self.handle).await {
             return Ok(unheard());
@@ -221,7 +226,8 @@ impl Pump<'_> {
         if audio_out.is_none() && text_out.is_some() {
             first_text_started_speaking(shared, self.handle, self.acc);
         }
-        let mut playback = SynthesisPlayout { tx: tx.clone(), rx, gate: &mut *self.gate };
+        let mut playback =
+            SynthesisPlayout { tx: tx.clone(), rx, gate: &mut *self.gate, nodes: self.nodes };
         let heard = match (&mut self.voice, audio_out.as_deref()) {
             (Voice::Tts(tts), Some(_)) => {
                 let tts = Arc::clone(tts);

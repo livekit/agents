@@ -1,10 +1,12 @@
-//! `Agent.llm_node`, `tts_node` and `stt_node` on a call: the leg the driver performs against when
-//! the agent overrides the node. Who it is (label, capabilities, rates) is the provider below; every
-//! request opens the host node, which reaches the provider itself.
+//! An agent's nodes on a call. `llm_node`, `tts_node` and `stt_node`: the leg the driver performs
+//! against when the agent overrides the node. Who it is (label, capabilities, rates) is the provider
+//! below; every request opens the host node, which reaches the provider itself.
+//! `transcription_node` and `realtime_audio_output_node`: [`OutputNodes`].
 
 use super::api::NodeFactory;
 use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{
     AudioFrame, ChatRequest, LanguageCode, Llm, LlmStream, SpeechEvent, StreamSource, Stt,
     SttCapabilities, SttSink, SttSource, Tts, TtsCapabilities, TtsSink, TtsSource, Ts,
@@ -38,6 +40,32 @@ impl Nodes {
         match &self.stt {
             Some(host) => Arc::new(Node { below, host: Arc::clone(host) }),
             None => below,
+        }
+    }
+}
+
+/// The nodes an agent overrides on the way out, opened at each use from the agent a reply was
+/// created under: `transcription_node` per spoken segment over the transcription output,
+/// `realtime_audio_output_node` per realtime generation over the audio output.
+#[derive(Default, Clone)]
+pub struct OutputNodes {
+    pub transcription: Option<Arc<dyn NodeFactory>>,
+    pub realtime_audio: Option<Arc<dyn NodeFactory>>,
+}
+
+impl OutputNodes {
+    /// The transcription output under the agent's `transcription_node`, opened for one segment.
+    /// A node that fails to open drops the segment's transcript.
+    pub fn text_output(&self, below: Option<Arc<dyn TextOutput>>) -> Option<Arc<dyn TextOutput>> {
+        let below = below?;
+        let Some(factory) = &self.transcription else { return Some(below) };
+        match factory.text_node(crate::io::CoreTextOutput::new(Arc::clone(&below))) {
+            Ok(node) => Some(Arc::new(crate::io::NodeTextOutput::new(node, below))),
+            Err(e) => {
+                log::error!(target: "livekit.agents", error = e.to_string().as_str();
+                    "failed to open the transcription_node");
+                None
+            }
         }
     }
 }

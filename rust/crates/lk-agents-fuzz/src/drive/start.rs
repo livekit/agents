@@ -90,8 +90,8 @@ impl Run {
                 None => fakes::FakeTts::new(registry.clone(), !setup.chunked_tts),
             }) as Arc<Tts>
         });
-        let (llm_node, tts_node, stt_node) = nodes(setup, &llm, &tts, &stt);
         let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
+        let nodes = agent_nodes(setup, &registry, OPENING_AGENT, &providers);
         // The avatar worker is in the room before its stream is opened to it. Its reports cross
         // as they are sent, so the sink gives up on one after a clear as in production.
         let avatar_sink = (setup.avatar && console.is_none()).then(|| {
@@ -112,7 +112,7 @@ impl Run {
                 Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
                 Some(instructions(&setup.instructions)),
                 None,
-                "agent".into(),
+                OPENING_AGENT.into(),
                 None,
                 None,
                 stt,
@@ -172,11 +172,11 @@ impl Run {
                 Some(tool_specs(&setup.tools)),
                 None,
                 Some(fakes::FakeTools::new(registry.clone()) as Arc<dyn HostToolRunner>),
-                session_node(setup, |on| on.transcription),
-                session_node(setup, |on| on.realtime_audio),
-                llm_node,
-                tts_node,
-                stt_node,
+                nodes.transcription,
+                nodes.realtime_audio,
+                nodes.llm,
+                nodes.tts,
+                nodes.stt,
                 match &console {
                     Some((io, _)) => Some(io.as_audio_input()),
                     None => host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
@@ -230,8 +230,7 @@ impl Run {
                 console.as_ref().map(|(io, _)| io.clone()),
                 None,
                 tasks.clone(),
-            )
-            .expect("assemble the session"),
+            ),
         );
         registry.attach_session(api.clone());
 
@@ -551,30 +550,61 @@ pub(super) struct Legs {
     pub(super) stt: Option<Arc<Stt>>,
 }
 
-/// The node factories the setup's agents install, each over the provider given beside it.
-pub(super) type NodeLegs =
-    (Option<Arc<dyn NodeFactory>>, Option<Arc<dyn NodeFactory>>, Option<Arc<dyn NodeFactory>>);
-
-pub(super) fn nodes(
-    setup: &Setup,
-    llm: &Option<Arc<Llm>>,
-    tts: &Option<Arc<Tts>>,
-    stt: &Option<Arc<Stt>>,
-) -> NodeLegs {
-    let Some(on) = setup.nodes else { return (None, None, None) };
-    let node = |wanted: bool, present: bool| {
-        (wanted && present).then(|| {
-            fakes::FakeNodes::new(llm.clone(), tts.clone(), stt.clone(), on.llm_text)
-                as Arc<dyn NodeFactory>
-        })
-    };
-    (node(on.llm, llm.is_some()), node(on.tts, tts.is_some()), node(on.stt, stt.is_some()))
+/// The node factories an agent installs: its `llm_node`, `tts_node` and `stt_node`, each over the
+/// provider given beside it, and its `transcription_node` and `realtime_audio_output_node`.
+#[derive(Default)]
+pub(super) struct AgentNodes {
+    pub(super) llm: Option<Arc<dyn NodeFactory>>,
+    pub(super) tts: Option<Arc<dyn NodeFactory>>,
+    pub(super) stt: Option<Arc<dyn NodeFactory>>,
+    pub(super) transcription: Option<Arc<dyn NodeFactory>>,
+    pub(super) realtime_audio: Option<Arc<dyn NodeFactory>>,
 }
 
-/// A node the first agent overrides that the session builds once, over its text or audio leg.
-fn session_node(setup: &Setup, wanted: fn(&NodeSetup) -> bool) -> Option<Arc<dyn NodeFactory>> {
-    let on = setup.nodes.filter(wanted)?;
-    Some(fakes::FakeNodes::new(None, None, None, on.llm_text) as Arc<dyn NodeFactory>)
+/// The nodes `agent` overrides: the opening agent's are the setup's, and every other agent flips
+/// some of them by its name, so a handoff changes which agent's nodes must run.
+pub(crate) fn overrides(setup: &Setup, agent: &str) -> Option<NodeSetup> {
+    let on = setup.nodes?;
+    if agent == OPENING_AGENT {
+        return Some(on);
+    }
+    let bits = agent.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+    let flip = |bit: u32| bits & (1 << bit) != 0;
+    Some(NodeSetup {
+        llm: on.llm ^ flip(0),
+        tts: on.tts ^ flip(1),
+        stt: on.stt ^ flip(2),
+        transcription: on.transcription ^ flip(3),
+        ..on
+    })
+}
+
+pub(super) fn agent_nodes(
+    setup: &Setup,
+    registry: &Arc<Registry>,
+    agent: &str,
+    legs: &Legs,
+) -> AgentNodes {
+    let Some(on) = overrides(setup, agent) else { return AgentNodes::default() };
+    let node = |wanted: bool| {
+        wanted.then(|| {
+            fakes::FakeNodes::new(
+                registry.clone(),
+                agent,
+                legs.llm.clone(),
+                legs.tts.clone(),
+                legs.stt.clone(),
+                on.llm_text,
+            ) as Arc<dyn NodeFactory>
+        })
+    };
+    AgentNodes {
+        llm: node(on.llm && legs.llm.is_some()),
+        tts: node(on.tts && legs.tts.is_some()),
+        stt: node(on.stt && legs.stt.is_some()),
+        transcription: node(on.transcription),
+        realtime_audio: node(on.realtime_audio),
+    }
 }
 
 /// A handoff's frame: the agent's tools and, when its agents override nodes, every leg a node
@@ -589,8 +619,12 @@ pub(super) fn frame(
 ) -> UpdateAgentArgs {
     let mut args = plain_frame(registry, agent, instructions, tools);
     if setup.nodes.is_some() {
-        (args.llm_node, args.tts_node, args.stt_node) =
-            nodes(setup, &legs.llm, &legs.tts, &legs.stt);
+        let nodes = agent_nodes(setup, registry, agent, legs);
+        args.llm_node = nodes.llm;
+        args.tts_node = nodes.tts;
+        args.stt_node = nodes.stt;
+        args.transcription_node = nodes.transcription;
+        args.realtime_audio_output_node = nodes.realtime_audio;
         args.stt = Maybe::Given(legs.stt.clone());
         args.llm = if setup.realtime.is_none() {
             Maybe::Given(legs.llm.clone())
@@ -628,6 +662,8 @@ fn plain_frame(
         llm_node: None,
         tts_node: None,
         stt_node: None,
+        transcription_node: None,
+        realtime_audio_output_node: None,
     }
 }
 

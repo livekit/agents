@@ -384,8 +384,6 @@ pub struct SessionShared {
     pub launch: LaunchGate,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
-    /// `realtime_audio_output_node`: a node per generation, over that step's audio output.
-    pub realtime_audio: Option<Arc<dyn crate::agent_session::api::NodeFactory>>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
     pub queue: crate::agent_session::Tx,

@@ -717,6 +717,9 @@ pub struct Providers {
     /// A per-turn override rides on [`ReplyContext::toolset`] instead.
     pub toolset: Arc<Toolset>,
     pub tools_host_extra: Vec<lk_agents_abi::HostRef>,
+    /// The `transcription_node` and `realtime_audio_output_node` of the agent the reply was
+    /// created under.
+    pub output_nodes: crate::agent_session::nodes::OutputNodes,
 }
 
 /// Built once `after` is on the record, so the interrupted item precedes it. Only `ChatRequested`

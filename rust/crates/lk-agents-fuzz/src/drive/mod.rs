@@ -146,8 +146,8 @@ pub struct Setup {
     pub amd: Option<AmdSetup>,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
     pub keyterms: Vec<String>,
-    /// The agent overrides `llm_node`, `tts_node` and `stt_node` (each as the default does), on
-    /// the first agent and on every agent a handoff installs.
+    /// The agents override nodes (each as the default does): the opening agent these, every agent
+    /// a handoff installs its own.
     pub nodes: Option<NodeSetup>,
     /// `stt_context_options["keyterm_detection"]` on, with the detection LLM the host resolves.
     pub keyterm_detection: Option<KeytermDetectionSetup>,
@@ -252,7 +252,11 @@ pub enum PreConnect {
     Malformed,
 }
 
-/// Which nodes the agents override.
+/// The agent the session opens with; a handoff names another.
+pub const OPENING_AGENT: &str = "agent";
+
+/// Which nodes the opening agent overrides; every other agent flips some of them
+/// (`start::overrides`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NodeSetup {
     pub llm: bool,
@@ -260,8 +264,8 @@ pub struct NodeSetup {
     pub stt: bool,
     /// The `llm_node` answers this text itself (a node returning a `str`), never calling the model.
     pub llm_text: Option<&'static str>,
-    /// The first agent overrides `transcription_node` and `realtime_audio_output_node` (each as
-    /// the default does), which the session builds once over its text and audio legs.
+    /// `transcription_node` and `realtime_audio_output_node` (each as the default does), opened
+    /// per segment and per realtime generation over the session's text and audio legs.
     pub transcription: bool,
     pub realtime_audio: bool,
 }

@@ -188,6 +188,13 @@ impl Authored {
         self
     }
 
+    /// The session opened `agent`'s `node`.
+    pub fn node(mut self, agent: &str, node: crate::record::NodeUse) -> Self {
+        let at = self.next();
+        self.recording.record_node(at, agent.into(), node);
+        self
+    }
+
     /// One chunk of audio the n-th synthesis stream produced.
     pub fn produced(mut self, tts: u32, chunk: u16, text: &str) -> Self {
         let at = self.next();

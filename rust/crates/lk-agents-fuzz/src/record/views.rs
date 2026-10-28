@@ -24,8 +24,8 @@ use lk_agents_voice::{
 };
 
 use super::{
-    Answer, Applied, Breach, Detail, Handle, Host, Id, Kind, Observed, Opened, Recording, Sink,
-    Tag,
+    Answer, Applied, Breach, Detail, Handle, Host, Id, Kind, NodeUse, Observed, Opened, Recording,
+    Sink, Tag,
 };
 use crate::{check::Subject, input::Input};
 
@@ -983,6 +983,11 @@ impl<'a> InferenceView<'a> {
             .filter(|o| o.kind == kind)
             .map(|opened| StreamView { view: self, opened })
             .collect()
+    }
+
+    /// Each node the session opened, with the agent whose override it is, in order.
+    pub fn nodes(&self) -> impl Iterator<Item = (Observed, &'a str, NodeUse)> {
+        self.r.nodes.iter().map(|(at, agent, node)| (*at, agent.as_str(), *node))
     }
 
     /// Every request the driver made of the model.

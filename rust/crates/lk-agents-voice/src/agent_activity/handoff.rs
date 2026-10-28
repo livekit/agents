@@ -355,6 +355,7 @@ impl Driver {
             vad,
             options,
             expressive,
+            output_nodes,
             ..
         } = update;
         self.session.expressive.agent = expressive;
@@ -362,8 +363,13 @@ impl Driver {
         let count = toolset.specs.len();
         let tool_names: std::collections::BTreeSet<String> =
             toolset.specs.iter().map(|t| t.name.clone()).collect();
-        let previous_agent =
-            self.activity.set_agent(agent, instructions, dynamic_instructions, toolset);
+        let previous_agent = self.activity.set_agent(
+            agent,
+            instructions,
+            dynamic_instructions,
+            output_nodes,
+            toolset,
+        );
         self.session.apply_providers(llm, tts, out);
 
         // The new agent's view: the context it brought, or the conversation carried forward.

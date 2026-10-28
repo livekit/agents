@@ -657,6 +657,7 @@ impl Driver {
                 tts: self.session.tts.as_ref().and_then(|t| self.shared.resources.tts(t.id)),
                 toolset: advertised,
                 tools_host_extra: self.session.tool_hosts.clone(),
+                output_nodes: self.activity.output_nodes.clone(),
             },
             user_metrics,
             message_id,

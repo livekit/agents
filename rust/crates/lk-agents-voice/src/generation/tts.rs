@@ -426,6 +426,8 @@ pub(super) struct SynthesisPlayout<'a> {
     pub(super) tx: mpsc::UnboundedSender<SynthesisEvent>,
     pub(super) rx: mpsc::UnboundedReceiver<SynthesisEvent>,
     pub(super) gate: &'a mut PlaybackGate,
+    /// The reply's agent's `transcription_node`.
+    pub(super) nodes: &'a crate::agent_session::nodes::OutputNodes,
 }
 
 impl SynthesisPlayout<'_> {
@@ -464,6 +466,7 @@ impl SynthesisPlayout<'_> {
                 // Outputs can change while a speculative reply waits for its turn.
                 let audio = self.gate.audio_enabled.then(|| shared.audio_output()).flatten();
                 let text = self.gate.text_enabled.then(|| shared.transcription_output()).flatten();
+                let text = self.nodes.text_output(text);
                 let leg = TextLeg::new(text.as_deref(), None, shared, handle.id());
                 let mut buffered = SynthesizedSegment {
                     rx: &mut self.rx,
@@ -495,6 +498,7 @@ impl SynthesisPlayout<'_> {
             return;
         }
         let out = self.gate.text_enabled.then(|| shared.transcription_output()).flatten();
+        let out = self.nodes.text_output(out);
         let leg = TextLeg::new(out.as_deref(), None, shared, handle.id());
         while let Ok(event) = self.rx.try_recv() {
             leg.forward(event).await;

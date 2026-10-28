@@ -45,6 +45,8 @@ pub(crate) struct AgentActivity {
     /// Replies in flight keep the prompt and tools they snapshotted.
     pub(crate) instructions: crate::generation::Instructions,
     pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    /// The agent's `transcription_node` and `realtime_audio_output_node`.
+    pub(crate) output_nodes: crate::agent_session::nodes::OutputNodes,
     pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
     /// `_tool_executor`.
     pub(crate) tools: crate::tool_executor::Tools,
@@ -112,16 +114,18 @@ pub(crate) struct AgentActivity {
 }
 
 impl AgentActivity {
-    /// A handoff lands: the new agent, prompt and tools. The previous agent's id.
+    /// A handoff lands: the new agent, prompt, nodes and tools. The previous agent's id.
     pub(crate) fn set_agent(
         &mut self,
         agent: String,
         instructions: crate::generation::Instructions,
         dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+        output_nodes: crate::agent_session::nodes::OutputNodes,
         toolset: crate::tool_executor::Toolset,
     ) -> String {
         self.instructions = instructions;
         self.dynamic_instructions = dynamic_instructions;
+        self.output_nodes = output_nodes;
         self.toolset = Arc::new(toolset);
         std::mem::replace(&mut self.agent, agent)
     }

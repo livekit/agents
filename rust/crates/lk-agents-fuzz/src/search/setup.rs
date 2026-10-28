@@ -158,7 +158,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     // drawn last, so every other part of a seed's setup stays what it was
     setup.avatar_fps = if rng.bool() { 25 } else { 40 };
     setup.avatar_latency_ms = rng.u64(1..1000 / setup.avatar_fps);
-    // The session's transcription node, drawn last too. Its realtime audio node is not drawn yet:
+    // The opening agent's transcription node, drawn last too; the agents a handoff installs flip
+    // it and their other nodes by name (`overrides`). The realtime audio node is not drawn yet:
     // what the node yields after the core flushed the segment lands in a segment of its own.
     if let Some(nodes) = setup.nodes.as_mut() {
         nodes.transcription = rng.bool();

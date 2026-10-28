@@ -336,6 +336,16 @@ pub enum Sink {
     Recorder(RecorderCall),
 }
 
+/// Which of an agent's nodes the session opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeUse {
+    Llm,
+    Tts,
+    Stt,
+    Transcription,
+    RealtimeAudio,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecorderCall {
     InputFrame,
@@ -589,6 +599,8 @@ pub struct Recording {
     /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
     /// link, made visible so a rule can hold injected VAD and STT events against the audio.
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
+    /// Each node the session opened, and the agent whose override it is.
+    nodes: Vec<(Observed, String, NodeUse)>,
     sink: Vec<(Observed, Sink)>,
     host: Vec<(Observed, Host)>,
     avatar: Vec<(Observed, AvatarStep)>,
@@ -882,6 +894,10 @@ impl Recording {
 
     pub fn held(&self) -> &[(Observed, u32, Vec<(u32, u64)>)] {
         &self.held
+    }
+
+    pub fn record_node(&mut self, at: Observed, agent: String, node: NodeUse) {
+        self.nodes.push((at, agent, node));
     }
 
     pub fn record_produced(&mut self, at: Observed, tts: u32, chunk: u16, text: String) {

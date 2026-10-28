@@ -742,6 +742,18 @@ async def nodes() -> None:
     assert any("TWENTY" in c for c in captions), captions
     assert not any("Twenty" in c for c in captions), captions
 
+    print("== transcription_node of the agent handed to")
+    captions.clear()
+
+    async def handed_caption(session: VoiceSession, room: _core.FakeRoom) -> None:
+        session.update_agent(Captioned())
+        await settle(room, 1)
+        await caption(session, room)
+
+    await node_session(Agent(instructions="You answer.", name="plain"), handed_caption)
+    print(f"captions {captions}")
+    assert any("TWENTY" in c for c in captions), captions
+
     print("== stt_node")
     heard: list[str] = []
 

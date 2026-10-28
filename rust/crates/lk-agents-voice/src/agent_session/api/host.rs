@@ -4,7 +4,7 @@
 use super::{
     CLOSE_TIMEOUT, CommandRefused, HostParts,
     InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
-    Ready, Reply, SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom,
+    Ready, Reply, SessionApi, SessionEvents, SessionRefused, SessionRoom,
     SessionJob, SessionRunner, Stage, StartFailed, UnknownCloseReason, UpdateAgentArgs,
     host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
@@ -15,7 +15,7 @@ use crate::agent_session::commands::{
     HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
     ToolUpdate, TurnCommand,
 };
-use crate::agent_session::nodes::Nodes;
+use crate::agent_session::nodes::{Nodes, OutputNodes};
 use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
@@ -123,7 +123,7 @@ impl SessionApi {
         // The job whose room this is: `start()` connects it beside the opening.
         job: Option<Arc<dyn SessionJob>>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Result<Self, SessionBuildError> {
+    ) -> Self {
         use crate::room_io::{
             AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig,
         };
@@ -269,23 +269,6 @@ impl SessionApi {
             legs => legs,
         };
 
-        // `realtime_audio_output_node`, opened per generation over the audio output it plays into;
-        // with no audio leg it has nothing to play into.
-        let realtime_audio_node = realtime_audio_output_node.filter(|_| audio_out.is_some());
-
-        // `Agent.transcription_node`, above the synchroniser (the node rewrites, the synchroniser
-        // paces). With no leg below it is dropped: `text_output=False` is legitimate.
-        let text_out: Option<Arc<dyn TextOutput>> = match (transcription_node, text_out) {
-            (Some(factory), Some(next)) => {
-                let node = factory
-                    .text_node(crate::io::CoreTextOutput::new(Arc::clone(&next)))
-                    .map_err(SessionBuildError::Node)?;
-                Some(Arc::new(crate::io::NodeTextOutput::new(node, next)))
-            }
-            (Some(_), None) => None,
-            (None, next) => next,
-        };
-
         // Facts, not options: the legs the two leg-dependent defaults need.
         let legs = crate::agent_activity::options::LegSet {
             stt: stt.is_some(),
@@ -324,6 +307,11 @@ impl SessionApi {
             ),
             instructions: instructions.unwrap_or_default(),
             dynamic_instructions,
+            // Opened at each use, above the synchroniser: the node rewrites, the synchroniser paces.
+            output_nodes: OutputNodes {
+                transcription: transcription_node,
+                realtime_audio: realtime_audio_output_node,
+            },
             chat_ctx,
             hook_bound: hook_bound.map(Duration::from_secs_f64),
             capture_run: None,
@@ -352,7 +340,6 @@ impl SessionApi {
             recorder: None,
             audio_out,
             text_out,
-            realtime_audio_node,
             room_events: Some(room.events()),
             // Installed at `open`, once `RoomIo` has been started and its stream taken.
             room_io_events: None,
@@ -391,7 +378,7 @@ impl SessionApi {
             job,
             usage: Arc::default(),
         };
-        Ok(api)
+        api
     }
 
     /// Publish the agent's track, open every provider stream, and start the loop. Awaitable, since

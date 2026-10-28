@@ -148,6 +148,9 @@ impl Run {
                     }
                     self.record.record_sink(at, sink);
                 }
+                Record::Node { at, agent, node } => {
+                    self.record.record_node(at, agent, node);
+                }
                 Record::Segment { segment, output } => {
                     self.segments.insert(segment, output);
                 }

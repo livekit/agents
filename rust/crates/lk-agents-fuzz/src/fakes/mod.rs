@@ -190,6 +190,12 @@ pub enum Record {
         at: Observed,
         slot: Slot,
     },
+    /// The session opened one of an agent's nodes.
+    Node {
+        at: Observed,
+        agent: String,
+        node: crate::record::NodeUse,
+    },
     /// Which output a flushed segment belongs to. Not a stamped event: it is a fact about the
     /// segment the harness keeps for as long as the run lasts.
     Segment {
@@ -317,6 +323,11 @@ impl Registry {
     /// one left to tell.
     fn write(&self, record: Record) {
         let _ = self.records.send(record);
+    }
+
+    /// The session opened `agent`'s `node`.
+    pub(super) fn node_used(&self, agent: &str, node: crate::record::NodeUse) {
+        self.write(Record::Node { at: self.stamps.next(), agent: agent.to_owned(), node });
     }
 
     /// A new output instance the case is attaching. Recorded like an invocation so the harness has

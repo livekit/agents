@@ -564,6 +564,9 @@ pub struct AgentUpdate {
     pub options: crate::agent_activity::options::AgentSessionOptions,
     /// The agent's `expressive`, replacing the previous agent's; `None` defers to the session's.
     pub expressive: Option<crate::agent_activity::options::Expressive>,
+    /// The agent's `transcription_node` and `realtime_audio_output_node`, replacing the previous
+    /// agent's.
+    pub output_nodes: crate::agent_session::nodes::OutputNodes,
     pub call: Option<RequestId>,
 }
 

@@ -21,6 +21,7 @@ fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
         vad: Maybe::NotGiven,
         options: Default::default(),
         expressive: None,
+        output_nodes: Default::default(),
         call: None,
     }
 }
@@ -83,7 +84,7 @@ fn assembled(
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
         None, None, None, spawner,
     );
-    api.expect("a room-only session assembles")
+    api
 }
 
 // Catches: a `close` that waits for the host's drain while still holding a `PeerHandle` sender on
