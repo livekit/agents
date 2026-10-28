@@ -450,8 +450,8 @@ class ResponsesLLMStream(llm.LLMStream):
 
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
-        # the stored response still holds the dropped items (an unanswered function call
-        # 400s the next turn), so chaining onto it would diverge from what was spoken
+        # the stored response still holds the dropped messages; chaining onto it would
+        # make the model believe it said them
         self._llm._prev_resp_id = "" if self._dropped_item_ids else self._response_id
         self._llm._pending_tool_calls = self._pending_tool_calls
 
