@@ -28,6 +28,21 @@ Wire contract of the Pulse streaming API, as this plugin relies on it:
   a final on its own is not, because the server also cuts finals inside an utterance
   (word-count rollover, blank-token endpoint at a chunk boundary).
 * Errors arrive as ``{"error": "..."}``.
+
+``pulse-2`` is a separate, streaming-only, English-only model on the same WebSocket
+endpoint (``?model=pulse-2``). It replaces Pulse's silence/word-count finalization
+with built-in end-of-turn detection, which has no tuning knobs, and adds per-final
+``emotion`` and ``gender`` objects, on by default. Per docs.smallest.ai, Pulse's
+finalization params ``eou_timeout_ms``, ``finalize_on_words``, and ``max_words`` are
+ignored by the server by default on ``pulse-2`` -- but if sent, they still take
+effect and compete with end-of-turn detection, fragmenting finals. Don't set them on
+an ``STT`` configured with ``model="pulse-2"``; if you're migrating from ``"pulse"``,
+remove them first. A final closed by the built-in end-of-turn model carries
+``eot_finalized: true``; the terminal final from ``close_stream`` / ``finalize``
+carries ``is_last: true`` instead and has no ``eot_finalized`` field. ``language``
+other than ``"en"`` is rejected client-side before connecting, since the server's
+own rejection is a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error frame followed by an
+unceremonious close.
 """
 
 from __future__ import annotations
@@ -75,10 +90,26 @@ DEFAULT_STREAM_PATH = "/stt/live"
 
 # Models that support real-time streaming. All others are batch-only and will be
 # wrapped with a StreamAdapter by the agent framework automatically.
-_STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
+_STREAMING_MODELS: frozenset[str] = frozenset({"pulse", "pulse-2"})
+# "pulse-2" is the only model known to lack a batch/pre-recorded endpoint. A deny
+# list (rather than an allow list of "pulse") keeps batch transcription working for
+# any other model string the caller passes, including future or server-specific ones.
+_BATCH_UNSUPPORTED_MODELS: frozenset[str] = frozenset({"pulse-2"})
 
 # Any letter or digit in any script; a transcript with none is punctuation only.
 _WORD_RE = re.compile(r"\w")
+
+
+def _validate_pulse_2_language(model: str, language: str) -> None:
+    """Reject non-English languages on the English-only ``pulse-2`` model.
+
+    The server closes the socket with a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error
+    frame in this case; raise here instead so the failure is immediate and the
+    message is clear, rather than surfacing later as a generic connection error.
+    """
+    if model == "pulse-2" and language != "en":
+        raise ValueError(f"model 'pulse-2' is English-only, got language={language!r}")
+
 
 T = TypeVar("T")
 
@@ -130,6 +161,8 @@ class _STTOptions:
     finalize_on_flush: bool  # {"type":"finalize"} when the framework flushes the stream
     finalize_on_words: bool | None  # word-count rollover of long segments; None = server default
     max_words: int | None  # rollover length; None = server default
+    emotion_detection: bool  # pulse-2 only: per-final "emotion" object
+    gender_detection: bool  # pulse-2 only: per-final "gender" object
     keepalive_interval: float | None  # seconds between {"type":"keepalive"} messages; None = off
     base_url: str
     stream_path: str
@@ -159,6 +192,8 @@ class STT(stt.STT):
         finalize_on_flush: bool = True,
         finalize_on_words: NotGivenOr[bool] = NOT_GIVEN,
         max_words: NotGivenOr[int] = NOT_GIVEN,
+        emotion_detection: bool = True,
+        gender_detection: bool = True,
         keepalive_interval: NotGivenOr[float | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -169,10 +204,16 @@ class STT(stt.STT):
 
         Args:
             model: STT model to use. ``"pulse"`` supports streaming and batch
-                transcription. Other models are batch-only; ``stream()`` raises
-                ``ValueError`` for them.
+                transcription. ``"pulse-2"`` is streaming-only and English-only,
+                with built-in end-of-turn detection plus per-final emotion and
+                gender; ``recognize()`` raises ``ValueError`` for it. Other models
+                are batch-only; ``stream()`` raises ``ValueError`` for them.
             language: BCP-47 language code (e.g. "en", "hi", "fr"). Use "multi" for
-                automatic language detection.
+                automatic language detection. ``"pulse-2"`` is English-only: anything
+                other than ``"en"`` raises ``ValueError`` here (and in
+                ``update_options()``) instead of connecting, since the server's own
+                rejection is a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error frame
+                followed by closing the socket.
             sample_rate: Audio sample rate in Hz. Supported: 8000, 16000, 22050,
                 24000, 44100, 48000. Defaults to 16000. Telephony audio should be sent
                 at its native 8000 Hz rather than upsampled.
@@ -210,7 +251,9 @@ class STT(stt.STT):
             eou_timeout_ms: Silence (ms) for the transducer's blank-token endpoint.
                 Unset uses the server default (800). Values below the ~1.1 s decode
                 chunk make the server cut finals inside utterances; prefer
-                ``endpointing`` for low latency.
+                ``endpointing`` for low latency. Don't set this with ``model="pulse-2"``:
+                it still takes effect there and competes with that model's built-in
+                end-of-turn detection, fragmenting finals.
             vad_events: Ask the server for ``speech_started`` / ``speech_ended``
                 messages and map them to START_OF_SPEECH / END_OF_SPEECH. This is the
                 only reliable end-of-speech signal: finals alone are also emitted
@@ -219,8 +262,18 @@ class STT(stt.STT):
                 the stream, so buffered speech is returned as a final immediately. Defaults to True.
             finalize_on_words: Cut a final every ``max_words`` words during long
                 continuous speech. Unset uses the server default (on). The cut is not a
-                turn end; END_OF_SPEECH still follows the VAD.
-            max_words: Word count for ``finalize_on_words``. Unset uses the server default.
+                turn end; END_OF_SPEECH still follows the VAD. Don't set this with
+                ``model="pulse-2"``; see ``eou_timeout_ms``.
+            max_words: Word count for ``finalize_on_words``. Unset uses the server
+                default. Don't set this with ``model="pulse-2"``; see ``eou_timeout_ms``.
+            emotion_detection: ``pulse-2`` only. Adds a six-class ``emotion`` object
+                (``neutral``, ``happy``, ``angry``, ``sad``, ``fear``, ``disgust``) with
+                confidence and score distribution to ``SpeechData.metadata["emotion"]``
+                on finals. No effect on ``"pulse"``. Defaults to True.
+            gender_detection: ``pulse-2`` only. Adds a ``gender`` object (``male`` /
+                ``female``) with confidence and scores to
+                ``SpeechData.metadata["gender"]`` on finals. No effect on ``"pulse"``.
+                Defaults to True.
             keepalive_interval: Seconds between ``{"type": "keepalive"}`` messages, which
                 reset the public API's inactivity timer during long pauses (it answers with
                 ``{"type": "pong"}``). Defaults to 5 s on the public API and off for a
@@ -236,6 +289,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=model in _STREAMING_MODELS,
+                offline_recognize=model not in _BATCH_UNSUPPORTED_MODELS,
                 interim_results=True,
                 diarization=diarize,
                 aligned_transcript="word" if word_timestamps else False,
@@ -248,6 +302,8 @@ class STT(stt.STT):
                 "Smallest AI API key is required, either as argument or set "
                 "SMALLEST_API_KEY environment variable"
             )
+
+        _validate_pulse_2_language(model, language)
 
         self._opts = _STTOptions(
             model=model,
@@ -273,6 +329,8 @@ class STT(stt.STT):
             finalize_on_flush=finalize_on_flush,
             finalize_on_words=finalize_on_words if is_given(finalize_on_words) else None,
             max_words=max_words if is_given(max_words) else None,
+            emotion_detection=emotion_detection,
+            gender_detection=gender_detection,
             keepalive_interval=(
                 keepalive_interval
                 if is_given(keepalive_interval)
@@ -305,6 +363,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
+        if config.model in _BATCH_UNSUPPORTED_MODELS:
+            raise ValueError(
+                f"{config.model} does not support batch transcription; use stream() instead"
+            )
         params: dict[str, Any] = {
             "model": config.model,
             "language": config.language,
@@ -352,6 +414,7 @@ class STT(stt.STT):
                 f"{self._opts.model} does not support streaming; use recognize() for batch transcription"
             )
         config = self._sanitize_options(language=language)
+        _validate_pulse_2_language(config.model, config.language)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -379,11 +442,28 @@ class STT(stt.STT):
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
+        emotion_detection: NotGivenOr[bool] = NOT_GIVEN,
+        gender_detection: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options; propagates to all active streams (triggers reconnect)."""
+        prospective_model = model if is_given(model) else self._opts.model
+        prospective_language = language if is_given(language) else self._opts.language
+        _validate_pulse_2_language(prospective_model, prospective_language)
+        # Streams may carry their own language override from stream(language=...); a
+        # model change must be validated against each of those too, not just the
+        # parent's language, and before anything is mutated so this stays atomic.
+        # Closed streams are skipped: _streams is a weak set, so one lingers here only
+        # if the caller still holds a reference, and a closed stream can't reconnect.
+        for stream in self._streams:
+            if stream._event_ch.closed:
+                continue
+            stream_language = language if is_given(language) else stream._opts.language
+            _validate_pulse_2_language(prospective_model, stream_language)
+
         if is_given(model):
             self._opts.model = model
             self._capabilities.streaming = model in _STREAMING_MODELS
+            self._capabilities.offline_recognize = model not in _BATCH_UNSUPPORTED_MODELS
         self._opts = _apply_updates(
             self._opts,
             language=language,
@@ -400,8 +480,12 @@ class STT(stt.STT):
             eou_timeout_ms=eou_timeout_ms,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
+            emotion_detection=emotion_detection,
+            gender_detection=gender_detection,
         )
         for stream in self._streams:
+            if stream._event_ch.closed:
+                continue
             stream.update_options(
                 model=model,
                 language=language,
@@ -418,6 +502,8 @@ class STT(stt.STT):
                 eou_timeout_ms=eou_timeout_ms,
                 vad_events=vad_events,
                 finalize_on_flush=finalize_on_flush,
+                emotion_detection=emotion_detection,
+                gender_detection=gender_detection,
             )
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> _STTOptions:
@@ -477,8 +563,10 @@ class SpeechStream(stt.SpeechStream):
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
+        emotion_detection: NotGivenOr[bool] = NOT_GIVEN,
+        gender_detection: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        self._opts = _apply_updates(
+        updated = _apply_updates(
             self._opts,
             model=model,
             language=language,
@@ -495,7 +583,13 @@ class SpeechStream(stt.SpeechStream):
             eou_timeout_ms=eou_timeout_ms,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
+            emotion_detection=emotion_detection,
+            gender_detection=gender_detection,
         )
+        # Validated here too (not just on the parent STT), so a stream-level
+        # language override, or a direct call on this stream, can't bypass it.
+        _validate_pulse_2_language(updated.model, updated.language)
+        self._opts = updated
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -686,6 +780,8 @@ class SpeechStream(stt.SpeechStream):
             "redact_pci": str(o.redact_pci).lower(),
             "endpointing": str(o.endpointing).lower(),
             "vad_events": str(o.vad_events).lower(),
+            "emotion_detection": str(o.emotion_detection).lower(),
+            "gender_detection": str(o.gender_detection).lower(),
         }
         if o.numerals is not None:
             params["numerals"] = str(o.numerals).lower()
@@ -800,14 +896,16 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
 
-        # A final closes the turn when it answers a finalize, ends the stream, or the
-        # server says the speaker paused. Other finals are cuts inside an utterance
-        # (word rollover, blank-token endpoint); with vad_events the turn end comes
-        # from speech_ended, without them every final has to count as one.
+        # A final closes the turn when it answers a finalize, ends the stream, the
+        # server says the speaker paused, or (pulse-2) its built-in end-of-turn model
+        # fired. Other finals are cuts inside an utterance (word rollover, blank-token
+        # endpoint); with vad_events the turn end comes from speech_ended, without them
+        # every final has to count as one.
         if is_final and (
             is_last
             or from_finalize
             or data.get("speech_final") is True
+            or data.get("eot_finalized") is True
             or not self._opts.vad_events
         ):
             self._end_speech()
@@ -874,6 +972,17 @@ def _transcript_to_speech_data(
     redacted_entities: list[str] = data.get("redacted_entities") or []
     if redacted_entities:
         metadata["redacted_entities"] = redacted_entities
+
+    # pulse-2 only: per-utterance emotion/gender (omitted, not null, on short/slow
+    # utterances) and whether built-in end-of-turn detection closed this final.
+    emotion = data.get("emotion")
+    if emotion:
+        metadata["emotion"] = emotion
+    gender = data.get("gender")
+    if gender:
+        metadata["gender"] = gender
+    if "eot_finalized" in data:
+        metadata["eot_finalized"] = bool(data["eot_finalized"])
 
     return [
         stt.SpeechData(
