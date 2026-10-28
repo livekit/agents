@@ -1,24 +1,13 @@
-# Copyright 2023 LiveKit, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
 import asyncio
 import dataclasses
 import inspect
+import logging
 import multiprocessing as mp
 import os
+import threading
+from abc import ABC
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -39,7 +28,6 @@ from .job import (
     RunningJobInfo,
 )
 from .log import logger
-from .plugin import Plugin
 from .simulation import SimulationContext
 from .storage.agentdb import AgentDBStorage
 from .storage.context import Handler
@@ -50,10 +38,6 @@ from .version import __version__
 
 if TYPE_CHECKING:
     from .a2a.endpoint import A2AEndpoint, A2ASessionOptions
-
-# The server's lifecycle (options and their defaults, health listener, load, registration,
-# availability, assignment, status, drain, close) and the endpoint data plane are the core's,
-# `_core.ServerRuntime`; this module owns the doors, the job processes and `AgentServer.http`.
 
 
 class ServerType(Enum):
@@ -72,6 +56,8 @@ class WorkerPermissions:
 
 
 Entrypoint = Callable[[JobContext], Awaitable[None]]
+
+
 _EntrypointT = TypeVar("_EntrypointT", bound=Entrypoint)
 
 
@@ -515,3 +501,52 @@ class _ServerHost:
         assert load_fnc is not None
         args = (self._server,) if inspect.signature(load_fnc).parameters else ()
         return await asyncio.get_running_loop().run_in_executor(None, load_fnc, *args)
+
+
+PluginEventTypes = Literal["plugin_registered"]
+
+
+class Plugin(ABC):  # noqa: B024
+    registered_plugins: list[Plugin] = []
+    emitter: utils.EventEmitter[PluginEventTypes] = utils.EventEmitter()
+
+    # TODO(theomonnom): make logger mandatory once all plugins have been updated
+    def __init__(
+        self,
+        title: str,
+        version: str,
+        package: str,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._title = title
+        self._version = version
+        self._package = package
+        self._logger = logger
+
+    @classmethod
+    def register_plugin(cls, plugin: Plugin) -> None:
+        if threading.current_thread() != threading.main_thread():
+            raise RuntimeError("Plugins must be registered on the main thread")
+
+        cls.registered_plugins.append(plugin)
+        cls.emitter.emit("plugin_registered", plugin)
+
+    # plugin can implement an optional download_files method
+    def download_files(self) -> None:  # noqa: B027
+        pass
+
+    @property
+    def package(self) -> str:
+        return self._package
+
+    @property
+    def title(self) -> str:
+        return self._title
+
+    @property
+    def version(self) -> str:
+        return self._version
+
+    @property
+    def logger(self) -> logging.Logger | None:
+        return self._logger

@@ -22,9 +22,8 @@ from . import _core
 from ._exceptions import CLIError
 from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
 from .log import DEV_LEVEL, _add_global_log_fields, logger
-from .plugin import Plugin
 from .telemetry import loop_monitor
-from .worker import AgentServer
+from .worker import AgentServer, Plugin
 
 __all__ = ["main", "run_app"]
 

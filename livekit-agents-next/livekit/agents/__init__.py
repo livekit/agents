@@ -68,7 +68,6 @@ from .llm.tool_context import (
     Working,
     function_tool,
 )
-from .plugin import Plugin
 from .simulation import (
     Scenario,
     ScenarioGroup,
@@ -148,6 +147,7 @@ from .voice.turn import (
 from .worker import (
     AgentHandler,
     AgentServer,
+    Plugin,
     RtcDoor,
     ServerType,
     WorkerPermissions,
