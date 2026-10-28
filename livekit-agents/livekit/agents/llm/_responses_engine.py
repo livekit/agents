@@ -193,6 +193,8 @@ class ResponsesLLMHost(Protocol):
 
 
 class ResponsesLLMStream(llm.LLMStream):
+    _llm: ResponsesLLMHost  # type: ignore[assignment]
+
     def __init__(
         self,
         llm: llm.LLM,
