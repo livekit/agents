@@ -619,11 +619,11 @@ class RealtimeMessage(ProviderMessage[RequestMetadata]):
     utterance_idx: int | None = None
     text: str | None = None
     language: str | None = None
-    language_confidence: float | None = None
-    confidence: float | None = None
-    audio_duration_s: float | None = None
-    start_s: float | None = None
-    end_s: float | None = None
+    language_confidence: _OptionalNumber = None
+    confidence: _OptionalNumber = None
+    audio_duration_s: _OptionalNumber = None
+    start_s: _OptionalNumber = None
+    end_s: _OptionalNumber = None
     is_fatal: bool | None = False
     message: str | None = None
     status_code: int | None = -1
@@ -632,13 +632,6 @@ class RealtimeMessage(ProviderMessage[RequestMetadata]):
     @classmethod
     def optional_integer(cls, value: object) -> int | None:
         return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-    @field_validator(
-        "confidence", "language_confidence", "audio_duration_s", "start_s", "end_s", mode="before"
-    )
-    @classmethod
-    def optional_number(cls, value: object) -> float | None:
-        return _optional_number(value)
 
     @field_validator("applied", mode="before")
     @classmethod

@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
-import logging
 import os
 import platform
 import time
@@ -339,30 +338,10 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
 
 
-def _extract_confidence(
-    payload: TranscriptionData,
-    instance_logger: logging.Logger,
-) -> float:
-    """Read Sarvam's ``language_probability`` from a response payload.
-
-    Returns the value as a float when present and numeric. Falls back to
-    ``1.0`` when the field is absent, ``None``, or has an unexpected type
-    (defensive — the field is documented for the REST endpoint but not
-    explicitly for streaming, so contract drift is logged for visibility).
-    """
-    value = payload.language_probability
-    # bool is a subclass of int — exclude explicitly so that an accidental
-    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
-    # as livekit-plugins-slng/.../stt.py.
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    if value is not None:
-        instance_logger.debug(
-            "Unexpected language_probability type: %s (value=%r); falling back to confidence=1.0",
-            type(value).__name__,
-            value,
-        )
-    return 1.0
+def _extract_confidence(payload: TranscriptionData) -> float:
+    """Sarvam's ``language_probability``, or 1.0 when it is absent or not a number."""
+    probability = payload.language_probability
+    return 1.0 if probability is None else probability
 
 
 def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
@@ -671,7 +650,7 @@ class STT(stt.STT):
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=_extract_confidence(response_json, self._logger),
+                        confidence=_extract_confidence(response_json),
                     )
                 ]
 
@@ -930,14 +909,12 @@ class SpeechStream(stt.SpeechStream):
         if self._server_request_id is None and request_id:
             self._server_request_id = str(request_id)
 
-    def _positive_time(self, value: object) -> float | None:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        if value <= 0:
+    def _positive_time(self, value: float | None) -> float | None:
+        if value is None or value <= 0:
             return None
         # Shift into the stream timeline so the value survives reconnects: the base
         # class advances start_time_offset by the session start -> audio start delay.
-        return float(value) + self.start_time_offset
+        return value + self.start_time_offset
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
@@ -971,7 +948,7 @@ class SpeechStream(stt.SpeechStream):
             text=transcript_text,
             start_time=self._positive_time(transcript.speech_start) or 0.0,
             end_time=self._positive_time(transcript.speech_end) or 0.0,
-            confidence=_extract_confidence(transcript, self._logger),
+            confidence=_extract_confidence(transcript),
         )
         self.send(
             stt.SpeechEvent(
