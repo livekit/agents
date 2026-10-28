@@ -1767,12 +1767,6 @@ class SttStreamAdapter:
     ) -> FallbackSttStream: ...
 
 
-class RetryingStt:
-    """`_core.RetryingStt`: what a host STT bound to `conn_options` is to the core."""
-
-    def __init__(self, stt: Any, conn_options: Any) -> None: ...
-
-
 class LlmMetricState:
     """`LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`)."""
 

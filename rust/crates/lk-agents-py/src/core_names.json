@@ -101,7 +101,6 @@
     "RemoteSessionClient",
     "RemoteSessionHost",
     "Reply",
-    "RetryingStt",
     "Role",
     "RoomAudioInput",
     "RoomEventBus",

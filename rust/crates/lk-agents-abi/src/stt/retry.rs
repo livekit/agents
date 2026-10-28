@@ -26,27 +26,6 @@ pub struct RetryingStt {
     clock: Arc<dyn Clock>,
 }
 
-/// `_core.RetryingStt`: what a host STT bound to `conn_options` is to the core.
-#[crate::host(object(name = "RetryingStt", cell = "arc", as_dyn(Stt = as_stt)))]
-impl RetryingStt {
-    /// `stt` is attempted under `conn_options`; every failed attempt is reported to it
-    /// ([`Stt::failed`], the plugin's `error` event).
-    #[host(new)]
-    pub fn for_host(
-        stt: Arc<dyn Stt>,
-        conn_options: ApiConnectOptions,
-        #[host(ambient)] clock: Arc<dyn Clock>,
-    ) -> Result<Self, crate::types::connect::ApiConnectOptionsError> {
-        conn_options.validate()?;
-        Ok(RetryingStt { inner: stt, options: conn_options, clock })
-    }
-
-    /// The retried STT as the provider the core holds (not proxied).
-    pub fn as_stt(self: &Arc<Self>) -> Arc<dyn Stt> {
-        Arc::clone(self) as Arc<dyn Stt>
-    }
-}
-
 impl RetryingStt {
     /// A host STT bound to `conn_options` (its proxy's `with_conn_options`), retried under them.
     pub fn bound(stt: Arc<dyn Stt>, conn_options: &ApiConnectOptions, clock: Arc<dyn Clock>) -> Arc<dyn Stt> {
@@ -517,7 +496,7 @@ mod tests {
 
     fn retrying(inner: Arc<Flaky>, max_retry: u32) -> RetryingStt {
         let clock: Arc<dyn Clock> = Arc::new(crate::utils::clock::SimClock::new());
-        RetryingStt::for_host(inner, ApiConnectOptions { max_retry, ..ApiConnectOptions::default() }, clock).unwrap()
+        RetryingStt { inner, options: ApiConnectOptions { max_retry, ..ApiConnectOptions::default() }, clock }
     }
 
     // Catches: a provider that cancels its own stream at close reported as a failed recognition
@@ -629,7 +608,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::utils::clock::SimClock::new());
         let uptime = std::time::Duration::from_secs(uptime_secs);
         let inner = Arc::new(Dropping { uptime, clock: Arc::clone(&clock) });
-        (RetryingStt::for_host(inner, options, Arc::clone(&clock)).unwrap(), clock)
+        (RetryingStt { inner, options, clock: Arc::clone(&clock) }, clock)
     }
 
     // Catches: an idle provider socket closed every ~3 minutes (Cartesia) exhausting the budget

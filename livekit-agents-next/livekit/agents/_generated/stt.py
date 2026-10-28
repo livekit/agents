@@ -299,10 +299,6 @@ class STT(
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
         self._emit_error(error, recoverable)
 
-    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        options = APIConnectOptions(**conn)
-        return _core.RetryingStt(_STTConn(self, options), options)
-
     async def _core_recognize(
         self,
         buffer: list[rtc.AudioFrame],
@@ -326,27 +322,6 @@ class STT(
         if start_time_offset is not None:
             out.start_time_offset = start_time_offset
         return out
-
-
-class _STTConn:
-    """``STT`` as the framework holds it under one ``conn_options``."""
-
-    def __init__(self, provider: STT, conn: APIConnectOptions) -> None:
-        self._provider = provider
-        self._conn = conn
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._provider, name)
-
-    async def _core_recognize(
-        self, buffer: list[rtc.AudioFrame], language: str | None
-    ) -> SpeechEvent:
-        return await self._provider._core_recognize(buffer, language, self._conn)
-
-    async def _core_stream(
-        self, language: str | None, start_time_offset: float | None
-    ) -> RecognizeStream | None:
-        return await self._provider._core_stream(language, start_time_offset, self._conn)
 
 
 class RecognizeStream(ABC):

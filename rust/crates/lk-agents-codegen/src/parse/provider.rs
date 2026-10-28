@@ -103,7 +103,6 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
             "store",
             "default",
             "conn",
-            "conn.retry",
             "markup",
             "chat",
             "value",
@@ -149,7 +148,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
                 }
             },
         },
-        "conn" => Role::Conn { retry: meta_str(&m, "conn.retry") },
+        "conn" => Role::Conn,
         "markup" => Role::Markup,
         "chat" => Role::Chat { name: meta_str(&m, "chat").unwrap_or_else(|| rust.clone()) },
         "report" => Role::Report,

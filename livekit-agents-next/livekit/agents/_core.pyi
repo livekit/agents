@@ -139,7 +139,6 @@ from ._generated._core_classes import (
     RecordingOptions as RecordingOptions,
     RemoteSessionClient as RemoteSessionClient,
     RemoteSessionHost as RemoteSessionHost,
-    RetryingStt as RetryingStt,
     RoomAudioInput as RoomAudioInput,
     RoomEventBus as RoomEventBus,
     RoomVideoInput as RoomVideoInput,

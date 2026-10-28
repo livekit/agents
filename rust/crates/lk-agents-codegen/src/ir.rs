@@ -653,9 +653,9 @@ pub enum Role {
         unsupported: Option<String>,
         store: Option<(String, String)>,
     },
-    /// `conn`: the provider under one `conn_options`; `retry = "Class"` wraps it in that core
-    /// retry loop, which reports each failed attempt to the provider (`report`).
-    Conn { retry: Option<String> },
+    /// `conn`: the provider under one `conn_options`, which the declared proxy binds and passes
+    /// to each awaited `_core_` call; no host surface of its own.
+    Conn,
     /// `markup`: `markup._provider_key()`, the nested `Markup` class plugins override.
     Markup,
     /// `chat`: a `_core.ChatRequest` read into the hook's keywords.

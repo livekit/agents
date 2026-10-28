@@ -250,14 +250,7 @@ impl Writer<'_> {
     }
 
     fn conn(&self) -> Option<&ProviderMethod> {
-        self.p.methods.iter().find(|m| matches!(m.role, Role::Conn { .. }))
-    }
-
-    /// A `conn` with a core retry wrapper takes the provider as a view under one `conn_options`
-    /// (`_core_with_conn_options`, `_<Class>Conn`); without one the declared proxy binds the
-    /// options itself and passes them to each awaited `_core_` call.
-    fn conn_view_needed(&self) -> bool {
-        self.p.methods.iter().any(|m| matches!(m.role, Role::Conn { retry: Some(_) }))
+        self.p.methods.iter().find(|m| matches!(m.role, Role::Conn))
     }
 
     /// The methods a `conn_options` reaches: every awaited one, on a provider with a `conn`.
@@ -368,10 +361,6 @@ impl Writer<'_> {
             ));
         }
         self.paths.push((class.clone(), p.path.clone()));
-        if self.conn_view_needed() {
-            b.push_str("\n\n");
-            self.conn_view(&mut b)?;
-        }
         if let Some(m) = realtime {
             let session = m.stream.as_ref().map(|x| x.name.clone()).unwrap_or_default();
             b.push_str(&format!(
@@ -570,7 +559,7 @@ impl Writer<'_> {
             }
             Role::Markup => self.markup(b, m)?,
             Role::Chat { name } => self.chat_hook(b, m, name)?,
-            Role::Conn { .. } | Role::Value(_) | Role::Report => {}
+            Role::Conn | Role::Value(_) | Role::Report => {}
         }
         Ok(())
     }
@@ -632,7 +621,7 @@ impl Writer<'_> {
 
     /// One method's `_core_` surface.
     fn core(&mut self, b: &mut String, m: &ProviderMethod) -> Result<(), String> {
-        if matches!(m.role, Role::Conn { retry: None }) {
+        if matches!(m.role, Role::Conn) {
             return Ok(());
         }
         let def = if m.is_async { "async def" } else { "def" };
@@ -651,10 +640,6 @@ impl Writer<'_> {
             params.push("conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS".to_owned());
         }
         let ret = match (&m.role, &m.ret) {
-            (Role::Conn { .. }, _) => {
-                self.need("typing", "Any");
-                "Any".to_owned()
-            }
             (Role::Init, Some(r)) if self.read_as_dict(r) => {
                 self.need("typing", "Any");
                 "dict[str, Any]".to_owned()
@@ -723,20 +708,7 @@ impl Writer<'_> {
                 }
                 s
             }
-            Role::Conn { retry } => {
-                self.need("..types", "APIConnectOptions");
-                let class = &self.p.class;
-                match retry {
-                    Some(r) => {
-                        self.need("..", "_core");
-                        format!(
-                            "options = APIConnectOptions(**conn)\n        \
-                             return _core.{r}(_{class}Conn(self, options), options)"
-                        )
-                    }
-                    None => format!("return _{class}Conn(self, APIConnectOptions(**conn))"),
-                }
-            }
+            Role::Conn => unreachable!("a `conn` has no `_core_` surface"),
             Role::Markup => "return self.markup._provider_key()".to_owned(),
             Role::Report => "self._emit_error(error, recoverable)".to_owned(),
             Role::Chat { name } => self.chat_core(m, name)?,
@@ -751,41 +723,6 @@ impl Writer<'_> {
         let Ok(t) = syn::parse_str::<syn::Type>(rust) else { return false };
         let Some(name) = last_ident(&t) else { return false };
         self.decls.iter().any(|d| d.rust_name == name && d.targets.iter().any(|t| t.from_items))
-    }
-
-    /// `_<Class>Conn`: the provider as the core holds it under one `conn_options`.
-    fn conn_view(&mut self, b: &mut String) -> Result<(), String> {
-        let class = self.p.class.clone();
-        self.need("typing", "Any");
-        b.push_str(&format!(
-            "class _{class}Conn:\n    \"\"\"``{class}`` as the framework holds it under one ``conn_options``.\"\"\"\n\n    def __init__(self, provider: {class}, conn: APIConnectOptions) -> None:\n        self._provider = provider\n        self._conn = conn\n\n    def __getattr__(self, name: str) -> Any:\n        return getattr(self._provider, name)\n"
-        ));
-        let routed: Vec<ProviderMethod> =
-            self.p.methods.iter().filter(|m| self.carries_conn(m)).cloned().collect();
-        for m in &routed {
-            let mut params = Vec::new();
-            let mut args = Vec::new();
-            for p in &m.params {
-                params.push(format!("{}: {}", p.name, self.core_ty(m, &p.rust_ty)?));
-                args.push(p.name.clone());
-            }
-            args.push("self._conn".to_owned());
-            let ret = match &m.ret {
-                None => "None".to_owned(),
-                Some(r) => self.core_ty(m, r)?,
-            };
-            let all =
-                std::iter::once("self".to_owned()).chain(params).collect::<Vec<_>>().join(", ");
-            signature(b, "async def", &format!("_core_{}", m.rust), &all, &ret);
-            b.push_str("        ");
-            b.push_str(&wrap_call(
-                "return await ",
-                &format!("self._provider._core_{}({})", m.rust, args.join(", ")),
-                8,
-            ));
-            b.push('\n');
-        }
-        Ok(())
     }
 
     fn stream(

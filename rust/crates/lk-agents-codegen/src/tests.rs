@@ -799,7 +799,7 @@ fn every_provider_method_gets_its_core_surface() {
     for core in ["_core_label", "_core_capabilities", "_core_ask"] {
         assert!(flat.contains(&format!("def {core}(self")), "{core}: {out}");
     }
-    // Without a retry wrapper the declared proxy binds `conn_options` itself: no view.
+    // The declared proxy binds `conn_options` itself: no view of the provider.
     assert!(!out.contains("_core_with_conn_options") && !out.contains("class _PConn"), "{out}");
     for want in [
         "async def _ask_impl(self, text: str, *, language: NotGivenOr[str] = NOT_GIVEN, conn_options: APIConnectOptions ) -> Caps: ...",
