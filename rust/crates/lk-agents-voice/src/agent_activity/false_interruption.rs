@@ -104,19 +104,16 @@ mod paused_speech {
             true
         }
 
-        /// `_on_turn_settled`: `true` when the pending verdict resolves now. A turn torn down
-        /// instead of decided does not resume ("closing releases the pause itself").
+        /// `_on_turn_settled`: `true` when the pending verdict resolves now: the turn was decided,
+        /// or torn down (the host's `clear_user_turn`, or a close, which releases the pause
+        /// itself and is the caller's to tell apart).
         pub fn turn_settled(&mut self, settled: TurnSettled) -> bool {
             if !self.false_interruption_pending {
                 return false;
             }
             match settled {
                 TurnSettled::Superseded => false,
-                TurnSettled::TornDown => {
-                    self.false_interruption_pending = false;
-                    false
-                }
-                TurnSettled::Decided => {
+                TurnSettled::TornDown | TurnSettled::Decided => {
                     self.false_interruption_pending = false;
                     true
                 }
@@ -608,10 +605,13 @@ impl Driver {
         }
     }
 
-    /// `_on_turn_settled`. A no-op unless the timeout is already waiting on a turn; a turn torn
-    /// down instead of decided does not resume ("closing releases the pause itself").
+    /// `_on_turn_settled`. A no-op unless the timeout is already waiting on a turn. A turn torn
+    /// down by the close does not resume: closing releases the pause itself. One the host cleared
+    /// does: the reference leaves that pause to the close too, and the agent silent until then.
     pub(crate) fn on_turn_settled(&mut self, now: Ts, settled: TurnSettled, out: &mut Out) {
-        if self.activity.paused_speech.turn_settled(settled) {
+        if self.activity.paused_speech.turn_settled(settled)
+            && !(settled == TurnSettled::TornDown && self.session.closing.is_some())
+        {
             self.on_false_interruption(now, out);
         }
     }
@@ -794,5 +794,23 @@ impl Driver {
             false
         });
         self.activity.interrupt_waiters = waiters;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: a pause whose verdict waits on an open turn left for ever when the host clears the
+    // turn (`clear_user_turn`): the agent paused for the person stays silent until the close
+    // (survey seed 4488).
+    #[test]
+    fn a_cleared_turn_resolves_the_pause_waiting_on_it() {
+        let cfg = AgentSessionOptions::default();
+        let mut paused = PausedSpeech::new(&cfg, AudioOutputCapabilities::default(), true);
+        paused.update_paused_speech(SpeechId(1), AgentState::Speaking, Duration::ZERO);
+        paused.false_interruption_timer_armed();
+        assert!(!paused.false_interruption_timed_out(true), "the open turn owns the verdict");
+        assert!(paused.turn_settled(TurnSettled::TornDown), "a torn-down turn resolves it");
     }
 }
