@@ -167,14 +167,24 @@ class STT(stt.STT):
     ) -> SpeechStream:
         return SpeechStream(
             stt=self,
+            params=self._params,
+            client=self._client,
             conn_options=conn_options,
         )
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, *, stt: STT, conn_options: APIConnectOptions) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
-        self._rtzr_stt: STT = stt
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        params: _STTOptions,
+        client: RTZROpenAPIClient,
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=params.sample_rate)
+        self._params = params
+        self._client = client
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._state = _StreamState.IDLE
@@ -184,31 +194,29 @@ class SpeechStream(stt.SpeechStream):
         self._idle_task: asyncio.Task[None] | None = None
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        config = self._rtzr_stt._client.build_config(
-            model_name=self._rtzr_stt._params.model_name,
-            domain=self._rtzr_stt._params.domain,
-            sample_rate=self._rtzr_stt._params.sample_rate,
-            encoding=self._rtzr_stt._params.encoding,
-            epd_time=self._rtzr_stt._params.epd_time,
-            noise_threshold=self._rtzr_stt._params.noise_threshold,
-            active_threshold=self._rtzr_stt._params.active_threshold,
-            use_punctuation=self._rtzr_stt._params.use_punctuation,
-            keywords=self._rtzr_stt._params.keywords,
+        config = self._client.build_config(
+            model_name=self._params.model_name,
+            domain=self._params.domain,
+            sample_rate=self._params.sample_rate,
+            encoding=self._params.encoding,
+            epd_time=self._params.epd_time,
+            noise_threshold=self._params.noise_threshold,
+            active_threshold=self._params.active_threshold,
+            use_punctuation=self._params.use_punctuation,
+            keywords=self._params.keywords,
         )
 
         try:
-            ws = await self._rtzr_stt._client.connect_websocket(
-                config, conn_options=self._conn_options
-            )
+            ws = await self._client.connect_websocket(config, conn_options=self._conn_options)
             logger.debug(
                 "RTZR STT WS connected (model=%s, sr=%s, epd=%.2fs, "
                 "noise=%.2f, active=%.2f, punct=%s)",
-                self._rtzr_stt._params.model_name,
-                self._rtzr_stt._params.sample_rate,
-                self._rtzr_stt._params.epd_time,
-                self._rtzr_stt._params.noise_threshold,
-                self._rtzr_stt._params.active_threshold,
-                self._rtzr_stt._params.use_punctuation,
+                self._params.model_name,
+                self._params.sample_rate,
+                self._params.epd_time,
+                self._params.noise_threshold,
+                self._params.active_threshold,
+                self._params.use_punctuation,
             )
             return ws
         except asyncio.TimeoutError as e:
@@ -305,9 +313,9 @@ class SpeechStream(stt.SpeechStream):
     @utils.log_exceptions(logger=logger)
     async def _send_audio_task(self) -> None:
         audio_bstream = utils.audio.AudioByteStream(
-            sample_rate=self._rtzr_stt._params.sample_rate,
+            sample_rate=self._params.sample_rate,
             num_channels=1,
-            samples_per_channel=self._rtzr_stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
+            samples_per_channel=self._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
         )
 
         has_ended = False
@@ -417,7 +425,7 @@ class SpeechStream(stt.SpeechStream):
                 alternatives=[
                     stt.SpeechData(
                         text=text,
-                        language=self._rtzr_stt._params.language,
+                        language=self._params.language,
                         start_time=start_time + self.start_time_offset,
                         end_time=start_time + duration + self.start_time_offset,
                         words=self._parse_words(words) if words else None,
