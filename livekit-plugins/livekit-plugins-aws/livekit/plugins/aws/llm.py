@@ -18,9 +18,9 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from aiobotocore.session import AioSession  # type: ignore
-from botocore.config import Config  # type: ignore
-from botocore.exceptions import ClientError  # type: ignore
+from aiobotocore.config import AioConfig
+from aiobotocore.session import AioSession
+from botocore.exceptions import ClientError
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
@@ -33,10 +33,13 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import _resolve_session
+from .utils import resolve_session
 
 if TYPE_CHECKING:
-    import aioboto3  # type: ignore
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        ConverseStreamOutputTypeDef,
+        SystemContentBlockTypeDef,
+    )
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
@@ -109,7 +112,7 @@ class LLM(llm.LLM):
         cache_system: bool = False,
         cache_tools: bool = False,
         supports_sampling_params: NotGivenOr[bool] = NOT_GIVEN,
-        session: AioSession | aioboto3.Session | None = None,
+        session: AioSession | None = None,
     ) -> None:
         """
         Create a new instance of AWS Bedrock LLM.
@@ -141,14 +144,13 @@ class LLM(llm.LLM):
                 model ID, which cannot cover application inference-profile ARNs that hide the
                 underlying model name — set False for those profiles to have sampling parameters
                 dropped instead of triggering a ValidationException. Defaults to NOT_GIVEN (auto-detect).
-            session (AioSession, optional): Optional aiobotocore session to use. Passing a legacy
-                aioboto3.Session is deprecated but still accepted.
+            session (AioSession, optional): Optional aiobotocore session to use.
         """  # noqa: E501
         super().__init__()
 
         self._sampling_params_warned = False
         self._forced_tool_choice_warned = False
-        self._session = _resolve_session(session)
+        self._session = resolve_session(session)
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
                 self._session.set_credentials(api_key, api_secret)
@@ -213,7 +215,7 @@ class LLM(llm.LLM):
             # When the caller wants no tools for this turn, drop toolConfig entirely;
             # orphan toolUse/toolResult blocks in history are stripped below so
             # Bedrock doesn't reject the request.
-            if is_given(effective_tool_choice) and effective_tool_choice == "none":
+            if isinstance(effective_tool_choice, str) and effective_tool_choice == "none":
                 return None
 
             tools_list = llm.ToolContext(tools).parse_function_tools("aws")
@@ -221,18 +223,14 @@ class LLM(llm.LLM):
                 tools_list.append({"cachePoint": {"type": "default"}})
 
             tool_config: dict[str, Any] = {"tools": tools_list}
-            if is_given(effective_tool_choice):
-                if (
-                    isinstance(effective_tool_choice, dict)
-                    and effective_tool_choice.get("type") == "function"
-                ):
-                    tool_config["toolChoice"] = {
-                        "tool": {"name": effective_tool_choice["function"]["name"]}
-                    }
-                elif effective_tool_choice == "required":
-                    tool_config["toolChoice"] = {"any": {}}
-                elif effective_tool_choice == "auto":
-                    tool_config["toolChoice"] = {"auto": {}}
+            if isinstance(effective_tool_choice, dict):
+                tool_config["toolChoice"] = {
+                    "tool": {"name": effective_tool_choice["function"]["name"]}
+                }
+            elif effective_tool_choice == "required":
+                tool_config["toolChoice"] = {"any": {}}
+            elif effective_tool_choice == "auto":
+                tool_config["toolChoice"] = {"auto": {}}
 
             forced = tool_config.get("toolChoice", {}).keys() & {"any", "tool"}
             if forced and _model_matches(self._opts.model, _MODELS_REJECTING_FORCED_TOOL_CHOICE):
@@ -257,7 +255,7 @@ class LLM(llm.LLM):
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
-            system_messages: list[dict[str, str | dict]] = [
+            system_messages: list[SystemContentBlockTypeDef] = [
                 {"text": content} for content in extra_data.system_messages
             ]
             if self._opts.cache_system:
@@ -325,13 +323,14 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            config = Config(
+            config = AioConfig(
                 user_agent_extra="x-client-framework:livekit-plugins-aws",
                 connect_timeout=self._conn_options.connect_timeout,
                 read_timeout=self._conn_options.read_timeout,
                 retries={"mode": "standard", "total_max_attempts": 1},
             )
-            async with self._session.create_client("bedrock-runtime", config=config) as client:
+            # Other services in this SDK overload set have no generated return stub.
+            async with self._session.create_client("bedrock-runtime", config=config) as client:  # pyright: ignore[reportUnknownMemberType]
                 try:
                     response = await client.converse_stream(**self._opts)
                 except ClientError as e:
@@ -369,7 +368,9 @@ class LLMStream(llm.LLMStream):
                 retryable=retryable,
             ) from e
 
-    def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
+    def _parse_chunk(
+        self, request_id: str, chunk: ConverseStreamOutputTypeDef
+    ) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
             start = chunk["contentBlockStart"]["start"]
             if "toolUse" in start:
@@ -381,6 +382,8 @@ class LLMStream(llm.LLMStream):
         elif "contentBlockDelta" in chunk:
             delta = chunk["contentBlockDelta"]["delta"]
             if "toolUse" in delta:
+                if self._fnc_raw_arguments is None:
+                    raise APIConnectionError("Bedrock sent tool arguments before a tool start")
                 self._fnc_raw_arguments += delta["toolUse"]["input"]
             elif "text" in delta:
                 return llm.ChatChunk(

@@ -18,7 +18,7 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
 from livekit.agents import (
@@ -35,36 +35,19 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .utils import DEFAULT_REGION
 
-try:
-    from aws_sdk_transcribe_streaming.client import (
-        AsyncTranscribeStreamingClient as TranscribeStreamingClient,
-    )
-    from aws_sdk_transcribe_streaming.config import AsyncTranscribeStreamingConfig as Config
-    from aws_sdk_transcribe_streaming.models import (
-        AudioEvent,
-        AudioStream,
-        AudioStreamAudioEvent,
-        BadRequestException,
+if TYPE_CHECKING:
+    # The SDK ships annotated namespace modules without a recognized typing marker.
+    from aws_sdk_transcribe_streaming.models import (  # pyright: ignore[reportMissingTypeStubs]
         Result,
-        StartStreamTranscriptionInput,
         TranscriptEvent,
-        TranscriptResultStream,
     )
-    from smithy_aws_core.identity import (
-        AWSCredentialsIdentity,
-        ContainerCredentialsResolver,
-        EnvironmentCredentialsResolver,
-        IMDSCredentialsResolver,
-        StaticCredentialsResolver,
-    )
-    from smithy_core.aio.identity import ChainedIdentityResolver
-    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
-    from smithy_core.aio.retries import StandardRetryStrategy
     from smithy_http.aio.crt import AWSCRTHTTPClient
 
-    _AWS_SDK_AVAILABLE = True
+try:
+    # The SDK ships annotated namespace modules without a recognized typing marker.
+    import aws_sdk_transcribe_streaming as _transcribe_sdk  # pyright: ignore[reportMissingTypeStubs]
 except ImportError:
-    _AWS_SDK_AVAILABLE = False
+    _transcribe_sdk = None
 
 
 @dataclass
@@ -133,7 +116,7 @@ class STT(stt.STT):
             )
         )
 
-        if not _AWS_SDK_AVAILABLE:
+        if _transcribe_sdk is None:
             raise ImportError(
                 "The 'aws_sdk_transcribe_streaming' package is not installed. "
                 "This implementation requires Python 3.12+ and the 'aws_sdk_transcribe_streaming' dependency."
@@ -237,6 +220,38 @@ class SpeechStream(stt.SpeechStream):
             await self._http_client.close()
 
     async def _run(self) -> None:
+        # The SDK ships annotated namespace modules without a recognized typing marker.
+        from aws_sdk_transcribe_streaming.client import (  # pyright: ignore[reportMissingTypeStubs]
+            AsyncTranscribeStreamingClient as TranscribeStreamingClient,
+        )
+
+        # The SDK ships annotated namespace modules without a recognized typing marker.
+        from aws_sdk_transcribe_streaming.config import (
+            AsyncTranscribeStreamingConfig as Config,  # pyright: ignore[reportMissingTypeStubs]
+        )
+
+        # The SDK ships annotated namespace modules without a recognized typing marker.
+        from aws_sdk_transcribe_streaming.models import (  # pyright: ignore[reportMissingTypeStubs]
+            AudioEvent,
+            AudioStream,
+            AudioStreamAudioEvent,
+            BadRequestException,
+            StartStreamTranscriptionInput,
+            TranscriptResultStream,
+            TranscriptResultStreamTranscriptEvent,
+        )
+        from smithy_aws_core.identity import (
+            AWSCredentialsIdentity,
+            ContainerCredentialsResolver,
+            EnvironmentCredentialsResolver,
+            IMDSCredentialsResolver,
+            StaticCredentialsResolver,
+        )
+        from smithy_core.aio.identity import ChainedIdentityResolver
+        from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+        from smithy_core.aio.retries import StandardRetryStrategy
+        from smithy_http.aio.crt import AWSCRTHTTPClient
+
         while True:
             # a restarted attempt needs its own transport: the pooled HTTP/2 connection
             # of the finished stream cannot carry a second StartStreamTranscription
@@ -266,7 +281,8 @@ class SpeechStream(stt.SpeechStream):
                 config_kwargs["aws_credentials_identity_resolver"] = ChainedIdentityResolver(
                     resolvers=(
                         StaticCredentialsResolver(),
-                        EnvironmentCredentialsResolver(),
+                        # Smithy's constructor has no return annotation in the published SDK.
+                        EnvironmentCredentialsResolver(),  # type: ignore[no-untyped-call]
                         ContainerCredentialsResolver(http_client=self._http_client),
                         IMDSCredentialsResolver(http_client=self._http_client),
                     )
@@ -326,10 +342,11 @@ class SpeechStream(stt.SpeechStream):
                     filtered_config[k] = v
                 elif isinstance(v, (int, float)):
                     filtered_config[k] = v
-                elif v is not None and is_given(v):
+                elif is_given(v):
                     filtered_config[k] = v
 
-            tasks: list[asyncio.Task[Any]] = []
+            tasks: list[asyncio.Task[None]] = []
+            gather_future: asyncio.Future[list[None]] | None = None
 
             try:
                 stream = await client.start_stream_transcription(
@@ -352,7 +369,7 @@ class SpeechStream(stt.SpeechStream):
                                 )
                                 self._audio_duration += frame.duration
                                 self._maybe_emit_recognition_usage()
-                            elif isinstance(frame, self.Flush):
+                            else:
                                 self._emit_recognition_usage()
                     finally:
                         self._emit_recognition_usage()
@@ -372,7 +389,7 @@ class SpeechStream(stt.SpeechStream):
                 ) -> None:
                     try:
                         async for event in output_stream:
-                            if isinstance(event.value, TranscriptEvent):
+                            if isinstance(event, TranscriptResultStreamTranscriptEvent):
                                 self._process_transcript_event(event.value)
                     except BadRequestException as e:
                         if (
@@ -424,8 +441,9 @@ class SpeechStream(stt.SpeechStream):
                         pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
-                with contextlib.suppress(Exception):
-                    await gather_future
+                if gather_future is not None:
+                    with contextlib.suppress(Exception):
+                        await gather_future
 
     def _maybe_emit_recognition_usage(self) -> None:
         if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
@@ -452,10 +470,10 @@ class SpeechStream(stt.SpeechStream):
 
         stream = transcript_event.transcript.results
         for resp in stream:
-            if resp.start_time is not None and resp.start_time == 0.0:
+            if resp.start_time == 0.0:
                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
-            if resp.end_time is not None and resp.end_time > 0.0:
+            if resp.end_time > 0.0:
                 if resp.is_partial:
                     self.send(
                         stt.SpeechEvent(
@@ -493,12 +511,12 @@ class SpeechStream(stt.SpeechStream):
             language=LanguageCode(detected_lang),
             start_time=(resp.start_time or 0.0) + self.start_time_offset,
             end_time=(resp.end_time or 0.0) + self.start_time_offset,
-            text=resp.alternatives[0].transcript if resp.alternatives else "",
+            text=(resp.alternatives[0].transcript or "") if resp.alternatives else "",
             confidence=confidence,
             source_languages=source_languages,
             words=[
                 TimedString(
-                    text=item.content,
+                    text=item.content or "",
                     start_time=item.start_time + self.start_time_offset,
                     end_time=item.end_time + self.start_time_offset,
                     start_time_offset=self.start_time_offset,

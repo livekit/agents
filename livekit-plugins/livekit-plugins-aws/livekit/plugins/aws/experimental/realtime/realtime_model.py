@@ -1,5 +1,3 @@
-# mypy: disable-error-code=unused-ignore
-
 from __future__ import annotations
 
 import asyncio
@@ -10,31 +8,28 @@ import os
 import time
 import uuid
 import weakref
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import boto3
 
-try:
-    from aws_sdk_bedrock_runtime.client import (
-        AsyncBedrockRuntimeClient as _BedrockRuntimeClient,
-        InvokeModelWithBidirectionalStreamOperationInput,
-    )
-    from aws_sdk_bedrock_runtime.config import AsyncBedrockRuntimeConfig as _BedrockRuntimeConfig
+# The SDK ships annotated namespace modules without a recognized typing marker.
+from aws_sdk_bedrock_runtime.client import (  # pyright: ignore[reportMissingTypeStubs]
+    AsyncBedrockRuntimeClient,
+    InvokeModelWithBidirectionalStreamOperationInput,
+)
 
-    _BEDROCK_CONFIG_USES_RESOLVE = True
-except ImportError:  # aws-sdk-bedrock-runtime < 0.10
-    from aws_sdk_bedrock_runtime.client import (
-        BedrockRuntimeClient as _BedrockRuntimeClient,
-        InvokeModelWithBidirectionalStreamOperationInput,
-    )
-    from aws_sdk_bedrock_runtime.config import Config as _BedrockRuntimeConfig
+# The SDK ships annotated namespace modules without a recognized typing marker.
+from aws_sdk_bedrock_runtime.config import (
+    AsyncBedrockRuntimeConfig,  # pyright: ignore[reportMissingTypeStubs]
+)
 
-    _BEDROCK_CONFIG_USES_RESOLVE = False
-from aws_sdk_bedrock_runtime.models import (
+# The SDK ships annotated namespace modules without a recognized typing marker.
+from aws_sdk_bedrock_runtime.models import (  # pyright: ignore[reportMissingTypeStubs]
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
+    InvokeModelWithBidirectionalStreamOutputChunk,
     ModelErrorException,
     ModelNotReadyException,
     ModelStreamErrorException,
@@ -42,6 +37,7 @@ from aws_sdk_bedrock_runtime.models import (
     ThrottlingException,
     ValidationException,
 )
+from pydantic import ValidationError as PayloadValidationError
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
@@ -50,6 +46,7 @@ from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
 from livekit.agents import (
+    APIConnectionError,
     APIStatusError,
     llm,
     utils,
@@ -57,17 +54,18 @@ from livekit.agents import (
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
 from ...log import logger
 from .events import (
     SonicEventBuilder as seb,
+    SonicOutputEvent,
     Tool,
     ToolConfiguration,
     ToolInputSchema,
     ToolSpec,
 )
 from .pretty_printer import AnsiColors, log_event_data, log_message
+from .turn_tracker import TurnTracker
 from .types import MODALITIES, REALTIME_MODELS, SONIC1_VOICES, SONIC2_VOICES, TURN_DETECTION
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
@@ -189,10 +187,10 @@ class _ResponseGeneration:
         response_id (str): LiveKit response_id for the assistant's response.
         message_gen (_MessageGeneration | None): Current message generation for assistant output.
         content_id_map (dict[str, str]): Map Nova Sonic contentId -> type (USER/ASSISTANT/TOOL).
-        _created_timestamp (float): Wall-clock time when the generation record was created.
-        _first_token_timestamp (float | None): Wall-clock time of first token emission.
-        _completed_timestamp (float | None): Wall-clock time when the turn fully completed.
-        _restart_attempts (int): Number of restart attempts for this specific completion.
+        created_timestamp (float): Wall-clock time when the generation record was created.
+        first_token_timestamp (float | None): Wall-clock time of first token emission.
+        completed_timestamp (float | None): Wall-clock time when the turn fully completed.
+        restart_attempts (int): Number of restart attempts for this specific completion.
     """  # noqa: E501
 
     completion_id: str
@@ -200,16 +198,16 @@ class _ResponseGeneration:
     function_ch: utils.aio.Chan[llm.FunctionCall]
     response_id: str
     message_gen: _MessageGeneration | None = None
-    content_id_map: dict[str, str] = field(default_factory=dict)
-    _created_timestamp: float = field(default_factory=time.time)
-    _first_token_timestamp: float | None = None
-    _completed_timestamp: float | None = None
-    _restart_attempts: int = 0
-    _done_fut: asyncio.Future[None] | None = None  # Resolved when generation completes
-    _emitted: bool = False  # Track if generation_created event was emitted
+    content_id_map: dict[str, str] = field(default_factory=dict[str, str])
+    created_timestamp: float = field(default_factory=time.time)
+    first_token_timestamp: float | None = None
+    completed_timestamp: float | None = None
+    restart_attempts: int = 0
+    done_fut: asyncio.Future[None] | None = None  # Resolved when generation completes
+    emitted: bool = False  # Track if generation_created event was emitted
 
 
-class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
+class Boto3CredentialsResolver(IdentityResolver[AWSCredentialsIdentity, Mapping[str, object]]):
     """IdentityResolver implementation that sources AWS credentials from boto3.
 
     The resolver delegates to the default boto3.Session() credential chain which
@@ -219,11 +217,11 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
     """
 
     def __init__(self) -> None:
-        self.session = boto3.Session()  # type: ignore[attr-defined]
+        self.session = boto3.Session()
         self._cached_identity: AWSCredentialsIdentity | None = None
         self._cached_expiry: float | None = None
 
-    async def get_identity(self, **kwargs: Any) -> AWSCredentialsIdentity:
+    async def get_identity(self, **kwargs: object) -> AWSCredentialsIdentity:
         """Asynchronously resolve AWS credentials.
 
         This method is invoked by the Bedrock runtime client whenever a new request needs to be
@@ -305,7 +303,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
             float | None: Unix timestamp when credentials expire, or None for static credentials.
         """
         try:
-            session = boto3.Session()  # type: ignore[attr-defined]
+            session = boto3.Session()
             credentials = session.get_credentials()
             if not credentials:
                 return None
@@ -532,7 +530,9 @@ class RealtimeModel(llm.RealtimeModel):
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(
+            self, options=self._opts, generate_reply_timeout=self._generate_reply_timeout
+        )
         self._sessions.add(sess)
         return sess
 
@@ -557,7 +557,13 @@ class RealtimeSession(  # noqa: F811
     _ResponseGeneration state in sync.
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        options: _RealtimeOptions,
+        generate_reply_timeout: float,
+    ) -> None:
         """Create and wire-up a new realtime session.
 
         Args:
@@ -566,12 +572,15 @@ class RealtimeSession(  # noqa: F811
         """
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
+        self._opts = options
+        self._generate_reply_timeout = generate_reply_timeout
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
-            model=self._realtime_model._model,
+            model=self._realtime_model.model,
         )
         self._input_resampler: rtc.AudioResampler | None = None
+        self._input_sample_rate: int | None = None
         self._bstream = utils.audio.AudioByteStream(
             DEFAULT_INPUT_SAMPLE_RATE, DEFAULT_CHANNELS, samples_per_channel=DEFAULT_CHUNK_SIZE
         )
@@ -639,7 +648,7 @@ class RealtimeSession(  # noqa: F811
             "usage": self._handle_usage_event,
             "other_event": self._handle_other_event,
         }
-        self._turn_tracker = _TurnTracker(
+        self._turn_tracker = TurnTracker(
             cast(Callable[[str, Any], None], self.emit),
             self.emit_generation_event,
         )
@@ -651,36 +660,16 @@ class RealtimeSession(  # noqa: F811
 
     @utils.log_exceptions(logger=logger)
     async def _initialize_client(self) -> None:
-        """Instantiate the Bedrock runtime client.
-
-        aws-sdk-bedrock-runtime 0.10 renamed ``Config`` / ``BedrockRuntimeClient``
-        to the async types and requires ``await AsyncBedrockRuntimeConfig.resolve``.
-        0.11 then dropped the old names entirely. Keep both construction paths so
-        the locked 0.7 extra and a fresh pip install of 0.11 both import.
-        See https://github.com/livekit/agents/issues/6994.
-
-        Sonic streams bidirectionally, so the transport has to be the CRT client.
-        0.11 defaults to aiohttp, which does not support duplex.
-        """
-        kwargs: dict[str, Any] = {
-            "endpoint_uri": (
-                f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com"
-            ),
-            "region": self._realtime_model._opts.region,
-            "aws_credentials_identity_resolver": _get_credentials_resolver(),
-            "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
-            "transport": AWSCRTHTTPClient(),
-            "retry_strategy": StandardRetryStrategy(max_attempts=1),
-        }
-        if _BEDROCK_CONFIG_USES_RESOLVE:
-            config = await _BedrockRuntimeConfig.resolve(**kwargs)
-        else:
-            from aws_sdk_bedrock_runtime.config import HTTPAuthSchemeResolver, SigV4AuthScheme
-
-            kwargs["auth_scheme_resolver"] = HTTPAuthSchemeResolver()
-            kwargs["auth_schemes"] = {"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")}
-            config = _BedrockRuntimeConfig(**kwargs)
-        self._bedrock_client = _BedrockRuntimeClient(config=config)
+        """Create the duplex Bedrock client with SDK retries disabled."""
+        config = await AsyncBedrockRuntimeConfig.resolve(
+            endpoint_uri=f"https://bedrock-runtime.{self._opts.region}.amazonaws.com",
+            region=self._opts.region,
+            aws_credentials_identity_resolver=_get_credentials_resolver(),
+            user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
+            transport=AWSCRTHTTPClient(),
+            retry_strategy=StandardRetryStrategy(max_attempts=1),
+        )
+        self._bedrock_client = AsyncBedrockRuntimeClient(config=config)
 
     def _calculate_session_duration(self) -> float:
         """Calculate session duration based on credential expiry and AWS 8-min limit."""
@@ -770,10 +759,10 @@ class RealtimeSession(  # noqa: F811
                 for event in self._event_builder.create_prompt_end_block():
                     await self._send_raw_event(event)
 
-            # Step 4: Wait for completionEnd and let _done_fut resolve
-            if self._current_generation and self._current_generation._done_fut:
+            # Step 4: Wait for completionEnd and let done_fut resolve
+            if self._current_generation and self._current_generation.done_fut:
                 try:
-                    await asyncio.wait_for(self._current_generation._done_fut, timeout=2.0)
+                    await asyncio.wait_for(self._current_generation.done_fut, timeout=2.0)
                     logger.debug("[SESSION] Generation completed (completionEnd received)")
                 except asyncio.TimeoutError:
                     logger.warning("[SESSION] Timeout waiting for completionEnd, proceeding anyway")
@@ -833,8 +822,7 @@ class RealtimeSession(  # noqa: F811
         # Step 5: Close the stream (close events already sent in _session_recycle_timer)
         if self._stream_response:
             try:
-                if not self._stream_response.input_stream.closed:
-                    await self._stream_response.input_stream.close()
+                await self._stream_response.input_stream.close()
             except Exception as e:
                 logger.debug(f"[SESSION] Error closing stream (expected): {e}")
 
@@ -844,7 +832,7 @@ class RealtimeSession(  # noqa: F811
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
-            model=self._realtime_model._model,
+            model=self._realtime_model.model,
         )
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._audio_input_chan = utils.aio.Chan[bytes]()
@@ -894,7 +882,7 @@ class RealtimeSession(  # noqa: F811
                 "error",
                 llm.RealtimeModelError(
                     timestamp=time.monotonic(),
-                    label=self._realtime_model._label,
+                    label=self._realtime_model.label,
                     error=APIStatusError(
                         message=err_msg,
                         status_code=500,
@@ -910,22 +898,19 @@ class RealtimeSession(  # noqa: F811
     def _serialize_tool_config(self) -> ToolConfiguration | None:
         """Convert self.tools into the JSON structure expected by Sonic.
 
-        If any tools are registered, the method also harmonises temperature and
-        top_p defaults to Sonic's recommended greedy values (1.0).
-
         Returns:
             ToolConfiguration | None: None when no tools are present, otherwise a complete config block.
         """  # noqa: E501
         tool_cfg = None
         if self.tools.function_tools:
-            tools = []
+            tools: list[Tool] = []
             for name, f in self.tools.function_tools.items():
                 if isinstance(f, llm.FunctionTool):
                     description = f.info.description
                     input_schema = llm.utils.build_legacy_openai_schema(f, internally_tagged=True)[
                         "parameters"
                     ]
-                elif isinstance(f, llm.RawFunctionTool):
+                else:
                     info = f.info
                     description = info.raw_schema.get("description")
                     raw_schema = info.raw_schema
@@ -934,26 +919,20 @@ class RealtimeSession(  # noqa: F811
                         "parameters",
                         raw_schema.get("input_schema", {"type": "object", "properties": {}}),
                     )
-                else:
-                    continue
 
                 tool = Tool(
                     toolSpec=ToolSpec(
                         name=name,
                         description=description or "No description provided",
-                        inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),  # type: ignore
+                        # Pydantic's static constructor uses the alias despite populate_by_name.
+                        inputSchema=ToolInputSchema(json_=json.dumps(input_schema)),  # pyright: ignore[reportCallIssue]
                     )
                 )
                 tools.append(tool)
-            tool_choice = self._tool_choice_adapter(self._realtime_model._opts.tool_choice)
+            tool_choice = self._tool_choice_adapter(self._opts.tool_choice)
             logger.debug(f"TOOL CHOICE: {tool_choice}")
             tool_cfg = ToolConfiguration(tools=tools, toolChoice=tool_choice)
 
-            # recommended to set greedy inference configs for tool calls
-            if not is_given(self._realtime_model.top_p):
-                self._realtime_model._opts.top_p = 1.0
-            if not is_given(self._realtime_model.temperature):
-                self._realtime_model._opts.temperature = 1.0
         return tool_cfg
 
     @utils.log_exceptions(logger=logger)
@@ -993,7 +972,7 @@ class RealtimeSession(  # noqa: F811
                 if self._chat_ctx_ready is None:
                     self._chat_ctx_ready = asyncio.get_running_loop().create_future()
 
-                pending_events: list[asyncio.Future] = []
+                pending_events: list[asyncio.Future[bool]] = []
                 if not self.tools.function_tools:
                     pending_events.append(self._tools_ready)
                 if not self._instructions_ready.done():
@@ -1020,9 +999,7 @@ class RealtimeSession(  # noqa: F811
                             "Chat context not received after 500ms, proceeding with empty chat context"  # noqa: E501
                         )
 
-            logger.info(
-                f"Initializing Bedrock session with realtime options: {self._realtime_model._opts}"
-            )
+            logger.info(f"Initializing Bedrock session with realtime options: {self._opts}")
             # there is a 40-message limit on the chat context
             if len(self._chat_ctx.items) > MAX_MESSAGES:
                 logger.warning(
@@ -1062,15 +1039,15 @@ class RealtimeSession(  # noqa: F811
                     )
 
             init_events, history_events = self._event_builder.create_prompt_start_block(
-                voice_id=self._realtime_model._opts.voice,
+                voice_id=self._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
                 chat_ctx=restart_ctx,
                 tool_configuration=self._serialize_tool_config(),
-                max_tokens=self._realtime_model._opts.max_tokens,
-                top_p=self._realtime_model._opts.top_p,
-                temperature=self._realtime_model._opts.temperature,
-                endpointing_sensitivity=self._realtime_model._opts.turn_detection,
+                max_tokens=self._opts.max_tokens,
+                top_p=self._opts.top_p,
+                temperature=self._opts.temperature,
+                endpointing_sensitivity=self._opts.turn_detection,
             )
 
             # Step 1: Send session init events (session start, prompt start, system prompt)
@@ -1116,7 +1093,6 @@ class RealtimeSession(  # noqa: F811
         except Exception as e:
             logger.debug(f"Failed to initialize stream: {str(e)}")
             raise
-        return self
 
     @utils.log_exceptions(logger=logger)
     def emit_generation_event(self) -> None:
@@ -1134,7 +1110,7 @@ class RealtimeSession(  # noqa: F811
             return
 
         # Log whether this is first or re-emission for tool call
-        if self._current_generation._emitted:
+        if self._current_generation.emitted:
             logger.debug(
                 f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}"
             )
@@ -1143,7 +1119,7 @@ class RealtimeSession(  # noqa: F811
                 f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
             )
 
-        self._current_generation._emitted = True
+        self._current_generation.emitted = True
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -1157,9 +1133,12 @@ class RealtimeSession(  # noqa: F811
             self._pending_generation_fut.set_result(generation_ev)
             self._pending_generation_fut = None
 
-    @utils.log_exceptions(logger=logger)
-    async def _handle_event(self, event_data: dict) -> None:
-        """Dispatch a raw Bedrock event to the corresponding _handle_* method."""
+    async def _handle_event(self, raw_event: object) -> None:
+        """Validate a Bedrock payload before dispatching its known fields."""
+        try:
+            event_data = SonicOutputEvent.model_validate(raw_event)
+        except PayloadValidationError as error:
+            raise APIConnectionError("invalid Nova Sonic event", retryable=False) from error
         event_type = self._event_builder.get_event_type(event_data)
         event_handler = self._event_handlers.get(event_type)
         if event_handler:
@@ -1168,7 +1147,7 @@ class RealtimeSession(  # noqa: F811
         else:
             logger.warning(f"No event handler found for event type: {event_type}")
 
-    async def _handle_completion_start_event(self, event_data: dict) -> None:
+    async def _handle_completion_start_event(self, event_data: SonicOutputEvent) -> None:
         """Handle completionStart - create new generation for this completion cycle."""
         log_event_data(event_data)
         self._create_response_generation()
@@ -1190,12 +1169,12 @@ class RealtimeSession(  # noqa: F811
                 message_ch=utils.aio.Chan(),
                 function_ch=utils.aio.Chan(),
                 response_id=response_id,
-                _done_fut=asyncio.get_running_loop().create_future(),
+                done_fut=asyncio.get_running_loop().create_future(),
             )
             generation_created = True
         else:
             logger.debug(
-                f"[GEN] Generation already exists: response_id={self._current_generation.response_id}, emitted={self._current_generation._emitted}"
+                f"[GEN] Generation already exists: response_id={self._current_generation.response_id}, emitted={self._current_generation.emitted}"
             )
 
         # Always ensure message structure exists (even if generation already exists)
@@ -1233,17 +1212,19 @@ class RealtimeSession(  # noqa: F811
             self.emit_generation_event()
 
     # will be completely ignoring post-ASR text events
-    async def _handle_text_output_content_start_event(self, event_data: dict) -> None:
+    async def _handle_text_output_content_start_event(self, event_data: SonicOutputEvent) -> None:
         """Handle text_output_content_start - track content type."""
+        payload = event_data.event.contentStart
+        assert payload is not None
         log_event_data(event_data)
 
-        role = event_data["event"]["contentStart"]["role"]
+        role = payload.role
 
         # SPECULATIVE text blocks are incremental previews within the same response.
         # Don't close the generation here — keep one generation open per response.
         # Close happens on END_TURN, barge-in, tool call, or completionEnd.
         if role == "ASSISTANT":
-            additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
+            additional_fields = payload.additionalModelFields
             if "SPECULATIVE" in additional_fields:
                 logger.debug("[GEN] ASSISTANT SPECULATIVE text received")
                 self._create_response_generation()  # reuses existing if present
@@ -1253,33 +1234,35 @@ class RealtimeSession(  # noqa: F811
         # Without this check, we crash on interruptions.
         if self._current_generation is None:
             # Track role for events that arrive without a generation
-            content_id = event_data["event"]["contentStart"].get("contentId")
+            content_id = payload.contentId
             if content_id:
                 self._no_gen_content_roles[content_id] = role
             logger.debug("No generation exists - ignoring content_start event")
             return
 
-        content_id = event_data["event"]["contentStart"]["contentId"]
+        content_id = payload.contentId
 
         # Track what type of content this is
         if role == "USER":
             self._current_generation.content_id_map[content_id] = "USER_ASR"
         elif role == "ASSISTANT":
-            additional_fields = event_data["event"]["contentStart"].get("additionalModelFields", "")
+            additional_fields = payload.additionalModelFields
             if "SPECULATIVE" in additional_fields:
                 self._current_generation.content_id_map[content_id] = "ASSISTANT_TEXT"
             elif "FINAL" in additional_fields:
                 self._current_generation.content_id_map[content_id] = "ASSISTANT_FINAL"
 
-    async def _handle_text_output_content_event(self, event_data: dict) -> None:
+    async def _handle_text_output_content_event(self, event_data: SonicOutputEvent) -> None:
         """Stream partial text tokens into the current generation."""
+        payload = event_data.event.textOutput
+        assert payload is not None
         log_event_data(event_data)
 
         if self._current_generation is None:
             # No active generation. This happens for USER ASR and ASSISTANT FINAL
             # text arriving between turns.
-            content_id = event_data["event"]["textOutput"]["contentId"]
-            text_content = event_data["event"]["textOutput"]["content"]
+            content_id = payload.contentId
+            text_content = payload.content
 
             if text_content == BARGE_IN_SIGNAL:
                 return
@@ -1291,8 +1274,8 @@ class RealtimeSession(  # noqa: F811
                 self._update_chat_ctx(role="assistant", text_content=text_content)
             return
 
-        content_id = event_data["event"]["textOutput"]["contentId"]
-        text_content = event_data["event"]["textOutput"]["content"]
+        content_id = payload.contentId
+        text_content = payload.content
 
         # Nova Sonic's automatic barge-in detection
         if text_content == BARGE_IN_SIGNAL:
@@ -1316,8 +1299,8 @@ class RealtimeSession(  # noqa: F811
 
         elif content_type == "ASSISTANT_TEXT":
             # Set first token timestamp if not already set
-            if self._current_generation._first_token_timestamp is None:
-                self._current_generation._first_token_timestamp = time.time()
+            if self._current_generation.first_token_timestamp is None:
+                self._current_generation.first_token_timestamp = time.time()
 
             # Stream text to LiveKit
             if self._current_generation.message_gen:
@@ -1371,12 +1354,14 @@ class RealtimeSession(  # noqa: F811
                     self._chat_ctx.truncate(max_items=MAX_MESSAGES)
 
     # cannot rely on this event for user b/c stopReason=PARTIAL_TURN always for user
-    async def _handle_text_output_content_end_event(self, event_data: dict) -> None:
+    async def _handle_text_output_content_end_event(self, event_data: SonicOutputEvent) -> None:
         """Handle text content end."""
         log_event_data(event_data)
 
-    async def _handle_tool_output_content_start_event(self, event_data: dict) -> None:
+    async def _handle_tool_output_content_start_event(self, event_data: SonicOutputEvent) -> None:
         """Track tool content start."""
+        payload = event_data.event.contentStart
+        assert payload is not None
         log_event_data(event_data)
 
         # Ensure generation exists
@@ -1385,38 +1370,39 @@ class RealtimeSession(  # noqa: F811
         if self._current_generation is None:
             return
 
-        content_id = event_data["event"]["contentStart"]["contentId"]
+        content_id = payload.contentId
         self._current_generation.content_id_map[content_id] = "TOOL"
 
-    async def _handle_tool_output_content_event(self, event_data: dict) -> None:
+    async def _handle_tool_output_content_event(self, event_data: SonicOutputEvent) -> None:
         """Execute the referenced tool locally and queue results."""
+        payload = event_data.event.toolUse
+        assert payload is not None
         log_event_data(event_data)
 
         if self._current_generation is None:
             logger.warning("tool_output_content received without active generation")
             return
 
-        tool_use_id = event_data["event"]["toolUse"]["toolUseId"]
-        tool_name = event_data["event"]["toolUse"]["toolName"]
-        args = event_data["event"]["toolUse"]["content"]
+        tool_use_id = payload.toolUseId
+        tool_name = payload.toolName
+        args = payload.content
 
         # Nova Sonic sometimes double-encodes tool arguments: the outer JSON parse
         # yields a string whose contents are themselves a JSON object string
         # (e.g. "\"{\\\"order_id\\\":\\\"1234\\\"}\"").
         # Only peel one layer when the inner string is a JSON object so that
         # legitimate string-valued schemas (e.g. content="hello") are preserved.
-        if isinstance(args, str):
-            try:
-                parsed = json.loads(args)
-                if isinstance(parsed, str):
-                    try:
-                        inner = json.loads(parsed)
-                        if isinstance(inner, dict):
-                            args = parsed
-                    except (json.JSONDecodeError, TypeError):
-                        pass  # inner string is a plain value, leave args untouched
-            except (json.JSONDecodeError, TypeError):
-                pass
+        try:
+            parsed = json.loads(args)
+            if isinstance(parsed, str):
+                try:
+                    inner = json.loads(parsed)
+                    if isinstance(inner, dict):
+                        args = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass  # inner string is a plain value, leave args untouched
+        except (json.JSONDecodeError, TypeError):
+            pass
 
         # Emit function call to LiveKit framework
         self._current_generation.function_ch.send_nowait(
@@ -1432,26 +1418,30 @@ class RealtimeSession(  # noqa: F811
         logger.debug("Closing generation to allow tool result delivery")
         self._close_current_generation()
 
-    async def _handle_tool_output_content_end_event(self, event_data: dict) -> None:
+    async def _handle_tool_output_content_end_event(self, event_data: SonicOutputEvent) -> None:
         log_event_data(event_data)
 
-    async def _handle_audio_output_content_start_event(self, event_data: dict) -> None:
+    async def _handle_audio_output_content_start_event(self, event_data: SonicOutputEvent) -> None:
         """Track audio content start."""
+        payload = event_data.event.contentStart
+        assert payload is not None
         if self._current_generation is not None:
             log_event_data(event_data)
-            content_id = event_data["event"]["contentStart"]["contentId"]
+            content_id = payload.contentId
             self._current_generation.content_id_map[content_id] = "ASSISTANT_AUDIO"
 
-    async def _handle_audio_output_content_event(self, event_data: dict) -> None:
+    async def _handle_audio_output_content_event(self, event_data: SonicOutputEvent) -> None:
         """Decode base64 audio from Bedrock and forward it to the audio stream."""
+        payload = event_data.event.audioOutput
+        assert payload is not None
         if self._current_generation is None or self._current_generation.message_gen is None:
             return
 
-        content_id = event_data["event"]["audioOutput"]["contentId"]
+        content_id = payload.contentId
         content_type = self._current_generation.content_id_map.get(content_id)
 
         if content_type == "ASSISTANT_AUDIO":
-            audio_content = event_data["event"]["audioOutput"]["content"]
+            audio_content = payload.content
             audio_bytes = base64.b64decode(audio_content)
             self._current_generation.message_gen.audio_ch.send_nowait(
                 rtc.AudioFrame(
@@ -1464,13 +1454,13 @@ class RealtimeSession(  # noqa: F811
             # Track when we last received audio output (for session recycling)
             self._last_audio_output_time = time.time()
 
-    async def _handle_audio_output_content_end_event(self, event_data: dict) -> None:
+    async def _handle_audio_output_content_end_event(self, event_data: SonicOutputEvent) -> None:
         """Handle audio content end - track END_TURN for session recycling."""
         log_event_data(event_data)
 
         # Check if this is END_TURN (assistant finished speaking)
-        stop_reason = event_data.get("event", {}).get("contentEnd", {}).get("stopReason")
-        if stop_reason == "END_TURN":
+        content_end = event_data.event.contentEnd
+        if content_end is not None and content_end.stopReason == "END_TURN":
             self._audio_end_turn_received = True
             logger.debug("[SESSION] AUDIO END_TURN received - assistant finished speaking")
             self._close_current_generation()
@@ -1481,11 +1471,11 @@ class RealtimeSession(  # noqa: F811
             return
 
         response_id = self._current_generation.response_id
-        was_emitted = self._current_generation._emitted
+        wasemitted = self._current_generation.emitted
 
         # Set completed timestamp
-        if self._current_generation._completed_timestamp is None:
-            self._current_generation._completed_timestamp = time.time()
+        if self._current_generation.completed_timestamp is None:
+            self._current_generation.completed_timestamp = time.time()
 
         # Close message channels
         if self._current_generation.message_gen:
@@ -1500,16 +1490,14 @@ class RealtimeSession(  # noqa: F811
         if not self._current_generation.function_ch.closed:
             self._current_generation.function_ch.close()
 
-        # Resolve _done_fut to signal generation is complete (for session recycling)
-        if self._current_generation._done_fut and not self._current_generation._done_fut.done():
-            self._current_generation._done_fut.set_result(None)
+        # Resolve done_fut to signal generation is complete (for session recycling)
+        if self._current_generation.done_fut and not self._current_generation.done_fut.done():
+            self._current_generation.done_fut.set_result(None)
 
-        logger.debug(
-            f"[GEN] CLOSED generation response_id={response_id}, was_emitted={was_emitted}"
-        )
+        logger.debug(f"[GEN] CLOSED generation response_id={response_id}, wasemitted={wasemitted}")
         self._current_generation = None
 
-    async def _handle_completion_end_event(self, event_data: dict) -> None:
+    async def _handle_completion_end_event(self, event_data: SonicOutputEvent) -> None:
         """Handle completionEnd - close the generation for this completion cycle."""
         log_event_data(event_data)
 
@@ -1518,13 +1506,15 @@ class RealtimeSession(  # noqa: F811
             logger.debug("completionEnd received, closing generation")
             self._close_current_generation()
 
-    async def _handle_other_event(self, event_data: dict) -> None:
+    async def _handle_other_event(self, event_data: SonicOutputEvent) -> None:
         log_event_data(event_data)
 
-    async def _handle_usage_event(self, event_data: dict) -> None:
+    async def _handle_usage_event(self, event_data: SonicOutputEvent) -> None:
+        payload = event_data.event.usageEvent
+        assert payload is not None
         # log_event_data(event_data)
-        input_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["input"]
-        output_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["output"]
+        input_tokens = payload.details.delta.input
+        output_tokens = payload.details.delta.output
 
         # Calculate metrics from timestamps
         duration = 0.0
@@ -1532,52 +1522,52 @@ class RealtimeSession(  # noqa: F811
         tokens_per_second = 0.0
 
         if self._current_generation is not None:
-            created_ts = self._current_generation._created_timestamp
-            first_token_ts = self._current_generation._first_token_timestamp
-            completed_ts = self._current_generation._completed_timestamp
+            created_ts = self._current_generation.created_timestamp
+            first_token_ts = self._current_generation.first_token_timestamp
+            completed_ts = self._current_generation.completed_timestamp
 
             # Calculate TTFT (time to first token)
-            if first_token_ts is not None and isinstance(created_ts, (int, float)):
+            if first_token_ts is not None:
                 ttft = first_token_ts - created_ts
 
             # Calculate duration (total time from creation to completion)
-            if completed_ts is not None and isinstance(created_ts, (int, float)):
+            if completed_ts is not None:
                 duration = completed_ts - created_ts
 
             # Calculate tokens per second
             total_tokens = (
-                input_tokens["speechTokens"]
-                + input_tokens["textTokens"]
-                + output_tokens["speechTokens"]
-                + output_tokens["textTokens"]
+                input_tokens.speechTokens
+                + input_tokens.textTokens
+                + output_tokens.speechTokens
+                + output_tokens.textTokens
             )
             if duration > 0:
                 tokens_per_second = total_tokens / duration
 
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
-            request_id=event_data["event"]["usageEvent"]["completionId"],
+            request_id=payload.completionId,
             timestamp=time.monotonic(),
             duration=duration,
             ttft=ttft,
             cancelled=False,
-            input_tokens=input_tokens["speechTokens"] + input_tokens["textTokens"],
-            output_tokens=output_tokens["speechTokens"] + output_tokens["textTokens"],
-            total_tokens=input_tokens["speechTokens"]
-            + input_tokens["textTokens"]
-            + output_tokens["speechTokens"]
-            + output_tokens["textTokens"],
+            input_tokens=input_tokens.speechTokens + input_tokens.textTokens,
+            output_tokens=output_tokens.speechTokens + output_tokens.textTokens,
+            total_tokens=input_tokens.speechTokens
+            + input_tokens.textTokens
+            + output_tokens.speechTokens
+            + output_tokens.textTokens,
             tokens_per_second=tokens_per_second,
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
-                text_tokens=input_tokens["textTokens"],
-                audio_tokens=input_tokens["speechTokens"],
+                text_tokens=input_tokens.textTokens,
+                audio_tokens=input_tokens.speechTokens,
                 image_tokens=0,
                 cached_tokens=0,
                 cached_tokens_details=None,
             ),
             output_token_details=RealtimeModelMetrics.OutputTokenDetails(
-                text_tokens=output_tokens["textTokens"],
-                audio_tokens=output_tokens["speechTokens"],
+                text_tokens=output_tokens.textTokens,
+                audio_tokens=output_tokens.speechTokens,
                 image_tokens=0,
             ),
             metadata=Metadata(
@@ -1605,9 +1595,13 @@ class RealtimeSession(  # noqa: F811
                         # Stream closed, exit gracefully
                         logger.debug("[SESSION] Stream returned None, exiting")
                         break
-                    if result.value and result.value.bytes_:
+                    if not isinstance(result, InvokeModelWithBidirectionalStreamOutputChunk):
+                        raise APIConnectionError(
+                            "unexpected Nova Sonic output event", retryable=False
+                        )
+                    if result.value.bytes_:
+                        response_data = result.value.bytes_.decode("utf-8")
                         try:
-                            response_data = result.value.bytes_.decode("utf-8")
                             json_data = json.loads(response_data)
                             # logger.debug(f"Received event: {json_data}")
                             await self._handle_event(json_data)
@@ -1662,7 +1656,7 @@ class RealtimeSession(  # noqa: F811
                             "error",
                             llm.RealtimeModelError(
                                 timestamp=time.monotonic(),
-                                label=self._realtime_model._label,
+                                label=self._realtime_model.label,
                                 error=APIStatusError(
                                     message=ve.message,
                                     status_code=400,
@@ -1680,7 +1674,7 @@ class RealtimeSession(  # noqa: F811
                             "error",
                             llm.RealtimeModelError(
                                 timestamp=time.monotonic(),
-                                label=self._realtime_model._label,
+                                label=self._realtime_model.label,
                                 error=APIStatusError(
                                     message=ve.message,
                                     status_code=400,
@@ -1731,7 +1725,7 @@ class RealtimeSession(  # noqa: F811
                         "error",
                         llm.RealtimeModelError(
                             timestamp=time.monotonic(),
-                            label=self._realtime_model._label,
+                            label=self._realtime_model.label,
                             error=APIStatusError(
                                 message=err_msg,
                                 status_code=500,
@@ -1754,7 +1748,7 @@ class RealtimeSession(  # noqa: F811
     async def _restart_session(self, ex: Exception) -> None:
         # Get restart attempts from current generation, or 0 if no generation
         restart_attempts = (
-            self._current_generation._restart_attempts if self._current_generation else 0
+            self._current_generation.restart_attempts if self._current_generation else 0
         )
 
         if restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
@@ -1769,7 +1763,7 @@ class RealtimeSession(  # noqa: F811
                 "error",
                 llm.RealtimeModelError(
                     timestamp=time.monotonic(),
-                    label=self._realtime_model._label,
+                    label=self._realtime_model.label,
                     error=APIStatusError(
                         message=f"Max restart attempts exceeded: {err_msg}",
                         status_code=500,
@@ -1785,8 +1779,8 @@ class RealtimeSession(  # noqa: F811
 
         # Increment restart counter for current generation
         if self._current_generation:
-            self._current_generation._restart_attempts += 1
-            restart_attempts = self._current_generation._restart_attempts
+            self._current_generation.restart_attempts += 1
+            restart_attempts = self._current_generation.restart_attempts
         else:
             restart_attempts = 1
 
@@ -1905,7 +1899,7 @@ class RealtimeSession(  # noqa: F811
                         text = item.raw_text_content
 
                         async def _send_user_text(
-                            text: str = text, fut: asyncio.Future = fut
+                            text: str = text, fut: asyncio.Future[llm.GenerationCreatedEvent] = fut
                         ) -> None:
                             try:
                                 # Wait for bidirectional stream to be fully established
@@ -1967,9 +1961,9 @@ class RealtimeSession(  # noqa: F811
         The recycle is deferred to avoid conflicts with in-flight tool
         results that are still being delivered to the current session.
         """
-        old_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
+        old_tools = set(self._tools.function_tools)
         self._tools = llm.ToolContext(tools)
-        new_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
+        new_tools = set(self._tools.function_tools)
 
         if self._tools.function_tools:
             if self._tools_ready is None:
@@ -2027,12 +2021,13 @@ class RealtimeSession(  # noqa: F811
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         """Ensure mic audio matches Sonic's required sample rate & channels."""
         if self._input_resampler:
-            if frame.sample_rate != self._input_resampler._input_rate:
+            if frame.sample_rate != self._input_sample_rate:
                 self._input_resampler = None
 
         if self._input_resampler is None and (
             frame.sample_rate != DEFAULT_INPUT_SAMPLE_RATE or frame.num_channels != DEFAULT_CHANNELS
         ):
+            self._input_sample_rate = frame.sample_rate
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
                 output_rate=DEFAULT_INPUT_SAMPLE_RATE,
@@ -2096,16 +2091,10 @@ class RealtimeSession(  # noqa: F811
                             val = cast(dict[str, str], task.result())
                             tool_result = val["tool_result"]
                             tool_use_id = val["tool_use_id"]
-                            if not isinstance(tool_result, str):
-                                tool_result = json.dumps(tool_result)
-                            else:
-                                try:
-                                    tool_result = json.loads(tool_result)
-                                except json.JSONDecodeError:
-                                    try:
-                                        tool_result = json.dumps({"tool_result": tool_result})
-                                    except Exception:
-                                        logger.exception("Failed to parse tool result")
+                            try:
+                                tool_result = json.loads(tool_result)
+                            except json.JSONDecodeError:
+                                tool_result = json.dumps({"tool_result": tool_result})
 
                             logger.debug(
                                 "Sending tool result", extra={"lk.pii.tool_result": tool_result}
@@ -2269,7 +2258,7 @@ class RealtimeSession(  # noqa: F811
                         self._pending_generation_fut = None
 
             timeout_handle = asyncio.get_running_loop().call_later(
-                self._realtime_model._generate_reply_timeout, _on_timeout
+                self._generate_reply_timeout, _on_timeout
             )
 
             def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
@@ -2413,8 +2402,8 @@ class RealtimeSession(  # noqa: F811
         # otherwise, the smithy layer will raise an InvalidStateError during cancellation
         self._is_sess_active.clear()
 
-        if self._stream_response and not self._stream_response.output_stream.closed:
-            await self._stream_response.output_stream.close()
+        if self._stream_response and (output_stream := self._stream_response.output_stream):
+            await output_stream.close()
 
         # note: even after the self.is_active flag is flipped and the output stream is closed,
         # there is a future inside output_stream.receive() at the AWS-CRT C layer that blocks
@@ -2443,7 +2432,7 @@ class RealtimeSession(  # noqa: F811
         if self._audio_input_task and not self._audio_input_task.done():
             self._audio_input_task.cancel()
             tasks.append(self._audio_input_task)
-        if self._stream_response and not self._stream_response.input_stream.closed:
+        if self._stream_response:
             await self._stream_response.input_stream.close()
 
         # cancel main task to prevent pending task warnings

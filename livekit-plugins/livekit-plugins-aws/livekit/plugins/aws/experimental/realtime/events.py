@@ -234,6 +234,73 @@ class Event(BaseModel):
     )
 
 
+class SonicOutputModel(_BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow")
+
+
+class SonicContentStart(SonicOutputModel):
+    contentId: str
+    type: str
+    role: str = ""
+    additionalModelFields: str = ""
+
+
+class SonicContentEnd(SonicOutputModel):
+    type: str
+    stopReason: str = ""
+
+
+class SonicTextOutput(SonicOutputModel):
+    contentId: str
+    content: str
+    role: str = ""
+
+
+class SonicAudioOutput(SonicOutputModel):
+    contentId: str
+    content: str
+
+
+class SonicToolUse(SonicOutputModel):
+    toolUseId: str
+    toolName: str
+    content: str
+
+
+class SonicUsageTokens(SonicOutputModel):
+    speechTokens: int
+    textTokens: int
+
+
+class SonicUsageDelta(SonicOutputModel):
+    input: SonicUsageTokens
+    output: SonicUsageTokens
+
+
+class SonicUsageDetails(SonicOutputModel):
+    delta: SonicUsageDelta
+
+
+class SonicUsageEvent(SonicOutputModel):
+    completionId: str
+    details: SonicUsageDetails
+
+
+class SonicOutputPayload(SonicOutputModel):
+    contentStart: SonicContentStart | None = None
+    contentEnd: SonicContentEnd | None = None
+    textOutput: SonicTextOutput | None = None
+    audioOutput: SonicAudioOutput | None = None
+    toolUse: SonicToolUse | None = None
+    usageEvent: SonicUsageEvent | None = None
+    completionStart: dict[str, object] | None = None
+    completionEnd: dict[str, object] | None = None
+
+
+class SonicOutputEvent(SonicOutputModel):
+    event: SonicOutputPayload
+
+
 class SonicEventBuilder:
     def __init__(
         self, prompt_name: str, audio_content_name: str, model: str = "amazon.nova-2-sonic-v1:0"
@@ -245,36 +312,27 @@ class SonicEventBuilder:
         self._uses_turn_detection_configuration = "amazon.nova-sonic-v1" not in model
 
     @classmethod
-    def get_event_type(cls, json_data: dict) -> str:
-        if event := json_data.get("event"):
-            if event.get("contentStart", {}).get("type") == "AUDIO":
-                return "audio_output_content_start"
-            elif event.get("contentEnd", {}).get("type") == "AUDIO":
-                return "audio_output_content_end"
-            elif event.get("contentStart", {}).get("type") == "TEXT":
-                return "text_output_content_start"
-            elif event.get("contentEnd", {}).get("type") == "TEXT":
-                return "text_output_content_end"
-            elif event.get("contentStart", {}).get("type") == "TOOL":
-                return "tool_output_content_start"
-            elif event.get("contentEnd", {}).get("type") == "TOOL":
-                return "tool_output_content_end"
-            elif event.get("textOutput"):
-                return "text_output_content"
-            elif event.get("audioOutput"):
-                return "audio_output_content"
-            elif event.get("toolUse"):
-                return "tool_output_content"
-            elif "completionStart" in event:
-                return "completion_start"
-            elif "completionEnd" in event:
-                return "completion_end"
-            elif "usageEvent" in event:
-                return "usage"
-            else:
-                return "other_event"
-
-        raise ValueError(f"Unknown event type: {json_data}")
+    def get_event_type(cls, data: SonicOutputEvent) -> str:
+        event = data.event
+        if start := event.contentStart:
+            if start.type in ("AUDIO", "TEXT", "TOOL"):
+                return f"{start.type.lower()}_output_content_start"
+        if end := event.contentEnd:
+            if end.type in ("AUDIO", "TEXT", "TOOL"):
+                return f"{end.type.lower()}_output_content_end"
+        if event.textOutput is not None:
+            return "text_output_content"
+        if event.audioOutput is not None:
+            return "audio_output_content"
+        if event.toolUse is not None:
+            return "tool_output_content"
+        if event.completionStart is not None:
+            return "completion_start"
+        if event.completionEnd is not None:
+            return "completion_end"
+        if event.usageEvent is not None:
+            return "usage"
+        return "other_event"
 
     def create_text_content_block(
         self,

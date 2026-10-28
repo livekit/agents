@@ -1,7 +1,7 @@
 import json
 import logging
 
-from .events import SonicEventBuilder
+from .events import SonicEventBuilder, SonicOutputEvent
 
 logger = logging.getLogger("livekit.plugins.aws")
 
@@ -37,12 +37,12 @@ EVENT_COLOR_MAP = {
 }
 
 
-def log_event_data(event_data: dict) -> None:
+def log_event_data(event_data: SonicOutputEvent) -> None:
     event_type = SonicEventBuilder.get_event_type(event_data)
     color = EVENT_COLOR_MAP[event_type]
     logger.debug(
         f"{color}{event_type.upper()}{AnsiColors.ENDC}",
-        extra={"lk.pii.event_data": json.dumps(event_data, indent=2)},
+        extra={"lk.pii.event_data": json.dumps(event_data.model_dump(exclude_none=True), indent=2)},
     )
 
 

@@ -13,12 +13,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-import botocore  # type: ignore
-import botocore.exceptions  # type: ignore
-from aiobotocore.config import AioConfig  # type: ignore
-from aiobotocore.session import AioSession  # type: ignore
+import botocore
+import botocore.exceptions
+from aiobotocore.config import AioConfig
+from aiobotocore.session import AioSession
 
 from livekit.agents import (
     APIConnectionError,
@@ -35,10 +35,14 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTSLanguages, TTSSpeechEngine, TTSTextType
-from .utils import _resolve_session, _strip_nones
+from .utils import resolve_session
 
 if TYPE_CHECKING:
-    import aioboto3  # type: ignore
+    from types_aiobotocore_polly.literals import (
+        LanguageCodeType,
+        VoiceIdType,
+    )
+    from types_aiobotocore_polly.type_defs import SynthesizeSpeechInputTypeDef
 
 DEFAULT_SPEECH_ENGINE: TTSSpeechEngine = "generative"
 DEFAULT_VOICE = "Ruth"
@@ -68,7 +72,7 @@ class TTS(tts.TTS):
         region: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
-        session: AioSession | aioboto3.Session | None = None,
+        session: AioSession | None = None,
     ) -> None:
         """
         Create a new instance of AWS Polly TTS.
@@ -87,8 +91,7 @@ class TTS(tts.TTS):
             region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
-            session(AioSession, optional): Optional aiobotocore session to use. Passing a legacy
-                aioboto3.Session is deprecated but still accepted.
+            session(AioSession, optional): Optional aiobotocore session to use.
         """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -97,7 +100,7 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
-        self._session = _resolve_session(session)
+        self._session = resolve_session(session)
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
                 self._session.set_credentials(api_key, api_secret)
@@ -124,7 +127,13 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            text=text,
+            options=self._opts,
+            session=self._session,
+            conn_options=conn_options,
+        )
 
     def update_options(
         self,
@@ -146,11 +155,17 @@ class TTS(tts.TTS):
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self, *, tts: TTS, text: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        *,
+        tts: TTS,
+        text: str,
+        options: _TTSOptions,
+        session: AioSession,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(tts=tts, input_text=text, conn_options=conn_options)
-        self._tts = tts
-        self._opts = replace(tts._opts)
+        self._opts = replace(options)
+        self._session = session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -159,20 +174,20 @@ class ChunkedStream(tts.ChunkedStream):
                 read_timeout=self._conn_options.read_timeout,
                 retries={"mode": "standard", "total_max_attempts": 1},
             )
-            async with self._tts._session.create_client("polly", config=config) as client:  # type: ignore
-                response = await client.synthesize_speech(
-                    **_strip_nones(
-                        {
-                            "Text": self._input_text,
-                            "OutputFormat": "mp3",
-                            "Engine": self._opts.speech_engine,
-                            "VoiceId": self._opts.voice,
-                            "TextType": self._opts.text_type,
-                            "SampleRate": str(self._opts.sample_rate),
-                            "LanguageCode": self._opts.language,
-                        }
-                    )
-                )
+            # Other services in this SDK overload set have no generated return stub.
+            async with self._session.create_client("polly", config=config) as client:  # pyright: ignore[reportUnknownMemberType]
+                # The service accepts new identifiers before its generated literal stubs catch up.
+                request: SynthesizeSpeechInputTypeDef = {
+                    "Text": self.input_text,
+                    "OutputFormat": "mp3",
+                    "Engine": self._opts.speech_engine,
+                    "VoiceId": cast("VoiceIdType", self._opts.voice),
+                    "TextType": self._opts.text_type,
+                    "SampleRate": str(self._opts.sample_rate),
+                }
+                if self._opts.language is not None:
+                    request["LanguageCode"] = cast("LanguageCodeType", self._opts.language)
+                response = await client.synthesize_speech(**request)
 
                 if "AudioStream" in response:
                     output_emitter.initialize(

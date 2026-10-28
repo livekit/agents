@@ -10,6 +10,7 @@ from typing import Any
 from livekit.agents import llm
 
 from ...log import logger
+from .events import SonicOutputEvent
 
 # Nova Sonic's barge-in detection signal (raw content without newline)
 BARGE_IN_CONTENT = '{ "interrupted" : true }'
@@ -29,8 +30,10 @@ class _Phase(enum.Enum):
 class _Turn:
     turn_id: int
     input_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
-    transcript: list[str] = field(default_factory=list)
+    created: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    transcript: list[str] = field(default_factory=list[str])
 
     phase: _Phase = _Phase.IDLE
     ev_input_started: bool = False
@@ -46,7 +49,7 @@ class _Turn:
         return " ".join(self.transcript)
 
 
-class _TurnTracker:
+class TurnTracker:
     def __init__(
         self,
         emit_fn: Callable[[str, Any], None],
@@ -60,12 +63,13 @@ class _TurnTracker:
     # --------------------------------------------------------
     #  PUBLIC ENTRY POINT
     # --------------------------------------------------------
-    def feed(self, event: dict) -> None:
+    def feed(self, event: SonicOutputEvent) -> None:
         turn = self._ensure_turn()
         kind = _classify(event)
 
         if kind == "USER_TEXT_PARTIAL":
-            turn.add_partial_text(event["event"]["textOutput"]["content"])
+            assert event.event.textOutput is not None
+            turn.add_partial_text(event.event.textOutput.content)
             self._maybe_emit_input_started(turn)
             self._emit_transcript_updated(turn)
             # note: cannot invoke self._maybe_input_stopped() here
@@ -93,7 +97,8 @@ class _TurnTracker:
             turn.phase = _Phase.DONE
 
         elif kind == "ASSISTANT_AUDIO_END":
-            if event["event"]["contentEnd"]["stopReason"] == "END_TURN":
+            assert event.event.contentEnd is not None
+            if event.event.contentEnd.stopReason == "END_TURN":
                 turn.phase = _Phase.DONE
 
         if turn.phase is _Phase.DONE:
@@ -154,25 +159,20 @@ class _TurnTracker:
             logger.debug(f"[GEN] TurnTracker SKIPPED - already sent for turn_id={turn.turn_id}")
 
 
-def _classify(ev: dict) -> str:
-    e = ev.get("event", {})
-    if "textOutput" in e and e["textOutput"]["role"] == "USER":
+def _classify(ev: SonicOutputEvent) -> str:
+    event = ev.event
+    text = event.textOutput
+    start = event.contentStart
+    end = event.contentEnd
+    if text is not None and text.role == "USER":
         return "USER_TEXT_PARTIAL"
-
-    if "contentStart" in e and e["contentStart"]["type"] == "TOOL":
+    if start is not None and start.type == "TOOL":
         return "TOOL_OUTPUT_CONTENT_START"
-
-    if "contentStart" in e and e["contentStart"]["role"] == "ASSISTANT":
-        add = e["contentStart"].get("additionalModelFields", "")
-        if "SPECULATIVE" in add:
+    if start is not None and start.role == "ASSISTANT":
+        if "SPECULATIVE" in start.additionalModelFields:
             return "ASSISTANT_SPEC_START"
-
-    if "textOutput" in e and e["textOutput"]["content"] == BARGE_IN_CONTENT:
+    if text is not None and text.content == BARGE_IN_CONTENT:
         return "BARGE_IN"
-
-    # note: there cannot be any audio events for the user in the output event loop
-    # therefore, we know that the audio event must be for the assistant
-    if "contentEnd" in e and e["contentEnd"]["type"] == "AUDIO":
+    if end is not None and end.type == "AUDIO":
         return "ASSISTANT_AUDIO_END"
-
     return ""
