@@ -949,13 +949,13 @@ impl ThreadDb {
         Ok(self.live()?.exec(SET_WAITER, vec![waiter.into(), lane.into()]).await?.rows_affected > 0)
     }
 
-    /// The holder's boundary check.
-    /// The holder's boundary check, one batch: the lane's waiter and the task's status.
+    /// The holder's boundary check, one batch: the lane's waiter, the task's status, and whether a
+    /// client asked to cancel it.
     pub async fn boundary(
         &self,
         lane: &str,
         task_id: &str,
-    ) -> Result<(Option<String>, Option<String>), StorageError> {
+    ) -> Result<(Option<String>, Option<String>, bool), StorageError> {
         let out = self
             .conn
             .batch(vec![
@@ -970,7 +970,27 @@ impl ThreadDb {
                 .and_then(SqlValue::as_str)
                 .map(str::to_owned)
         };
-        Ok((text(&out.results[0]), text(&out.results[1])))
+        let cancel = out.results[1].rows().first().and_then(|row| row.get(1)?.as_i64()) == Some(1);
+        Ok((text(&out.results[0]), text(&out.results[1]), cancel))
+    }
+
+    /// `tasks/cancel` on a running row: `request`, with the client's reason, goes into its
+    /// internal data for the holder to act on. `false` when the row is not `working`.
+    pub async fn request_cancel(
+        &self,
+        lane: &str,
+        task_id: &str,
+        request: &Value,
+    ) -> Result<bool, StorageError> {
+        let patch = SqlValue::json(request);
+        let r = self.conn.exec(REQUEST_CANCEL, vec![patch, lane.into(), task_id.into()]).await?;
+        Ok(r.rows_affected > 0)
+    }
+
+    /// The lane's running tasks a client asked to cancel.
+    pub async fn cancel_requested(&self, lane: &str) -> Result<Vec<String>, StorageError> {
+        let set = self.live()?.query_all(CANCEL_REQUESTED, vec![lane.into()]).await?;
+        Ok(set.rows.iter().filter_map(|r| r.first()?.as_str().map(str::to_owned)).collect())
     }
 
     pub async fn waiter(&self, lane: &str) -> Result<Option<String>, StorageError> {

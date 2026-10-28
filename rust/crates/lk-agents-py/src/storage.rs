@@ -483,6 +483,21 @@ impl PyThreadDb {
         awaitable!(py, db.mark_orphan_failed(&lane, &task_id, &message))
     }
 
+    /// `tasks/cancel` on a running row: `request`, with the client's reason, in its internal
+    /// data for its holder to act on. `False` when the row is not `working`.
+    fn request_cancel<'py>(
+        &self,
+        py: Python<'py>,
+        lane: String,
+        task_id: String,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let request = value_from_py(request, "request")?;
+        let db = self.inner.clone();
+        awaitable!(py, db.request_cancel(&lane, &task_id, &request))
+    }
+
     /// The journal, every lane, after `after_id`: `EventRow`s.
     #[pyo3(signature = (after_id=0, limit=100))]
     fn events<'py>(

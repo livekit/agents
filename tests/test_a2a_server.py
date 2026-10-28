@@ -58,7 +58,6 @@ from .a2a_driver import (
     user_message,
     wire,
 )
-from .agentdb_fixture import past_the_fresh_acquire
 from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = [pytest.mark.unit]
@@ -296,7 +295,6 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
             await asyncio.sleep(0.01)
         else:
             pytest.fail("the waiter was never set")
-        await past_the_fresh_acquire()
         release.set()
         r1, r2 = await asyncio.gather(first, second)
 
@@ -523,7 +521,6 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(door: Callable[.
     canceled = await desk.cancel(task["id"], ctx_id, **{"livekit/reason": "user_interrupted"})
     # the call answers at once; the task ends on its stream once its tool stopped
     assert canceled["result"]["status"]["state"] == "TASK_STATE_WORKING"
-    await past_the_fresh_acquire()
     release.set()
     sent = await running
     final = sent.frames[-1]["statusUpdate"]

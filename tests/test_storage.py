@@ -34,7 +34,7 @@ from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
 from livekit.agents.storage.protocol import dump_state
 from livekit.agents.storage.resolve import AgentRegistry, Thread, resolve_thread
 
-from .agentdb_fixture import let_the_lease_lapse, new_session, past_the_fresh_acquire
+from .agentdb_fixture import let_the_lease_lapse, new_session
 from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = [pytest.mark.unit]
@@ -312,7 +312,6 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
         await asyncio.sleep(0.01)
     else:
         pytest.fail("the waiter was never set")
-    await past_the_fresh_acquire()
     waiter_set.set()
 
     r1 = await first

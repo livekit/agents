@@ -97,6 +97,10 @@ pub struct TaskInternal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[python(default = "None")]
     pub parent: Option<String>,
+    /// A client's `tasks/cancel` on the running task, with its reason: its holder stops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[python(default = "None")]
+    pub cancel: Option<Value>,
 }
 
 impl TaskInternal {

@@ -160,6 +160,9 @@ class ThreadDb:
     def mark_orphan_failed(
         self, lane: str, task_id: str, status_message: Any
     ) -> Awaitable[bool]: ...
+    def request_cancel(self, lane: str, task_id: str, request: Any) -> Awaitable[bool]:
+        """``tasks/cancel`` on a ``working`` row: ``request`` in its internal data for its holder;
+        ``False`` when the row is not ``working``."""
     def events(self, after_id: int = 0, limit: int = 100) -> Awaitable[list[EventRow]]: ...
     def lane_events(self, lane: str, after_id: int = 0) -> Awaitable[list[EventRow]]: ...
     def lanes(self) -> Awaitable[list[LaneRow]]: ...
@@ -342,6 +345,8 @@ class TurnHostProtocol(Protocol):
         ``local`` when this worker runs the lane."""
     def on_end(self, task: TaskRecord, output: Any) -> Awaitable[None]:
         """Rust calls it under ``live`` after each commit, for every task the turn carried."""
+    def cancel(self, task_id: str) -> Awaitable[None]:
+        """Rust calls it under ``live`` while holding the lane, for a canceled task whose work runs."""
     def background(self, wait: float) -> Awaitable[storage_turn.Background]:
         """Rust calls it under ``live`` between turns, to learn what runs and what is ready."""
 

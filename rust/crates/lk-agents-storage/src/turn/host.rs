@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,9 @@ pub trait TurnHost: Send + Sync {
     /// Under `live`: a turn this host ran committed `task`, which goes on its own answer
     /// stream; `output` is the reply when the task carried it.
     async fn on_end(&self, _task: &TaskRecord, _output: Option<&Value>) {}
+    /// Under `live`: a client asked to cancel `task_id`, whose work runs in the background; the
+    /// work stops, and what it queued then ends the task.
+    async fn cancel(&self, _task_id: &str) {}
     /// Under `live`: what the work this host left running in the background queued, after
     /// waiting up to `wait` for some.
     async fn background(&self, wait: Duration) -> Background {
@@ -202,22 +205,15 @@ struct BoundaryInner {
     lease: Option<Lease>,
     tripped: AtomicBool,
     client_canceled: AtomicBool,
-    /// When the acquire that made this boundary cleared the holder's waiter and picked the
-    /// task up: a check within [`FRESH`] of it is answered from it, without a read.
-    acquired: Instant,
     /// Under `live`: the last inbox row the turn took. A newer one that interrupts yields.
     arrivals_after: Option<i64>,
 }
 
-/// How long the acquire answers the boundary: an interrupt that lands inside this window
-/// waits for the next boundary.
-const FRESH: Duration = Duration::from_millis(100);
-
 /// The `boundary()` of `_turn`: the host asks before each model call and once more before the
 /// answer streams. `true` once means `true` from then on. The lease lost means the run cannot
 /// commit anyway, so nothing yields; under `interrupt` a waiter yields the lane, under `live` a
-/// newer message that interrupts; a row a client canceled with `tasks/cancel` yields too, and
-/// nothing is written over it (plan 5.5).
+/// newer message that interrupts; a task a client asked to cancel with `tasks/cancel` yields too,
+/// as does a row a client already canceled, and nothing is written over that one (plan 5.5).
 #[derive(Clone)]
 pub struct Boundary {
     inner: Arc<BoundaryInner>,
@@ -253,7 +249,6 @@ impl Boundary {
                 lease,
                 tripped: AtomicBool::new(false),
                 client_canceled: AtomicBool::new(false),
-                acquired: Instant::now(),
                 arrivals_after: None,
             }),
         }
@@ -280,9 +275,6 @@ impl Boundary {
         if i.lease.as_ref().is_some_and(Lease::is_lost) {
             return Ok(false);
         }
-        if i.acquired.elapsed() < FRESH {
-            return Ok(false);
-        }
         if let Some(last) = i.arrivals_after
             && i.db
                 .inbox_pending(&i.lane)
@@ -294,13 +286,13 @@ impl Boundary {
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "a newer message interrupts the reply");
             return Ok(true);
         }
-        let (waiter, status) = i.db.boundary(&i.lane, &i.task_id).await?;
+        let (waiter, status, cancel) = i.db.boundary(&i.lane, &i.task_id).await?;
         if i.interrupt && waiter.is_some_and(|w| !w.is_empty() && w != i.holder) {
             i.tripped.store(true, Ordering::Release);
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "yielding the lane to a newer message");
             return Ok(true);
         }
-        if status.as_deref() == Some(TaskState::Canceled.as_str()) {
+        if cancel || status.as_deref() == Some(TaskState::Canceled.as_str()) {
             i.tripped.store(true, Ordering::Release);
             i.client_canceled.store(true, Ordering::Release);
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "the task was canceled by a client; yielding");

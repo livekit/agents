@@ -372,6 +372,8 @@ fn merge_write(
         ask,
         deadline: patch.deadline.or(was.deadline),
         parent: patch.parent.or(was.parent),
+        // an ended row runs nothing to stop
+        cancel: if status.is_terminal() { None } else { was.cancel },
     };
 
     Ok(TaskWrite {

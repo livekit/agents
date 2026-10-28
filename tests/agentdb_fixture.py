@@ -70,12 +70,6 @@ async def let_the_lease_lapse() -> None:
     await asyncio.sleep(LEASE_TTL + LEASE_MARGIN)
 
 
-async def past_the_fresh_acquire() -> None:
-    """Waits out ``FRESH`` (``turn/host.rs``): for 100 ms after an acquire a boundary check is
-    answered from the acquire, so an interrupt or a cancel inside it waits for the next boundary."""
-    await asyncio.sleep(0.15)
-
-
 @pytest.fixture
 async def agentdb_worker() -> AsyncIterator[Callable[[str], AgentDBStorage]]:
     """``agentdb_worker("worker-c")`` is one more worker against the same project."""

@@ -39,7 +39,6 @@ from .a2a_driver import (
     state_of,
     wire,
 )
-from .agentdb_fixture import past_the_fresh_acquire
 
 pytestmark = [pytest.mark.unit]
 
@@ -111,7 +110,7 @@ async def listed(desk: Door, thread: str, count: int) -> None:
 
 
 class Busy:
-    """A handler whose first message holds the floor until ``release``; every later turn answers
+    """A handler whose first message holds the floor until ``gate``; every later turn answers
     with the texts of the messages it took."""
 
     def __init__(self) -> None:
@@ -133,11 +132,6 @@ class Busy:
         await ctx.update("looking")
         return "seen " + " + ".join(texts)
 
-    async def release(self) -> None:
-        # an interrupt that lands right after the lane was taken waits for the next boundary
-        await past_the_fresh_acquire()
-        self.gate.set()
-
     async def send(self, desk: Door, first: str, *later: str, **flags: Any) -> list[Sent]:
         """Sends ``first``, then each of ``later`` with ``flags`` while it is answered."""
         thread = await desk.thread()
@@ -146,7 +140,7 @@ class Busy:
         for count, text in enumerate(later, 2):
             sends.append(asyncio.create_task(desk.send(text, context_id=thread, **flags)))
             await listed(desk, thread, count)
-        await self.release()
+        self.gate.set()
         return list(await asyncio.wait_for(asyncio.gather(*sends), 30))
 
 
@@ -234,7 +228,7 @@ async def test_a_delegation_never_interrupts_the_experts_reply(
         asked = asyncio.create_task(desk.send("fare to Oslo?", context_id=thread))
         # the person's task, the expert's reply and the delegation
         await listed(desk, thread, 3)
-        await busy.release()
+        busy.gate.set()
         reply, sent = await asyncio.wait_for(asyncio.gather(direct, asked), 30)
         await delegate.aclose()
 

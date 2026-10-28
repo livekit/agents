@@ -5,13 +5,13 @@
 //! from inside `handle` to ask whether to yield.
 //!
 //! The host is any Python object with three coroutine methods, `handle(ctx)`, `on_update(task_id,
-//! text)` and `on_token(task_id, delta)`, and under `live` three more, `accepted(task_id, local)`,
-//! `on_end(task, output)` and `background(wait)`. Rust calls them from the tokio runtime the
-//! way the worker calls `host.open`: the coroutine is scheduled on the event loop that built the
-//! `Turn` with `run_coroutine_threadsafe`, its result arrives on a oneshot channel the done
-//! callback fills, and dropping the Rust future (the turn cancelled from Python) cancels the
-//! Python task. The GIL is held only to build the call and to read its result, never across an
-//! await, and nothing here blocks the event loop thread on the runtime.
+//! text)` and `on_token(task_id, delta)`, and under `live` four more, `accepted(task_id, local)`,
+//! `on_end(task, output)`, `cancel(task_id)` and `background(wait)`. Rust calls them from the
+//! tokio runtime the way the worker calls `host.open`: the coroutine is scheduled on the event
+//! loop that built the `Turn` with `run_coroutine_threadsafe`, its result arrives on a oneshot
+//! channel the done callback fills, and dropping the Rust future (the turn cancelled from Python)
+//! cancels the Python task. The GIL is held only to build the call and to read its result, never
+//! across an await, and nothing here blocks the event loop thread on the runtime.
 //!
 //! `handle(ctx, boundary)` receives the `TurnContext` model of `_generated/storage_turn.py`
 //! (every field of the crate's record as JSON: `history` the items, `tasks` the task records,
@@ -306,6 +306,16 @@ impl TurnHost for PyTurnHost {
             .await
         {
             log::warn!(target: "livekit.agents", "the host's on_end raised: {e}");
+        }
+    }
+
+    async fn cancel(&self, task_id: &str) {
+        let task_id = task_id.to_owned();
+        if let Err(e) = self
+            .call("cancel", move |py| Ok((task_id,).into_pyobject(py)?.into_any().cast_into()?))
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's cancel raised: {e}");
         }
     }
 

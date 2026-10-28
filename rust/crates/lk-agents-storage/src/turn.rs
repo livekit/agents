@@ -676,6 +676,13 @@ impl Turn {
             if background.running.is_empty() {
                 break None;
             }
+            // a client asked to cancel a task whose work runs here: the work stops, and what it
+            // queued then ends the task
+            for task_id in db.cancel_requested(&self.lane).await? {
+                if background.running.contains(&task_id) {
+                    self.host.cancel(&task_id).await;
+                }
+            }
             if !db.inbox_pending(&self.lane).await?.is_empty() {
                 break Some(Background::default());
             }

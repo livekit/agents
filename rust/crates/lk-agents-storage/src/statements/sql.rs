@@ -78,7 +78,16 @@ pub const PICKUP_TASK: &str = "UPDATE tasks SET status = 'working', updated_at =
 pub const PICKUP_HELD: &str = "UPDATE tasks SET status = 'working', updated_at = unixepoch() \
      WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working', 'input-required') \
      AND EXISTS (SELECT 1 FROM lanes WHERE lane = tasks.lane AND lease_token = ?)";
-pub const TASK_STATUS: &str = "SELECT status FROM tasks WHERE lane = ? AND task_id = ?";
+/// The task's status, and whether a client asked to cancel it.
+pub const TASK_STATUS: &str = "SELECT status, json_extract(internal, '$.cancel') IS NOT NULL \
+     FROM tasks WHERE lane = ? AND task_id = ?";
+/// `tasks/cancel` on a running row: the request, kept in its internal data.
+pub const REQUEST_CANCEL: &str = "UPDATE tasks SET internal = jsonb_set(COALESCE(internal, jsonb('{}')), \
+     '$.cancel', json(?)), updated_at = unixepoch() \
+     WHERE lane = ? AND task_id = ? AND status = 'working'";
+/// The lane's running tasks a client asked to cancel.
+pub const CANCEL_REQUESTED: &str = "SELECT task_id FROM tasks WHERE lane = ? AND status = 'working' \
+     AND json_extract(internal, '$.cancel') IS NOT NULL";
 pub const MARK_ORPHAN_FAILED: &str = "UPDATE tasks SET status = 'failed', status_message = jsonb(?), updated_at = unixepoch() \
      WHERE lane = ? AND task_id = ? AND status = 'working'";
 /// The schema probe: one read, which fails `no such table` on a database no SDK wrote yet.
@@ -117,7 +126,8 @@ pub fn upsert_task(fenced: bool) -> String {
          unixepoch() {} \
          ON CONFLICT(task_id) DO UPDATE SET status = excluded.status, name = excluded.name, \
          message_id = excluded.message_id, status_message = excluded.status_message, data = excluded.data, \
-         internal = excluded.internal, updated_at = excluded.updated_at",
+         internal = excluded.internal, updated_at = excluded.updated_at \
+         WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')",
         cond(fenced)
     )
 }
