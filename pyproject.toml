@@ -39,6 +39,7 @@ livekit-plugins-gnani = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
 livekit-plugins-hamming = { workspace = true }
+livekit-plugins-humanlike = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
