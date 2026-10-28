@@ -370,6 +370,8 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
         // A proxy field is taken from the host (`extract` only: `check_output` refuses it).
         Ty::This
         | Ty::Source { .. }
+        | Ty::Sink { .. }
+        | Ty::Duplex { .. }
         | Ty::Handle { .. }
         | Ty::Instance { .. }
         | Ty::HostSource(_)

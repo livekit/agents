@@ -368,6 +368,8 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Proxy { .. }
         | Ty::Native { .. }
         | Ty::Source { .. }
+        | Ty::Sink { .. }
+        | Ty::Duplex { .. }
         | Ty::HostSource(_)
         | Ty::HostDuplex { .. }
         | Ty::Handle { .. }

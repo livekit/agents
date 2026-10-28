@@ -8,7 +8,8 @@
 //! objects and converted here with the parameter's name as the error path.
 
 use crate::decl::{
-    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Param, Record, RecordDecl, Ty,
+    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Param, Record, RecordDecl,
+    Sink, Ty,
 };
 use crate::python::Out;
 
@@ -67,6 +68,9 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         for (class, _) in sources(c) {
             root.push_str(&format!("    m.add_class::<{}::{class}>()?;\n", c.family));
         }
+        for sink in &c.sinks {
+            root.push_str(&format!("    m.add_class::<{}::{}>()?;\n", c.family, sink.class));
+        }
     }
     for r in &decls.records {
         for f in functions(r) {
@@ -89,6 +93,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             for (name, item) in sources(c) {
                 text.push('\n');
                 text.push_str(&source_class(&name, &item)?);
+            }
+            for (sink, output) in duplexes(c) {
+                text.push('\n');
+                text.push_str(&duplex_class(decls, c, sink, &output)?);
             }
         }
         for p in decls.proxies.iter().filter(|p| p.family == *family) {
@@ -380,6 +388,74 @@ pub fn sources(c: &Class) -> Vec<(String, Ty)> {
     out
 }
 
+/// The duplex stream classes a class's methods hand out: each sink with its source's item.
+pub fn duplexes(c: &Class) -> Vec<(&Sink, Ty)> {
+    c.sinks
+        .iter()
+        .filter_map(|sink| {
+            c.methods.iter().find_map(|m| match &m.ret.ok {
+                Ty::Duplex { class, output, .. } if *class == sink.class => {
+                    Some((sink, (**output).clone()))
+                }
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// A duplex stream as the host drives it: input pushed synchronously into the sink, output pulled
+/// through the runtime's `NativeSource`, closing ends the input. The sink trait's own `call`s are
+/// methods of the class.
+fn duplex_class(
+    decls: &Declarations,
+    c: &Class,
+    sink: &Sink,
+    output: &Ty,
+) -> Result<String, String> {
+    let name = &sink.class;
+    let at = format!("{}::{name}", c.trait_path);
+    let to_py = if native(output) {
+        "::pyo3::IntoPyObjectExt::into_py_any(item, py)".to_owned()
+    } else {
+        format!("Ok({}.unbind())", crate::records::emit(output, "item")?)
+    };
+    let param = Param {
+        name: "item".into(),
+        ty: sink.item.clone(),
+        by_ref: false,
+        kw_only: false,
+        default: None,
+        shape_error: None,
+    };
+    let (item_ty, convert) = input(&at, &param)?;
+    let convert = convert.map(|c| format!("        let item = {c};\n")).unwrap_or_default();
+    let err = &sink.err.with;
+    let guard = "        ::lk_agents_abi::python::check_pid()?;\n";
+    let control = Class {
+        name: name.clone(),
+        rust_name: name.clone(),
+        trait_path: sink.trait_path.clone(),
+        methods: sink.methods.clone(),
+        sinks: Vec::new(),
+        ..c.clone()
+    };
+    let mut s = format!(
+        "type {name}Impl = dyn {trait_path};\n{extractors}\n/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::std::boxed::Box<{name}Impl>, ::lk_agents_runtime::source::NativeSource<{output}>);\n\n#[pymethods]\nimpl {name} {{\n",
+        trait_path = sink.trait_path,
+        extractors = numeric_extractors(&control)?,
+        output = output.rust(),
+    );
+    s.push_str(&format!(
+        "    fn push(&self, item: {item_ty}) -> PyResult<()> {{\n{guard}{convert}        ::lk_agents_abi::StreamSink::push(&*self.0, item).map_err({err})\n    }}\n\n    fn flush(&self) -> PyResult<()> {{\n{guard}        ::lk_agents_abi::StreamSink::flush(&*self.0).map_err({err})\n    }}\n\n    fn end_input(&self) -> PyResult<()> {{\n{guard}        ::lk_agents_abi::StreamSink::end_input(&*self.0);\n        Ok(())\n    }}\n\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        crate::host::source::recv(&self.1, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        ::lk_agents_abi::StreamSink::end_input(&*self.0);\n        crate::host::source::aclose(&self.1, py)\n    }}\n"
+    ));
+    for m in &control.methods {
+        s.push('\n');
+        s.push_str(&method(decls, &control, m)?);
+    }
+    s.push_str("}\n");
+    Ok(s)
+}
+
 /// A pull source as the host consumes it: the runtime's `NativeSource` does the work.
 fn source_class(name: &str, item: &Ty) -> Result<String, String> {
     let to_py = if native(item) {
@@ -668,6 +744,12 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Handle { class, .. } => {
             (format!("crate::handles::{class}"), format!("crate::handles::{class}::from({{}})"))
         }
+        Ty::Duplex { class, .. } => (
+            class.clone(),
+            format!(
+                "{{ let (sink, source) = {{}}; {class}(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }}"
+            ),
+        ),
         Ty::Source { class, .. } => (
             class.clone(),
             format!(

@@ -20,6 +20,9 @@ pub struct Worse;
 pub struct HostError;
 #[crate::host(error(raised = "livekit.agents.Refused"))]
 pub struct Refused;
+#[crate::host(error(with = crate::errors::raise_provider))]
+pub struct ProviderError;
+pub fn raise_provider(_: ProviderError) {}
 "#;
 
 const CHAT: &str = r#"
@@ -67,7 +70,7 @@ pub(crate) fn read(llm: &str) -> Result<Declarations, String> {
                 "#[crate::host(handwritten(extract, emit, host = \"object\"))] pub struct HostRef;",
             ),
             ("utils/maybe.rs", "pub enum Maybe<T> { NotGiven, Given(T) }"),
-            ("utils/stream.rs", "pub trait StreamSource<T> {}"),
+            ("utils/stream.rs", "pub trait StreamSource<T> {}\npub trait StreamSink<T> {}"),
         ],
     )?;
     resolve::declarations(&krate)
@@ -230,6 +233,63 @@ fn ambiguous_or_unsupported_declarations_fail_generation() {
     ] {
         let err = refuse(body);
         assert!(err.contains("Native") && err.contains(want), "`{body}`: {err}");
+    }
+}
+
+// Catches: a sink and its source handed out as two objects instead of one stream class, the sink
+// trait's own calls dropped from that class, input taken without its record conversion, or a sink
+// accepted anywhere but beside its source.
+#[test]
+fn a_sink_and_its_source_are_one_duplex_stream_class() {
+    let control = "use super::chat::Chunk;\nuse crate::utils::stream::StreamSink;\npub trait Audio: StreamSink<Chunk> { #[host(call)] fn retune(&self, #[host(kw, default = None)] model: Option<String>); }";
+    let declare = |body: &str| {
+        format!(
+            "{}\npub mod audio {{ {control} }}",
+            class(&format!(
+                "#[host(sink(item = Chunk, class = \"Live\"))] type In: audio::Audio;\n#[host(source(item = Report, class = \"Live\"))] type Out;\n{body}"
+            ))
+        )
+    };
+    let decls = read(&declare(
+        "#[host(call)] fn stream(&self) -> Result<(Self::In, Self::Out), crate::errors::ProviderError>;",
+    ))
+    .expect("resolves");
+    let c = &decls.classes[0];
+    assert!(matches!(&c.methods[0].ret.ok, Ty::Duplex { class, .. } if class == "Live"));
+    assert_eq!(c.sinks[0].trait_path, "::lk_agents_abi::llm::class::audio::Audio");
+    assert_eq!(c.sinks[0].methods[0].name, "retune");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
+    assert!(root.contains("m.add_class::<llm::Live>()?;"), "{root}");
+    assert!(!llm.contains("pub struct Live(::lk_agents_runtime::source::NativeSource"), "{llm}");
+    for expected in [
+        "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
+        "::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
+        "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        ::lk_agents_abi::python::check_pid()?;\n        ::lk_agents_abi::StreamSink::end_input(&*self.0);",
+        "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&self.0, model)",
+        "{ let (sink, source) = out; Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }",
+    ] {
+        assert!(llm.contains(expected), "{expected}\n{llm}");
+    }
+    let stub = crate::class_stub::emit(&decls).expect("stubs");
+    let text = &stub[0].out.text;
+    assert!(
+        text.contains("class Live:\n    def push(self, item: ChatChunk) -> None: ...")
+            && text.contains("    def retune(self, *, model: str | None = None) -> None: ...")
+            && text.contains("    async def recv(self) -> dict[str, object] | None: ..."),
+        "{text}"
+    );
+    for (body, refusal) in [
+        ("#[host(call)] fn stream(&self) -> Self::In;", "returned beside its source"),
+        (
+            "#[host(call)] fn stream(&self) -> (Self::Out, Self::In);",
+            "returned first beside its source",
+        ),
+        ("#[host(call)] fn other(&self);", "returned beside its source by a method"),
+    ] {
+        let error = read(&declare(body)).expect_err(body);
+        assert!(error.contains(refusal), "{body}: {error}");
     }
 }
 

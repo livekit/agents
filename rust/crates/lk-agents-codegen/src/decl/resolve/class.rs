@@ -63,11 +63,13 @@ impl Resolver<'_> {
             .position(|i| matches!(i, syn::Item::Trait(t) if t.ident == tr.ident))
             .expect("read from here");
         let mut methods = Vec::new();
+        let mut sinks = Vec::new();
         for inner in &tr.items {
             match inner {
                 syn::TraitItem::Type(t) => {
-                    let assoc = self.assoc_type(t)?;
+                    let (assoc, sink) = self.assoc_type(t)?;
                     self.assoc.push(assoc);
+                    sinks.extend(sink);
                 }
                 syn::TraitItem::Fn(f) => methods.push(self.method(f)?),
                 other => {
@@ -76,6 +78,15 @@ impl Resolver<'_> {
                         quote::quote!(#other)
                     ));
                 }
+            }
+        }
+        for sink in &sinks {
+            let paired = |ty: &Ty| matches!(ty, Ty::Duplex { class, .. } if *class == sink.class);
+            if !methods.iter().any(|m| paired(&m.ret.ok)) {
+                return Err(format!(
+                    "{at}: the sink of `{}` is returned beside its source by a method: `(Self::Sink, Self::Source)`",
+                    sink.class
+                ));
             }
         }
         let form = match class {
@@ -147,6 +158,7 @@ impl Resolver<'_> {
                     _ => None,
                 })
                 .collect(),
+            sinks,
             methods,
         })
     }

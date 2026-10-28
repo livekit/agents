@@ -19,6 +19,7 @@
 //! | proxy method | `requires(tool_call, ..)` | scopes (`job`, `agent`, `speech`, `tool_call`, `approval`) the awaited or notify call's `context` parameter must hold; without one the runtime refuses the call before the host is entered, with the declared error |
 //! | error type | `error(raised = "module.Class")` | the host refuses a proxy call by raising that class: `Result<Result<T, E>, _>`'s `E`, from its message |
 //! | associated type | `source(item = T, class = "X")` | a pull source of `T`, handed out as stream class `X` |
+//! | associated type | `sink(item = I, class = "X")` | the input half of stream class `X`, returned as `(Self::Sink, Self::Source)` beside the `source(.., class = "X")`: one duplex class (`push`/`flush`/`end_input`, `recv`, `aclose` ending the input); its bound is `StreamSink<I>` or an ABI trait over it whose `call`s are methods of `X` |
 //! | associated type | `class(name = "X")` | an instance of the declared class `X`: the generated `Implementations` binds this type to `X`'s implementation |
 //! | associated type | `handle(class = "X")` | an implementation's own object, handed out (never taken in) as the registration shell's class `crate::handles::X`, built `From` it |
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |

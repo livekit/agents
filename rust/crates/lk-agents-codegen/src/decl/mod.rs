@@ -301,6 +301,23 @@ pub struct Class {
     pub native: Vec<String>,
     /// `(assoc, class)`: the associated types that are instances of another declared class.
     pub instances: Vec<(String, String)>,
+    /// The input halves of the duplex stream classes its methods hand out.
+    pub sinks: Vec<Sink>,
+    pub methods: Vec<Method>,
+}
+
+/// `#[host(sink(item = I, class = "X"))] type S: Trait`: the input half of the duplex stream
+/// class `X`, whose output half is the `source(.., class = "X")` returned beside it
+/// (`(Self::S, Self::Events)`). `Trait` is `StreamSink<I>`, or an ABI trait over it whose `call`
+/// methods are `X`'s too (a live recognition's `update_options`).
+#[derive(Debug, Clone)]
+pub struct Sink {
+    pub class: String,
+    pub item: Ty,
+    /// The trait the stream holds its input half as: `dyn <trait_path>`.
+    pub trait_path: String,
+    /// `ProviderError`'s declared conversion: what a refused push raises.
+    pub err: ErrorDecl,
     pub methods: Vec<Method>,
 }
 
@@ -467,6 +484,19 @@ pub enum Ty {
         item: Box<Ty>,
         class: String,
     },
+    /// The input half of the duplex stream class `class` ([`Sink`]); returned only beside its
+    /// source, as [`Ty::Duplex`].
+    Sink {
+        item: Box<Ty>,
+        class: String,
+    },
+    /// `(Self::Sink, Self::Source)` of one stream class: handed to the host as that class, input
+    /// pushed synchronously and output pulled, under one lifetime. Output only.
+    Duplex {
+        input: Box<Ty>,
+        output: Box<Ty>,
+        class: String,
+    },
     /// `Box<dyn StreamSource<T>>` a host call returns: the host's async iterable of `T`, pulled
     /// in its own context (`crate::host::stream::HostStream`). Input only.
     HostSource(Box<Ty>),
@@ -592,8 +622,11 @@ impl Ty {
             Ty::Source { item, .. } | Ty::HostSource(item) => {
                 format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>", item.rust())
             }
+            Ty::Sink { item, .. } => {
+                format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>", item.rust())
+            }
             Ty::Error(e) => e.rust.clone(),
-            Ty::HostDuplex { input, output } => format!(
+            Ty::HostDuplex { input, output } | Ty::Duplex { input, output, .. } => format!(
                 "(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>)",
                 input.rust(),
                 output.rust()

@@ -167,9 +167,13 @@ pub fn mark_in_place(decls: &mut Declarations) {
         }
     }
     for c in &mut decls.classes {
-        for m in &mut c.methods {
+        let sinks = c.sinks.iter_mut().flat_map(|s| s.methods.iter_mut());
+        for m in c.methods.iter_mut().chain(sinks) {
             m.params.iter_mut().for_each(|p| mark(&mut p.ty, &held));
             mark(&mut m.ret.ok, &held);
+        }
+        for s in &mut c.sinks {
+            mark(&mut s.item, &held);
         }
     }
     for p in &mut decls.proxies {
@@ -245,8 +249,8 @@ fn mark(ty: &mut Ty, held: &BTreeSet<String>) {
             mark(t, held);
         }
         Ty::Tuple(ts) => ts.iter_mut().for_each(|t| mark(t, held)),
-        Ty::Source { item, .. } => mark(item, held),
-        Ty::HostDuplex { input, output } => {
+        Ty::Source { item, .. } | Ty::Sink { item, .. } => mark(item, held),
+        Ty::HostDuplex { input, output } | Ty::Duplex { input, output, .. } => {
             mark(input, held);
             mark(output, held);
         }

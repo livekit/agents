@@ -76,10 +76,18 @@ enum Shape {
 }
 
 impl Resolver<'_> {
-    fn assoc_type(&self, t: &syn::TraitItemType) -> Result<Assoc, String> {
+    fn assoc_type(&self, t: &syn::TraitItemType) -> Result<(Assoc, Option<Sink>), String> {
         let at = format!("{}::{}", self.at, t.ident);
         let entries = voc::read(&t.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["source", "handle", "class"])?;
+        voc::only(&at, &entries, &["source", "handle", "class", "sink"])?;
+        if let Some(sink) = voc::find(&entries, "sink") {
+            if entries.len() > 1 {
+                return Err(format!("{at}: an associated type declares one kind"));
+            }
+            let sink = self.sink(t, sink, &at)?;
+            let ty = Ty::Sink { item: Box::new(sink.item.clone()), class: sink.class.clone() };
+            return Ok((Assoc { rust_name: t.ident.to_string(), ty }, Some(sink)));
+        }
         let kinds = (
             voc::find(&entries, "source"),
             voc::find(&entries, "handle"),
@@ -128,11 +136,73 @@ impl Resolver<'_> {
             }
             _ => {
                 return Err(format!(
-                    "{at}: an associated type declares one kind: #[host(source(item = T, class = \"X\"))], #[host(handle(class = \"X\"))] or #[host(class(name = \"X\"))]"
+                    "{at}: an associated type declares one kind: #[host(source(item = T, class = \"X\"))], #[host(sink(item = T, class = \"X\"))], #[host(handle(class = \"X\"))] or #[host(class(name = \"X\"))]"
                 ));
             }
         };
-        Ok(Assoc { rust_name: t.ident.to_string(), ty })
+        Ok((Assoc { rust_name: t.ident.to_string(), ty }, None))
+    }
+
+    /// `sink(item = I, class = "X")` on `type S: Trait`: `Trait` is `StreamSink<I>`, or an ABI
+    /// trait over it whose methods are `call`s of the stream class.
+    fn sink(&self, t: &syn::TraitItemType, entry: &Entry, at: &str) -> Result<Sink, String> {
+        voc::only(at, &entry.nested, &["item", "class"])?;
+        let item = voc::rust(at, &entry.nested, "item")?
+            .ok_or_else(|| format!("{at}: sink(item = T) is what it takes"))?;
+        let item = self.ty(&item, at)?;
+        check_input(at, &item)?;
+        let class = voc::text(at, &entry.nested, "class")?
+            .ok_or_else(|| format!("{at}: sink(class = \"X\") is its stream class"))?;
+        let stream_sink =
+            self.krate.resolve(0, &syn::parse_quote!(crate::utils::stream::StreamSink)).ok();
+        let bound = t.bounds.iter().find_map(|b| match b {
+            syn::TypeParamBound::Trait(tr) => Some(&tr.path),
+            _ => None,
+        });
+        let bound = bound.ok_or_else(|| format!("{at}: a sink is bound by its input trait"))?;
+        let found = self.krate.resolve(self.module, bound).map_err(|e| format!("{at}: {e}"))?;
+        let err_shape =
+            self.shape(self.module, &syn::parse_quote!(crate::errors::ProviderError), &[], at)?;
+        let err = self.error(&err_shape, at)?;
+        if stream_sink.as_ref() == Some(&found) {
+            let trait_path = format!("::lk_agents_abi::StreamSink<{}>", item.rust());
+            return Ok(Sink { class, item, trait_path, err, methods: Vec::new() });
+        }
+        let Found::Item { module, item: index } = found else {
+            return Err(format!(
+                "{at}: a sink is bound by `StreamSink<T>` or an ABI trait over it"
+            ));
+        };
+        let syn::Item::Trait(tr) = &self.krate.modules[module].items[index] else {
+            return Err(format!(
+                "{at}: a sink is bound by `StreamSink<T>` or an ABI trait over it"
+            ));
+        };
+        let over_sink = tr.supertraits.iter().any(|b| {
+            matches!(b, syn::TypeParamBound::Trait(s)
+                if self.krate.resolve(module, &s.path).ok() == stream_sink)
+        });
+        if !over_sink {
+            return Err(format!("{at}: `{}` extends `StreamSink<T>`", tr.ident));
+        }
+        let inner = format!("{}: {}", self.krate.modules[module].file, tr.ident);
+        let resolver = Resolver { krate: self.krate, module, at: &inner, assoc: Vec::new() };
+        let mut methods = Vec::new();
+        for f in &tr.items {
+            let syn::TraitItem::Fn(f) = f else {
+                return Err(format!("{inner}: a sink trait declares only methods"));
+            };
+            let m = resolver.method(f)?;
+            if m.kind != MethodKind::Call || m.mutable {
+                return Err(format!(
+                    "{inner}::{}: a sink's methods are `call`s on `&self`",
+                    m.rust_name
+                ));
+            }
+            methods.push(m);
+        }
+        let trait_path = self.krate.extern_path(module, index).map_err(|e| format!("{at}: {e}"))?;
+        Ok(Sink { class, item, trait_path, err, methods })
     }
 
     fn method(&self, f: &syn::TraitItemFn) -> Result<Method, String> {
@@ -506,7 +576,18 @@ impl Resolver<'_> {
                 input: Box::new(self.classify(input, at)?),
                 output: Box::new(self.classify(output, at)?),
             }),
-            Shape::Tuple(items) => Ok(Ty::Tuple(items.iter().map(|i| self.classify(i, at)).collect::<Result<_, _>>()?)),
+            Shape::Tuple(items) => {
+                let items: Vec<Ty> = items.iter().map(|i| self.classify(i, at)).collect::<Result<_, _>>()?;
+                match &items[..] {
+                    [Ty::Sink { item: input, class }, Ty::Source { item: output, class: other }] if class == other => {
+                        Ok(Ty::Duplex { input: input.clone(), output: output.clone(), class: class.clone() })
+                    }
+                    [Ty::Sink { class, .. }, ..] | [_, Ty::Sink { class, .. }] => Err(format!(
+                        "{at}: the sink of `{class}` is returned first beside its source: `(Self::Sink, Self::Source)`"
+                    )),
+                    _ => Ok(Ty::Tuple(items)),
+                }
+            }
             Shape::SelfType => Ok(Ty::This),
             Shape::SelfAssoc(name) => self
                 .assoc
@@ -928,9 +1009,12 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
             check_input(at, v)
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_input(at, t)),
-        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit => {
-            Err(format!("{at}: `{}` is not an input", ty.rust()))
-        }
+        Ty::This
+        | Ty::Source { .. }
+        | Ty::Sink { .. }
+        | Ty::Duplex { .. }
+        | Ty::Handle { .. }
+        | Ty::Unit => Err(format!("{at}: `{}` is not an input", ty.rust())),
         Ty::HostSource(item) => check_input(at, item),
         Ty::HostDuplex { input, output } => {
             check_output(at, input)?;
@@ -960,6 +1044,13 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
             Err(format!("{at}: a host stream is not handed back to the host"))
         }
         Ty::Source { item, .. } => check_output(at, item),
+        Ty::Sink { class, .. } => {
+            Err(format!("{at}: the sink of `{class}` is returned beside its source"))
+        }
+        Ty::Duplex { input, output, .. } => {
+            check_input(at, input)?;
+            check_output(at, output)
+        }
         _ => Ok(()),
     }
 }

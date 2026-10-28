@@ -44,6 +44,26 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 ));
                 own.push(name);
             }
+            for (sink, output) in crate::adapter::duplexes(c) {
+                let input = annotation(c, &sink.item, Dir::In, &mut imports);
+                let output = annotation(c, &output, Dir::Out, &mut imports);
+                let control = Class {
+                    name: sink.class.clone(),
+                    methods: sink.methods.clone(),
+                    ..(*c).clone()
+                };
+                body.push_str(&format!(
+                    "\nclass {}:\n    def push(self, item: {input}) -> None: ...\n    def flush(self) -> None: ...\n    def end_input(self) -> None: ...\n",
+                    sink.class
+                ));
+                for m in &control.methods {
+                    body.push_str(&method(&control, m, &mut imports));
+                }
+                body.push_str(&format!(
+                    "    async def recv(self) -> {output} | None: ...\n    async def aclose(self) -> None: ...\n"
+                ));
+                own.push(sink.class.clone());
+            }
         }
         for r in decls.records.iter().filter(|r| r.persisted && r.family == family) {
             let (persist, restore) = r.persistence();
@@ -426,7 +446,9 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 name.to_owned()
             }
         }
-        Ty::Source { class, .. } => class.clone(),
+        Ty::Source { class, .. } | Ty::Sink { class, .. } | Ty::Duplex { class, .. } => {
+            class.clone()
+        }
         Ty::HostSource(item) => {
             imports.add("collections.abc", "AsyncIterable");
             format!("AsyncIterable[{}]", annotation(c, item, dir, imports))
