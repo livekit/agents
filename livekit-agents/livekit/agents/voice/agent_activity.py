@@ -2447,6 +2447,8 @@ class AgentActivity(RecognitionHooks):
                 # generating, which would otherwise stamp the turn after the reply it prompted
                 msg.created_at = ev.turn_started_at
                 msg.metrics = {"started_speaking_at": ev.turn_started_at}
+            if not ev.transcript.strip():
+                return  # an empty transcript is no turn: nothing to commit, nothing it answers
             self._answer_pending_input(msg)
             self._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
@@ -3793,21 +3795,14 @@ class AgentActivity(RecognitionHooks):
             if self._session.output.transcription_enabled
             else None
         )
-        if new_message is not None and (lane := self._session._live_lane) is not None:
-            # plan 3.3.7: the reply takes its lane before the model reads the history, so a
-            # text that moved the lane lands in the agent's history and this turn's first
+        chat_ctx = chat_ctx.copy()
+        if new_message is not None and self._session._live_lane is not None:
+            # plan 3.3.7: the reply takes its lane before the model reads the history; the
+            # session hands the agent what a text turn added, and this turn's snapshot gets it too
             from ..storage.live import merge_history
 
-            try:
-                stored = await lane.turn_started()
-            except Exception:
-                logger.exception("the voice turn could not take its lane")
-                stored = None
-            if stored is not None:
-                merge_history(self._chat_ctx, stored, turns_only=True)
-                if chat_ctx is not self._chat_ctx:
-                    merge_history(chat_ctx, stored, turns_only=True)
-        chat_ctx = chat_ctx.copy()
+            if (stored := await self._session._take_lane()) is not None:
+                merge_history(chat_ctx, stored, turns_only=True)
         tool_ctx = llm.ToolContext(tools)
         tool_ctx._exclude(self._on_enter_ignored_tools(tool_ctx))
 

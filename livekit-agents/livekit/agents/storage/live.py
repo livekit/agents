@@ -78,6 +78,8 @@ class LiveLane:
         self._db: ThreadDb | None = None
         self._version: int | None = None
         self._held: _Held | None = None
+        self._known: set[str] = set()
+        """The stored items the call has held: a commit deletes only those it dropped since."""
         self._chain: asyncio.Task[object] | None = None
         self._hold_timer: asyncio.TimerHandle | None = None
         self._closed = False
@@ -99,6 +101,7 @@ class LiveLane:
             loaded = load_state(row.state, self._state_type)
             self._state = _assign_state(self._state, loaded)
 
+        self._known = {item.id for item in self._history.items if _stored(item)}
         return self._state
 
     def turn_started(self) -> Awaitable[ChatContext | None]:
@@ -211,6 +214,7 @@ class LiveLane:
     def _reload_from(self, loaded: Loaded) -> None:
         """The lane moved under the call (a text turn ran): take its history and state."""
         merge_history(self._history, history_of(loaded.items))
+        self._known |= {item.id for item in self._history.items if _stored(item)}
         if self._state_type is not None and loaded.lane.state is not None:
             self._state = _assign_state(
                 self._state, load_state(loaded.lane.state, self._state_type)
@@ -245,6 +249,7 @@ class LiveLane:
             return
 
         self._version = result.version
+        self._known = {item.id for item in self._history.items if _stored(item)}
 
     def _commit_request(self, held: _Held) -> CommitRequest:
         """What the call added since the acquire: changed items, deleted ones, the state."""
@@ -275,7 +280,8 @@ class LiveLane:
             run_id=held.run_id,
             fence=Fence(version=held.loaded.version, lease_token=held.token),
             items=items,
-            delete_items=[item_id for item_id in loaded if item_id not in kept],
+            # what another writer added is not the call's to drop
+            delete_items=[i for i in loaded if i in self._known and i not in kept],
             events=[
                 EventWrite(
                     ts_ms=_now_ms(),

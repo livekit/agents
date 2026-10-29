@@ -21,6 +21,7 @@ from ..llm.tool_context import (
     DuplicateScope,
     FunctionTool,
     InputRequired,
+    ModelRetry,
     RawFunctionTool,
     StopResponse,
     Tool,
@@ -460,6 +461,8 @@ class _ToolExecutor:
                 if not first_update_fut.done():
                     first_update_fut.set_result(None)
                 raise  # _on_done emits the cancelled terminal
+            except ModelRetry as e:
+                output = ToolError(e.message)  # as in text: the model reads why, and retries
             except Exception as e:
                 output = e
 

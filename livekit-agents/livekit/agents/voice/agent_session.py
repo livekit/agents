@@ -734,6 +734,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._thread = thread
         # the agent's lane on the storage, opened at start() (storage/live.py)
         self._live_lane: LiveLane | None = None
+        # the one take of the lane in flight, or the last: the history it reloaded, if it moved
+        self._lane_turn: asyncio.Future[ChatContext | None] | None = None
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
@@ -1374,6 +1376,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._started = False
 
                 if self._live_lane is not None:
+                    # cancelling the take would leave its acquire's lease taken
+                    if self._lane_turn is not None:
+                        await self._lane_turn
                     await self._live_lane.close()
                     self._live_lane = None
 
@@ -2422,13 +2427,44 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(message)
         if message.role == "user" and self._live_lane is not None:
             # the person's turn ended: the lane is held until the reply is committed
-            self._live_lane.turn_started()
+            self._take_lane()
         if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
                 extra={"role": message.role, "lk.pii.text": text},
             )
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
+
+    def _take_lane(self) -> asyncio.Future[ChatContext | None]:
+        """Takes the lane for the reply; when a text turn moved it, the agent's context gets the
+        lane's new items, each item it had unchanged, and the result is the stored history.
+
+        A realtime model reads them from its next reply on: the provider usually starts the
+        current one before the acquire returns.
+        """
+        lane = self._live_lane
+        assert lane is not None
+
+        async def take() -> ChatContext | None:
+            from ..storage.live import merge_history
+
+            try:
+                stored = await lane.turn_started()
+                activity = self._activity
+                # a closing activity gets no history: the call's lane commits what it said
+                if stored is not None and activity is not None and not self._closing:
+                    chat_ctx = activity.chat_ctx.copy()
+                    merge_history(chat_ctx, stored, turns_only=True)
+                    await activity.update_chat_ctx(chat_ctx)
+            except Exception:
+                logger.exception("the voice turn could not take its lane")
+                return None
+            return stored
+
+        if self._lane_turn is not None and not self._lane_turn.done():
+            return self._lane_turn
+        self._lane_turn = asyncio.ensure_future(take())
+        return self._lane_turn
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         for item in items:

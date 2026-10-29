@@ -49,7 +49,6 @@ async def by_text(storage: AgentDBStorage, thread_id: str, text: str, seen: list
 
 
 @pytest.mark.rule("R63", "B11")
-@pytest.mark.xfail(strict=True, reason="R63: the voice commit deletes every stored item it lacks")
 async def test_a_voice_commit_keeps_what_a_text_turn_wrote(agentdb_storage: AgentDBStorage) -> None:
     sid = await new_session(agentdb_storage, LANE)
     seen: list[str] = []
@@ -70,7 +69,6 @@ async def test_a_voice_commit_keeps_what_a_text_turn_wrote(agentdb_storage: Agen
 
 
 @pytest.mark.rule("B10")
-@pytest.mark.xfail(strict=True, reason="B10: the realtime model's context never gets the reload")
 async def test_a_text_between_voice_turns_reaches_the_realtime_model(
     agentdb_storage: AgentDBStorage, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -118,7 +116,6 @@ async def test_a_text_between_voice_turns_reaches_the_realtime_model(
 
 
 @pytest.mark.rule("B67")
-@pytest.mark.xfail(strict=True, reason="B67: a closing activity gets the take's history")
 async def test_a_call_closing_while_its_turn_takes_the_lane_waits_for_it(
     agentdb_storage: AgentDBStorage,
     monkeypatch: pytest.MonkeyPatch,
@@ -172,7 +169,6 @@ async def test_a_call_closing_while_its_turn_takes_the_lane_waits_for_it(
 
 
 @pytest.mark.rule("R62", "B9")
-@pytest.mark.xfail(strict=True, reason="R62: an empty transcript is committed as a turn")
 async def test_an_empty_transcript_is_no_turn() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
     async with LiveSession(llm=model) as session:
@@ -188,7 +184,6 @@ async def test_an_empty_transcript_is_no_turn() -> None:
 
 
 @pytest.mark.rule("B4")
-@pytest.mark.xfail(strict=True, reason="B4: the model reads 'An internal error occurred'")
 async def test_a_model_retry_on_a_call_reads_as_in_text() -> None:
     model = FakeLLM(
         fake_responses=[
