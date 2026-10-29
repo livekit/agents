@@ -34,7 +34,6 @@ fn frame(n: usize) -> AudioFrame {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 fn detector(
     port: u16,
 ) -> (AdaptiveInterruptionDetector, tokio::sync::mpsc::UnboundedReceiver<DetectorEvent>) {
@@ -71,7 +70,6 @@ fn push_one_overlap(
     stream.push(InputEvent::Audio(frame(1600))).unwrap();
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// A `/bargein` gateway that answers the first audio frame with a interruption.
 ///
 /// Returns the port and a handle that yields the `session.create` the client sent, so the test can

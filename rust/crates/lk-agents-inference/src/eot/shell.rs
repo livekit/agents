@@ -2,9 +2,7 @@
 //! the transport's task, so all but `session_created` only post to a channel; taking the host's
 //! lock there is how deadlocks happen.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::EotInferenceMetrics;
@@ -30,9 +28,7 @@ pub enum SinkEvent {
 }
 
 pub struct ChannelSink {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedSender<SinkEvent>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     thresholds: Arc<Mutex<ThresholdOptions>>,
     /// The model this transport is, for [`EotInferenceMetrics::metadata`]; constant per transport.
     model: &'static str,
@@ -84,21 +80,16 @@ impl PredictionSink for ChannelSink {
 
 pub struct TransportShell {
     pub transport: Arc<dyn EotTransport>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<SinkEvent>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// The shell's own handle on the sink's channel, for posting [`SinkEvent::End`].
     end: mpsc::UnboundedSender<SinkEvent>,
     /// Makes `run()` return on `detach()`; the cloud receive half would otherwise stay parked on
     /// an open socket.
     stopped: tokio::sync::Notify,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ended: AtomicBool,
 }
 
 impl TransportShell {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Mount the transport `build` makes over a sink reporting as `model`. One owner holds both
     /// channel ends, so [`SinkEvent::End`] follows the last report.
     pub fn mount(
@@ -132,7 +123,6 @@ impl TransportShell {
         self.finish();
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Run the transport for its whole lifetime. `Ok` is "the audio ended"; `Err` goes to the
     /// session's `transport_failed`.
     pub async fn run(&self) -> Result<(), ApiError> {

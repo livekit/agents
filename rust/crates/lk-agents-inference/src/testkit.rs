@@ -3,7 +3,6 @@
 
 use async_trait::async_trait;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 
 /// A recorded `connect` call: the URL and its headers.
@@ -21,15 +20,12 @@ impl lk_agents_abi::llm::provider_format::ImageResolver for NoImages {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// A scripted WebSocket: records sends, replays canned incoming messages unsynchronised with them.
 type Incoming = Arc<Mutex<std::collections::VecDeque<Result<WsMessage, TransportError>>>>;
 
 pub struct FakeWs {
     incoming: Incoming,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     sent: Arc<Mutex<Vec<String>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     connects: Mutex<Vec<ConnectRecord>>,
     /// Fail the handshake instead of connecting.
     connect_error: Option<TransportError>,
@@ -42,7 +38,6 @@ pub struct FakeWs {
 }
 
 impl FakeWs {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     pub fn new(incoming: Vec<Result<WsMessage, TransportError>>) -> Self {
         FakeWs {
             incoming: Arc::new(Mutex::new(incoming.into_iter().collect())),
@@ -101,7 +96,6 @@ impl FakeWs {
 
 #[async_trait]
 impl WsTransport for FakeWs {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     async fn connect(
         &self,
         url: &str,
@@ -126,9 +120,7 @@ impl WsTransport for FakeWs {
 }
 
 struct FakeWsSender {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     sent: Arc<Mutex<Vec<String>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Mutex<bool>,
     stall: bool,
 }

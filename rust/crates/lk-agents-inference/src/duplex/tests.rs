@@ -410,7 +410,6 @@ fn transcript_no_audio_ever_claims_is_emitted_after_three_seconds() {
     assert_eq!(f.seg.waiting_fragments(), 0);
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 fn call() -> FunctionCall {
     FunctionCall {
         id: "call_1".into(),

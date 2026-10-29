@@ -32,12 +32,9 @@ use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::connection_pool::ConnectionPool;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::pin::pin;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -106,15 +103,12 @@ impl<P: TtsTextProcessorFactory> std::ops::Deref for NativeTts<P> {
 
 /// What every session's view of one client shares: its options and its pooled connections.
 pub struct TtsShared {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     opts: Arc<Mutex<TtsOptions>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     expressive: AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
     clock: Arc<lk_agents_abi::BoundClock>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     connections: Arc<Mutex<Connections>>,
 }
 
@@ -129,13 +123,11 @@ struct Connection {
 /// `utils.ConnectionPool(max_session_duration=300, mark_refreshed_on_get=True)`.
 struct Connections {
     pool: ConnectionPool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     idle: HashMap<u64, Connection>,
     next_id: u64,
 }
 
 impl Default for Connections {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         Connections {
             pool: ConnectionPool::new(Some(300.0), true),
@@ -182,7 +174,6 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let shared = TtsShared {
             opts: Arc::new(Mutex::new(opts)),
@@ -347,8 +338,6 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
         Ok((Box::new(sink), Box::new(source)))
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn open(
         &self,
         identification: Option<&Headers>,
@@ -506,7 +495,6 @@ enum TextCmd {
 
 pub struct TtsSinkHandle {
     text: mpsc::Sender<TextCmd>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     prep: Mutex<TextPrep>,
 }
 
@@ -672,7 +660,6 @@ pub const AUDIO_QUEUE_CAPACITY: usize = 8;
 const MAX_PENDING_TEXT_BYTES: usize = 64 * 1024;
 
 struct Pump {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     connections: Arc<Mutex<Connections>>,
     session_id: Option<String>,
     ws: Arc<dyn WsTransport>,

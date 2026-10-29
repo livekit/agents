@@ -15,7 +15,6 @@ use super::{
 pub struct InterruptionLeg {
     /// The input half, cloned out of the stream: synchronous, bounded and explicit on overload.
     input: super::transport::InterruptionInput,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Held across an await by `next_event`, hence a `tokio` mutex.
     stream: tokio::sync::Mutex<InterruptionStream>,
     /// Converts sentinel `Ts`s to the gateway's `time.time()` seconds, on the session's anchor.
@@ -23,7 +22,6 @@ pub struct InterruptionLeg {
 }
 
 impl InterruptionLeg {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// **Must be called on the tokio runtime.**
     pub fn open(detector: &AdaptiveInterruptionDetector, anchor: WallAnchor) -> Arc<Self> {
         let stream = detector.stream();

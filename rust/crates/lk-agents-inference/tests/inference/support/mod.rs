@@ -16,7 +16,6 @@ use std::time::Duration;
 /// reported as a failure rather than as a stalled run.
 pub const LIMIT: Duration = Duration::from_secs(10);
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Await `fut`, failing the test with `what` if it does not finish inside [`LIMIT`].
 pub async fn within<F: Future>(what: &str, fut: F) -> F::Output {
     match tokio::time::timeout(LIMIT, fut).await {
@@ -25,7 +24,6 @@ pub async fn within<F: Future>(what: &str, fut: F) -> F::Output {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Poll `cond` until it holds, failing the test with `what` if it never does.
 ///
 /// A bounded replacement for `while !cond() { yield_now().await }`, which is the other way a test

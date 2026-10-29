@@ -2,9 +2,7 @@
 //! mounted transport, with the input resampled to the detector's rate, the transport swapped for
 //! the local model on a cloud failure, and each `predict()` answered by its own waiter.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::ApiError;
@@ -65,7 +63,6 @@ struct Inner {
     replacement_audio: AudioRingBuffer,
     replacement_request: Option<(EotRequestId, Vec<i16>)>,
     retired: Option<Arc<TransportShell>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     waiters: HashMap<String, oneshot::Sender<EotPrediction>>,
     resampler: Option<Box<dyn Resampler>>,
     input_format: Option<(u32, u16)>,
@@ -74,7 +71,6 @@ struct Inner {
 
 /// One stream of the user's audio, answering `predict()` at each pause.
 pub struct EotStream {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<Inner>,
     rate: u32,
     make: TransportFactory,
@@ -86,7 +82,6 @@ pub struct EotStream {
 }
 
 impl EotStream {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Mounts the transport for `session`'s model and starts the run loop on `spawner`.
     pub fn open(
         session: EotSession,
@@ -352,7 +347,6 @@ impl EotStream {
         }
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `_run`: the mounted transport for its lifetime, remounted after a swap.
     async fn run(self: Arc<Self>) {
         let mut swaps = self.swaps.subscribe();

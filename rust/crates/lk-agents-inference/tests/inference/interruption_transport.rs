@@ -7,7 +7,6 @@
 use crate::support;
 
 use std::sync::Arc;
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
@@ -40,8 +39,6 @@ fn options(base_url: String, threshold: Option<f64>) -> InterruptionOptions {
     .unwrap()
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Accepts connections forever, forwarding each `session.create` it receives with the
 /// connection's `X-LiveKit-Session-ID`.
 async fn recording_gateway() -> (u16, mpsc::UnboundedReceiver<(String, String)>) {
@@ -104,7 +101,6 @@ async fn dead_port() -> u16 {
 // session keeps running at the old sensitivity for the rest of the call, silently. Also catches
 // headers read once rather than per connection (`_connect_ws`): every reconnect would reuse the
 // first session id.
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
     let (port, mut creates) = recording_gateway().await;

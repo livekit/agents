@@ -26,7 +26,6 @@ use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -110,22 +109,16 @@ impl<E: Env> std::ops::Deref for NativeStt<E> {
 
 /// What every session's view of one client shares: its options, connections and open streams.
 pub struct SttShared {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     opts: Mutex<SttOptions>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     capabilities: Mutex<SttCapabilities>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Framework-managed keyterms, merged into `extra` at connect and by `session.update`.
     session_keyterms: Mutex<Vec<String>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     keyterms_unsupported_warned: std::sync::atomic::AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
     vad: Mutex<Option<Arc<dyn crate::abi::Vad>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Every open stream, which `update_options` and keyterm changes reach mid-stream.
     live: Mutex<Vec<Weak<StreamControl>>>,
 }
@@ -135,7 +128,6 @@ impl<E: Env> NativeStt<E> {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let capabilities =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
@@ -575,9 +567,7 @@ enum SinkCmd {
 /// reconnect upstream when the keyterms change". One slot, latest wins.
 #[derive(Debug, Default)]
 struct DeferredExtra {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     speaking: std::sync::atomic::AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pending: Mutex<Option<serde_json::Map<String, serde_json::Value>>>,
 }
 
@@ -842,8 +832,6 @@ impl Pump {
         }
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
     async fn attempt(&mut self) -> Result<(), ApiError> {
         let headers = gateway_headers(
@@ -968,8 +956,6 @@ impl Pump {
         })
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn send_loop(
         sender: Arc<dyn WsSender>,
         audio_rx: &mut mpsc::Receiver<SinkCmd>,
@@ -1111,7 +1097,6 @@ impl Pump {
         std::future::pending().await
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn recv_loop(
         receiver: &mut dyn lk_agents_net::transport::WsReceiver,
         machine: Arc<Mutex<SttProtocol>>,

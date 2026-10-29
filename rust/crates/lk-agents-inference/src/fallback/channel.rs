@@ -26,7 +26,6 @@ impl ChainTask {
     }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `source.next()` or the consumer's stop, whichever comes first. A stop reads as the stream's
 /// clean end, so the attempt loop breaks `Served` and closes its member on the way out.
 pub(crate) async fn next_or_stop<T, S: StreamSource<T> + ?Sized>(
@@ -106,7 +105,6 @@ pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
     }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `source.next()`, or `None` once the chain closes (the probe then closes its stream).
 pub(crate) async fn probe_next<T, S: StreamSource<T> + ?Sized>(
     source: &mut S,

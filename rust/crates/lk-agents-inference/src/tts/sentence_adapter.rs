@@ -247,7 +247,6 @@ struct AdapterSource {
     /// Who hears of each retried sentence (the engine's error event and journal).
     report: Option<lk_agents_abi::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: mpsc::UnboundedReceiver<AdapterInput>,
     splitter: Box<dyn SentenceSplitter>,
     /// The markup lowered before synthesis; `None` when expressive is off or there is no dialect.

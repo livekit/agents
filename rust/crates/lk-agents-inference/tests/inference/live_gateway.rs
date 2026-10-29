@@ -26,7 +26,6 @@ fn credentials() -> Option<(String, String, String)> {
     Some((key, secret, url))
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Catches: the STT handshake and `session.create` being wrong. Silence produces no transcript,
 /// so what this asserts is narrower than the TTS test and deliberately so: the gateway must
 /// **accept** the session and the audio frames rather than closing on a malformed opening frame.

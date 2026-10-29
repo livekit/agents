@@ -3,7 +3,6 @@
 //! fresh input on failover (`tts:428-434`) and into the streaming probe (`tts:504-531`). A failure
 //! after output remains a failure and cannot replay delivered audio.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use crate::tts::sentence_adapter::StreamAdapter;
@@ -50,14 +49,12 @@ pub enum Token {
 /// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
 pub struct TokenLog {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<TokenLogState>,
     /// Raised once no more text can arrive; what a streamed probe waits for.
     settled: watch::Sender<bool>,
 }
 
 impl Default for TokenLog {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         TokenLog { inner: Mutex::default(), settled: watch::channel(false).0 }
     }
@@ -393,7 +390,6 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
         self.needs_resampling.get(index).copied().unwrap_or(false)
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn spawn_pump(&self, req: TtsReq, slot: RecoverySlot, log: Option<Arc<TokenLog>>) -> TtsSource {
         let (tx, rx) = mpsc::channel::<Result<SynthesizedAudio, ProviderError>>(32);
         let chain = Arc::clone(&self.chain);

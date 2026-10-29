@@ -3,9 +3,7 @@
 
 use std::collections::VecDeque;
 
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::ProviderError;
@@ -47,19 +45,16 @@ struct FakeLlm {
     label: String,
     /// `None` leaves the trait default (`"unknown"`).
     model: Option<String>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     seen: Mutex<Vec<ApiConnectOptions>>,
     /// `None` means `chat()` itself raises.
     chunks: Option<Vec<LlmChunk>>,
     /// The stream dies after the scripted chunks instead of ending cleanly.
     fail_after: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// `chat()` raises this many more times before it serves.
     outages: AtomicUsize,
 }
 
 impl FakeLlm {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn build(
         label: &str,
         model: Option<&str>,
@@ -225,13 +220,10 @@ async fn a_content_chunk_does_block_the_failover() {
 
 /// An `Llm` whose stream never ends, recording when its chain task is dropped.
 struct HangingLlm {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     opened: Arc<AtomicBool>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     dropped: Arc<AtomicBool>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct HangingStream(Arc<AtomicBool>);
 
 impl StreamSource<LlmChunk> for HangingStream {
@@ -328,7 +320,6 @@ async fn a_closed_llm_adapter_starts_no_more_recovery_probes() {
 }
 
 // Catches: the returned stream's `aclose` not aborting the task filling it.
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn closing_the_llm_stream_aborts_the_chain_task_and_releases_the_provider() {
     let opened = Arc::new(AtomicBool::new(false));
@@ -355,7 +346,6 @@ struct FakeStt {
     label: String,
     conn: ApiConnectOptions,
     fails: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     calls: Arc<Mutex<Vec<(String, ApiConnectOptions)>>>,
 }
 
@@ -398,7 +388,6 @@ impl Stt for FakeStt {
 }
 
 // Catches: an unbounded STT retry loop under the chain; also pins probe 0 vs attempt 1 retries.
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_wrapped_stt_never_runs_an_independent_retry_loop() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -446,15 +435,10 @@ async fn a_wrapped_stt_never_runs_an_independent_retry_loop() {
 
 #[derive(Default)]
 struct SttSess {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     frames: Mutex<Vec<AudioFrame>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     flushes: AtomicUsize,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     ended: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// Events this session handed to whoever was draining it.
     emitted: AtomicUsize,
 }
@@ -477,7 +461,6 @@ impl StreamSink<AudioFrame> for SttSessSink {
 
 struct SttSessSource {
     sess: Arc<SttSess>,
-    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     rx: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
 }
 
@@ -503,21 +486,17 @@ impl StreamSource<SpeechEvent> for SttSessSource {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 type SttSender = mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>;
 
 struct DuplexStt {
     label: String,
     streaming: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// `stream()` refuses this many times before it works.
     refusals: AtomicUsize,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     made: Mutex<Vec<(Arc<SttSess>, Option<SttSender>)>>,
 }
 
 impl DuplexStt {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn new(label: &str, refusals: usize) -> Arc<Self> {
         Arc::new(DuplexStt {
             label: label.into(),
@@ -526,7 +505,6 @@ impl DuplexStt {
             made: Mutex::new(Vec::new()),
         })
     }
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn batch_only(label: &str) -> Arc<Self> {
         Arc::new(DuplexStt {
             label: label.into(),
@@ -565,7 +543,6 @@ impl Stt for DuplexStt {
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move { Err(boom("this fake only has a streaming path")) })
     }
-    #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
     fn stream(
         &self,
         _language: Option<&LanguageCode>,

@@ -3,9 +3,7 @@
 //! `run_once`; only the send half is a task. The `Mutex<InterruptionCore>` is never held across an
 //! `.await`.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -78,21 +76,16 @@ pub enum DetectorEvent {
 
 /// `AdaptiveInterruptionDetector` (`inference/interruption.py:264`).
 pub struct AdaptiveInterruptionDetector {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     opts: Arc<Mutex<InterruptionOptions>>,
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedSender<DetectorEvent>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `weakref.WeakSet[InterruptionWebSocketStream]`, so `update_options` reaches live streams
     /// without keeping dead ones alive.
     streams: Mutex<Vec<Weak<Notify>>>,
 }
 
 impl AdaptiveInterruptionDetector {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         opts: InterruptionOptions,
         config: ConnectionConfig,
@@ -136,8 +129,6 @@ impl AdaptiveInterruptionDetector {
         self.open(false)
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn open(&self, fan_out: bool) -> InterruptionStream {
         let reconnect = Arc::new(Notify::new());
         self.streams.lock().unwrap().push(Arc::downgrade(&reconnect));
@@ -181,17 +172,13 @@ pub enum StreamEvent {
 
 #[derive(Clone)]
 struct StreamContext {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     opts: Arc<Mutex<InterruptionOptions>>,
     config: ConnectionConfig,
     clock: Arc<dyn Clock>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// `None` for a [`private_stream`](AdaptiveInterruptionDetector::private_stream).
     detector_events: Option<mpsc::UnboundedSender<DetectorEvent>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     stream_events: mpsc::UnboundedSender<StreamEvent>,
     reconnect: Arc<Notify>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: Arc<AtomicBool>,
     input_failure: watch::Sender<Option<ApiError>>,
 }
@@ -330,10 +317,8 @@ async fn while_input_open<F: std::future::Future>(
 pub struct InterruptionStream {
     /// `Option` so `end_input()` can drop the sender (`self._input_ch.close()`).
     input_tx: Option<InterruptionInput>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     event_rx: mpsc::UnboundedReceiver<StreamEvent>,
     reconnect: Arc<Notify>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: Arc<AtomicBool>,
     task: JoinHandle<Result<(), ApiError>>,
 }
@@ -445,7 +430,6 @@ async fn main_task(
     result
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 async fn main_task_inner(
     ctx: &StreamContext,
     mut input_rx: mpsc::Receiver<QueuedInput>,
@@ -480,7 +464,6 @@ async fn main_task_inner(
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `_run`'s outer `while True` (`inference/interruption.py:944`): connect, pump, and go round again
 /// if `update_options` asked for a reconnect.
 async fn run(
@@ -501,9 +484,6 @@ async fn run(
     }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// One connection's lifetime. `Ok(true)` means "reconnect", `Ok(false)` means "the input ended".
 async fn run_once(
     ctx: &StreamContext,
@@ -623,7 +603,6 @@ enum Incoming {
     Closed,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 fn handle_incoming(
     ctx: &StreamContext,
     core: &Arc<Mutex<InterruptionCore>>,
@@ -676,7 +655,6 @@ fn handle_incoming(
     Ok(Incoming::Continue)
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `send_task` (`inference/interruption.py:796`).
 async fn send_task(
     core: Arc<Mutex<InterruptionCore>>,

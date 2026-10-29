@@ -2,7 +2,6 @@
 //! [`EotSession`], the gateway over an in-memory WebSocket, the local model as a closure.
 
 use std::collections::BTreeMap;
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,7 +46,6 @@ fn cloud_session(local_fallback: bool) -> EotSession {
     cloud_session_sharing(local_fallback).0
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 /// [`cloud_session`], plus the threshold table it shares with the caller.
 fn cloud_session_sharing(local_fallback: bool) -> (EotSession, Arc<Mutex<ThresholdOptions>>) {
     let mut thresholds = ThresholdOptions::new(TurnDetectorModel::V1, None, None);
@@ -315,13 +313,9 @@ fn the_ring_buffer_keeps_the_newest_audio() {
 
 #[derive(Default)]
 struct RecordingSink {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     resolves: Mutex<Vec<(String, TransportPrediction)>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     metrics: Mutex<Vec<EotInferenceMetrics>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     warnings: Mutex<Vec<EotWarning>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     defaults: Mutex<Vec<(BTreeMap<String, f64>, f64)>>,
     reject_defaults: bool,
 }
@@ -362,7 +356,6 @@ impl PredictionSink for RecordingSink {
 }
 
 struct FakeSink {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
@@ -375,10 +368,8 @@ impl WebSocketSink for FakeSink {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 /// One connection's inbound frames, and the headers it was opened with.
 type Incoming = tokio::sync::mpsc::UnboundedReceiver<Result<Vec<u8>, ApiError>>;
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 type Headers = Arc<Mutex<Vec<Vec<(String, String)>>>>;
 
 struct FakeStream {
@@ -392,12 +383,9 @@ impl WebSocketStream for FakeStream {
 }
 
 struct FakeConnector {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     urls: Arc<Mutex<Vec<String>>>,
     headers: Headers,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     incoming: Mutex<Option<Incoming>>,
     /// Never complete the handshake: a gateway that accepts the socket and says nothing.
     hang: bool,
@@ -422,12 +410,9 @@ impl WebSocketConnector for FakeConnector {
 
 struct CloudFixture {
     transport: Arc<CloudTransport>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     urls: Arc<Mutex<Vec<String>>>,
     headers: Headers,
-    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     server: tokio::sync::mpsc::UnboundedSender<Result<Vec<u8>, ApiError>>,
 }
 
@@ -435,8 +420,6 @@ fn cloud_fixture(sink: Arc<RecordingSink>) -> CloudFixture {
     hanging_cloud_fixture(sink, false)
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn hanging_cloud_fixture(sink: Arc<RecordingSink>, hang: bool) -> CloudFixture {
     let (server, incoming) = tokio::sync::mpsc::unbounded_channel();
     let sent = Arc::new(Mutex::new(Vec::new()));
@@ -467,7 +450,6 @@ fn cloud_options() -> CloudOptions {
 
 // Catches: the handshake bounded on tokio's clock or not at all; a stalled handshake is the
 // non-retryable `APITimeoutError`, and the cloud->local fallback is the recovery.
-#[allow(clippy::disallowed_macros, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_handshake_that_never_completes_times_out_on_the_session_clock_and_does_not_retry() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
@@ -485,7 +467,6 @@ async fn a_handshake_that_never_completes_times_out_on_the_session_clock_and_doe
     assert_eq!(fixture.urls.lock().unwrap().len(), 1, "dialed once, not retried");
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Await `f`, but never forever, so a mutant fails the test instead of hanging it.
 async fn within<T>(label: &str, f: impl std::future::Future<Output = T>) -> T {
     match tokio::time::timeout(Duration::from_secs(2), f).await {
@@ -515,7 +496,6 @@ fn server_message(message: proto::server_message::Message, request_id: &str) -> 
     .encode_to_vec()
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn client_messages(sent: &Arc<Mutex<Vec<Vec<u8>>>>) -> Vec<proto::ClientMessage> {
     sent.lock()
         .unwrap()
@@ -525,7 +505,6 @@ fn client_messages(sent: &Arc<Mutex<Vec<Vec<u8>>>>) -> Vec<proto::ClientMessage>
 }
 
 // Catches: swapped or mis-scaled latency metrics, and losing `backchannel_probability`.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_prediction_message_resolves_the_request_and_reports_its_metrics() {
     let sink = Arc::new(RecordingSink::default());
@@ -666,7 +645,6 @@ async fn a_server_error_message_ends_the_transport_with_its_status_code() {
 
 // Catches: the transport-latency warning's guards (`> 0` for unset, `> 500` for rate); the exact
 // boundary is unreachable from a wall clock.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_slow_round_trip_is_reported_and_an_unstamped_message_is_not() {
     let sink = Arc::new(RecordingSink::default());
@@ -700,7 +678,6 @@ async fn a_slow_round_trip_is_reported_and_an_unstamped_message_is_not() {
 }
 
 // Catches: dropping the `closing_ws` flag, so a clean shutdown looks unexpected and falls back.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_close_after_session_close_is_a_clean_end_and_a_close_before_it_is_not() {
     let sink = Arc::new(RecordingSink::default());
@@ -724,7 +701,6 @@ async fn a_close_after_session_close_is_a_clean_end_and_a_close_before_it_is_not
 
 // Catches: the wire encoding of audio (the frame's `num_samples`, LE s16, no empty frames) and
 // the two control messages.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn audio_and_control_messages_go_out_in_the_shape_the_gateway_expects() {
     let sink = Arc::new(RecordingSink::default());
@@ -766,7 +742,6 @@ async fn audio_and_control_messages_go_out_in_the_shape_the_gateway_expects() {
 
 // Catches: an `https://` gateway URL, rewriting more than the scheme, losing the bearer token, or
 // minting it with the wrong grant, `sub`, `iss` or a TTL other than `ttl=600`.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn the_handshake_uses_a_ws_url_a_bearer_token_and_the_hosts_session_id() {
     let sink = Arc::new(RecordingSink::default());
@@ -802,7 +777,6 @@ async fn the_handshake_uses_a_ws_url_a_bearer_token_and_the_hosts_session_id() {
 
 /// Records the PCM the model was handed, so the snapshot rule is observable.
 struct RecordingModel {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     seen: Arc<Mutex<Vec<Vec<i16>>>>,
     answer: Result<f64, String>,
 }
@@ -816,7 +790,6 @@ impl LocalEotModel for RecordingModel {
 
 // Catches: the local audio path: no buffering, no clear on flush, snapshot taken at run time,
 // a window other than the trailing 1.2 s, or a model failure propagating instead of scoring 0.0.
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn the_local_transport_scores_the_audio_it_was_holding_when_the_request_was_made() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -852,7 +825,6 @@ async fn the_local_transport_scores_the_audio_it_was_holding_when_the_request_wa
 }
 
 // Catches: letting a model failure through instead of scoring 0.0.
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
     let sink = Arc::new(RecordingSink::default());
