@@ -17,11 +17,11 @@ use std::time::Duration;
 
 use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
-use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::UploadGate as UploadGateApi;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
+use lk_agents_abi::{Clock, RealClock};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
 use tokio::io::AsyncReadExt;
@@ -185,8 +185,8 @@ impl SessionReportUploader {
         recording: RecordingUpload,
         url: reqwest::Url,
     ) -> Result<bool, UploadError> {
-        let epoch = tokio::time::Instant::now();
-        let now = || Ts::from_nanos(epoch.elapsed().as_nanos() as u64);
+        let clock = RealClock::new();
+        let now = || clock.now();
         let mut steps = Vec::new();
         let mut attempts = Attempts::start(UPLOAD_ATTEMPTS, now(), &mut steps);
         let mut failure = String::new();
@@ -201,7 +201,7 @@ impl SessionReportUploader {
             }
             let Some(attempt) = launched else {
                 let at = attempts.wake_at(None).expect("an undecided upload is waiting to retry");
-                tokio::time::sleep_until(epoch + at.saturating_duration_since(Ts::ZERO)).await;
+                clock.wait_until(at).await;
                 attempts.wake(now(), None, &mut steps);
                 continue;
             };
