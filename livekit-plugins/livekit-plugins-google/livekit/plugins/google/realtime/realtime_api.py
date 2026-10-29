@@ -1033,21 +1033,24 @@ class RealtimeSession(llm.RealtimeSession):
                     async with self._session_lock:
                         self._active_session = session
 
+                        if self._session_resumption_handle is not None and self._context_updated:
+                            # the handle restores the conversation, but with the
+                            # instructions/tools the session had when it was created. a
+                            # handle may also predate the last context_update, so the
+                            # current ones are sent again rather than trusting it. sent
+                            # before the pending chat context is taken, so a failure here
+                            # leaves it in place for the retry
+                            await session.send_context_update(
+                                system_instruction=types.Content(
+                                    parts=[types.Part(text=self._opts.instructions)]
+                                )
+                                if is_given(self._opts.instructions)
+                                else None,
+                                tools=list(self._tools_config()),
+                            )
+
                         pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
-                            if self._context_updated:
-                                # the handle restores the conversation, but with the
-                                # instructions/tools the session had when it was created.
-                                # a handle may also predate the last context_update, so
-                                # the current ones are sent again rather than trusting it
-                                await session.send_context_update(
-                                    system_instruction=types.Content(
-                                        parts=[types.Part(text=self._opts.instructions)]
-                                    )
-                                    if is_given(self._opts.instructions)
-                                    else None,
-                                    tools=list(self._tools_config()),
-                                )
                             # the handle restores the conversation; send only what came after it
                             target = pending_ctx if pending_ctx is not None else self._chat_ctx
                             if self._resumption_chat_ctx is None:

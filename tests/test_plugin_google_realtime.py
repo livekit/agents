@@ -11,7 +11,7 @@ import pytest
 from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectOptions, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -1300,5 +1300,46 @@ async def test_vertex_gemini_3_8_context_update_order_and_resume_resend(
         assert resent[0].parts[0].text == "Speak concisely."
         assert len(resent[1]) == 1
         assert resent[1][0].function_declarations[0].name == _restart_tool.info.name
+    finally:
+        await session.aclose()
+
+
+async def test_failed_resume_context_update_keeps_pending_chat_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resume that fails while re-sending the context must not drop pending chat context."""
+    from google.genai.live import AsyncLive
+
+    class _FailingContextUpdate(_FakeLiveSession):
+        async def send_context_update(
+            self, *, system_instruction: object = None, tools: object = None
+        ) -> None:
+            raise RuntimeError("socket closed during resume")
+
+    sockets: list[_FakeLiveSession] = [_FailingContextUpdate(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0)
+    ).session()
+    session._session_resumption_handle = "resume-me"
+    session._context_updated = True
+    pending = llm.ChatContext.empty()
+    msg = pending.add_message(role="user", content="queued while offline")
+    session._pending_chat_ctx = pending
+    try:
+        while len(opened) < 2 or session._active_session is not opened[1]:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert opened[1].sent[0][0] == "context_update"
+        assert session._chat_ctx.get_by_id(msg.id) is not None
     finally:
         await session.aclose()
