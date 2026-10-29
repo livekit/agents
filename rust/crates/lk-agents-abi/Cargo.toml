@@ -41,9 +41,8 @@ indexmap.workspace = true
 thiserror.workspace = true
 # Legacy realtime, tool and shutdown adapters report failures through the host logger.
 log.workspace = true
-# Legacy clocks, task ownership, queues, stream teardown and realtime notifications still use
-# `sync` and `time`; their implementations move with the host and runtime service extraction.
-tokio = { workspace = true, features = ["sync", "time"] }
+# `python` only: the legacy in-place bindings' `AsyncMutex` (`src/python/mod.rs`).
+tokio = { workspace = true, features = ["sync"], optional = true }
 # `python` only: the runtime the in-place bindings expand against (`src/python.rs`). Without the
 # feature this crate has no pyo3.
 pyo3 = { workspace = true, optional = true }
@@ -65,7 +64,13 @@ bytes = "1"
 # dispatch. Enabled through a core crate's own `python` feature, by `lk-agents-py` only.
 # `multiple-pymethods`: a class's generated `#[pymethods]` block (`#[host(object)]`) and the
 # hand-written methods beside it that no declaration expresses (a getter building host objects).
-python = ["dep:pyo3", "pyo3/multiple-pymethods", "dep:pyo3-async-runtimes", "dep:base64"]
+python = [
+    "dep:pyo3",
+    "pyo3/multiple-pymethods",
+    "dep:pyo3-async-runtimes",
+    "dep:base64",
+    "dep:tokio",
+]
 # See the `serde` dependency's note: the derive on the plain enums the voice core carries.
 serde = []
 # The zeroed metrics records tests fill in field by field (`metrics::testkit`).
@@ -73,4 +78,3 @@ testkit = []
 
 [dev-dependencies]
 lk-agents-test-support = { path = "../lk-agents-test-support" }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util"] }

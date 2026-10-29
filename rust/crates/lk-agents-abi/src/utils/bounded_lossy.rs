@@ -201,19 +201,44 @@ impl<T> Drop for BoundedLossy<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::pin;
     use std::time::Duration;
 
-    /// Real-time guard: these hazards fail as hangs.
+    /// Real-time guard: a lost wakeup fails instead of hanging.
     const GUARD: Duration = Duration::from_secs(2);
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    async fn within<F: std::future::Future>(f: F) -> F::Output {
-        tokio::time::timeout(GUARD, f).await.expect("the queue hung instead of answering")
+    /// One poll: every wait below is on a queue that already holds its answer.
+    fn ready<F: Future>(f: F) -> F::Output {
+        match pin!(f).poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("the queue hung instead of answering"),
+        }
+    }
+
+    /// Polls `f` on this thread, parked between polls; a wait no wake ends fails.
+    fn woken<F: Future>(f: F) -> F::Output {
+        struct Unpark(std::thread::Thread, std::sync::OnceLock<()>);
+        impl std::task::Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                let _ = self.1.set(());
+                self.0.unpark();
+            }
+        }
+        let mut f = pin!(f);
+        loop {
+            let unpark = Arc::new(Unpark(std::thread::current(), std::sync::OnceLock::new()));
+            let waker = Waker::from(unpark.clone());
+            if let Poll::Ready(v) = f.as_mut().poll(&mut Context::from_waker(&waker)) {
+                return v;
+            }
+            std::thread::park_timeout(GUARD);
+            assert!(unpark.1.get().is_some(), "the receiver slept through a push (lost wakeup)");
+        }
     }
 
     // Catches `mpsc::try_send`'s behaviour: rejecting the newest frame when full.
-    #[tokio::test]
-    async fn a_full_queue_evicts_the_oldest_frame_not_the_newest() {
+    #[test]
+    fn a_full_queue_evicts_the_oldest_frame_not_the_newest() {
         let mut q = BoundedLossy::new(3);
         assert_eq!(q.push(1), Pushed::Ok);
         assert_eq!(q.push(2), Pushed::Ok);
@@ -223,29 +248,29 @@ mod tests {
 
         assert_eq!(q.dropped(), 2, "the loss must be observable to the driver's warn");
         assert_eq!(q.len(), 3, "eviction, not growth");
-        assert_eq!(within(q.recv()).await, Some(3), "the three most recent frames survive");
-        assert_eq!(within(q.recv()).await, Some(4));
-        assert_eq!(within(q.recv()).await, Some(5));
+        assert_eq!(ready(q.recv()), Some(3), "the three most recent frames survive");
+        assert_eq!(ready(q.recv()), Some(4));
+        assert_eq!(ready(q.recv()), Some(5));
     }
 
     // Catches: nothing observing hang-up, so `recv` never returns `None`; and hang-up discarding the queue.
-    #[tokio::test]
-    async fn recv_drains_then_ends_when_the_sender_hangs_up() {
+    #[test]
+    fn recv_drains_then_ends_when_the_sender_hangs_up() {
         let (tx, mut rx) = BoundedLossy::audio();
         tx.push("hello");
         tx.push("world");
         drop(tx);
 
-        assert_eq!(within(rx.recv()).await, Some("hello"));
-        assert_eq!(within(rx.recv()).await, Some("world"));
-        assert_eq!(within(rx.recv()).await, None, "recv must end when the only sender is gone");
+        assert_eq!(ready(rx.recv()), Some("hello"));
+        assert_eq!(ready(rx.recv()), Some("world"));
+        assert_eq!(ready(rx.recv()), None, "recv must end when the only sender is gone");
     }
 
     // Catches a lost wakeup: checking before registering for notification. Real OS thread: the
     // push side is synchronous host code.
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[tokio::test]
-    async fn a_push_racing_the_receiver_still_wakes_it() {
+    #[test]
+    fn a_push_racing_the_receiver_still_wakes_it() {
         let (tx, mut rx) = BoundedLossy::audio();
         let start = std::sync::Arc::new(std::sync::Barrier::new(2));
 
@@ -263,10 +288,9 @@ mod tests {
         start.wait();
         let mut seen = 0;
         while seen < 200 {
-            match tokio::time::timeout(GUARD, rx.recv()).await {
-                Ok(Some(_)) => seen += 1,
-                Ok(None) => break, // sender finished; the rest were evicted, which is legal
-                Err(_) => panic!("the receiver slept through a push (lost wakeup) after {seen}"),
+            match woken(rx.recv()) {
+                Some(_) => seen += 1,
+                None => break, // sender finished; the rest were evicted, which is legal
             }
         }
         producer.join().unwrap();
@@ -274,27 +298,26 @@ mod tests {
     }
 
     // Catches: a `select!` arm dropping the in-flight `recv` and taking a frame with it.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[tokio::test]
-    async fn an_abandoned_recv_does_not_consume_a_frame() {
+    #[test]
+    fn an_abandoned_recv_does_not_consume_a_frame() {
         let (tx, mut rx) = BoundedLossy::audio();
 
         {
             // Empty, so this parks -- the state a losing `select!` arm is in.
-            let mut waiting = Box::pin(rx.recv());
-            assert!(tokio::time::timeout(Duration::from_millis(5), &mut waiting).await.is_err());
+            let waiting = pin!(rx.recv());
+            assert!(waiting.poll(&mut Context::from_waker(Waker::noop())).is_pending());
             // The frame lands while that arm is parked, and the arm is then dropped unpolled.
             tx.push(7);
         }
 
-        let got = within(rx.recv()).await;
+        let got = ready(rx.recv());
         assert_eq!(got, Some(7), "the abandoned recv consumed the frame, or ate its wakeup");
         assert_eq!(rx.dropped(), 0, "an abandoned recv is not a drop");
     }
 
     // Catches: pushes into a torn-down leg getting no `Closed` answer.
-    #[tokio::test]
-    async fn pushing_after_the_receiver_is_gone_reports_closed() {
+    #[test]
+    fn pushing_after_the_receiver_is_gone_reports_closed() {
         let (tx, rx) = BoundedLossy::audio();
         assert_eq!(tx.push(1), Pushed::Ok);
         drop(rx);

@@ -191,38 +191,39 @@ mod tests {
         }
     }
 
+    fn poll<F: Future + ?Sized>(f: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
+        f.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    }
+
     // Catches: a wedged host teardown hanging the pump, or a bound on tokio's clock, not the session's.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[tokio::test]
-    async fn a_close_that_never_resolves_is_timed_out_at_the_deadline_on_the_clock() {
+    #[test]
+    fn a_close_that_never_resolves_is_timed_out_at_the_deadline_on_the_clock() {
         let clock = Arc::new(VirtualClock::new());
         let source: Box<dyn StreamSource<()>> =
             Box::new(Host { clock: Arc::clone(&clock), wedged: true });
         let deadline = clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
 
-        let closing = tokio::spawn(source.close(deadline));
-        tokio::task::yield_now().await;
-        assert!(!closing.is_finished(), "nothing moved time, the close must still be waiting");
+        let mut closing = source.close(deadline);
+        assert!(poll(closing.as_mut()).is_pending(), "nothing moved time, the close must wait");
         clock.advance(HOST_TEARDOWN_TIMEOUT - Duration::from_millis(1));
-        tokio::task::yield_now().await;
-        assert!(!closing.is_finished(), "one millisecond before the deadline is not the deadline");
+        assert!(poll(closing.as_mut()).is_pending(), "one millisecond before is not the deadline");
         clock.advance(Duration::from_millis(1));
-        assert_eq!(closing.await.unwrap(), Closed::TimedOut);
+        assert_eq!(poll(closing.as_mut()), std::task::Poll::Ready(Closed::TimedOut));
     }
 
     // Catches: `bounded` reporting `TimedOut` for a teardown that answered.
-    #[tokio::test]
-    async fn a_teardown_that_answers_is_clean() {
+    #[test]
+    fn a_teardown_that_answers_is_clean() {
         let clock = Arc::new(VirtualClock::new());
         let source: Box<dyn StreamSource<()>> =
             Box::new(Host { clock: Arc::clone(&clock), wedged: false });
         let deadline = clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-        assert_eq!(source.close(deadline).await, Closed::Clean);
+        assert_eq!(poll(source.close(deadline).as_mut()), std::task::Poll::Ready(Closed::Clean));
 
         // A deadline already behind the clock still gives a ready teardown its one poll.
         let source: Box<dyn StreamSource<()>> =
             Box::new(Host { clock: Arc::clone(&clock), wedged: false });
         clock.advance(Duration::from_secs(1));
-        assert_eq!(source.close(Ts::ZERO).await, Closed::Clean);
+        assert_eq!(poll(source.close(Ts::ZERO).as_mut()), std::task::Poll::Ready(Closed::Clean));
     }
 }
