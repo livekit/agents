@@ -20,6 +20,7 @@ pub mod cores {
         LlmMetricState, ProviderMetrics, TtsMetricState,
     };
     pub use lk_agents_core::telemetry::records::MetricsRecords;
+    pub use lk_agents_core::telemetry::report::ReportProjection;
     pub use lk_agents_core::telemetry::transport::TraceParents;
     pub use lk_agents_core::text::Languages;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};

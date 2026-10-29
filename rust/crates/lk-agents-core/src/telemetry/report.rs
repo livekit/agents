@@ -1,6 +1,10 @@
-//! One native privacy projection for retained report events, console snapshots and Cloud records.
+//! The session report's privacy projection and record shape: which events and fields a report
+//! may retain, and the bounded log records the host SDK emits. `lk-agents-net` builds and uploads
+//! the report.
 
-use lk_agents_abi::telemetry::policy;
+use lk_agents_abi::telemetry::policy::{
+    REPORT_EVENT_BYTES, REPORT_EVENT_ITEMS, REPORT_EVENT_RECORD_BYTES, SDK_RECORD_BYTES,
+};
 use lk_agents_abi::telemetry::report::projection::{
     ProjectedReportEvent, SessionReportProjection, SessionReportSnapshot,
 };
@@ -10,6 +14,129 @@ use lk_agents_abi::voice::events::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+/// OTel JS's `HrTime`: epoch nanos do not fit a JS `number`.
+pub type HrTime = (i64, u32);
+
+pub fn hr_time(epoch_nanos: u128) -> HrTime {
+    ((epoch_nanos / 1_000_000_000) as i64, (epoch_nanos % 1_000_000_000) as u32)
+}
+
+pub fn epoch_nanos(t: HrTime) -> u128 {
+    t.0.max(0) as u128 * 1_000_000_000 + t.1 as u128
+}
+
+/// OTel's `SeverityNumber.ERROR`, identical in both SDKs.
+const SEVERITY_ERROR: u8 = 17;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogRecord {
+    pub logger: String,
+    pub body: String,
+    pub timestamp: HrTime,
+    pub severity_number: u8,
+    pub severity_text: String,
+    /// Recursive, unlike a span's.
+    pub attributes: Value,
+}
+
+impl From<LogRecord> for LogRecordWire {
+    fn from(r: LogRecord) -> Self {
+        LogRecordWire {
+            logger: r.logger,
+            body: r.body,
+            timestamp_nanos: epoch_nanos(r.timestamp).min(i64::MAX as u128) as i64,
+            severity_number: r.severity_number,
+            severity_text: r.severity_text,
+            attributes: match r.attributes {
+                Value::Object(attributes) => attributes,
+                _ => unreachable!("session report attributes are always objects"),
+            },
+        }
+    }
+}
+
+// What `_upload_session_report` (`telemetry/traces.py:480`) emits as OTel log records; Rust builds
+// them, the host's SDK emits them. Tag-with-metadata and outcome records are not behind
+// `recording_enabled` (hence `job.py:320`'s `recording_enabled(..) or has_evals`). Buffered early
+// logs (`job.py:265`) are the log handler's.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoggerName {
+    ChatHistory,
+    /// Also carries the tag and outcome records.
+    Evaluations,
+}
+
+/// A report record: `SeverityNumber.ERROR` / `"error"` when `error`, else `UNSPECIFIED` /
+/// `"unspecified"` -- the report's own lowercase spelling, not the log handler's.
+pub fn record(
+    logger: LoggerName,
+    body: &str,
+    timestamp: HrTime,
+    attributes: Value,
+    error: bool,
+) -> LogRecord {
+    let (severity_number, severity_text) =
+        if error { (SEVERITY_ERROR, "error") } else { (0, "unspecified") };
+    LogRecord {
+        logger: match logger {
+            LoggerName::ChatHistory => "chat_history",
+            LoggerName::Evaluations => "evaluations",
+        }
+        .to_owned(),
+        body: body.to_owned(),
+        timestamp,
+        severity_number,
+        severity_text: severity_text.to_owned(),
+        attributes,
+    }
+}
+
+/// `int(seconds * 1e9)`.
+pub fn hr_seconds(seconds: f64) -> HrTime {
+    hr_time((seconds * 1e9) as u128)
+}
+
+/// Count serialized bytes without allocating another copy of arbitrary application metadata.
+pub fn report_value_fits(value: &(impl serde::Serialize + ?Sized)) -> bool {
+    report_value_bytes(value).is_some()
+}
+
+pub fn report_value_bytes(value: &(impl serde::Serialize + ?Sized)) -> Option<usize> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > SDK_RECORD_BYTES.saturating_sub(self.0 + 1024) {
+                return Err(std::io::ErrorKind::FileTooLarge.into());
+            }
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value).ok()?;
+    Some(counter.0)
+}
+
+pub fn attribute_report_record(
+    record: &mut LogRecord,
+    job_id: &str,
+    room_id: &str,
+    room: &str,
+    capture_content: bool,
+) {
+    let attributes = record.attributes.as_object_mut().expect("report attributes are objects");
+    attributes.insert("job_id".into(), job_id.into());
+    attributes.insert("room_id".into(), room_id.into());
+    attributes.insert("room".into(), room.into());
+    attributes.insert("lk.telemetry.capture_content".into(), capture_content.into());
+    // Bodies are protocol discriminators; free-form content lives in gated attributes.
+    attributes.insert("lk.telemetry.safe_body".into(), true.into());
+}
 
 #[derive(Deserialize)]
 struct EventHeader {
@@ -58,9 +185,7 @@ impl EventPrivacy {
 pub fn event_allowed(kind: &str, capture_content: bool, redaction: bool) -> bool {
     match EventPrivacy::for_kind(kind) {
         EventPrivacy::Safe => true,
-        EventPrivacy::Content => {
-            lk_agents_core::telemetry::policy::content_allowed(capture_content, redaction)
-        }
+        EventPrivacy::Content => super::policy::content_allowed(capture_content, redaction),
         EventPrivacy::Refused => false,
     }
 }
@@ -75,10 +200,8 @@ pub struct ReportProjection {
 
 impl SessionReportProjection for ReportProjection {
     fn new(capture_content: bool, options: &RecordingOptions, project_redaction: bool) -> Self {
-        let content = lk_agents_core::telemetry::policy::content_allowed(
-            capture_content,
-            options.redaction || project_redaction,
-        );
+        let content =
+            super::policy::content_allowed(capture_content, options.redaction || project_redaction);
         Self {
             content,
             transcript: content && options.transcript,
@@ -98,12 +221,12 @@ impl SessionReportProjection for ReportProjection {
     }
 
     fn event_limit(&self, items: usize) -> usize {
-        items.min(policy::REPORT_EVENT_ITEMS)
+        items.min(REPORT_EVENT_ITEMS)
     }
 
     fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> bool {
-        event_bytes <= policy::REPORT_EVENT_RECORD_BYTES
-            && event_bytes <= policy::REPORT_EVENT_BYTES.saturating_sub(retained_bytes)
+        event_bytes <= REPORT_EVENT_RECORD_BYTES
+            && event_bytes <= REPORT_EVENT_BYTES.saturating_sub(retained_bytes)
     }
 
     fn project(&self, mut report: SessionReportSnapshot) -> SessionReportSnapshot {
@@ -121,7 +244,7 @@ impl SessionReportProjection for ReportProjection {
     }
 
     fn project_event(&self, event: Value, retained_bytes: usize) -> Option<ProjectedReportEvent> {
-        if !super::records::report_value_fits(&event) {
+        if !report_value_fits(&event) {
             return None;
         }
         let header = EventHeader::deserialize(&event).ok()?;
@@ -135,8 +258,7 @@ impl SessionReportProjection for ReportProjection {
         };
         // Include a separator, and never charge less than either the SDK's retained graph or
         // the native wire representation. Both destinations consequently share the same bound.
-        let bytes =
-            super::records::report_value_bytes(&value)?.saturating_add(1).max(retained_bytes);
+        let bytes = report_value_bytes(&value)?.saturating_add(1).max(retained_bytes);
         Some(ProjectedReportEvent { value, content, retained_bytes: bytes })
     }
 
@@ -153,21 +275,15 @@ impl SessionReportProjection for ReportProjection {
         let key = if event.content { "lk.pii.session_event" } else { "session.event" };
         let value = serde_json::to_string(&event.value).ok()?;
         let attributes = Value::Object(Map::from_iter([(key.to_owned(), Value::String(value))]));
-        let mut record = super::records::record(
-            super::records::LoggerName::ChatHistory,
+        let mut record = record(
+            LoggerName::ChatHistory,
             "session event",
-            super::records::hr_seconds(timestamp),
+            hr_seconds(timestamp),
             attributes,
             false,
         );
-        super::records::attribute_report_record(
-            &mut record,
-            &identity.0,
-            &identity.1,
-            &identity.2,
-            self.content,
-        );
-        super::records::report_value_fits(&record.attributes).then(|| record.into())
+        attribute_report_record(&mut record, &identity.0, &identity.1, &identity.2, self.content);
+        report_value_fits(&record.attributes).then(|| record.into())
     }
 }
 

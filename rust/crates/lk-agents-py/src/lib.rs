@@ -145,7 +145,7 @@ impl generated::Implementations for Selected {
     type InferenceModels = lk_agents_runtime::inference::models::Models;
     type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;
     type SessionReportProjection =
-        lk_agents_runtime::net::session_report::projection::ReportProjection;
+        lk_agents_runtime::cores::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
     type EventRetention = lk_agents_runtime::net::session_report::EventRetention;
     type PreparedTranscript = lk_agents_runtime::net::session_report::TranscriptBuilder;

@@ -8,7 +8,6 @@
 
 mod admission;
 pub mod events;
-pub mod projection;
 pub mod records;
 pub mod transcript;
 

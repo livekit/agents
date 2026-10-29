@@ -15,56 +15,19 @@ use lk_agents_abi::telemetry::report::{
     SessionReportInput, TAG_FAIL, TAG_SUCCESS, Tagger as _,
 };
 use lk_agents_abi::{ChatItem, Clock};
+use lk_agents_core::telemetry::report::{
+    HrTime, LogRecord, LoggerName, ReportProjection, attribute_report_record, hr_seconds, hr_time,
+    record, report_value_bytes, report_value_fits,
+};
 use serde_json::{Map, Value, json};
 
 // -----------------------------------------------------------------------------------------
 // log records and their timestamps
 // -----------------------------------------------------------------------------------------
 
-/// OTel JS's `HrTime`: epoch nanos do not fit a JS `number`.
-pub type HrTime = (i64, u32);
-
-pub fn hr_time(epoch_nanos: u128) -> HrTime {
-    ((epoch_nanos / 1_000_000_000) as i64, (epoch_nanos % 1_000_000_000) as u32)
-}
-
-pub fn epoch_nanos(t: HrTime) -> u128 {
-    t.0.max(0) as u128 * 1_000_000_000 + t.1 as u128
-}
-
 /// A wall-clock stamp; pre-epoch reads as the epoch.
 pub fn hr_wall(t: SystemTime) -> HrTime {
     hr_time(t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0))
-}
-
-/// OTel's `SeverityNumber.ERROR`, identical in both SDKs.
-const SEVERITY_ERROR: u8 = 17;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LogRecord {
-    pub logger: String,
-    pub body: String,
-    pub timestamp: HrTime,
-    pub severity_number: u8,
-    pub severity_text: String,
-    /// Recursive, unlike a span's.
-    pub attributes: Value,
-}
-
-impl From<LogRecord> for LogRecordWire {
-    fn from(r: LogRecord) -> Self {
-        LogRecordWire {
-            logger: r.logger,
-            body: r.body,
-            timestamp_nanos: epoch_nanos(r.timestamp).min(i64::MAX as u128) as i64,
-            severity_number: r.severity_number,
-            severity_text: r.severity_text,
-            attributes: match r.attributes {
-                Value::Object(attributes) => attributes,
-                _ => unreachable!("session report attributes are always objects"),
-            },
-        }
-    }
 }
 
 /// An evaluation's fields, in the reference's insertion order.
@@ -76,51 +39,6 @@ fn evaluation_attributes(e: &EvaluationRecord) -> [(&'static str, &str); 5] {
         ("reasoning", &e.reasoning),
         ("instructions", &e.instructions),
     ]
-}
-
-// -----------------------------------------------------------------------------------------
-// the session report's log records
-// -----------------------------------------------------------------------------------------
-// What `_upload_session_report` (`telemetry/traces.py:480`) emits as OTel log records; Rust builds
-// them, the host's SDK emits them. Tag-with-metadata and outcome records are not behind
-// `recording_enabled` (hence `job.py:320`'s `recording_enabled(..) or has_evals`). Buffered early
-// logs (`job.py:265`) are the log handler's.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LoggerName {
-    ChatHistory,
-    /// Also carries the tag and outcome records.
-    Evaluations,
-}
-
-/// A report record: `SeverityNumber.ERROR` / `"error"` when `error`, else `UNSPECIFIED` /
-/// `"unspecified"` -- the report's own lowercase spelling, not the log handler's.
-pub(super) fn record(
-    logger: LoggerName,
-    body: &str,
-    timestamp: HrTime,
-    attributes: Value,
-    error: bool,
-) -> LogRecord {
-    let (severity_number, severity_text) =
-        if error { (SEVERITY_ERROR, "error") } else { (0, "unspecified") };
-    LogRecord {
-        logger: match logger {
-            LoggerName::ChatHistory => "chat_history",
-            LoggerName::Evaluations => "evaluations",
-        }
-        .to_owned(),
-        body: body.to_owned(),
-        timestamp,
-        severity_number,
-        severity_text: severity_text.to_owned(),
-        attributes,
-    }
-}
-
-/// `int(seconds * 1e9)`.
-pub(super) fn hr_seconds(seconds: f64) -> HrTime {
-    hr_time((seconds * 1e9) as u128)
 }
 
 /// `{k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}`, in declaration order. Only
@@ -260,11 +178,8 @@ pub fn session_records(
     let mut out = Vec::new();
     let mut omitted = report.omitted_events;
     let opts = report.recording_options;
-    let projection = <super::projection::ReportProjection as SessionReportProjection>::new(
-        capture_content,
-        &opts,
-        false,
-    );
+    let projection =
+        <ReportProjection as SessionReportProjection>::new(capture_content, &opts, false);
     let capture_content = projection.content();
 
     if opts.recording_enabled() {
@@ -439,46 +354,6 @@ pub fn session_records(
         }
     }
     out
-}
-
-/// Count serialized bytes without allocating another copy of arbitrary application metadata.
-pub(super) fn report_value_fits(value: &(impl serde::Serialize + ?Sized)) -> bool {
-    report_value_bytes(value).is_some()
-}
-
-pub(super) fn report_value_bytes(value: &(impl serde::Serialize + ?Sized)) -> Option<usize> {
-    struct Counter(usize);
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if bytes.len() > policy::SDK_RECORD_BYTES.saturating_sub(self.0 + 1024) {
-                return Err(std::io::ErrorKind::FileTooLarge.into());
-            }
-            self.0 += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    serde_json::to_writer(&mut counter, value).ok()?;
-    Some(counter.0)
-}
-
-pub(super) fn attribute_report_record(
-    record: &mut LogRecord,
-    job_id: &str,
-    room_id: &str,
-    room: &str,
-    capture_content: bool,
-) {
-    let attributes = record.attributes.as_object_mut().expect("report attributes are objects");
-    attributes.insert("job_id".into(), job_id.into());
-    attributes.insert("room_id".into(), room_id.into());
-    attributes.insert("room".into(), room.into());
-    attributes.insert("lk.telemetry.capture_content".into(), capture_content.into());
-    // Bodies are protocol discriminators; free-form content lives in gated attributes.
-    attributes.insert("lk.telemetry.safe_body".into(), true.into());
 }
 
 // -----------------------------------------------------------------------------------------
