@@ -83,7 +83,8 @@ function useSessionDetails(sessions: SessionRow[], agent: string, selected: stri
  */
 export function Room() {
   const panel = useDrawer();
-  const chat = useConversation();
+  const inCall = useRef(false);
+  const chat = useConversation({ inCall });
   const { dump, skew, watchError, taskLog } = useSession(chat.sessionId);
   const now = useNow(skew);
   const database = dump?.database ?? null;
@@ -94,7 +95,10 @@ export function Room() {
 
   /* A call with no conversation yet makes one; the page adopts it. */
   const adopt = chat.adopt;
-  const call = useCall({ sessionId: chat.sessionId, sub, agent, onSession: adopt });
+  const call = useCall({ sessionId: chat.sessionId, sub, agent, endpoint: chat.grant?.endpointName ?? "", onSession: adopt });
+  useEffect(() => {
+    inCall.current = call.connected;
+  }, [call.connected]);
 
   /* A selection belongs to its session: another session has its own tasks. */
   const [selection, setSelection] = useState<{ sessionId: string | null; taskId: string } | null>(null);

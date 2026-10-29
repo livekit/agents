@@ -89,7 +89,7 @@ function mergeTurns(kept: VoiceTurn[], live: VoiceTurn[]): VoiceTurn[] {
  * what a call said is snapshotted into `kept` when it ends or the next one
  * starts, and `reset` forgets everything for a new conversation.
  */
-export function useCall({ sessionId, sub, agent, onSession }: { sessionId: string | null; sub: string; agent: string; onSession: (sessionId: string) => void }) {
+export function useCall({ sessionId, sub, agent, endpoint, onSession }: { sessionId: string | null; sub: string; agent: string; endpoint: string; onSession: (sessionId: string) => void }) {
   const adopt = useRef(onSession);
   useEffect(() => {
     adopt.current = onSession;
@@ -99,7 +99,7 @@ export function useCall({ sessionId, sub, agent, onSession }: { sessionId: strin
   const { userChoices, saveAudioInputDeviceId } = usePersistentUserChoices();
   const session = useSession(tokenSource, {
     agentName: agent,
-    agentMetadata: JSON.stringify({ session_id: sessionId ?? undefined, sub }),
+    agentMetadata: JSON.stringify({ session_id: sessionId ?? undefined, sub, endpoint }),
     participantIdentity: sub,
     participantName: sub,
     agentConnectTimeoutMilliseconds: 45_000,

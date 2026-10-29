@@ -38,7 +38,7 @@ export async function POST(request: Request) {
   const body = ((await request.json().catch(() => null)) ?? {}) as Body;
   const dispatch = body.room_config?.agents?.[0];
   const agentName = dispatch?.agent_name ?? process.env.CONSOLE_AGENT ?? "fast-brain";
-  let metadata: { session_id?: string; sub?: string } = {};
+  let metadata: { session_id?: string; sub?: string; endpoint?: string } = {};
   try {
     metadata = dispatch?.metadata ? (JSON.parse(dispatch.metadata) as typeof metadata) : {};
   } catch {
@@ -49,7 +49,8 @@ export async function POST(request: Request) {
     const made = await fetch(`${API_URL}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sub: metadata.sub ?? body.participant_identity ?? "" }),
+      /* the session is listed under the agent and the endpoint on screen, as a text one is */
+      body: JSON.stringify({ sub: metadata.sub ?? body.participant_identity ?? "", agent: agentName, endpoint: metadata.endpoint ?? "" }),
     });
     if (!made.ok) return NextResponse.json({ error: `session: ${made.status} ${await made.text()}` }, { status: 502 });
     sessionId = ((await made.json()) as { session: { sessionId: string } }).session.sessionId;
