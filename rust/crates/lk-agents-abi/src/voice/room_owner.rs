@@ -7,6 +7,7 @@ use crate::voice::room_io::{
 use crate::voice::rtc::capabilities::RtcRoom;
 use crate::voice::rtc::{ParticipantIdentity, RtcError, TrackSid};
 use crate::{AudioFrame, Clock, Closed, Spawner, VirtualClock};
+use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,46 +29,28 @@ pub trait RoomVideoInputPort: VideoInput {
     fn aclose<'a>(&'a self) -> crate::BoxFuture<'a, Closed>;
 }
 
-pub struct RoomAudioInput(pub Arc<dyn RoomAudioInputPort>);
-
-#[crate::host(object(cell = "arc", as_dyn(AudioInput = as_audio_input)))]
-impl RoomAudioInput {
-    pub fn as_audio_input(self: &Arc<Self>) -> Arc<dyn AudioInput> {
-        self.0.clone()
-    }
+/// `_core.RoomAudioInput`: the room's microphone leg, taken as itself wherever the host passes
+/// an audio input.
+#[crate::host(class(name = "RoomAudioInput", native = AudioInput))]
+pub trait RoomAudioInput: Send + Sync + Sized + 'static {
     #[host(getter)]
-    pub fn reading(&self) -> Option<TrackSid> {
-        self.0.reading()
-    }
-    #[host(method)]
-    pub async fn next_frame(&self) -> Result<Option<AudioFrame>> {
-        self.0.next_frame().await
-    }
-    #[host(method)]
-    pub async fn aclose(&self) -> Result<()> {
-        input_closed(self.0.aclose().await)
-    }
+    fn reading(&self) -> Option<TrackSid>;
+    #[host(await, name = "next_frame")]
+    async fn read_frame(&self) -> Result<Option<AudioFrame>>;
+    #[host(await)]
+    async fn aclose(&self) -> Result<()>;
 }
 
-pub struct RoomVideoInput(pub Arc<dyn RoomVideoInputPort>);
-
-#[crate::host(object(cell = "arc", as_dyn(VideoInput = as_video_input)))]
-impl RoomVideoInput {
-    pub fn as_video_input(self: &Arc<Self>) -> Arc<dyn VideoInput> {
-        self.0.clone()
-    }
+/// `_core.RoomVideoInput`: the room's video leg, taken as itself wherever the host passes a video
+/// input.
+#[crate::host(class(name = "RoomVideoInput", native = VideoInput))]
+pub trait RoomVideoInput: Send + Sync + Sized + 'static {
     #[host(getter)]
-    pub fn reading(&self) -> Option<TrackSid> {
-        self.0.reading()
-    }
-    #[host(method)]
-    pub async fn next_frame(&self) -> Result<Option<crate::MediaRef>> {
-        self.0.next_frame().await.map(|frame| frame.map(|frame| frame.media))
-    }
-    #[host(method)]
-    pub async fn aclose(&self) -> Result<()> {
-        input_closed(self.0.aclose().await)
-    }
+    fn reading(&self) -> Option<TrackSid>;
+    #[host(await, name = "next_frame")]
+    async fn read_frame(&self) -> Result<Option<crate::MediaRef>>;
+    #[host(await)]
+    async fn aclose(&self) -> Result<()>;
 }
 
 pub trait RoomIo: Send + Sync {
@@ -77,8 +60,8 @@ pub trait RoomIo: Send + Sync {
         rtc_listener: Arc<dyn Fn(crate::voice::rtc::RoomEvent) -> bool + Send + Sync>,
     );
     fn audio_input(&self) -> Option<Arc<dyn AudioInput>>;
-    fn audio_input_leg(&self) -> Option<Arc<RoomAudioInput>>;
-    fn video_input(&self) -> Option<Arc<RoomVideoInput>>;
+    fn audio_input_leg(&self) -> Option<Arc<dyn RoomAudioInputPort>>;
+    fn video_input(&self) -> Option<Arc<dyn RoomVideoInputPort>>;
     fn audio_output(&self) -> Option<Arc<dyn AudioOutput>>;
     fn transcription_output(&self) -> Option<Arc<dyn TextOutput>>;
     fn wants_transcript_sync(&self, external_audio: bool) -> bool;
@@ -101,7 +84,7 @@ pub trait RoomIo: Send + Sync {
 
 /// A supplied runtime capability constructs the room performer; the core never locates a runtime.
 #[crate::host(native(refused = "expected a native room session"))]
-pub trait SessionRoom: Send + Sync {
+pub trait SessionRoom: Any + Send + Sync {
     fn rtc(&self) -> Option<Arc<dyn RtcRoom>>;
     fn clock(&self) -> Arc<dyn Clock>;
     fn virtual_clock(&self) -> Option<Arc<VirtualClock>> {
@@ -110,16 +93,10 @@ pub trait SessionRoom: Send + Sync {
     fn room_io(&self, spawner: Arc<dyn Spawner>, config: RoomIoConfig) -> Arc<dyn RoomIo>;
 }
 
-#[derive(Clone)]
-pub struct RoomSession(pub Arc<dyn SessionRoom>);
-
-/// Runtime capability connecting a session to its room, clock, and owned I/O.
-#[crate::host(object(name = "_core_RoomSession", cell = "value", pyclass(from_py_object), derive(Clone), as_dyn(SessionRoom = session_room)))]
-impl RoomSession {
-    pub fn session_room(&self) -> Arc<dyn SessionRoom> {
-        self.0.clone()
-    }
-}
+/// `_core_RoomSession`: what a session's room I/O is built from, handed to the host and taken
+/// back as itself.
+#[crate::host(class(name = "_core_RoomSession", native = SessionRoom))]
+pub trait RoomSession: Send + Sync + Sized + 'static {}
 
 #[crate::host(functions)]
 pub trait RoomRuntime {
@@ -127,19 +104,22 @@ pub trait RoomRuntime {
     #[host(env)]
     type Env;
 
+    #[host(class(name = "_core_RoomSession"))]
+    type Room;
+
     #[host(function, name = "_core_create_room_session")]
-    fn create_room_session(env: &Self::Env, room: Option<Arc<dyn RtcRoom>>) -> RoomSession;
+    fn create_room_session(env: &Self::Env, room: Option<Arc<dyn RtcRoom>>) -> Self::Room;
 
     /// Wait for the supplied room's connection, avatar participant and subscribed video track.
     #[host(function, name = "wait_avatar_join")]
     async fn wait_avatar_join(
-        room: RoomSession,
+        room: Arc<dyn SessionRoom>,
         identity: String,
     ) -> std::result::Result<(f64, f64), crate::voice::rtc::RtcError>;
 
     #[host(function)]
     async fn wait_for_participant(
-        room: RoomSession,
+        room: Arc<dyn SessionRoom>,
         identity: Option<String>,
         kinds: Option<Vec<i32>>,
         include_local: bool,
@@ -147,26 +127,16 @@ pub trait RoomRuntime {
 
     #[host(function)]
     async fn wait_for_agent(
-        room: RoomSession,
+        room: Arc<dyn SessionRoom>,
         name: Option<String>,
     ) -> std::result::Result<ParticipantIdentity, RtcError>;
 
     #[host(function)]
     async fn wait_for_track_publication(
-        room: RoomSession,
+        room: Arc<dyn SessionRoom>,
         identity: Option<String>,
         kinds: Option<Vec<i32>>,
         include_local: bool,
         subscribed: bool,
     ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError>;
-}
-
-fn input_closed(outcome: Closed) -> Result<()> {
-    match outcome {
-        Closed::Clean => Ok(()),
-        Closed::Failed => Err(crate::voice::io::IoError::Rtc("room input cleanup failed".into())),
-        Closed::TimedOut => {
-            Err(crate::voice::io::IoError::Rtc("room input cleanup deadline expired".into()))
-        }
-    }
 }

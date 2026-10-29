@@ -528,25 +528,6 @@ class RoomEventBus:
     def subscriber_count(self) -> int: ...
 
 
-class RoomAudioInput:
-    @property
-    def reading(self) -> str | None: ...
-    async def next_frame(self) -> Any | None: ...
-    async def aclose(self) -> None: ...
-
-
-class RoomVideoInput:
-    @property
-    def reading(self) -> str | None: ...
-    async def next_frame(self) -> Any | None: ...
-    async def aclose(self) -> None: ...
-
-
-class _core_RoomSession:
-    """Runtime capability connecting a session to its room, clock, and owned I/O."""
-
-
-
 class ChatRequest:
     """The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
     host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its

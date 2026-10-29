@@ -4,6 +4,7 @@ pub use lk_agents_voice::workflows::dtmf::DtmfResult;
 use lk_agents_voice::workflows::dtmf::{
     DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_code, dtmf_send_answer,
 };
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The pause between two published keypad tones.
@@ -12,12 +13,12 @@ pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
 /// `send_dtmf_events(events)`: each key published as a keypad tone in `room`, 0.3 s apart; the
 /// answer to the model is [`dtmf_send_answer`]'s.
 pub async fn send_dtmf_events(
-    room: lk_agents_abi::voice::room_owner::RoomSession,
+    room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     events: Vec<String>,
     clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
 ) -> String {
     let outcome = async {
-        let room = room.0.rtc().ok_or(DtmfSendError::NotConnected)?;
+        let room = room.rtc().ok_or(DtmfSendError::NotConnected)?;
         for event in &events {
             let code = dtmf_code(event)
                 .map_err(|error| DtmfSendError::Key { event: event.clone(), error })?;
@@ -37,15 +38,14 @@ pub async fn send_dtmf_events(
 /// `room`, until `num_digits` of them, the stop key, or `timeout` seconds without a key once the
 /// first is in. Fewer than `num_digits` is [`ReceiveDtmfError::Incomplete`].
 pub async fn receive_dtmf(
-    room: lk_agents_abi::voice::room_owner::RoomSession,
+    room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     num_digits: usize,
     timeout: f64,
     stop_event: String,
     clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
 ) -> Result<DtmfResult, ReceiveDtmfError> {
     let mut reception = DtmfReception::new(num_digits, timeout, &stop_event)?;
-    let room =
-        room.0.rtc().ok_or_else(|| ReceiveDtmfError::Room("room is not connected".into()))?;
+    let room = room.rtc().ok_or_else(|| ReceiveDtmfError::Room("room is not connected".into()))?;
     let mut events = room.events();
     loop {
         let next = match reception.deadline() {
@@ -72,19 +72,19 @@ pub struct DtmfIo;
 impl lk_agents_abi::voice::workflows::dtmf::DtmfIo for DtmfIo {
     type Result = DtmfResult;
     async fn send_dtmf_events(
-        room: lk_agents_abi::voice::room_owner::RoomSession,
+        room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         events: Vec<String>,
     ) -> String {
-        let clock = room.0.clock();
+        let clock = room.clock();
         send_dtmf_events(room, events, clock).await
     }
     async fn receive_dtmf(
-        room: lk_agents_abi::voice::room_owner::RoomSession,
+        room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         num_digits: usize,
         timeout: f64,
         stop_event: String,
     ) -> Result<DtmfResult, ReceiveDtmfError> {
-        let clock = room.0.clock();
+        let clock = room.clock();
         receive_dtmf(room, num_digits, timeout, stop_event, clock).await
     }
 }

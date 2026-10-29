@@ -35,7 +35,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
     );
     let room = rtc.room("background");
     let fixed = FixedRoom {
-        rtc: room.clone(),
+        rtc: Some(room.clone()),
         time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
         pool: None,
     };
@@ -190,7 +190,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
     player
         .start_for_host(
             Arc::new(FixedRoom {
-                rtc: room.clone(),
+                rtc: Some(room.clone()),
                 time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
                 pool: None,
             }),

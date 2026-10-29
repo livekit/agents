@@ -186,7 +186,7 @@ pub trait AvatarRunner: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        room: crate::voice::room_owner::RoomSession,
+        room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         #[host(kw)] receiver: std::sync::Arc<dyn AvatarAudioReceiver>,
         generator: std::sync::Arc<dyn AvatarVideoGenerator>,
         media: std::sync::Arc<dyn AvatarMedia>,

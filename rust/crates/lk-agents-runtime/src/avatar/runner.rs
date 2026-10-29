@@ -4,7 +4,7 @@
 use lk_agents_abi::voice::avatar::{
     self, AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator, RunnerError,
 };
-use lk_agents_abi::voice::room_owner::RoomSession;
+use lk_agents_abi::voice::room_owner::SessionRoom;
 use lk_agents_abi::voice::rtc::{RoomEvent, RtcError, RtcRoom};
 use lk_agents_abi::{Clock, Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessEnv;
@@ -170,13 +170,13 @@ impl avatar::AvatarRunner for AvatarRunner {
     /// the tracks); `lazy_publish` holds the tracks back until the first frame.
     fn new(
         env: &ProcessEnv,
-        room: RoomSession,
+        room: Arc<dyn SessionRoom>,
         receiver: Arc<dyn AvatarAudioReceiver>,
         generator: Arc<dyn AvatarVideoGenerator>,
         media: Arc<dyn AvatarMedia>,
         lazy_publish: bool,
     ) -> Result<Self, RtcError> {
-        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
+        let room = room.rtc().ok_or(RtcError::NotConnected)?;
         let spawner = (env.spawner)().map_err(RtcError::host)?;
         let io = AvatarIo { receiver, generator, media };
         let clock = env.clock.clone();

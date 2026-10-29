@@ -307,7 +307,7 @@ async fn room_relinks_input_after_the_linked_participant_is_replaced() {
     let io = room_io(room.clone(), clock, config);
     io.clone().start();
     io.wait_for_ready().await.unwrap();
-    assert_eq!(io.audio_input_leg().unwrap().0.reading(), Some("TR_first".into()));
+    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("TR_first".into()));
     room.remove_participant(&"first".into(), DisconnectReason::ClientInitiated);
     let replacement = room.add_participant("second", ParticipantKind::Standard);
     replacement.publish_microphone("TR_second");
@@ -315,7 +315,7 @@ async fn room_relinks_input_after_the_linked_participant_is_replaced() {
         tokio::task::yield_now().await;
     }
     let linked = io.linked_participant();
-    let reading = io.audio_input_leg().unwrap().0.reading();
+    let reading = io.audio_input_leg().unwrap().reading();
     io.clone().aclose().await;
     assert_eq!(linked, Some("second".into()), "the replacement participant must become linked");
     assert_eq!(reading, Some("TR_second".into()), "the microphone must follow the new link");
@@ -377,7 +377,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     })
     .await
     .expect("the current participant must remain linked after the delayed old departure");
-    assert_eq!(io.audio_input_leg().unwrap().0.reading(), Some("microphone".into()));
+    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("microphone".into()));
     io.clone().aclose().await;
 }
 
@@ -426,7 +426,7 @@ async fn a_rejoined_identity_gets_a_new_attachment_without_an_explicit_selection
     assert!(
         matches!(event, Some(RoomIoEvent::ParticipantLinked(ParticipantLinked { identity })) if identity.as_str()=="person")
     );
-    assert_eq!(io.audio_input_leg().unwrap().0.reading(), Some("new-track".into()));
+    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("new-track".into()));
     io.clone().aclose().await;
 }
 

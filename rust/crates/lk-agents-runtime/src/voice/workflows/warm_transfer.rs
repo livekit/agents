@@ -214,7 +214,6 @@ impl TransferRun {
         let room = host
             .connect_human(room_name.clone(), caller.local().identity()?.to_string())
             .await?
-            .0
             .rtc()
             .ok_or_else(|| HostError::new("warm transfer requires a connected human RTC room"))?;
         let events = room.events();
@@ -574,7 +573,7 @@ mod tests {
             _: String,
         ) -> lk_agents_abi::BoxFuture<
             '_,
-            Result<lk_agents_abi::voice::room_owner::RoomSession, HostError>,
+            Result<Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>, HostError>,
         > {
             Box::pin(async move { unreachable!() })
         }
@@ -775,12 +774,12 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
     async fn run(
         &self,
         host: Arc<dyn lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
-        caller: lk_agents_abi::voice::room_owner::RoomSession,
+        caller: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     ) -> Result<String, TransferFailed> {
         self.0
             .run(
                 host,
-                caller.0.rtc().ok_or_else(|| {
+                caller.rtc().ok_or_else(|| {
                     HostError::new("warm transfer requires a connected caller RTC room")
                 })?,
             )

@@ -26,12 +26,9 @@ from .._core import (
     ChatItem,
     PlaybackInfo,
     PlaybackTracker,
-    RoomAudioInput,
     RoomEventBus,
-    RoomVideoInput,
     SessionRecorder,
     VoiceAgent,
-    _core_RoomSession,
 )
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
@@ -767,6 +764,29 @@ class WarmTransfer:
 class ConsoleIo:
     """`lk agent console`'s socket, opened when the session starts."""
     def __init__(self, addr: str) -> None: ...
+
+class RoomAudioInput:
+    """`_core.RoomAudioInput`: the room's microphone leg, taken as itself wherever the host passes
+    an audio input.
+    """
+    @property
+    def reading(self) -> str | None: ...
+    async def next_frame(self) -> AudioFrame | None: ...
+    async def aclose(self) -> None: ...
+
+class RoomVideoInput:
+    """`_core.RoomVideoInput`: the room's video leg, taken as itself wherever the host passes a video
+    input.
+    """
+    @property
+    def reading(self) -> str | None: ...
+    async def next_frame(self) -> object | None: ...
+    async def aclose(self) -> None: ...
+
+class _core_RoomSession:
+    """`_core_RoomSession`: what a session's room I/O is built from, handed to the host and taken
+    back as itself.
+    """
 
 def _core_create_room_session(room: Room | None) -> _core_RoomSession: ...
 

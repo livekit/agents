@@ -148,7 +148,7 @@ pub trait Implementations: 'static {
     type TextStreamSender: ::lk_agents_abi::voice::rtc::ports::TextStreamSender;
     type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
-    type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<Options = Self::SessionOptions>;
+    type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<Options = Self::SessionOptions, MicLeg = Self::RoomAudioInput, CameraLeg = Self::RoomVideoInput>;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
     type InterruptionGateFunctions: ::lk_agents_abi::voice::session_options::InterruptionGateFunctions;
     type WorkflowChecks: ::lk_agents_abi::voice::workflows::WorkflowChecks;
@@ -156,7 +156,10 @@ pub trait Implementations: 'static {
     type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo<Result = Self::DtmfResult>;
     type WarmTransfer: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer;
     type ConsoleIo: ::lk_agents_abi::voice::console::ConsoleIo;
-    type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime;
+    type RoomAudioInput: ::lk_agents_abi::voice::room_owner::RoomAudioInput;
+    type RoomVideoInput: ::lk_agents_abi::voice::room_owner::RoomVideoInput;
+    type RoomSession: ::lk_agents_abi::voice::room_owner::RoomSession;
+    type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime<Room = Self::RoomSession>;
     type EndpointStream: ::lk_agents_abi::worker::endpoint_host::EndpointStream;
     type EndpointServer: ::lk_agents_abi::worker::endpoint_host::EndpointServer;
     type AsgiReceive: ::lk_agents_abi::worker::endpoint_host::AsgiReceive;
@@ -403,6 +406,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::receive_dtmf, m)?)?;
     m.add_class::<voice::WarmTransfer>()?;
     m.add_class::<voice::ConsoleIo>()?;
+    m.add_class::<voice::RoomAudioInput>()?;
+    m.add_class::<voice::RoomVideoInput>()?;
+    m.add_class::<voice::_core_RoomSession>()?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_avatar_join, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;

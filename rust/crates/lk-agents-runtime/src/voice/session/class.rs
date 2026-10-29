@@ -25,19 +25,22 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     type Env = lk_agents_net::env::ProcessEnv;
     type Options = SessionOptions;
     type Speech = Speech;
+    type MicLeg = crate::room_io::RoomAudioInput;
+    type CameraLeg = crate::room_io::RoomVideoInput;
 
     /// Assemble a session; nothing starts here: synchronous, so a host can bind the room's legs
     /// and recorder before starting.
     fn new(
         env: &Self::Env,
-        room: lk_agents_abi::voice::room_owner::RoomSession,
+        room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         args: VoiceSessionArgs,
         options: Option<SessionOptions>,
     ) -> Result<Self, lk_agents_abi::voice::rtc::RtcError> {
         let spawner = (env.spawner)().map_err(|e| {
-            lk_agents_abi::voice::rtc::RtcError::Stream(lk_agents_abi::errors::ApiError::new(e).into())
+            lk_agents_abi::voice::rtc::RtcError::Stream(
+                lk_agents_abi::errors::ApiError::new(e).into(),
+            )
         })?;
-        let room = room.0;
         let agents = HostAgents::default();
         agents.install(&args.agent, args.agent_host);
         let time = match room.virtual_clock() {
@@ -54,10 +57,12 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             args.auto_gain_control,
             args.text_output,
         );
-        let host_audio_input =
-            args.host_audio_input.or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_input()));
-        let host_audio_output =
-            args.host_audio_output.or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_output()));
+        let host_audio_input = args
+            .host_audio_input
+            .or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_input()));
+        let host_audio_output = args
+            .host_audio_output
+            .or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_output()));
         let rtc_room = room.rtc();
         // An audio leg the host set replaces the room's, which is then neither published nor
         // subscribed. The room's text output stays: it paces a host transcription leg.
@@ -81,12 +86,17 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 llm: args.keyterm_llm.map(|l| llm_leg(l, conn.llm)),
                 tools_host: args.keyterm_tools,
             });
-        let remote = args.remote_session
+        let remote = args
+            .remote_session
             .map(|port| {
                 if args.console.is_none() && rtc_room.is_none() {
                     return Err(lk_agents_abi::voice::rtc::RtcError::Closed("remote RTC session"));
                 }
-                Ok(RemoteSessionConfig { port, room: rtc_room.clone(), console: args.console.clone() })
+                Ok(RemoteSessionConfig {
+                    port,
+                    room: rtc_room.clone(),
+                    console: args.console.clone(),
+                })
             })
             .transpose()?;
 
@@ -125,7 +135,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             legs => legs,
         };
 
-        let interruption = args.interruption_detector
+        let interruption = args
+            .interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let nodes = Nodes { llm: args.llm_node, tts: None, stt: None };
         let llm = args.llm.map(|l| nodes.llm(llm_leg(l, conn.llm)));
@@ -197,13 +208,17 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.video_in = if args.host_video_sampler {
             None
         } else {
-            args.host_video_input.or_else(|| room_io.video_input().map(|v| v.as_video_input()))
+            args.host_video_input
+                .or_else(|| room_io.video_input().map(|v| v as Arc<dyn VideoInput>))
         };
         builder.audio_out = audio_out;
         builder.text_out = text_out;
         builder.room_link = Some(room_link);
-        builder.toolset =
-            Toolset { specs: args.tools.unwrap_or_default(), host: args.tools_host, agent: args.voice_agent };
+        builder.toolset = Toolset {
+            specs: args.tools.unwrap_or_default(),
+            host: args.tools_host,
+            agent: args.voice_agent,
+        };
 
         Ok(VoiceSession {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
@@ -247,12 +262,12 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         lock(&self.host.usage).flatten()
     }
 
-    fn audio_input(&self) -> Option<Arc<lk_agents_abi::voice::room_owner::RoomAudioInput>> {
-        self.room_io.audio_input_leg()
+    fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {
+        self.room_io.audio_input_leg().map(crate::room_io::RoomAudioInput)
     }
 
-    fn video_input(&self) -> Option<Arc<lk_agents_abi::voice::room_owner::RoomVideoInput>> {
-        self.room_io.video_input()
+    fn video_input(&self) -> Option<crate::room_io::RoomVideoInput> {
+        self.room_io.video_input().map(crate::room_io::RoomVideoInput)
     }
 
     fn attach_recorder(&self, recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>) {

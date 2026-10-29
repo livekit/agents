@@ -53,7 +53,7 @@ fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRo
     let room = rtc.room(name);
     // The `FakeRtc` is the room's owner; the room keeps it alive through its own `Arc`.
     std::mem::forget(rtc);
-    (room.clone(), FixedRoom { rtc: room, time: Timebase::from_virtual(clock), pool: None })
+    (room.clone(), FixedRoom { rtc: Some(room), time: Timebase::from_virtual(clock), pool: None })
 }
 
 /// A session and the steps it journals.
@@ -96,7 +96,7 @@ fn assembled(
     hook_bound: Option<f64>,
     options: Option<SessionOptions>,
 ) -> VoiceSession {
-    let room = lk_agents_abi::voice::room_owner::RoomSession(Arc::new(room));
+    let room = Arc::new(room) as Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>;
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),
         room_io_config: Some(Default::default()),

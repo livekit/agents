@@ -108,7 +108,7 @@ pub trait BackgroundAudioPlayer: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn start(
         &self,
-        room: crate::voice::room_owner::RoomSession,
+        room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         draw: f64,
         #[host(kw)] ambient: Vec<Sound>,
         choose: bool,

@@ -8,7 +8,7 @@ use lk_agents_abi::{AudioFrame, Clock, Spawner};
 use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
 use lk_agents_media::pool::MediaPool;
 use lk_agents_media::{Mixer, StreamId};
-use lk_agents_net::env::{ProcessEnv, MediaPoolSource};
+use lk_agents_net::env::{MediaPoolSource, ProcessEnv};
 use lk_agents_net::task::TaskSet;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -18,13 +18,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use lk_agents_voice::background_audio::{
-    AUDIO_SOURCE_BUFFER_MS, BuiltinAudioClip, LoopingStreamError, Playback,
-    PlayerPhase, TRACK_NAME, ThinkingSound, apply_gain, plan_play, select_sound, thinking_sound,
+    AUDIO_SOURCE_BUFFER_MS, BuiltinAudioClip, LoopingStreamError, Playback, PlayerPhase,
+    TRACK_NAME, ThinkingSound, apply_gain, plan_play, select_sound, thinking_sound,
 };
 
-pub use lk_agents_abi::voice::background_audio::{
-    FrameStream, PlaybackError, Sound, SoundSource,
-};
+pub use lk_agents_abi::voice::background_audio::{FrameStream, PlaybackError, Sound, SoundSource};
 
 /// Completion and stop notification owned by voice, shared with the caller's handle
 /// (`PlayHandle`'s two write-once futures).
@@ -738,13 +736,13 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
 
     async fn start(
         &self,
-        room: lk_agents_abi::voice::room_owner::RoomSession,
+        room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         draw: f64,
         ambient: Vec<Sound>,
         choose: bool,
         source: Option<TrackSource>,
     ) -> Result<lk_agents_abi::voice::rtc::TrackSid, RtcError> {
-        self.0.start_for_host(room.0, draw, ambient, choose, source).await
+        self.0.start_for_host(room, draw, ambient, choose, source).await
     }
 
     fn play(

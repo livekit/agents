@@ -11,9 +11,7 @@ use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
     ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
-use lk_agents_abi::voice::room_owner::{
-    self, RoomAudioInput, RoomIo as _, RoomIoEvent, RoomVideoInput,
-};
+use lk_agents_abi::voice::room_owner::{self, RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::voice::rtc::events::RoomEvent;
 use lk_agents_abi::voice::rtc::{
@@ -700,12 +698,12 @@ impl room_owner::RoomIo for RoomIo {
     }
 
     /// The microphone leg itself, as the session hands it to the host.
-    fn audio_input_leg(&self) -> Option<Arc<RoomAudioInput>> {
-        self.audio_input.clone().map(|input| Arc::new(RoomAudioInput(input)))
+    fn audio_input_leg(&self) -> Option<Arc<dyn room_owner::RoomAudioInputPort>> {
+        self.audio_input.clone().map(|input| input as Arc<dyn room_owner::RoomAudioInputPort>)
     }
 
-    fn video_input(&self) -> Option<Arc<RoomVideoInput>> {
-        self.video_input.clone().map(|input| Arc::new(RoomVideoInput(input)))
+    fn video_input(&self) -> Option<Arc<dyn room_owner::RoomVideoInputPort>> {
+        self.video_input.clone().map(|input| input as Arc<dyn room_owner::RoomVideoInputPort>)
     }
 
     /// The caller wraps it with a synchroniser if configured.

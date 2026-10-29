@@ -5,7 +5,6 @@
 //! share: an agent, a history, a patch, built from the case's terms.
 use super::*;
 use lk_agents_abi::voice::console::ConsolePort;
-use lk_agents_abi::voice::room_owner::RoomSession;
 use lk_agents_abi::voice::session::{VoiceSession as _, VoiceSessionArgs};
 
 impl Run {
@@ -226,7 +225,7 @@ impl Run {
             ..Default::default()
         };
         let session_room =
-            RoomSession(Arc::new(FixedRoom { rtc: room.clone(), time: time.clone(), pool: None }));
+            Arc::new(FixedRoom { rtc: Some(room.clone()), time: time.clone(), pool: None });
         let api = Arc::new(
             VoiceSession::new(&scheduled(tasks.clone()), session_room, args, Some(options))
                 .expect("the configured voice fixture is valid"),
@@ -375,8 +374,11 @@ impl Run {
                 // The DST plays streamed sounds only; nothing decodes a file.
                 || Err("no media pool in the simulation".into()),
             ));
-            let room =
-                Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone(), pool: None });
+            let room = Arc::new(FixedRoom {
+                rtc: Some(run.room.clone()),
+                time: run.time.clone(),
+                pool: None,
+            });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
             let _ = player.start_for_host(room, fakes::HALF, ambient, true, None).await;
             run.background = Some(player);

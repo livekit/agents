@@ -46,12 +46,12 @@ pub trait DtmfIo {
 
     #[host(function)]
     async fn send_dtmf_events(
-        room: crate::voice::room_owner::RoomSession,
+        room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         events: Vec<String>,
     ) -> String;
     #[host(function)]
     async fn receive_dtmf(
-        room: crate::voice::room_owner::RoomSession,
+        room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         num_digits: usize,
         timeout: f64,
         stop_event: String,

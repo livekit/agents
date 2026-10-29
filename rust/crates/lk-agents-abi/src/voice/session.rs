@@ -316,6 +316,11 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(class(name = "SessionOptions"))]
     type Options: SessionOptions;
 
+    /// The room's microphone and video legs.
+    #[host(class(name = "RoomAudioInput"))]
+    type MicLeg;
+    #[host(class(name = "RoomVideoInput"))]
+    type CameraLeg;
     /// A speech `say()` / `generate_reply()` answers: the host's `_core.SpeechHandle`.
     #[host(handle(class = "SpeechHandle"))]
     type Speech: Send + Sync + 'static;
@@ -326,7 +331,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        room: crate::voice::room_owner::RoomSession,
+        room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         args: VoiceSessionArgs,
         #[host(default = None)] options: Option<Self::Options>,
     ) -> Result<Self, crate::voice::rtc::RtcError>;
@@ -343,11 +348,11 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
     /// handle each call over the same leg; safe before or after `start()`.
     #[host(getter)]
-    fn audio_input(&self) -> Option<Arc<crate::voice::room_owner::RoomAudioInput>>;
+    fn audio_input(&self) -> Option<Self::MicLeg>;
 
     /// The room's video leg, when `RoomIoConfig(video_input=True)` asked for one, else `None`.
     #[host(getter)]
-    fn video_input(&self) -> Option<Arc<crate::voice::room_owner::RoomVideoInput>>;
+    fn video_input(&self) -> Option<Self::CameraLeg>;
 
     /// Record the session into `recorder`; `None` detaches. Safe before or after `start()`; the
     /// file's `finish` stays the host's.

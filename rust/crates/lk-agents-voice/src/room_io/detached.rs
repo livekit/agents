@@ -1,7 +1,7 @@
 //! I/O for a session with no RTC attachment or room resources.
 
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
-use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomVideoInput};
+use lk_agents_abi::voice::room_owner;
 use lk_agents_abi::voice::rtc::ParticipantIdentity;
 use std::sync::Arc;
 
@@ -21,10 +21,10 @@ impl room_owner::RoomIo for DetachedRoomIo {
     fn audio_input(&self) -> Option<Arc<dyn AudioInput>> {
         None
     }
-    fn audio_input_leg(&self) -> Option<Arc<RoomAudioInput>> {
+    fn audio_input_leg(&self) -> Option<Arc<dyn room_owner::RoomAudioInputPort>> {
         None
     }
-    fn video_input(&self) -> Option<Arc<RoomVideoInput>> {
+    fn video_input(&self) -> Option<Arc<dyn room_owner::RoomVideoInputPort>> {
         None
     }
     fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {

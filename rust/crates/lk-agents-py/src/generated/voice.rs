@@ -221,9 +221,10 @@ pub struct AvatarRunner(::std::sync::Arc<AvatarRunnerImpl>);
 impl AvatarRunner {
     #[new]
     #[pyo3(signature = (room, *, receiver, generator, media, lazy_publish))]
-    fn new(room: ::lk_agents_abi::voice::room_owner::RoomSession, receiver: Bound<'_, PyAny>, generator: Bound<'_, PyAny>, media: Bound<'_, PyAny>, lazy_publish: bool) -> PyResult<AvatarRunner> {
+    fn new(room: Bound<'_, PyAny>, receiver: Bound<'_, PyAny>, generator: Bound<'_, PyAny>, media: Bound<'_, PyAny>, lazy_publish: bool) -> PyResult<AvatarRunner> {
         ::lk_agents_abi::python::check_pid()?;
         let env = crate::process::env();
+        let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
         let receiver = crate::generated::voice::AvatarAudioReceiverProxy::from_host(&receiver)?;
         let generator = crate::generated::voice::AvatarVideoGeneratorProxy::from_host(&generator)?;
         let media = crate::generated::voice::AvatarMediaProxy::from_host(&media)?;
@@ -376,8 +377,9 @@ impl BackgroundAudioPlayer {
     }
 
     #[pyo3(signature = (room, draw, *, ambient, choose, source = None))]
-    fn start<'py>(&self, py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, #[pyo3(from_py_with = _extract_background_audio_player_start_draw)] draw: f64, ambient: Bound<'_, PyAny>, choose: bool, source: ::std::option::Option<::lk_agents_abi::voice::room_io::TrackSource>) -> PyResult<Bound<'py, PyAny>> {
+    fn start<'py>(&self, py: Python<'py>, room: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_background_audio_player_start_draw)] draw: f64, ambient: Bound<'_, PyAny>, choose: bool, source: ::std::option::Option<::lk_agents_abi::voice::room_io::TrackSource>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
         let ambient = ambient.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::background_audio_wire::sound_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -1178,9 +1180,10 @@ impl VoiceSession {
     /// empty session layer).
     #[new]
     #[pyo3(signature = (room, args, options = None))]
-    fn new(room: ::lk_agents_abi::voice::room_owner::RoomSession, args: Bound<'_, PyAny>, options: Option<Bound<'_, PyAny>>) -> PyResult<VoiceSession> {
+    fn new(room: Bound<'_, PyAny>, args: Bound<'_, PyAny>, options: Option<Bound<'_, PyAny>>) -> PyResult<VoiceSession> {
         ::lk_agents_abi::python::check_pid()?;
         let env = crate::process::env();
+        let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
         let args = crate::generated::records::voice_session::voice_session_args_from_py(&args)?;
         let options = options.map(|v| v.cast::<super::voice::SessionOptions>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)).transpose()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::new(&env, room, args, options).map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -1209,18 +1212,18 @@ impl VoiceSession {
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
     /// handle each call over the same leg; safe before or after `start()`.
     #[getter]
-    fn audio_input<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    fn audio_input(&self) -> PyResult<::std::option::Option<super::voice::RoomAudioInput>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::audio_input(&self.0);
-        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(<::lk_agents_abi::voice::room_owner::RoomAudioInput as ::lk_agents_abi::python::ArcClass>::wrap(py, value)?)).transpose()?)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(super::voice::RoomAudioInput(::std::sync::Arc::new(value)))).transpose()?)
     }
 
     /// The room's video leg, when `RoomIoConfig(video_input=True)` asked for one, else `None`.
     #[getter]
-    fn video_input<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    fn video_input(&self) -> PyResult<::std::option::Option<super::voice::RoomVideoInput>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::video_input(&self.0);
-        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(<::lk_agents_abi::voice::room_owner::RoomVideoInput as ::lk_agents_abi::python::ArcClass>::wrap(py, value)?)).transpose()?)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(super::voice::RoomVideoInput(::std::sync::Arc::new(value)))).transpose()?)
     }
 
     /// Record the session into `recorder`; `None` detaches. Safe before or after `start()`; the
@@ -1820,8 +1823,9 @@ fn _extract_dtmf_io_receive_dtmf_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64
 
 #[pyfunction]
 #[pyo3(signature = (room, events))]
-pub fn send_dtmf_events<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, events: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+pub fn send_dtmf_events<'py>(py: Python<'py>, room: Bound<'_, PyAny>, events: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::send_dtmf_events(room, events).await;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -1830,8 +1834,9 @@ pub fn send_dtmf_events<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room
 
 #[pyfunction]
 #[pyo3(signature = (room, num_digits, timeout, stop_event))]
-pub fn receive_dtmf<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_num_digits)] num_digits: usize, #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_timeout)] timeout: f64, stop_event: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+pub fn receive_dtmf<'py>(py: Python<'py>, room: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_num_digits)] num_digits: usize, #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_timeout)] timeout: f64, stop_event: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::receive_dtmf(room, num_digits, timeout, stop_event).await.map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError| <::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::voice::GetDtmfResult(::std::sync::Arc::new(out)), py))
@@ -1875,9 +1880,10 @@ impl WarmTransfer {
     }
 
     #[pyo3(signature = (host, caller))]
-    fn run<'py>(&self, py: Python<'py>, host: Bound<'_, PyAny>, caller: ::lk_agents_abi::voice::room_owner::RoomSession) -> PyResult<Bound<'py, PyAny>> {
+    fn run<'py>(&self, py: Python<'py>, host: Bound<'_, PyAny>, caller: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let host = crate::generated::voice::TransferHostProxy::from_host(&host)?;
+        let caller = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&caller).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("caller", ": expected a native room session")))?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <WarmTransferImpl as ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer>::run(&this, host, caller)
@@ -1931,6 +1937,132 @@ impl ConsoleIo {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
+type RoomAudioInputImpl = <crate::Selected as super::Implementations>::RoomAudioInput;
+
+/// `_core.RoomAudioInput`: the room's microphone leg, taken as itself wherever the host passes
+/// an audio input.
+#[pyclass(frozen, name = "RoomAudioInput", module = "livekit.agents._core")]
+pub struct RoomAudioInput(::std::sync::Arc<RoomAudioInputImpl>);
+
+#[pymethods]
+impl RoomAudioInput {
+    #[getter]
+    fn reading(&self) -> PyResult<::std::option::Option<::lk_agents_abi::voice::rtc::TrackSid>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RoomAudioInputImpl as ::lk_agents_abi::voice::room_owner::RoomAudioInput>::reading(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(name = "next_frame")]
+    fn read_frame<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <RoomAudioInputImpl as ::lk_agents_abi::voice::room_owner::RoomAudioInput>::read_frame(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <RoomAudioInputImpl as ::lk_agents_abi::voice::room_owner::RoomAudioInput>::aclose(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::io::AudioInput`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::AudioInput>(),
+        read: |obj| {
+            let this = obj.cast::<RoomAudioInput>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioInput> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
+type RoomVideoInputImpl = <crate::Selected as super::Implementations>::RoomVideoInput;
+
+/// `_core.RoomVideoInput`: the room's video leg, taken as itself wherever the host passes a video
+/// input.
+#[pyclass(frozen, name = "RoomVideoInput", module = "livekit.agents._core")]
+pub struct RoomVideoInput(::std::sync::Arc<RoomVideoInputImpl>);
+
+#[pymethods]
+impl RoomVideoInput {
+    #[getter]
+    fn reading(&self) -> PyResult<::std::option::Option<::lk_agents_abi::voice::rtc::TrackSid>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RoomVideoInputImpl as ::lk_agents_abi::voice::room_owner::RoomVideoInput>::reading(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(name = "next_frame")]
+    fn read_frame<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <RoomVideoInputImpl as ::lk_agents_abi::voice::room_owner::RoomVideoInput>::read_frame(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <RoomVideoInputImpl as ::lk_agents_abi::voice::room_owner::RoomVideoInput>::aclose(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::io::VideoInput`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::VideoInput>(),
+        read: |obj| {
+            let this = obj.cast::<RoomVideoInput>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::VideoInput> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
+type _core_RoomSessionImpl = <crate::Selected as super::Implementations>::RoomSession;
+
+/// `_core_RoomSession`: what a session's room I/O is built from, handed to the host and taken
+/// back as itself.
+#[pyclass(frozen, name = "_core_RoomSession", module = "livekit.agents._core")]
+pub struct _core_RoomSession(::std::sync::Arc<_core_RoomSessionImpl>);
+
+#[pymethods]
+impl _core_RoomSession {
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::room_owner::SessionRoom`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(),
+        read: |obj| {
+            let this = obj.cast::<_core_RoomSession>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::SessionRoom> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
 type RoomRuntimeImpl = <crate::Selected as super::Implementations>::RoomRuntime;
 
 fn _extract_room_runtime_wait_for_participant_kinds(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<::std::vec::Vec<i32>>> {
@@ -1943,19 +2075,20 @@ fn _extract_room_runtime_wait_for_track_publication_kinds(obj: &Bound<'_, PyAny>
 
 #[pyfunction]
 #[pyo3(signature = (room))]
-pub fn _core_create_room_session(room: Option<Bound<'_, PyAny>>) -> PyResult<::lk_agents_abi::voice::room_owner::RoomSession> {
+pub fn _core_create_room_session(room: Option<Bound<'_, PyAny>>) -> PyResult<super::voice::_core_RoomSession> {
     ::lk_agents_abi::python::check_pid()?;
     let env = crate::process::env();
     let room = room.map(|v| crate::generated::voice::RtcRoomProxy::from_host(&v)).transpose()?;
     let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::create_room_session(&env, room);
-    Ok(out)
+    Ok(super::voice::_core_RoomSession(::std::sync::Arc::new(out)))
 }
 
 /// Wait for the supplied room's connection, avatar participant and subscribed video track.
 #[pyfunction]
 #[pyo3(signature = (room, identity))]
-pub fn wait_avatar_join<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, identity: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+pub fn wait_avatar_join<'py>(py: Python<'py>, room: Bound<'_, PyAny>, identity: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_avatar_join(room, identity).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -1964,8 +2097,9 @@ pub fn wait_avatar_join<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room
 
 #[pyfunction]
 #[pyo3(signature = (room, identity, kinds, include_local))]
-pub fn wait_for_participant<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, identity: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_room_runtime_wait_for_participant_kinds)] kinds: ::std::option::Option<::std::vec::Vec<i32>>, include_local: bool) -> PyResult<Bound<'py, PyAny>> {
+pub fn wait_for_participant<'py>(py: Python<'py>, room: Bound<'_, PyAny>, identity: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_room_runtime_wait_for_participant_kinds)] kinds: ::std::option::Option<::std::vec::Vec<i32>>, include_local: bool) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_participant(room, identity, kinds, include_local).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -1974,8 +2108,9 @@ pub fn wait_for_participant<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::
 
 #[pyfunction]
 #[pyo3(signature = (room, name))]
-pub fn wait_for_agent<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, name: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+pub fn wait_for_agent<'py>(py: Python<'py>, room: Bound<'_, PyAny>, name: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_agent(room, name).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -1984,8 +2119,9 @@ pub fn wait_for_agent<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_o
 
 #[pyfunction]
 #[pyo3(signature = (room, identity, kinds, include_local, subscribed))]
-pub fn wait_for_track_publication<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, identity: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_room_runtime_wait_for_track_publication_kinds)] kinds: ::std::option::Option<::std::vec::Vec<i32>>, include_local: bool, subscribed: bool) -> PyResult<Bound<'py, PyAny>> {
+pub fn wait_for_track_publication<'py>(py: Python<'py>, room: Bound<'_, PyAny>, identity: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_room_runtime_wait_for_track_publication_kinds)] kinds: ::std::option::Option<::std::vec::Vec<i32>>, include_local: bool, subscribed: bool) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let room = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&room).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("room", ": expected a native room session")))?;
     crate::host::future_into_py(py, async move {
         let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_track_publication(room, identity, kinds, include_local, subscribed).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -5058,7 +5194,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
             }));
     }
 
-    fn connect_human(&self, room_name: ::std::string::String, identity: ::std::string::String) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::voice::room_owner::RoomSession, ::lk_agents_abi::errors::HostError>> {
+    fn connect_human(&self, room_name: ::std::string::String, identity: ::std::string::String) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let room_name_arg = room_name;
         let identity_arg = identity;
@@ -5076,7 +5212,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::voice::room_owner::RoomSession>().map_err(::pyo3::PyErr::from)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(&o).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("TransferHost._core_connect_human", ": expected a native room session")))).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
