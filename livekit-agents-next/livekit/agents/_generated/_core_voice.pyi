@@ -10,20 +10,12 @@ from typing import Any
 
 from datetime import date
 from livekit.agents import VAD
-from livekit.agents._core_view import TurnDetector
 from livekit.agents.beta.workflows import _TransferHost
-from livekit.agents.job import JobContext
 from livekit.agents.llm import LLM
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
-from livekit.agents.voice.agent_session import (
-    VoiceSession as HostVoiceSession,
-    _AgentHooks,
-    _DynamicInstructions,
-)
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
-from livekit.agents.voice.remote_session import SessionPort
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import AudioFrame
 
@@ -31,13 +23,8 @@ from .._core import (
     AgentNodes,
     ChatContent,
     ChatItem,
-    DuplexRealtimeModel,
-    HostRealtimeModel,
-    InterruptionDetector,
-    NativeRealtimeModel,
     PlaybackInfo,
     PlaybackTracker,
-    RealtimeFallbackModel,
     RoomAudioInput,
     RoomEventBus,
     RoomVideoInput,
@@ -45,19 +32,16 @@ from .._core import (
     SpeechHandle,
     VoiceAgent,
     _core_RoomSession,
-    _core_VoiceStore,
 )
 from ..types import NotGivenOr
 from .amd import AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
-from .keyterms import STTContextOptions
 from .session_options import SessionKwargs, SessionLegs, UpdateKwargs
 from .session_wire import StartPlan
 from .tool_report import ToolReport
-from .turn import TurnHandlingOptions
-from .voice_session import UpdateAgentArgs
+from .voice_session import UpdateAgentArgs, VoiceSessionArgs
 from .workflows import InstructionsArg
 
 def amd_constants() -> AmdConstants:
@@ -294,60 +278,12 @@ class VoiceSession:
     def __init__(
         self,
         room: _core_RoomSession,
-        *,
-        instructions: str | None = None,
-        dynamic_instructions: _DynamicInstructions | None = None,
-        agent: str = "",
-        agent_host: object | None = None,
-        chat_ctx: Sequence[ChatItem] | None = None,
-        storage: _core_VoiceStore | None = None,
-        stt: STT[Any] | None = None,
-        vad: VAD[Any] | None = None,
-        llm: LLM[Any] | None = None,
-        realtime: DuplexRealtimeModel | HostRealtimeModel | NativeRealtimeModel | RealtimeFallbackModel | None = None,
-        tts: TTS[Any] | None = None,
-        on_event: HostVoiceSession | None = None,
-        hooks: _AgentHooks | None = None,
-        participant_identity: str | None = None,
-        auto_gain_control: bool = True,
-        input_sample_rate: int = 24000,
-        output_sample_rate: int = 24000,
+        args: VoiceSessionArgs,
         options: SessionOptions | None = None,
-        agent_turn_handling: TurnHandlingOptions | None = None,
-        agent_min_consecutive_speech_delay: float | None = None,
-        agent_use_tts_aligned_transcript: bool | None = None,
-        turn_detector: TurnDetector | None = None,
-        interruption_detector: InterruptionDetector | None = None,
-        text_output: bool = True,
-        room_io_config: dict[str, object] | None = None,
-        tools: Sequence[dict[str, object]] | None = None,
-        tools_host: object | None = None,
-        voice_agent: VoiceAgent | None = None,
-        transcription_node: AgentNodes | None = None,
-        realtime_audio_output_node: AgentNodes | None = None,
-        llm_node: AgentNodes | None = None,
-        tts_node: AgentNodes | None = None,
-        stt_node: AgentNodes | None = None,
-        host_audio_input: AudioInput | None = None,
-        host_audio_output: AudioOutput | None = None,
-        host_video_input: VideoInput | None = None,
-        video_sampler: tuple[float, float] | None = None,
-        host_video_sampler: bool = False,
-        host_transcription_output: TextOutput | None = None,
-        using_default_vad: bool = False,
-        hook_bound: float | None = None,
-        max_unrecoverable_errors: int = 3,
-        stt_context: STTContextOptions | None = None,
-        keyterm_llm: LLM[Any] | None = None,
-        keyterm_tools: object | None = None,
-        agent_expressive: NotGivenOr[bool | dict[str, object] | None] = ...,
-        session_id: str | None = None,
-        remote_session: SessionPort | None = None,
-        console: ConsoleIo | None = None,
-        job: JobContext | None = None,
     ) -> None:
         """Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
-        RTC attachment. `on_event` receives each session event, on the calling loop.
+        RTC attachment; `options` is the session layer `SessionOptions(kwargs)` built (none is an
+        empty session layer).
         """
     async def start(self) -> None:
         """Open the providers and run the loop beside the host event drain. Resolves once the host

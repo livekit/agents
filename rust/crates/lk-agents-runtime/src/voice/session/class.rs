@@ -6,11 +6,10 @@ use crate::voice::session::transcript_sync::{SyncConfig, TranscriptSynchronizer}
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
-    CommitSuperseded, IdleRefused, NotAnImage, NotInterruptible, UnknownCloseReason, VoiceTaskEnded,
+    CommitSuperseded, IdleRefused, NotAnImage, NotInterruptible, UnknownCloseReason,
+    VoiceSessionArgs, VoiceTaskEnded,
 };
-use lk_agents_abi::voice::session_options::{
-    Expressive, ResolvedSessionOptions, TurnHandlingKwargs, UpdateKwargs,
-};
+use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, UpdateKwargs};
 use lk_agents_abi::{ChatItem, ToolSpec};
 use lk_agents_voice::agent_activity::DriverConfig;
 use lk_agents_voice::agent_activity::options::{AgentSessionOptions, DetectorKind};
@@ -22,69 +21,25 @@ use lk_agents_voice::filler_scheduler::FillerId;
 
 type Speech = Arc<SpeechHandle>;
 
-impl VoiceSession {
-    /// Assemble a session; the loop begins at `start()`. Nothing starts here: synchronous, so a
-    /// host can bind the room's legs and recorder before starting.
-    #[allow(clippy::too_many_arguments)]
-    pub fn assemble(
-        spawner: Arc<dyn Spawner>,
+impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
+    type Env = lk_agents_net::env::ProcessEnv;
+    type Options = SessionOptions;
+    type Speech = Speech;
+
+    /// Assemble a session; nothing starts here: synchronous, so a host can bind the room's legs
+    /// and recorder before starting.
+    fn new(
+        env: &Self::Env,
         room: lk_agents_abi::voice::room_owner::RoomSession,
-        instructions: Option<String>,
-        dynamic_instructions: Option<Arc<dyn lk_agents_abi::agent::HostInstructions>>,
-        agent: String,
-        agent_host: Option<HostRef>,
-        chat_ctx: Option<Vec<ChatItem>>,
-        storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
-        stt: Option<Arc<dyn Stt>>,
-        vad: Option<Arc<dyn Vad>>,
-        llm: Option<Arc<dyn Llm>>,
-        realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
-        tts: Option<Arc<dyn Tts>>,
-        on_event: Option<Arc<dyn SessionEvents>>,
-        hooks: Option<Arc<dyn SessionHooks>>,
-        participant_identity: Option<String>,
-        auto_gain_control: bool,
-        input_sample_rate: u32,
-        output_sample_rate: u32,
+        args: VoiceSessionArgs,
         options: Option<SessionOptions>,
-        agent_turn_handling: Option<TurnHandlingKwargs>,
-        agent_min_consecutive_speech_delay: Option<f64>,
-        agent_use_tts_aligned_transcript: Option<bool>,
-        turn_detector: Option<Arc<dyn lk_agents_abi::EotDetector>>,
-        interruption_detector: Option<
-            Arc<dyn lk_agents_abi::turn::interruption::InterruptionSource>,
-        >,
-        text_output: bool,
-        room_io_config: Option<lk_agents_abi::voice::room_io::RoomIoConfig>,
-        tools: Option<Vec<ToolSpec>>,
-        tools_host: Option<HostRef>,
-        voice_agent: Option<Arc<dyn lk_agents_abi::agent::AgentFrame>>,
-        transcription_node: Option<Arc<dyn NodeFactory>>,
-        realtime_audio_output_node: Option<Arc<dyn NodeFactory>>,
-        llm_node: Option<Arc<dyn NodeFactory>>,
-        tts_node: Option<Arc<dyn NodeFactory>>,
-        stt_node: Option<Arc<dyn NodeFactory>>,
-        host_audio_input: Option<Arc<dyn AudioInput>>,
-        host_audio_output: Option<Arc<dyn AudioOutput>>,
-        host_video_input: Option<Arc<dyn VideoInput>>,
-        video_sampler: Option<(f64, f64)>,
-        host_video_sampler: bool,
-        host_transcription_output: Option<Arc<dyn TextOutput>>,
-        using_default_vad: bool,
-        hook_bound: Option<f64>,
-        max_unrecoverable_errors: u32,
-        stt_context: Option<lk_agents_abi::turn::keyterms::SttContextConfig>,
-        keyterm_llm: Option<Arc<dyn Llm>>,
-        keyterm_tools: Option<HostRef>,
-        agent_expressive: Maybe<Expressive>,
-        session_id: Option<String>,
-        remote_session: Option<Arc<dyn SessionPort>>,
-        console: Option<Arc<dyn lk_agents_abi::voice::console::ConsolePort>>,
-        job: Option<Arc<dyn lk_agents_abi::worker::job::SessionJob>>,
     ) -> Result<Self, lk_agents_abi::voice::rtc::RtcError> {
+        let spawner = (env.spawner)().map_err(|e| {
+            lk_agents_abi::voice::rtc::RtcError::Stream(lk_agents_abi::errors::ApiError::new(e).into())
+        })?;
         let room = room.0;
         let agents = HostAgents::default();
-        agents.install(&agent, agent_host);
+        agents.install(&args.agent, args.agent_host);
         let time = match room.virtual_clock() {
             Some(clock) => Timebase::from_virtual(clock),
             None => Timebase::of_clock(room.clock()),
@@ -92,17 +47,17 @@ impl VoiceSession {
         let clock = time.clock();
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
         let mut config = lk_agents_voice::room_io::options::resolve_config(
-            room_io_config,
-            participant_identity,
-            input_sample_rate,
-            output_sample_rate,
-            auto_gain_control,
-            text_output,
+            args.room_io_config,
+            args.participant_identity,
+            args.input_sample_rate,
+            args.output_sample_rate,
+            args.auto_gain_control,
+            args.text_output,
         );
         let host_audio_input =
-            host_audio_input.or_else(|| console.as_ref().map(|c| c.clone().as_audio_input()));
+            args.host_audio_input.or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_input()));
         let host_audio_output =
-            host_audio_output.or_else(|| console.as_ref().map(|c| c.clone().as_audio_output()));
+            args.host_audio_output.or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_output()));
         let rtc_room = room.rtc();
         // An audio leg the host set replaces the room's, which is then neither published nor
         // subscribed. The room's text output stays: it paces a host transcription leg.
@@ -118,20 +73,20 @@ impl VoiceSession {
         }
         let conn = options.as_ref().map(|o| o.conn()).unwrap_or_default();
         let keyterms =
-            stt_context.as_ref().map(|cfg| lk_agents_voice::keyterm_detection::KeytermSetup {
+            args.stt_context.as_ref().map(|cfg| lk_agents_voice::keyterm_detection::KeytermSetup {
                 detection: lk_agents_voice::keyterm_detection::resolve_detection(
                     cfg.keyterm_detection.as_ref(),
                 ),
                 static_keyterms: cfg.keyterms.clone().unwrap_or_default(),
-                llm: keyterm_llm.map(|l| llm_leg(l, &conn.llm)),
-                tools_host: keyterm_tools,
+                llm: args.keyterm_llm.map(|l| llm_leg(l, &conn.llm)),
+                tools_host: args.keyterm_tools,
             });
-        let remote = remote_session
+        let remote = args.remote_session
             .map(|port| {
-                if console.is_none() && rtc_room.is_none() {
+                if args.console.is_none() && rtc_room.is_none() {
                     return Err(lk_agents_abi::voice::rtc::RtcError::Closed("remote RTC session"));
                 }
-                Ok(RemoteSessionConfig { port, room: rtc_room.clone(), console: console.clone() })
+                Ok(RemoteSessionConfig { port, room: rtc_room.clone(), console: args.console.clone() })
             })
             .transpose()?;
 
@@ -149,7 +104,7 @@ impl VoiceSession {
         let mut synchronizer = None;
         let (audio_out, text_out) = match (
             host_audio_output.or_else(|| room_io.audio_output()),
-            host_transcription_output.or_else(|| room_io.transcription_output()),
+            args.host_transcription_output.or_else(|| room_io.transcription_output()),
         ) {
             (Some(audio), Some(text))
                 if room_io.wants_transcript_sync(has_external_audio_output) =>
@@ -170,19 +125,19 @@ impl VoiceSession {
             legs => legs,
         };
 
-        let interruption = interruption_detector
+        let interruption = args.interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
-        let nodes = Nodes { llm: llm_node, tts: None, stt: None };
-        let llm = llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
+        let nodes = Nodes { llm: args.llm_node, tts: None, stt: None };
+        let llm = args.llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
         // Facts, not options: the legs the two leg-dependent defaults need.
         let legs = LegSet {
-            stt: stt.is_some(),
-            vad: vad.is_some(),
-            using_default_vad,
+            stt: args.stt.is_some(),
+            vad: args.vad.is_some(),
+            using_default_vad: args.using_default_vad,
             llm: llm.is_some(),
-            tts: tts.is_some(),
-            realtime: realtime.is_some(),
-            detector: turn_detector.as_ref().map(|_| DetectorKind::Streaming),
+            tts: args.tts.is_some(),
+            realtime: args.realtime.is_some(),
+            detector: args.turn_detector.as_ref().map(|_| DetectorKind::Streaming),
             adaptive_detector: interruption.is_some(),
             audio_enabled: true,
             audio_output: true,
@@ -191,64 +146,64 @@ impl VoiceSession {
         let stack = ConfigStack {
             session: options.as_ref().map(|o| o.session()).unwrap_or_default(),
             agent: Some(lk_agents_voice::turn::agent_layer(
-                agent_turn_handling.as_ref(),
-                agent_min_consecutive_speech_delay,
-                agent_use_tts_aligned_transcript,
+                args.agent_turn_handling.as_ref(),
+                args.agent_min_consecutive_speech_delay,
+                args.agent_use_tts_aligned_transcript,
             )),
         };
         let mut builder = DriverBuilder::new(
-            agent,
+            args.agent,
             time.clone(),
             spawner.clone(),
             DriverConfig::new(stack, legs),
         );
         let view = builder.view.subscribe();
         let resources = builder.resources.clone();
-        if let Some(session_id) = session_id {
+        if let Some(session_id) = args.session_id {
             builder.session_id = session_id;
         }
-        builder.video_sampler = video_sampler.map(|(speaking, silent)| {
+        builder.video_sampler = args.video_sampler.map(|(speaking, silent)| {
             lk_agents_voice::room_io::video_sampler::VideoSampler::new(speaking, silent)
         });
-        builder.instructions = instructions.map(Instructions::plain).unwrap_or_default();
-        builder.dynamic_instructions = dynamic_instructions;
+        builder.instructions = args.instructions.map(Instructions::plain).unwrap_or_default();
+        builder.dynamic_instructions = args.dynamic_instructions;
         // Opened at each use, above the synchroniser: the node rewrites, the synchroniser paces.
         builder.output_nodes = OutputNodes {
-            transcription: transcription_node,
-            realtime_audio: realtime_audio_output_node,
+            transcription: args.transcription_node,
+            realtime_audio: args.realtime_audio_output_node,
         };
-        builder.chat_ctx = chat_ctx;
-        builder.storage = storage;
-        builder.hook_bound = hook_bound.map(Duration::from_secs_f64);
-        builder.max_unrecoverable_errors = max_unrecoverable_errors;
+        builder.chat_ctx = args.chat_ctx;
+        builder.storage = args.storage;
+        builder.hook_bound = args.hook_bound.map(Duration::from_secs_f64);
+        builder.max_unrecoverable_errors = args.max_unrecoverable_errors;
         builder.conn = conn;
         builder.expressive = lk_agents_voice::generation::ExpressiveLayers {
             session: options.as_ref().map(|o| o.expressive()).unwrap_or_default(),
-            agent: agent_expressive.given(),
+            agent: args.agent_expressive.given(),
         };
-        builder.eot = turn_detector.clone();
+        builder.eot = args.turn_detector.clone();
         builder.llm = llm;
-        builder.realtime = realtime;
-        builder.tts = tts;
-        builder.tts_node = tts_node;
-        builder.stt = stt;
-        builder.stt_node = stt_node;
+        builder.realtime = args.realtime;
+        builder.tts = args.tts;
+        builder.tts_node = args.tts_node;
+        builder.stt = args.stt;
+        builder.stt_node = args.stt_node;
         builder.forward_chat_context =
-            stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
+            args.stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
         builder.keyterms = keyterms;
-        builder.vad = vad;
+        builder.vad = args.vad;
         builder.audio_in = host_audio_input.or_else(|| room_io.audio_input());
         // Only with the driver's sampler; a custom callable keeps frames host-side.
-        builder.video_in = if host_video_sampler {
+        builder.video_in = if args.host_video_sampler {
             None
         } else {
-            host_video_input.or_else(|| room_io.video_input().map(|v| v.as_video_input()))
+            args.host_video_input.or_else(|| room_io.video_input().map(|v| v.as_video_input()))
         };
         builder.audio_out = audio_out;
         builder.text_out = text_out;
         builder.room_link = Some(room_link);
         builder.toolset =
-            Toolset { specs: tools.unwrap_or_default(), host: tools_host, agent: voice_agent };
+            Toolset { specs: args.tools.unwrap_or_default(), host: args.tools_host, agent: args.voice_agent };
 
         Ok(VoiceSession {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
@@ -267,143 +222,20 @@ impl VoiceSession {
             last_filler: AtomicU64::new(0),
             agents,
             host: HostParts {
-                events: on_event,
-                hooks,
+                events: args.on_event,
+                hooks: args.hooks,
                 closed: Arc::default(),
                 handoffs: Arc::default(),
-                eot: turn_detector,
+                eot: args.turn_detector,
                 has_options: options.is_some(),
                 call_room: rtc_room,
                 remote,
-                job,
+                job: args.job,
                 usage: Arc::default(),
             },
             resources,
             conn,
         })
-    }
-}
-
-impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
-    type Env = lk_agents_net::env::ProcessEnv;
-    type Options = SessionOptions;
-    type Speech = Speech;
-
-    fn new(
-        env: &Self::Env,
-        room: lk_agents_abi::voice::room_owner::RoomSession,
-        instructions: Option<String>,
-        dynamic_instructions: Option<Arc<dyn lk_agents_abi::agent::HostInstructions>>,
-        agent: String,
-        agent_host: Option<HostRef>,
-        chat_ctx: Option<Vec<ChatItem>>,
-        storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
-        stt: Option<Arc<dyn Stt>>,
-        vad: Option<Arc<dyn Vad>>,
-        llm: Option<Arc<dyn Llm>>,
-        realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
-        tts: Option<Arc<dyn Tts>>,
-        on_event: Option<Arc<dyn SessionEvents>>,
-        hooks: Option<Arc<dyn SessionHooks>>,
-        participant_identity: Option<String>,
-        auto_gain_control: bool,
-        input_sample_rate: u32,
-        output_sample_rate: u32,
-        options: Option<SessionOptions>,
-        agent_turn_handling: Option<TurnHandlingKwargs>,
-        agent_min_consecutive_speech_delay: Option<f64>,
-        agent_use_tts_aligned_transcript: Option<bool>,
-        turn_detector: Option<Arc<dyn lk_agents_abi::EotDetector>>,
-        interruption_detector: Option<
-            Arc<dyn lk_agents_abi::turn::interruption::InterruptionSource>,
-        >,
-        text_output: bool,
-        room_io_config: Option<lk_agents_abi::voice::room_io::RoomIoConfig>,
-        tools: Option<Vec<ToolSpec>>,
-        tools_host: Option<HostRef>,
-        voice_agent: Option<Arc<dyn lk_agents_abi::agent::AgentFrame>>,
-        transcription_node: Option<Arc<dyn NodeFactory>>,
-        realtime_audio_output_node: Option<Arc<dyn NodeFactory>>,
-        llm_node: Option<Arc<dyn NodeFactory>>,
-        tts_node: Option<Arc<dyn NodeFactory>>,
-        stt_node: Option<Arc<dyn NodeFactory>>,
-        host_audio_input: Option<Arc<dyn AudioInput>>,
-        host_audio_output: Option<Arc<dyn AudioOutput>>,
-        host_video_input: Option<Arc<dyn VideoInput>>,
-        video_sampler: Option<(f64, f64)>,
-        host_video_sampler: bool,
-        host_transcription_output: Option<Arc<dyn TextOutput>>,
-        using_default_vad: bool,
-        hook_bound: Option<f64>,
-        max_unrecoverable_errors: u32,
-        stt_context: Option<lk_agents_abi::turn::keyterms::SttContextConfig>,
-        keyterm_llm: Option<Arc<dyn Llm>>,
-        keyterm_tools: Option<HostRef>,
-        agent_expressive: Maybe<Expressive>,
-        session_id: Option<String>,
-        remote_session: Option<Arc<dyn SessionPort>>,
-        console: Option<Arc<dyn lk_agents_abi::voice::console::ConsolePort>>,
-        job: Option<Arc<dyn lk_agents_abi::worker::job::SessionJob>>,
-    ) -> Result<Self, lk_agents_abi::voice::rtc::RtcError> {
-        let spawner = (env.spawner)().map_err(|e| {
-            lk_agents_abi::voice::rtc::RtcError::Stream(
-                lk_agents_abi::errors::ApiError::new(e).into(),
-            )
-        })?;
-        Self::assemble(
-            spawner,
-            room,
-            instructions,
-            dynamic_instructions,
-            agent,
-            agent_host,
-            chat_ctx,
-            storage,
-            stt,
-            vad,
-            llm,
-            realtime,
-            tts,
-            on_event,
-            hooks,
-            participant_identity,
-            auto_gain_control,
-            input_sample_rate,
-            output_sample_rate,
-            options,
-            agent_turn_handling,
-            agent_min_consecutive_speech_delay,
-            agent_use_tts_aligned_transcript,
-            turn_detector,
-            interruption_detector,
-            text_output,
-            room_io_config,
-            tools,
-            tools_host,
-            voice_agent,
-            transcription_node,
-            realtime_audio_output_node,
-            llm_node,
-            tts_node,
-            stt_node,
-            host_audio_input,
-            host_audio_output,
-            host_video_input,
-            video_sampler,
-            host_video_sampler,
-            host_transcription_output,
-            using_default_vad,
-            hook_bound,
-            max_unrecoverable_errors,
-            stt_context,
-            keyterm_llm,
-            keyterm_tools,
-            agent_expressive,
-            session_id,
-            remote_session,
-            console,
-            job,
-        )
     }
 
     fn start(&self) -> Result<BoxFuture<'static, Result<(), StartFailed>>, OpenRefused> {

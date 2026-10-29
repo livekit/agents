@@ -13,14 +13,29 @@ from ..types import NOT_GIVEN
 
 if TYPE_CHECKING:
     from livekit.agents import VAD
-    from livekit.agents._core import AgentNodes, VoiceAgent
+    from livekit.agents._core import (
+        AgentNodes,
+        ConsoleIo,
+        DuplexRealtimeModel,
+        HostRealtimeModel,
+        InterruptionDetector,
+        NativeRealtimeModel,
+        RealtimeFallbackModel,
+        VoiceAgent,
+        _core_VoiceStore,
+    )
+    from livekit.agents._core_view import TurnDetector
+    from livekit.agents.job import JobContext
     from livekit.agents.llm import LLM
     from livekit.agents.stt import STT
     from livekit.agents.tts import TTS
-    from livekit.agents.voice.agent_session import _DynamicInstructions
+    from livekit.agents.voice.agent_session import VoiceSession, _AgentHooks, _DynamicInstructions
+    from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
+    from livekit.agents.voice.remote_session import SessionPort
 
     from .._core import ChatItem
     from ..types import NotGivenOr
+    from .keyterms import STTContextOptions
     from .turn import TurnHandlingOptions
 
 
@@ -62,3 +77,81 @@ class UpdateAgentArgs:
     stt_node: AgentNodes | None = None
     transcription_node: AgentNodes | None = None
     realtime_audio_output_node: AgentNodes | None = None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class VoiceSessionArgs:
+    """What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
+    `VoiceSession(...)` and `start()` hand them over. `Default` is a session with none of them.
+    """
+
+    instructions: str | None = None
+    dynamic_instructions: _DynamicInstructions | None = None
+    agent: str = ""
+    agent_host: object | None = None
+    chat_ctx: list[ChatItem] | None = None
+    storage: _core_VoiceStore | None = None
+    stt: STT | None = None
+    vad: VAD | None = None
+    llm: LLM | None = None
+    realtime: DuplexRealtimeModel | HostRealtimeModel | NativeRealtimeModel | RealtimeFallbackModel | None = None
+    tts: TTS | None = None
+    on_event: VoiceSession | None = None
+    """Receives each session event, on the calling loop."""
+    hooks: _AgentHooks | None = None
+    participant_identity: str | None = None
+    auto_gain_control: bool = True
+    input_sample_rate: int = 24000
+    output_sample_rate: int = 24000
+    agent_turn_handling: TurnHandlingOptions | None = None
+    """The first agent's own `turn_handling`, `min_consecutive_speech_delay` in seconds and
+    `use_tts_aligned_transcript`: the agent layer of the stack.
+    """
+    agent_min_consecutive_speech_delay: float | None = None
+    agent_use_tts_aligned_transcript: bool | None = None
+    turn_detector: TurnDetector | None = None
+    """The turn detector over the user's audio (`turn_detection`)."""
+    interruption_detector: InterruptionDetector | None = None
+    """The adaptive-interruption detector: an object means the host's gate said yes."""
+    text_output: bool = True
+    room_io_config: dict[str, object] | None = None
+    """`RoomOptions._to_core()`, resolved per leg; without it the scalars above."""
+    tools: list[dict[str, object]] | None = None
+    tools_host: object | None = None
+    voice_agent: VoiceAgent | None = None
+    """The first agent as its tools are hosted: its definition and its `AgentHost`."""
+    transcription_node: AgentNodes | None = None
+    realtime_audio_output_node: AgentNodes | None = None
+    llm_node: AgentNodes | None = None
+    tts_node: AgentNodes | None = None
+    stt_node: AgentNodes | None = None
+    host_audio_input: AudioInput | None = None
+    """The host's own io legs, replacing the room's."""
+    host_audio_output: AudioOutput | None = None
+    host_video_input: VideoInput | None = None
+    video_sampler: tuple[float, float] | None = None
+    """`VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame."""
+    host_video_sampler: bool = False
+    """A custom `video_sampler` callable: the host pumps and gates; the session reads no camera."""
+    host_transcription_output: TextOutput | None = None
+    using_default_vad: bool = False
+    hook_bound: float | None = None
+    """The end-of-turn hook's bound, in seconds; `None` is no hook and no wait."""
+    max_unrecoverable_errors: int = 3
+    stt_context: STTContextOptions | None = None
+    keyterm_llm: LLM | None = None
+    keyterm_tools: object | None = None
+    agent_expressive: NotGivenOr[bool | dict[str, object] | None] = NOT_GIVEN
+    """The first agent's own `expressive`; `NOT_GIVEN` defers to the session's."""
+    session_id: str | None = None
+    """Prefixes the ids the session mints for chat items; `None` mints a random one."""
+    remote_session: SessionPort | None = None
+    """Serve the remote session protocol (`lk agent simulate`, the dashboard, `lk agent
+    console`) on the room's byte streams, or on `console`.
+    """
+    console: ConsoleIo | None = None
+    """`lk agent console`'s socket: the session's audio input and output, and the remote
+    session's transport.
+    """
+    job: JobContext | None = None
+    """The job whose room this is: `start()` connects it beside the opening."""

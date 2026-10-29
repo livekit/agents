@@ -94,18 +94,15 @@ fn assembled(
     hook_bound: Option<f64>,
     options: Option<SessionOptions>,
 ) -> VoiceSession {
-    let spawner =
-        Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current()));
     let room = lk_agents_abi::voice::room_owner::RoomSession(Arc::new(room));
-    #[rustfmt::skip]
-    let api = VoiceSession::assemble(
-        spawner, room, None, None, "agent".into(), None, None, None, None, None, None, None,
-        None, None, None, None, true, 24_000, 24_000, options, None, None, None, None, None, true,
-        Some(lk_agents_abi::voice::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
-        None, None,
-        None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
-        None, None, None,
-    );
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        room_io_config: Some(Default::default()),
+        hook_bound,
+        ..Default::default()
+    };
+    let env = lk_agents_net::env::ProcessEnv::current_runtime();
+    let api = <VoiceSession as lk_agents_abi::voice::session::VoiceSession>::new(&env, room, args, options);
     api.expect("valid native room ports")
 }
 

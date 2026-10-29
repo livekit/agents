@@ -166,6 +166,184 @@ pub struct UpdateAgentArgs {
     pub realtime_audio_output_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
 }
 
+/// What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
+/// `VoiceSession(...)` and `start()` hand them over. `Default` is a session with none of them.
+#[crate::host(record(module = "voice_session", extract))]
+#[derive(Clone)]
+pub struct VoiceSessionArgs {
+    #[host(default = None)]
+    pub instructions: Option<String>,
+    #[host(default = None)]
+    pub dynamic_instructions: Option<Arc<dyn crate::agent::HostInstructions>>,
+    #[host(default = "")]
+    pub agent: String,
+    #[host(default = None)]
+    pub agent_host: Option<HostRef>,
+    #[host(default = None)]
+    pub chat_ctx: Option<Vec<ChatItem>>,
+    #[host(default = None)]
+    pub storage: Option<Arc<dyn crate::storage::voice::VoiceStorage>>,
+    #[host(default = None)]
+    pub stt: Option<Arc<dyn Stt>>,
+    #[host(default = None)]
+    pub vad: Option<Arc<dyn Vad>>,
+    #[host(default = None)]
+    pub llm: Option<Arc<dyn Llm>>,
+    #[host(default = None)]
+    pub realtime: Option<Arc<dyn crate::Realtime>>,
+    #[host(default = None)]
+    pub tts: Option<Arc<dyn Tts>>,
+    /// Receives each session event, on the calling loop.
+    #[host(default = None)]
+    pub on_event: Option<Arc<dyn crate::voice::session_effects::SessionEvents>>,
+    #[host(default = None)]
+    pub hooks: Option<Arc<dyn crate::voice::session_effects::SessionHooks>>,
+    #[host(default = None)]
+    pub participant_identity: Option<String>,
+    #[host(default = true)]
+    pub auto_gain_control: bool,
+    #[host(default = 24000)]
+    pub input_sample_rate: u32,
+    #[host(default = 24000)]
+    pub output_sample_rate: u32,
+    /// The first agent's own `turn_handling`, `min_consecutive_speech_delay` in seconds and
+    /// `use_tts_aligned_transcript`: the agent layer of the stack.
+    #[host(default = None)]
+    pub agent_turn_handling: Option<TurnHandlingKwargs>,
+    #[host(default = None)]
+    pub agent_min_consecutive_speech_delay: Option<f64>,
+    #[host(default = None)]
+    pub agent_use_tts_aligned_transcript: Option<bool>,
+    /// The turn detector over the user's audio (`turn_detection`).
+    #[host(default = None)]
+    pub turn_detector: Option<Arc<dyn crate::EotDetector>>,
+    /// The adaptive-interruption detector: an object means the host's gate said yes.
+    #[host(default = None)]
+    pub interruption_detector: Option<Arc<dyn crate::turn::interruption::InterruptionSource>>,
+    #[host(default = true)]
+    pub text_output: bool,
+    /// `RoomOptions._to_core()`, resolved per leg; without it the scalars above.
+    #[host(default = None)]
+    pub room_io_config: Option<crate::voice::room_io::RoomIoConfig>,
+    #[host(default = None)]
+    pub tools: Option<Vec<ToolSpec>>,
+    #[host(default = None)]
+    pub tools_host: Option<HostRef>,
+    /// The first agent as its tools are hosted: its definition and its `AgentHost`.
+    #[host(default = None)]
+    pub voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
+    #[host(default = None)]
+    pub transcription_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
+    #[host(default = None)]
+    pub realtime_audio_output_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
+    #[host(default = None)]
+    pub llm_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
+    #[host(default = None)]
+    pub tts_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
+    #[host(default = None)]
+    pub stt_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
+    /// The host's own io legs, replacing the room's.
+    #[host(default = None)]
+    pub host_audio_input: Option<Arc<dyn AudioInput>>,
+    #[host(default = None)]
+    pub host_audio_output: Option<Arc<dyn AudioOutput>>,
+    #[host(default = None)]
+    pub host_video_input: Option<Arc<dyn VideoInput>>,
+    /// `VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame.
+    #[host(default = None)]
+    pub video_sampler: Option<(f64, f64)>,
+    /// A custom `video_sampler` callable: the host pumps and gates; the session reads no camera.
+    #[host(default = false)]
+    pub host_video_sampler: bool,
+    #[host(default = None)]
+    pub host_transcription_output: Option<Arc<dyn TextOutput>>,
+    #[host(default = false)]
+    pub using_default_vad: bool,
+    /// The end-of-turn hook's bound, in seconds; `None` is no hook and no wait.
+    #[host(default = None)]
+    pub hook_bound: Option<f64>,
+    #[host(default = 3)]
+    pub max_unrecoverable_errors: u32,
+    #[host(default = None)]
+    pub stt_context: Option<crate::turn::keyterms::SttContextConfig>,
+    #[host(default = None)]
+    pub keyterm_llm: Option<Arc<dyn Llm>>,
+    #[host(default = None)]
+    pub keyterm_tools: Option<HostRef>,
+    /// The first agent's own `expressive`; `NOT_GIVEN` defers to the session's.
+    pub agent_expressive: Maybe<Expressive>,
+    /// Prefixes the ids the session mints for chat items; `None` mints a random one.
+    #[host(default = None)]
+    pub session_id: Option<String>,
+    /// Serve the remote session protocol (`lk agent simulate`, the dashboard, `lk agent
+    /// console`) on the room's byte streams, or on `console`.
+    #[host(default = None)]
+    pub remote_session: Option<Arc<dyn crate::worker::remote_session::SessionPort>>,
+    /// `lk agent console`'s socket: the session's audio input and output, and the remote
+    /// session's transport.
+    #[host(default = None)]
+    pub console: Option<Arc<dyn crate::voice::console::ConsolePort>>,
+    /// The job whose room this is: `start()` connects it beside the opening.
+    #[host(default = None)]
+    pub job: Option<Arc<dyn crate::worker::job::SessionJob>>,
+}
+
+impl Default for VoiceSessionArgs {
+    fn default() -> Self {
+        VoiceSessionArgs {
+            instructions: None,
+            dynamic_instructions: None,
+            agent: String::new(),
+            agent_host: None,
+            chat_ctx: None,
+            storage: None,
+            stt: None,
+            vad: None,
+            llm: None,
+            realtime: None,
+            tts: None,
+            on_event: None,
+            hooks: None,
+            participant_identity: None,
+            auto_gain_control: true,
+            input_sample_rate: 24_000,
+            output_sample_rate: 24_000,
+            agent_turn_handling: None,
+            agent_min_consecutive_speech_delay: None,
+            agent_use_tts_aligned_transcript: None,
+            turn_detector: None,
+            interruption_detector: None,
+            text_output: true,
+            room_io_config: None,
+            tools: None,
+            tools_host: None,
+            voice_agent: None,
+            transcription_node: None,
+            realtime_audio_output_node: None,
+            llm_node: None,
+            tts_node: None,
+            stt_node: None,
+            host_audio_input: None,
+            host_audio_output: None,
+            host_video_input: None,
+            video_sampler: None,
+            host_video_sampler: false,
+            host_transcription_output: None,
+            using_default_vad: false,
+            hook_bound: None,
+            max_unrecoverable_errors: 3,
+            stt_context: None,
+            keyterm_llm: None,
+            keyterm_tools: None,
+            agent_expressive: Maybe::NotGiven,
+            session_id: None,
+            remote_session: None,
+            console: None,
+            job: None,
+        }
+    }
+}
+
 /// `AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
 /// and the session layer they became (plus every `update_options` so far).
 #[crate::host(class(name = "SessionOptions"))]
@@ -199,92 +377,14 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     type Speech: Send + Sync + 'static;
 
     /// Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
-    /// RTC attachment. `on_event` receives each session event, on the calling loop.
+    /// RTC attachment; `options` is the session layer `SessionOptions(kwargs)` built (none is an
+    /// empty session layer).
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
         room: crate::voice::room_owner::RoomSession,
-        #[host(kw, default = None)] instructions: Option<String>,
-        #[host(default = None)] dynamic_instructions: Option<
-            Arc<dyn crate::agent::HostInstructions>,
-        >,
-        #[host(default = "")] agent: String,
-        #[host(default = None)] agent_host: Option<HostRef>,
-        #[host(default = None)] chat_ctx: Option<Vec<ChatItem>>,
-        #[host(default = None)] storage: Option<Arc<dyn crate::storage::voice::VoiceStorage>>,
-        #[host(default = None)] stt: Option<Arc<dyn Stt>>,
-        #[host(default = None)] vad: Option<Arc<dyn Vad>>,
-        #[host(default = None)] llm: Option<Arc<dyn Llm>>,
-        #[host(default = None)] realtime: Option<Arc<dyn crate::Realtime>>,
-        #[host(default = None)] tts: Option<Arc<dyn Tts>>,
-        #[host(default = None)] on_event: Option<
-            Arc<dyn crate::voice::session_effects::SessionEvents>,
-        >,
-        #[host(default = None)] hooks: Option<Arc<dyn crate::voice::session_effects::SessionHooks>>,
-        #[host(default = None)] participant_identity: Option<String>,
-        #[host(default = true)] auto_gain_control: bool,
-        #[host(default = 24_000)] input_sample_rate: u32,
-        #[host(default = 24_000)] output_sample_rate: u32,
-        // The session layer `SessionOptions(kwargs)` built; none is an empty session layer.
+        args: VoiceSessionArgs,
         #[host(default = None)] options: Option<Self::Options>,
-        // The first agent's own `turn_handling`, `min_consecutive_speech_delay` in seconds and
-        // `use_tts_aligned_transcript`: the agent layer of the stack.
-        #[host(default = None)] agent_turn_handling: Option<TurnHandlingKwargs>,
-        #[host(default = None)] agent_min_consecutive_speech_delay: Option<f64>,
-        #[host(default = None)] agent_use_tts_aligned_transcript: Option<bool>,
-        // The turn detector over the user's audio (`turn_detection`).
-        #[host(default = None)] turn_detector: Option<Arc<dyn crate::EotDetector>>,
-        // The adaptive-interruption detector: an object means the host's gate said yes.
-        #[host(default = None)] interruption_detector: Option<
-            Arc<dyn crate::turn::interruption::InterruptionSource>,
-        >,
-        #[host(default = true)] text_output: bool,
-        // `RoomOptions._to_core()`, resolved per leg; without it the scalars above.
-        #[host(default = None)] room_io_config: Option<crate::voice::room_io::RoomIoConfig>,
-        #[host(default = None)] tools: Option<Vec<ToolSpec>>,
-        #[host(default = None)] tools_host: Option<HostRef>,
-        // The first agent as its tools are hosted: its definition and its `AgentHost`.
-        #[host(default = None)] voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
-        #[host(default = None)] transcription_node: Option<
-            Arc<dyn crate::voice::nodes::NodeFactory>,
-        >,
-        #[host(default = None)] realtime_audio_output_node: Option<
-            Arc<dyn crate::voice::nodes::NodeFactory>,
-        >,
-        #[host(default = None)] llm_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
-        #[host(default = None)] tts_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
-        #[host(default = None)] stt_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
-        // The host's own io legs, replacing the room's.
-        #[host(default = None)] host_audio_input: Option<Arc<dyn AudioInput>>,
-        #[host(default = None)] host_audio_output: Option<Arc<dyn AudioOutput>>,
-        #[host(default = None)] host_video_input: Option<Arc<dyn VideoInput>>,
-        // `VoiceActivityVideoSampler(speaking_fps, silent_fps)`'s two rates; `None`: every frame.
-        #[host(default = None)] video_sampler: Option<(f64, f64)>,
-        // A custom `video_sampler` callable: the host pumps and gates; the session reads no camera.
-        #[host(default = false)] host_video_sampler: bool,
-        #[host(default = None)] host_transcription_output: Option<Arc<dyn TextOutput>>,
-        #[host(default = false)] using_default_vad: bool,
-        // The end-of-turn hook's bound, in seconds; `None` is no hook and no wait.
-        #[host(default = None)] hook_bound: Option<f64>,
-        #[host(default = 3)] max_unrecoverable_errors: u32,
-        #[host(default = None)] stt_context: Option<crate::turn::keyterms::SttContextConfig>,
-        #[host(default = None)] keyterm_llm: Option<Arc<dyn Llm>>,
-        #[host(default = None)] keyterm_tools: Option<HostRef>,
-        // The first agent's own `expressive`; `NOT_GIVEN` defers to the session's.
-        agent_expressive: Maybe<Expressive>,
-        // Prefixes the ids the session mints for chat items; `None` mints a random one.
-        #[host(default = None)] session_id: Option<String>,
-        // Serve the remote session protocol (`lk agent simulate`, the dashboard, `lk agent
-        // console`) on the room's byte streams, or on `console`.
-        #[host(default = None)] remote_session: Option<
-            Arc<dyn crate::worker::remote_session::SessionPort>,
-        >,
-        // `lk agent console`'s socket: the session's audio input and output, and the remote
-        // session's transport.
-        #[host(default = None)] console: Option<Arc<dyn crate::voice::console::ConsolePort>>,
-        // The job whose room this is: `start()` connects it beside the opening.
-        #[host(default = None)] job: Option<Arc<dyn crate::worker::job::SessionJob>>,
     ) -> Result<Self, crate::voice::rtc::RtcError>;
 
     /// Open the providers and run the loop beside the host event drain. Resolves once the host

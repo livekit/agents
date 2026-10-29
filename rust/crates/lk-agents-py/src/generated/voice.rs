@@ -713,30 +713,6 @@ impl SessionOptions {
 // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
 type VoiceSessionImpl = <crate::Selected as super::Implementations>::VoiceSession;
 
-fn _extract_voice_session_new_input_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "input_sample_rate")
-}
-
-fn _extract_voice_session_new_output_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "output_sample_rate")
-}
-
-fn _extract_voice_session_new_agent_min_consecutive_speech_delay(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "agent_min_consecutive_speech_delay")).map(Some) }
-}
-
-fn _extract_voice_session_new_video_sampler(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<(f64, f64)>> {
-    if obj.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "video_sampler"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "video_sampler"))?, (::lk_agents_abi::python::number_from_py::<f64>(&item_1, "video_sampler"))?,)) })()).map(Some) }
-}
-
-fn _extract_voice_session_new_hook_bound(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
-    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "hook_bound")).map(Some) }
-}
-
-fn _extract_voice_session_new_max_unrecoverable_errors(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "max_unrecoverable_errors")
-}
-
 fn _extract_voice_session_ivr_start_max_silence(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_silence")
 }
@@ -781,39 +757,16 @@ pub struct VoiceSession(::std::sync::Arc<VoiceSessionImpl>);
 #[pymethods]
 impl VoiceSession {
     /// Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
-    /// RTC attachment. `on_event` receives each session event, on the calling loop.
+    /// RTC attachment; `options` is the session layer `SessionOptions(kwargs)` built (none is an
+    /// empty session layer).
     #[new]
-    #[pyo3(signature = (room, *, instructions = None, dynamic_instructions = None, agent = "".to_owned(), agent_host = None, chat_ctx = None, storage = None, stt = None, vad = None, llm = None, realtime = None, tts = None, on_event = None, hooks = None, participant_identity = None, auto_gain_control = true, input_sample_rate = 24000, output_sample_rate = 24000, options = None, agent_turn_handling = None, agent_min_consecutive_speech_delay = None, agent_use_tts_aligned_transcript = None, turn_detector = None, interruption_detector = None, text_output = true, room_io_config = None, tools = None, tools_host = None, voice_agent = None, transcription_node = None, realtime_audio_output_node = None, llm_node = None, tts_node = None, stt_node = None, host_audio_input = None, host_audio_output = None, host_video_input = None, video_sampler = None, host_video_sampler = false, host_transcription_output = None, using_default_vad = false, hook_bound = None, max_unrecoverable_errors = 3, stt_context = None, keyterm_llm = None, keyterm_tools = None, agent_expressive = ::lk_agents_abi::Maybe::NotGiven, session_id = None, remote_session = None, console = None, job = None))]
-    fn new(room: ::lk_agents_abi::voice::room_owner::RoomSession, instructions: ::std::option::Option<::std::string::String>, dynamic_instructions: Option<Bound<'_, PyAny>>, agent: ::std::string::String, agent_host: ::std::option::Option<::lk_agents_abi::HostRef>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>, storage: Option<Bound<'_, PyAny>>, stt: Option<Bound<'_, PyAny>>, vad: Option<Bound<'_, PyAny>>, llm: Option<Bound<'_, PyAny>>, realtime: Option<Bound<'_, PyAny>>, tts: Option<Bound<'_, PyAny>>, on_event: Option<Bound<'_, PyAny>>, hooks: Option<Bound<'_, PyAny>>, participant_identity: ::std::option::Option<::std::string::String>, auto_gain_control: bool, #[pyo3(from_py_with = _extract_voice_session_new_input_sample_rate)] input_sample_rate: u32, #[pyo3(from_py_with = _extract_voice_session_new_output_sample_rate)] output_sample_rate: u32, options: Option<Bound<'_, PyAny>>, agent_turn_handling: ::std::option::Option<::lk_agents_abi::voice::session_options::TurnHandlingKwargs>, #[pyo3(from_py_with = _extract_voice_session_new_agent_min_consecutive_speech_delay)] agent_min_consecutive_speech_delay: ::std::option::Option<f64>, agent_use_tts_aligned_transcript: ::std::option::Option<bool>, turn_detector: Option<Bound<'_, PyAny>>, interruption_detector: Option<Bound<'_, PyAny>>, text_output: bool, room_io_config: ::std::option::Option<::lk_agents_abi::voice::room_io::RoomIoConfig>, tools: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ToolSpec>>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, voice_agent: Option<Bound<'_, PyAny>>, transcription_node: Option<Bound<'_, PyAny>>, realtime_audio_output_node: Option<Bound<'_, PyAny>>, llm_node: Option<Bound<'_, PyAny>>, tts_node: Option<Bound<'_, PyAny>>, stt_node: Option<Bound<'_, PyAny>>, host_audio_input: Option<Bound<'_, PyAny>>, host_audio_output: Option<Bound<'_, PyAny>>, host_video_input: Option<Bound<'_, PyAny>>, #[pyo3(from_py_with = _extract_voice_session_new_video_sampler)] video_sampler: ::std::option::Option<(f64, f64)>, host_video_sampler: bool, host_transcription_output: Option<Bound<'_, PyAny>>, using_default_vad: bool, #[pyo3(from_py_with = _extract_voice_session_new_hook_bound)] hook_bound: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_voice_session_new_max_unrecoverable_errors)] max_unrecoverable_errors: u32, stt_context: ::std::option::Option<::lk_agents_abi::turn::keyterms::SttContextConfig>, keyterm_llm: Option<Bound<'_, PyAny>>, keyterm_tools: ::std::option::Option<::lk_agents_abi::HostRef>, agent_expressive: ::lk_agents_abi::Maybe<::lk_agents_abi::voice::session_options::Expressive>, session_id: ::std::option::Option<::std::string::String>, remote_session: Option<Bound<'_, PyAny>>, console: Option<Bound<'_, PyAny>>, job: Option<Bound<'_, PyAny>>) -> PyResult<VoiceSession> {
+    #[pyo3(signature = (room, args, options = None))]
+    fn new(room: ::lk_agents_abi::voice::room_owner::RoomSession, args: Bound<'_, PyAny>, options: Option<Bound<'_, PyAny>>) -> PyResult<VoiceSession> {
         ::lk_agents_abi::python::check_pid()?;
         let env = crate::process::env();
-        let dynamic_instructions = dynamic_instructions.map(|v| crate::generated::agent::HostInstructionsProxy::from_host(&v)).transpose()?;
-        let storage = storage.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("storage", ": expected a native voice storage manager")))).transpose()?;
-        let stt = stt.map(|v| crate::generated::stt::SttProxy::from_host(&v)).transpose()?;
-        let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
-        let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
-        let realtime = realtime.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Realtime>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("realtime", ": expected NativeRealtimeModel")))).transpose()?;
-        let tts = tts.map(|v| crate::generated::tts::TtsProxy::from_host(&v)).transpose()?;
-        let on_event = on_event.map(|v| crate::generated::voice::SessionEventsProxy::from_host(&v)).transpose()?;
-        let hooks = hooks.map(|v| crate::generated::voice::SessionHooksProxy::from_host(&v)).transpose()?;
+        let args = crate::generated::records::voice_session::voice_session_args_from_py(&args)?;
         let options = options.map(|v| v.cast::<super::voice::SessionOptions>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)).transpose()?;
-        let turn_detector = turn_detector.map(|v| crate::generated::turn::EotDetectorProxy::from_host(&v)).transpose()?;
-        let interruption_detector = interruption_detector.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("interruption_detector", ": interruption_detector must be an `inference.AdaptiveInterruptionDetector`")))).transpose()?;
-        let voice_agent = voice_agent.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)")))).transpose()?;
-        let transcription_node = transcription_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("transcription_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let realtime_audio_output_node = realtime_audio_output_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("realtime_audio_output_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let llm_node = llm_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("llm_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let tts_node = tts_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tts_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let stt_node = stt_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("stt_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let host_audio_input = host_audio_input.map(|v| crate::generated::voice::AudioInputProxy::from_host(&v)).transpose()?;
-        let host_audio_output = host_audio_output.map(|v| crate::generated::voice::AudioOutputProxy::from_host(&v)).transpose()?;
-        let host_video_input = host_video_input.map(|v| crate::generated::voice::VideoInputProxy::from_host(&v)).transpose()?;
-        let host_transcription_output = host_transcription_output.map(|v| crate::generated::voice::TextOutputProxy::from_host(&v)).transpose()?;
-        let keyterm_llm = keyterm_llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
-        let remote_session = remote_session.map(|v| crate::generated::worker::SessionPortProxy::from_host(&v)).transpose()?;
-        let console = console.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::console::ConsolePort>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("console", ": expected a native ConsoleIo")))).transpose()?;
-        let job = job.map(|v| crate::generated::worker::SessionJobProxy::from_host(&v)).transpose()?;
-        let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::new(&env, room, instructions, dynamic_instructions, agent, agent_host, chat_ctx, storage, stt, vad, llm, realtime, tts, on_event, hooks, participant_identity, auto_gain_control, input_sample_rate, output_sample_rate, options, agent_turn_handling, agent_min_consecutive_speech_delay, agent_use_tts_aligned_transcript, turn_detector, interruption_detector, text_output, room_io_config, tools, tools_host, voice_agent, transcription_node, realtime_audio_output_node, llm_node, tts_node, stt_node, host_audio_input, host_audio_output, host_video_input, video_sampler, host_video_sampler, host_transcription_output, using_default_vad, hook_bound, max_unrecoverable_errors, stt_context, keyterm_llm, keyterm_tools, agent_expressive, session_id, remote_session, console, job).map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::new(&env, room, args, options).map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(VoiceSession(::std::sync::Arc::new(out)))
     }
 

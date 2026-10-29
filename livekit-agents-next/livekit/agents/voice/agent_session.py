@@ -65,7 +65,7 @@ from .._generated.session_wire import (
     ToolExecutionUpdatedWire,
 )
 from .._generated.vad import VAD
-from .._generated.voice_session import UpdateAgentArgs
+from .._generated.voice_session import UpdateAgentArgs, VoiceSessionArgs
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
 from ..llm import LLM, ChatContext, FunctionCall, RealtimeModel, StopResponse, function_tool
@@ -508,8 +508,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         keyterm_llm = _detection_llm(self._stt_context)
         self._room = room
         try:
-            self._core = _core.VoiceSession(
-                _core._core_create_room_session(_RtcRoom.of(room) if room is not None else None),
+            args = VoiceSessionArgs(
                 instructions=frame["instructions"],
                 dynamic_instructions=frame["dynamic_instructions"],
                 agent=frame["agent"],
@@ -527,7 +526,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 host_transcription_output=self._output.transcription,
                 on_event=self,
                 hooks=hooks,
-                options=self._options,
                 tools=frame["tools"],
                 tools_host=frame["tools_host"],
                 voice_agent=frame["voice_agent"],
@@ -547,6 +545,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # the core connects the job's room beside its opening
                 job=job_ctx if in_job and console is None else None,
             )
+            room_session = _core._core_create_room_session(
+                _RtcRoom.of(room) if room is not None else None
+            )
+            self._core = _core.VoiceSession(room_session, args, self._options)
         except BaseException:
             # a core that never started never closes the toolsets
             await hooks._core_close_toolsets(None)
