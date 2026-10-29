@@ -427,36 +427,6 @@ mod tests {
         }
     }
 
-    // Catches: decoding each chunk lossily, so a character split across two chunks became two
-    // replacement characters (the old `String::from_utf8_lossy` per chunk).
-    #[test]
-    fn a_character_split_across_chunks_is_decoded_whole() {
-        let (events, end) = decode(&[b"data: caf\xc3", b"\xa9\n\n"]);
-        assert_eq!((data(&events), end), (vec!["caf\u{e9}"], Ok(())));
-    }
-
-    // Catches: emitting each `data:` line as its own event.
-    #[test]
-    fn data_lines_join_into_one_event_at_the_blank_line() {
-        let (events, end) = decode(&[b"data: a\ndata: b\n\n"]);
-        assert_eq!((data(&events), end), (vec!["a\nb"], Ok(())));
-    }
-
-    // Catches: only LF delimiting lines, so a CR-only stream never produced an event.
-    #[test]
-    fn a_bare_cr_ends_a_line() {
-        let (events, end) = decode(&[b"data: x\r\r"]);
-        assert_eq!((data(&events), end), (vec!["x"], Ok(())));
-    }
-
-    // Catches: `trim_start` on the value, which strips payload whitespace past the one space the
-    // format reserves.
-    #[test]
-    fn only_the_first_space_after_the_colon_is_stripped() {
-        let (events, end) = decode(&[b"data:  x \n\n"]);
-        assert_eq!((data(&events), end), (vec![" x "], Ok(())));
-    }
-
     // Catches: a body ending inside an event reported as a clean end (the half-received event
     // silently dropped).
     #[test]

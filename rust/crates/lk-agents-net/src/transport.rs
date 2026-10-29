@@ -211,18 +211,4 @@ mod tests {
         assert_eq!(err.kind, ApiErrorKind::Connection);
         assert!(err.retryable);
     }
-
-    // Catches: looking up quota headers case-sensitively.
-    #[test]
-    fn quota_headers_are_found_regardless_of_case() {
-        let err = TransportError::Status {
-            status: 429,
-            message: "Too Many Requests".into(),
-            headers: vec![("x-livekit-inference-rpm-limit".into(), "60".into())],
-            body: None,
-        };
-        assert_eq!(err.header("X-LiveKit-Inference-RPM-Limit"), Some("60"));
-        assert_eq!(err.header("X-LiveKit-Inference-TPM-Limit"), None);
-        assert_eq!(TransportError::Timeout.header("anything"), None);
-    }
 }

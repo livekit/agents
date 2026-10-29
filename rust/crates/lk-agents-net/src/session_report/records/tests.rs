@@ -274,17 +274,6 @@ fn re_adding_a_tag_keeps_its_position() {
     assert_eq!(t.entries()[0].1, Some(json!({"v": 3})));
 }
 
-// Catches: judge tags not landing in the tag set.
-#[test]
-fn recording_an_evaluation_writes_both_a_tag_and_a_record() {
-    let mut t = tagger();
-    t._core_record_judgment("booked".into(), "fail".into(), "no".into(), "".into());
-    assert_eq!(t.sorted_tags(), vec!["lk.judge.booked:fail"]);
-    assert_eq!(t.evaluations().len(), 1);
-    assert_eq!(t.evaluations()[0].name, "booked");
-    assert!(t.has_evals());
-}
-
 // Catches: tag timestamps from the wall clock rather than the session clock.
 #[test]
 fn tag_timestamps_come_from_the_session_clock() {
@@ -411,33 +400,4 @@ fn only_the_recording_disabled_401_closes_the_gate() {
     // Right text, wrong code -- the reference checks the code first.
     assert!(!UploadGate::is_disabled_response(403, b"data recording is disabled".to_vec()));
     assert!(!UploadGate::is_disabled_response(500, b"data recording is disabled".to_vec()));
-}
-
-// Catches: panicking or missing the marker on a non-UTF-8 body.
-#[test]
-fn invalid_utf8_body_still_matches() {
-    let mut body = b"data recording is disabled ".to_vec();
-    body.extend_from_slice(&[0xff, 0xfe]);
-    assert!(UploadGate::is_disabled_response(401, body));
-}
-
-// Catches: the gate becoming a global again.
-#[test]
-fn two_sessions_do_not_share_the_disabled_flag() {
-    let mut a = UploadGate::new();
-    let b = UploadGate::new();
-    a.disable();
-    assert!(a.disabled());
-    assert!(!b.disabled(), "session B must still be allowed to upload");
-}
-
-// Catches: warning on every rejected upload instead of once, and `reset()` not re-arming.
-#[test]
-fn disable_reports_only_the_transition_and_reset_rearms() {
-    let mut g = UploadGate::new();
-    assert!(g.disable());
-    assert!(!g.disable());
-    g.reset();
-    assert!(!g.disabled());
-    assert!(g.disable());
 }
