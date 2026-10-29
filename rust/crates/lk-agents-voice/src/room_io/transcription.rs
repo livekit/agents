@@ -126,8 +126,9 @@ impl Writer {
         self.expression.as_ref().map_or(0, |(_, value)| value.capacity())
     }
     pub fn admit_text(&mut self, text: &str) -> Result<()> {
+        // A closed output takes no more text; `capture` drops it.
         if self.closed() {
-            return Err(IoError::Rtc("transcription output is closed".into()));
+            return Ok(());
         }
         let prior = if self.is_delta_stream { self.raw_bytes } else { 0 };
         if text.len() > MAX_STREAM_BYTES.saturating_sub(prior) {

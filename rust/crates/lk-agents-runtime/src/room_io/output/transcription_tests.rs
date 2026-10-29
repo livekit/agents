@@ -275,3 +275,26 @@ async fn queued_transcript_keeps_its_subject_and_track_through_replacement() {
     );
     assert!(streams.iter().all(|stream| stream.closed));
 }
+
+// Catches: a speech still producing text when the room closed failing with "transcription
+// output is closed": a closed output takes no more text, and that is not the speech's error.
+#[tokio::test(start_paused = true)]
+async fn text_captured_after_close_is_dropped_not_an_error() {
+    let (rtc, clock) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
+    let room = rtc.room("transcription-after-close");
+    room.add_participant("user", ParticipantKind::Standard);
+    let output = ParticipantTranscriptionOutput::new(
+        room.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock,
+        Arc::new(SegmentIds::counting()),
+        true,
+        false,
+        None,
+    );
+    output.set_participant(Some("user".into())).await.unwrap();
+    output.aclose().await.unwrap();
+    output.capture_text("late").await.expect("a closed output drops late text");
+    output.flush();
+    assert!(room.local_participant().text_streams().iter().all(|stream| stream.text().is_empty()));
+}
