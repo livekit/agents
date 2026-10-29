@@ -22,8 +22,8 @@ from .log import logger
 from .telemetry import capture_content_enabled, trace_types, tracer
 
 if TYPE_CHECKING:
-    from ._generated.inference_llm import ChatCompletionOptions
     from .inference import LLMModels
+    from .inference.llm import ChatCompletionOptions
 
 __all__ = [
     "EvaluationResult",

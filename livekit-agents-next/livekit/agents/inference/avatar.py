@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from livekit import rtc
 
 from .. import _core
-from .._generated.inference_avatar import LemonSliceOptions as LemonSliceOptions
 from ..job import get_job_context
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -21,6 +20,33 @@ if TYPE_CHECKING:
     import aiohttp
 
     from ..voice import VoiceSession
+
+
+from typing import TypedDict
+
+
+class LemonSliceOptions(TypedDict, total=False):
+    """Provider-specific options for a LemonSlice inference avatar.
+
+    Mirrors the per-provider option dicts in :mod:`inference.stt` /
+    :mod:`inference.tts` (e.g. ``CartesiaOptions``); passed via ``extra_kwargs``.
+    All keys are optional.
+    """
+
+    image_url: str
+    prompt: str
+    idle_prompt: str
+    idle_timeout: int
+
+
+# --- the frozen public paths -----------------------------------------------------------------
+#
+# Assigned here rather than in each class body: pydantic resolves annotations against
+# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
+# looking for `Literal` and every foreign type in the re-export module, which imports
+# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
+# reporting `_generated.*` for a name whose import path never moved.
+LemonSliceOptions.__module__ = "livekit.agents.inference.avatar"
 
 
 class AvatarSession(BaseAvatarSession):

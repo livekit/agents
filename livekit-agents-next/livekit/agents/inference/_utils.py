@@ -5,16 +5,18 @@ import os
 import platform
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from livekit import api
 
 from .. import _core
-from .._generated.inference_llm import InferenceClass
 from ..job import _server_setting
 from ..types import NotGivenOr
 from ..utils import is_given
 from ..utils.misc import shortuuid
 from ..version import __version__
+
+InferenceClass = Literal["priority", "standard", "low"]
 
 __all__ = [
     "InferenceClass",
