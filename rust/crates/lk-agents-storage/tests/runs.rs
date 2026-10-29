@@ -739,3 +739,35 @@ async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written(
     assert!(s1.lane(LANE).history().await.unwrap().is_empty());
     fx.cleanup(&[&s1, &s2]).await;
 }
+
+/// The renewal retries a failing extend while the lease cannot have lapsed (`ttl - interval`
+/// since the last extend) and declares the lease lost once failures outlast that window.
+#[tokio::test(start_paused = true)]
+async fn a_failing_renewal_retries_within_the_lease_and_is_lost_after_it() {
+    use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
+    use lk_agents_storage::testing::{Faulty, MemoryConnection};
+    use std::sync::Arc;
+
+    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+    let faulty = Arc::new(Faulty::new(Box::new(MemoryConnection::new(clock).unwrap())));
+    let timing = LeaseTiming::new(Duration::from_secs(10), Duration::from_secs(3)).unwrap();
+    let thread = Thread::new(faulty.clone(), "AT_renewal", timing, SchemaCell::default(), "w1")
+        .await
+        .unwrap();
+    let run = thread.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let lease = run.lease().unwrap().clone();
+    let start = tokio::time::Instant::now();
+
+    // extends at 3 s and 6 s fail, within the 7 s window; the one at 9 s renews
+    faulty.unreachable_for(Duration::from_secs(5));
+    tokio::time::sleep(Duration::from_millis(9500)).await;
+    assert!(!lease.is_lost(), "a failure within the window is retried");
+
+    // extends at 12 s and 15 s fail and retry; at 18 s the failures outlast the window
+    faulty.unreachable_for(Duration::from_secs(20));
+    tokio::time::sleep(Duration::from_millis(8000)).await;
+    assert!(!lease.is_lost(), "still within the window at 17.5 s");
+    let lost = tokio::time::timeout(Duration::from_secs(5), lease.lost()).await;
+    assert!(matches!(lost, Ok(StorageError::LeaseLost(_))), "{lost:?}");
+    assert_eq!(start.elapsed().as_secs(), 18);
+}

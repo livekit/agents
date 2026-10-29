@@ -759,7 +759,6 @@ pub(crate) fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::StatementResult;
 
     fn fence() -> Fence {
         Fence {
@@ -791,8 +790,31 @@ mod tests {
         assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_b"))), Resolution::Rejected);
         assert_eq!(resolve(Some(&f), false, lane(4, None)), Resolution::Rejected);
         assert_eq!(resolve(None, false, lane(0, None)), Resolution::NotApplied);
-        // an answer missing a statement's result is malformed, not an empty success
-        let short = BatchResult { results: vec![StatementResult::Rows(vec![])] };
-        assert!(short.at(1).is_err());
+    }
+
+    /// Answers every batch with no results.
+    struct Short;
+
+    #[async_trait::async_trait]
+    impl SqliteConnection for Short {
+        async fn query(&self, _: Statement) -> Result<Vec<Row>, StorageError> {
+            Ok(Vec::new())
+        }
+        async fn batch(&self, _: Vec<Statement>) -> Result<BatchResult, StorageError> {
+            Ok(BatchResult { results: Vec::new() })
+        }
+        async fn close(&self) {}
+    }
+
+    /// An answer missing a statement's result is malformed, never an empty success: a lost
+    /// commit is not resolved as not applied, nor a commit as made.
+    #[tokio::test]
+    async fn a_batch_answer_missing_a_statement_is_unavailable() {
+        let f = fence();
+        let resolved = resolve_commit(&Short, "front-desk", "r1", Some(&f), None).await;
+        assert!(matches!(resolved, Err(StorageError::Unavailable(_))), "{resolved:?}");
+        let fenced = Some(Fenced { fence: &f, keep: None });
+        let committed = commit(&Short, "front-desk", &Commit::default(), fenced).await;
+        assert!(matches!(committed, Err(StorageError::Unavailable(_))), "{committed:?}");
     }
 }
