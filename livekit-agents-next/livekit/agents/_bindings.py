@@ -22,6 +22,8 @@ from .log import logger
 from .types import APIConnectOptions, NotGivenOr
 
 if TYPE_CHECKING:
+    from ._generated.amd import AMDPredictionEvent
+    from ._generated.chat_items import ChatMessage
     from ._generated.llm import ChatChunk
     from ._generated.metrics import STTMetrics
     from ._generated.stt import STT, SpeechData, SpeechEvent
@@ -341,6 +343,27 @@ async def recognize(
 
 def chat_chunk_has_response(chunk: ChatChunk) -> bool:
     return bool(chunk.delta and (chunk.delta.content or chunk.delta.tool_calls))
+
+
+def amd_prediction_is_human(event: AMDPredictionEvent) -> bool:
+    return _core.amd_category_is_human(event.category)
+
+
+def amd_prediction_is_machine(event: AMDPredictionEvent) -> bool:
+    return _core.amd_category_is_machine(event.category)
+
+
+def _text_parts(message: ChatMessage) -> list[str]:
+    return [c for c in message.content if isinstance(c, str)]
+
+
+def chat_message_raw_text_content(message: ChatMessage) -> str | None:
+    parts = _text_parts(message)
+    return "\n".join(parts) if parts else None
+
+
+def chat_message_text_content(message: ChatMessage) -> str | None:
+    return _core.chat_message_text_content(_text_parts(message), message.role == "assistant")
 
 
 def metrics_repr(metrics: BaseModel) -> str:
