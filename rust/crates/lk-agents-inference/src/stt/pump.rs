@@ -174,6 +174,8 @@ impl Pump {
             None => (None, None),
         };
 
+        // Wakes the settlement timer whenever the input or a message moves its deadline.
+        let rearm = Arc::new(tokio::sync::Notify::new());
         let send = Self::send_loop(
             sender.clone(),
             &mut self.audio_rx,
@@ -183,6 +185,7 @@ impl Pump {
             self.opts.sample_rate,
             machine.clone(),
             self.clock.clone(),
+            rearm.clone(),
         );
         let recv = Self::recv_loop(
             receiver.as_mut(),
@@ -194,24 +197,37 @@ impl Pump {
                 clock: self.clock.clone(),
                 ack_deadline: self.opts.conn_options.read_deadline(self.clock.now()),
                 offset: self.offset,
+                rearm: rearm.clone(),
             },
         );
         let finalize = Self::vad_finalize_loop(sender.clone(), &mut vad_source);
 
-        let deadline = machine.lock().unwrap().wake_at();
-        let total_timer = async {
-            match deadline {
-                Some(deadline) => self.clock.wait_until(deadline).await,
-                None => std::future::pending().await,
+        let settle = async {
+            loop {
+                let deadline = machine.lock().unwrap().wake_at();
+                let wait = async {
+                    match deadline {
+                        Some(deadline) => self.clock.wait_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    _ = rearm.notified() => continue,
+                    _ = wait => {}
+                }
+                let effects = machine.lock().unwrap().handle(SttEvent::Wake, self.clock.now());
+                if let Some(result) = effects.into_iter().find_map(|effect| match effect {
+                    SttEffect::Finished(result) => Some(result),
+                    _ => None,
+                }) {
+                    return result;
+                }
             }
         };
         let outcome = tokio::select! {
             _ = self.stop.wait_for(|stop| *stop) => Ok(()),
-            _ = total_timer => {
-                machine.lock().unwrap().handle(SttEvent::Wake, self.clock.now()).into_iter().find_map(|effect| match effect {
-                    SttEffect::Finished(result) => Some(result), _ => None
-                }).unwrap_or_else(|| Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).with_retryable(false)))
-            },
+            r = settle => r,
             r = send => r,
             r = recv => r,
             r = finalize => r,
@@ -237,6 +253,7 @@ impl Pump {
         sample_rate: u32,
         machine: Arc<Mutex<SttProtocol>>,
         clock: Arc<dyn Clock>,
+        rearm: Arc<tokio::sync::Notify>,
     ) -> Result<(), ApiError> {
         // 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
         let mut bstream = AudioByteStream::new(sample_rate, 1, Some(sample_rate / 20), false);
@@ -356,16 +373,9 @@ impl Pump {
                 .await
                 .map_err(|error| connect_error(WHAT, error))?;
         }
-        let at = machine.lock().unwrap().wake_at().expect("input EOF arms settlement");
-        clock.wait_until(at).await;
-        let effects = machine.lock().unwrap().handle(SttEvent::Wake, clock.now());
-        if let Some(result) = effects.into_iter().find_map(|effect| match effect {
-            SttEffect::Finished(result) => Some(result),
-            _ => None,
-        }) {
-            return result;
-        }
-        // Completion may already be observed while its transcript is blocked on delivery.
+        rearm.notify_one();
+        // Completion is an acknowledgment or a quiet period: the receive half and the settlement
+        // timer observe it.
         std::future::pending().await
     }
 
@@ -374,7 +384,7 @@ impl Pump {
         machine: Arc<Mutex<SttProtocol>>,
         ctx: RecvCtx,
     ) -> Result<(), ApiError> {
-        let RecvCtx { event_tx, deferred, update_tx, clock, ack_deadline, offset } = ctx;
+        let RecvCtx { event_tx, deferred, update_tx, clock, ack_deadline, offset, rearm } = ctx;
         // Only the first read (the `session.create` ack) is a response the session waits for;
         // later silence is the user's.
         let mut awaiting_first = true;
@@ -417,6 +427,7 @@ impl Pump {
                             .store(machine.is_speaking(), std::sync::atomic::Ordering::SeqCst);
                         effects
                     };
+                    rearm.notify_one();
                     for effect in effects {
                         match effect {
                             SttEffect::Deliver(event) => {
@@ -479,6 +490,7 @@ struct RecvCtx {
     /// `read_timeout` from the session-create frame: the acknowledgement is a response.
     ack_deadline: Option<lk_agents_abi::Ts>,
     offset: f64,
+    rearm: Arc<tokio::sync::Notify>,
 }
 
 /// The event on the caller's timeline: every alternative's and word's times moved by `offset`.

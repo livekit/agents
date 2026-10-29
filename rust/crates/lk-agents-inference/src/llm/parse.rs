@@ -8,9 +8,9 @@ use serde::Deserialize;
 
 // Only the fields the reference reads, `#[serde(default)]` everywhere.
 
-/// `#[serde(default)]` covers only an absent key; some providers send `"tool_calls": null`, which
-/// would fail the whole chunk.
-fn null_as_empty<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+/// `#[serde(default)]` covers only an absent key; providers send `"tool_calls": null` (and the STT
+/// gateway `"words": null`), which would fail the whole message.
+pub(crate) fn null_as_empty<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,

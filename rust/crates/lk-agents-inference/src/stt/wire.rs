@@ -110,7 +110,7 @@ pub struct Transcript {
     #[serde(default = "utterance_confidence")]
     pub confidence: f64,
     pub speaker_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::llm::parse::null_as_empty")]
     pub words: Vec<Word>,
     pub extra: Option<Map<String, Value>>,
 }

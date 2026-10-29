@@ -40,7 +40,7 @@ use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
 
-/// Maximum settlement time after audio EOF. Silence at expiry is a failure, never clean EOF.
+/// Quiet period after audio EOF, or after a later interim, that completes an unacknowledged stream.
 pub(super) const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `_MAX_AGENT_CONTEXT_CHARS`: AssemblyAI caps `agent_context`, so the tail is kept.

@@ -1,11 +1,16 @@
-//! STT completion policy. Audio EOF asks for finalization; neither socket EOF nor a quiet
-//! period proves that the provider delivered the final transcript.
+//! STT completion policy. Audio EOF asks for finalization. Some providers acknowledge it with
+//! `session.finalized`; others (Deepgram, AssemblyAI) answer with at most a final transcript and
+//! keep the socket open, so a quiet period after the input ended completes the stream: short after
+//! a final transcript, `finalization_timeout` otherwise. Socket EOF before completion fails.
 
 use super::{machine::TranscriptMachine, wire::Incoming};
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{SpeechEvent, Ts};
 use std::time::Duration;
+
+/// Quiet period after a post-EOF final transcript that completes a stream with no acknowledgment.
+pub const FINAL_TRANSCRIPT_QUIET: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub enum SttEvent {
@@ -36,8 +41,6 @@ pub struct SttProtocol {
     finalization_deadline: Option<Ts>,
     started: bool,
     input_ended: bool,
-    finalized: bool,
-    pending_transcript: bool,
     finished: bool,
 }
 
@@ -59,8 +62,6 @@ impl SttProtocol {
             finalization_deadline: None,
             started: false,
             input_ended: false,
-            finalized: false,
-            pending_transcript: false,
             finished: false,
         }
     }
@@ -83,16 +84,15 @@ impl SttProtocol {
         if self.finished {
             return Vec::new();
         }
-        if self.wake_at().is_some_and(|deadline| now >= deadline) {
+        if self.total_deadline.is_some_and(|deadline| now >= deadline) {
             self.finished = true;
-            let phase = if self.total_deadline.is_some_and(|deadline| now >= deadline) {
-                TimeoutPhase::Total
-            } else {
-                TimeoutPhase::Read
-            };
-            return vec![SttEffect::Finished(
-                Err(ApiError::timed_out(phase).with_retryable(false)),
-            )];
+            return vec![SttEffect::Finished(Err(
+                ApiError::timed_out(TimeoutPhase::Total).with_retryable(false)
+            ))];
+        }
+        if self.finalization_deadline.is_some_and(|deadline| now >= deadline) {
+            self.finished = true;
+            return vec![SttEffect::Finished(Ok(()))];
         }
         match event {
             SttEvent::Start if !self.started => {
@@ -100,7 +100,6 @@ impl SttProtocol {
                 vec![SttEffect::SttStreamOpen { stream_id: self.stream_id, stt: self.stt }]
             }
             SttEvent::AudioWritten(duration) => {
-                self.pending_transcript = true;
                 self.transcript.record_audio(duration);
                 Vec::new()
             }
@@ -110,16 +109,21 @@ impl SttProtocol {
                 vec![SttEffect::SttFinalize { stream_id: self.stream_id }]
             }
             SttEvent::Message(message) => {
-                match &message {
-                    Incoming::SessionFinalized if self.input_ended => self.finalized = true,
-                    Incoming::FinalTranscript(_) => self.pending_transcript = false,
-                    Incoming::SessionClosed
-                        if !self.input_ended || !self.finalized || self.pending_transcript =>
-                    {
+                let quiet = match &message {
+                    Incoming::SessionClosed => {
                         return self.fail("STT session closed before transcript completion");
                     }
-                    _ => {}
+                    Incoming::FinalTranscript(_) => FINAL_TRANSCRIPT_QUIET,
+                    Incoming::InterimTranscript(_) | Incoming::PreflightTranscript(_) => {
+                        self.finalization_timeout
+                    }
+                    _ => Duration::ZERO,
+                };
+                if self.input_ended && !quiet.is_zero() {
+                    self.finalization_deadline = Some(now.saturating_add(quiet));
                 }
+                let acknowledged =
+                    self.input_ended && matches!(message, Incoming::SessionFinalized);
                 let processed = self.transcript.process(message);
                 let mut effects: Vec<_> =
                     processed.events.into_iter().map(SttEffect::Deliver).collect();
@@ -129,7 +133,7 @@ impl SttProtocol {
                 if let Some(error) = processed.error {
                     self.finished = true;
                     effects.push(SttEffect::Finished(Err(error)));
-                } else if self.input_ended && self.finalized && !self.pending_transcript {
+                } else if acknowledged {
                     self.finished = true;
                     effects.push(SttEffect::Finished(Ok(())));
                 }
@@ -151,39 +155,43 @@ mod tests {
     use super::*;
     use lk_agents_abi::Clock;
 
+    // Catches: a stream whose input ended waiting for an acknowledgment the gateway never sends
+    // (Deepgram and AssemblyAI keep the socket open with no `session.finalized` after
+    // `session.finalize`), failing every `stt.stream()` read to its end with a read timeout.
     #[test]
-    fn stt_completion_vectors_require_finalization_and_transcript_and_bound_settlement() {
+    fn input_eof_completes_on_acknowledgment_or_quiet_period() {
         let now = lk_agents_abi::VirtualClock::new().now();
+        let at = |secs| now.saturating_add(Duration::from_secs(secs));
         let make =
             || SttProtocol::new(1, ResourceId(2), "r".into(), None, Duration::from_secs(5), None);
+        let final_transcript = || {
+            let text = r#"{"type":"final_transcript","transcript":"hello"}"#;
+            SttEvent::Message(super::super::wire::decode(text).unwrap())
+        };
+
         let mut stream = make();
         assert!(matches!(stream.handle(SttEvent::Start, now)[0], SttEffect::SttStreamOpen { .. }));
         stream.handle(SttEvent::AudioWritten(0.1), now);
         assert!(matches!(stream.handle(SttEvent::InputEof, now)[0], SttEffect::SttFinalize { .. }));
-        assert!(stream.handle(SttEvent::Message(Incoming::SessionFinalized), now).is_empty());
-        assert!(matches!(stream.handle(SttEvent::ServerEof, now)[0], SttEffect::Finished(Err(_))));
-        let mut stream = make();
-        stream.handle(SttEvent::AudioWritten(0.1), now);
-        stream.handle(SttEvent::InputEof, now);
-        stream.handle(SttEvent::Message(Incoming::SessionFinalized), now);
-        let final_transcript =
-            super::super::wire::decode(r#"{"type":"final_transcript","transcript":"hello"}"#)
-                .unwrap();
-        let effects = stream.handle(SttEvent::Message(final_transcript), now);
-        assert!(effects.iter().any(|effect| matches!(effect, SttEffect::Deliver(event) if event.kind == lk_agents_abi::SpeechEventType::FinalTranscript)));
-        assert_eq!(effects.last(), Some(&SttEffect::Finished(Ok(()))));
+        let effects = stream.handle(final_transcript(), at(1));
+        assert!(!effects.iter().any(|effect| matches!(effect, SttEffect::Finished(_))));
+        assert!(stream.handle(SttEvent::Wake, at(3)).is_empty());
+        assert_eq!(stream.handle(SttEvent::Wake, at(4)), vec![SttEffect::Finished(Ok(()))]);
+
         let mut stream = make();
         stream.handle(SttEvent::InputEof, now);
-        assert!(stream.handle(SttEvent::Message(Incoming::Unknown), now).is_empty());
-        assert!(matches!(
-            stream.handle(SttEvent::Wake, now.saturating_add(Duration::from_secs(5)))[0],
-            SttEffect::Finished(Err(_))
-        ));
+        assert!(stream.handle(SttEvent::Wake, at(4)).is_empty());
+        assert_eq!(stream.handle(SttEvent::Wake, at(5)), vec![SttEffect::Finished(Ok(()))]);
+
         let mut stream = make();
         stream.handle(SttEvent::InputEof, now);
         assert_eq!(
             stream.handle(SttEvent::Message(Incoming::SessionFinalized), now),
             vec![SttEffect::Finished(Ok(()))]
         );
+
+        let mut stream = make();
+        stream.handle(SttEvent::InputEof, now);
+        assert!(matches!(stream.handle(SttEvent::ServerEof, now)[0], SttEffect::Finished(Err(_))));
     }
 }

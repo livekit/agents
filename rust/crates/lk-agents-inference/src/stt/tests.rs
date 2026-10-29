@@ -333,11 +333,11 @@ async fn closing_the_input_still_delivers_the_pending_final_transcript() {
     assert!(kinds.contains(&SpeechEventType::FinalTranscript), "got {kinds:?}");
 }
 
-// Catches: a stream whose input ended never ending, since the gateway keeps the socket open
-// after `session.finalize` (a `stt.stream()` read to its end hung forever against the real
-// gateway): lack of an explicit finalization acknowledgment fails at the settlement deadline.
+// Catches: a stream whose input ended never ending, or failing with a read timeout, since the
+// gateway keeps the socket open after `session.finalize` and Deepgram/AssemblyAI never send
+// `session.finalized`: a quiet period after the last final transcript completes it cleanly.
 #[tokio::test]
-async fn missing_completion_after_input_eof_fails_instead_of_clean_eof() {
+async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt_once(ws.clone()).with_clock(clock.clone());
@@ -345,19 +345,23 @@ async fn missing_completion_after_input_eof_fails_instead_of_clean_eof() {
     sink.push(frame(800)).unwrap();
     sink.end_input();
     ws.feed(text(json!({"type":"session.created"})));
-    ws.feed(text(json!({"type": "final_transcript", "transcript": "bye"})));
+    crate::testkit::fallback::until("the finalize", || {
+        ws.sent_json().iter().any(|v| v["type"] == json!("session.finalize"))
+    })
+    .await;
+    ws.feed(text(json!({"type": "final_transcript", "transcript": "bye", "words": null})));
     let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
     assert!(events.iter().any(|e| e.kind == SpeechEventType::FinalTranscript));
 
-    crate::testkit::arm_then_advance(&clock, FINALIZATION_TIMEOUT / 2).await;
+    crate::testkit::arm_then_advance(&clock, lifecycle::FINAL_TRANSCRIPT_QUIET / 2).await;
     let early = lk_agents_abi::timeout(
         &lk_agents_abi::RealClock::new(),
         Duration::from_millis(50),
         source.next(),
     )
     .await;
-    assert!(early.is_err(), "ended before the inactivity timeout: {early:?}");
-    crate::testkit::arm_then_advance(&clock, FINALIZATION_TIMEOUT).await;
+    assert!(early.is_err(), "ended before the quiet period: {early:?}");
+    crate::testkit::arm_then_advance(&clock, lifecycle::FINAL_TRANSCRIPT_QUIET).await;
     let end = lk_agents_abi::timeout(
         &lk_agents_abi::RealClock::new(),
         Duration::from_secs(1),
@@ -365,7 +369,7 @@ async fn missing_completion_after_input_eof_fails_instead_of_clean_eof() {
     )
     .await
     .expect("the stream never ended after its input did");
-    assert!(end.is_err(), "missing completion was reported as clean EOF: {end:?}");
+    assert!(matches!(end, Ok(None)), "{end:?}");
 }
 
 // Catches: finalizing on the wrong VAD event (only END_OF_SPEECH), or on none.

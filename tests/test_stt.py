@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from livekit import agents, rtc
 from livekit.agents import inference, stt
-from livekit.agents.stt.stt import STT, RecognizeStream, SpeechData, SpeechEvent
+from livekit.agents.stt import STT, RecognizeStream, SpeechData, SpeechEvent
 from livekit.plugins import (
     assemblyai,
     aws,
