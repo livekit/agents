@@ -48,6 +48,8 @@ impl generated::Implementations for Selected {
     type ApiErrorFunctions = lk_agents_runtime::net::http::HttpErrors;
     type ChatContextDiffs = lk_agents_runtime::cores::ChatDiffs;
     type ConnectOptionsFunctions = lk_agents_runtime::net::attempts::ConnectOptionsRules;
+    type SentencePacer = lk_agents_runtime::inference::tts::pacer::SentencePacer;
+    type SynthesisChecks = lk_agents_runtime::inference::tts::checks::SynthesisChecks;
     type ImageFunctions = lk_agents_runtime::images::ImageFunctions;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;

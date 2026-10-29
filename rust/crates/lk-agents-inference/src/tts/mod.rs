@@ -6,8 +6,10 @@
 //! `inference/tts.py`'s `SynthesizeStream` does.
 
 pub mod adapter;
+pub mod checks;
 pub mod emitter;
 pub mod machine;
+pub mod pacer;
 mod ports;
 mod pump;
 pub mod sentence_adapter;

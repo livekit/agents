@@ -237,6 +237,62 @@ pub fn tts_adapter_stream<'py>(py: Python<'py>, provider: Bound<'_, PyAny>, conn
     })
 }
 
+// Declared in rust/crates/lk-agents-abi/src/tts/stream_pacer.rs.
+type SentencePacerImpl = <crate::Selected as super::Implementations>::SentencePacer;
+
+fn _extract_sentence_pacer_new_minimum_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "minimum_audio")
+}
+
+fn _extract_sentence_pacer_new_maximum_text(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "maximum_text")
+}
+
+fn _extract_sentence_pacer_poll_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_sentence_pacer_poll_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "audio")
+}
+
+/// Paces a synthesis's sentences: the first at once, the rest in batches once the audio already
+/// synthesized is nearly played.
+#[pyclass(name = "SentencePacer", module = "livekit.agents._core")]
+pub struct SentencePacer(SentencePacerImpl);
+
+#[pymethods]
+impl SentencePacer {
+    #[new]
+    #[pyo3(signature = (minimum_audio, maximum_text))]
+    fn new(#[pyo3(from_py_with = _extract_sentence_pacer_new_minimum_audio)] minimum_audio: f64, #[pyo3(from_py_with = _extract_sentence_pacer_new_maximum_text)] maximum_text: usize) -> PyResult<SentencePacer> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::new(minimum_audio, maximum_text);
+        Ok(SentencePacer(out))
+    }
+
+    #[pyo3(signature = (text))]
+    fn push(&mut self, text: ::std::string::String) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::push(&mut self.0, text);
+        Ok(())
+    }
+
+    fn end(&mut self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::end(&mut self.0);
+        Ok(())
+    }
+
+    /// Text to emit, remaining audio for diagnostics, and next wakeup (None means done).
+    #[pyo3(signature = (now, audio))]
+    fn poll(&mut self, #[pyo3(from_py_with = _extract_sentence_pacer_poll_now)] now: f64, #[pyo3(from_py_with = _extract_sentence_pacer_poll_audio)] audio: f64) -> PyResult<(::std::option::Option<::std::string::String>, f64, ::std::option::Option<f64>)> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <SentencePacerImpl as ::lk_agents_abi::tts::stream_pacer::SentencePacer>::poll(&mut self.0, now, audio);
+        Ok(out)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
 type InferenceTtsStreamImpl = <crate::Selected as super::Implementations>::InferenceTtsStream;
 
@@ -333,6 +389,26 @@ impl FallbackTtsStream {
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/tts/streams.rs.
+type SynthesisChecksImpl = <crate::Selected as super::Implementations>::SynthesisChecks;
+
+fn _extract_synthesis_checks_validate_synthesis_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "duration")
+}
+
+fn _extract_synthesis_checks_validate_synthesis_segments(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<(usize, usize)>> {
+    if obj.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "segments"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((::lk_agents_abi::python::number_from_py::<usize>(&item_0, "segments"))?, (::lk_agents_abi::python::number_from_py::<usize>(&item_1, "segments"))?,)) })()).map(Some) }
+}
+
+/// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
+/// ``segments`` as ``(expected, actual)``) failed, or ``None``.
+#[pyfunction]
+#[pyo3(signature = (text, duration, segments))]
+pub fn validate_synthesis(text: ::std::string::String, #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_duration)] duration: f64, #[pyo3(from_py_with = _extract_synthesis_checks_validate_synthesis_segments)] segments: ::std::option::Option<(usize, usize)>) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = <SynthesisChecksImpl as ::lk_agents_abi::tts::streams::SynthesisChecks>::validate_synthesis(&text, duration, segments);
+    Ok(out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tts/tts.rs.

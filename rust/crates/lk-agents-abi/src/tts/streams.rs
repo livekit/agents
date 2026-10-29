@@ -32,3 +32,16 @@ pub trait FallbackTtsStream: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn aclose(&self);
 }
+
+/// The checks a host synthesis's end applies.
+#[crate::host(functions(pid = false))]
+pub trait SynthesisChecks {
+    /// Why a synthesis of ``text`` that pushed ``duration`` seconds of audio (and, streamed,
+    /// ``segments`` as ``(expected, actual)``) failed, or ``None``.
+    #[host(function)]
+    fn validate_synthesis(
+        text: &str,
+        duration: f64,
+        segments: Option<(usize, usize)>,
+    ) -> Option<String>;
+}

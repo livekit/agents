@@ -38,35 +38,3 @@ pub enum RetryDecision {
     #[host(field = "delay")]
     Retry(f64),
 }
-
-#[crate::host(export(pid = false))]
-pub fn validate_synthesis(
-    text: &str,
-    duration: f64,
-    #[host(required)] segments: Option<(usize, usize)>,
-) -> Option<String> {
-    if text.trim_matches(|c| crate::utils::strings::PYTHON_WHITESPACE.contains(&c)).is_empty() {
-        return None;
-    }
-    if duration <= 0.0 {
-        return Some(format!("no audio frames were pushed for text: {text}"));
-    }
-    if let Some((expected, actual)) = segments {
-        if expected != actual {
-            return Some(format!(
-                "number of segments mismatch: expected {expected}, but got {actual}"
-            ));
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn synthesis_without_audio_or_with_lost_segments_fails() {
-        assert!(validate_synthesis("hello", 0.0, None).is_some());
-        assert!(validate_synthesis("hello", 1.0, Some((2, 1))).is_some());
-    }
-}

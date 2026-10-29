@@ -74,7 +74,6 @@ from ._generated._core_classes import (
     RoomVideoInput as RoomVideoInput,
     RpcHandler as RpcHandler,
     RunningJobInfo as RunningJobInfo,
-    SentencePacer as SentencePacer,
     SessionClock as SessionClock,
     SessionClosing as SessionClosing,
     SessionOptions as SessionOptions,
@@ -122,7 +121,6 @@ from ._generated._core_classes import (
     speech_priorities as speech_priorities,
     tool_call_output as tool_call_output,
     validate_card_number as validate_card_number,
-    validate_synthesis as validate_synthesis,
     video_queue_frames as video_queue_frames,
 )
 from ._generated._core_errors import (
@@ -289,6 +287,7 @@ from ._generated._core_tts import (
     FallbackTtsStream as FallbackTtsStream,
     InferenceTtsStream as InferenceTtsStream,
     Markup as Markup,
+    SentencePacer as SentencePacer,
     TranscriptMarkupStripper as TranscriptMarkupStripper,
     chat_ctx_summarize_plan as chat_ctx_summarize_plan,
     chat_history_summary_xml as chat_history_summary_xml,
@@ -308,6 +307,7 @@ from ._generated._core_tts import (
     supported_nonverbals as supported_nonverbals,
     to_xml as to_xml,
     tts_adapter_stream as tts_adapter_stream,
+    validate_synthesis as validate_synthesis,
 )
 from ._generated._core_turn import (
     EotStream as EotStream,

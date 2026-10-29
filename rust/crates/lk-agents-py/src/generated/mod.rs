@@ -111,8 +111,10 @@ pub trait Implementations: 'static {
     type MarkupClass: ::lk_agents_abi::tts::markup::bindings::MarkupClass;
     type TranscriptStripper: ::lk_agents_abi::tts::markup::bindings::TranscriptStripper;
     type StreamAdapterFunctions: ::lk_agents_abi::StreamAdapterFunctions<Stream = Self::FallbackTtsStream>;
+    type SentencePacer: ::lk_agents_abi::tts::stream_pacer::SentencePacer;
     type InferenceTtsStream: ::lk_agents_abi::tts::streams::InferenceTtsStream;
     type FallbackTtsStream: ::lk_agents_abi::tts::streams::FallbackTtsStream;
+    type SynthesisChecks: ::lk_agents_abi::tts::streams::SynthesisChecks;
     type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
     type EotStream: ::lk_agents_abi::turn::inference::EotStream;
     type InterruptionDetector: ::lk_agents_abi::turn::inference::InterruptionDetector;
@@ -325,8 +327,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tts::Markup>()?;
     m.add_class::<tts::TranscriptMarkupStripper>()?;
     m.add_function(wrap_pyfunction!(tts::tts_adapter_stream, m)?)?;
+    m.add_class::<tts::SentencePacer>()?;
     m.add_class::<tts::InferenceTtsStream>()?;
     m.add_class::<tts::FallbackTtsStream>()?;
+    m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
     m.add_class::<turn::InferenceEot>()?;
     m.add_class::<turn::EotStream>()?;
     m.add_class::<turn::InterruptionDetector>()?;
