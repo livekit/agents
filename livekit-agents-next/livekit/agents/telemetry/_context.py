@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import inspect
 import os
-from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, cast
 
 from opentelemetry import context as otel_context, trace, trace as trace_api
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import Link, Span, SpanKind, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
 
@@ -17,14 +16,6 @@ from . import trace_types, utils as telemetry_utils
 if TYPE_CHECKING:
     from ..job import JobContext
     from ..voice.agent_session import VoiceSession
-
-_USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
-
-
-_START_SPAN_SIGNATURE = inspect.signature(Tracer.start_span)
-
-
-_START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_span)
 
 
 def _with_conversation_id(
@@ -56,18 +47,39 @@ class _DynamicTracer(Tracer):
             tracer_provider=self._tracer_provider,
         )
 
-    def start_span(self, *args: Any, **kwargs: Any) -> Span:
-        bound = _START_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
-        bound.arguments["attributes"] = _with_conversation_id(bound.arguments.get("attributes"))
-        return self._tracer.start_span(*bound.args[1:], **bound.kwargs)
+    def start_span(
+        self,
+        name: str,
+        context: otel_context.Context | None = None,
+        kind: SpanKind = SpanKind.INTERNAL,
+        attributes: Mapping[str, AttributeValue] | None = None,
+        links: Sequence[Link] | None = None,
+        start_time: int | None = None,
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+    ) -> Span:
+        return self._tracer.start_span(
+            name,
+            context=context,
+            kind=kind,
+            attributes=_with_conversation_id(attributes),
+            links=links,
+            start_time=start_time,
+            record_exception=record_exception,
+            set_status_on_exception=set_status_on_exception,
+        )
 
     @_agnosticcontextmanager
-    def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        bound = _USE_SPAN_SIGNATURE.bind(*args, **kwargs)
-        record_exception = bound.arguments.get("record_exception", True)
-        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
-        bound.arguments.update(record_exception=False, set_status_on_exception=False)
-        with trace_api.use_span(*bound.args, **bound.kwargs) as span:
+    def use_span(
+        self,
+        span: Span,
+        end_on_exit: bool = False,
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+    ) -> Iterator[Span]:
+        with trace_api.use_span(
+            span, end_on_exit=end_on_exit, record_exception=False, set_status_on_exception=False
+        ):
             try:
                 yield span
             except Exception as exc:
@@ -82,7 +94,7 @@ class _DynamicTracer(Tracer):
         name: str,
         *,
         context: otel_context.Context | None = None,
-        attributes: dict[str, Any] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
     ) -> Iterator[Span]:
         """A span that is never made current.
 
@@ -101,20 +113,35 @@ class _DynamicTracer(Tracer):
             span.end()
 
     @_agnosticcontextmanager
-    def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        bound = _START_AS_CURRENT_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
-        bound.arguments["attributes"] = _with_conversation_id(bound.arguments.get("attributes"))
-        record_exception = bound.arguments.get("record_exception", True)
-        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
-        bound.arguments.update(record_exception=False, set_status_on_exception=False)
-        with self._tracer.start_as_current_span(*bound.args[1:], **bound.kwargs) as span:
-            try:
-                yield span
-            except Exception as exc:
-                telemetry_utils.record_exception(
-                    span, exc, record_event=record_exception, set_status=set_status_on_exception
-                )
-                raise
+    def start_as_current_span(
+        self,
+        name: str,
+        context: otel_context.Context | None = None,
+        kind: SpanKind = SpanKind.INTERNAL,
+        attributes: Mapping[str, AttributeValue] | None = None,
+        links: Sequence[Link] | None = None,
+        start_time: int | None = None,
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+        end_on_exit: bool = True,
+    ) -> Iterator[Span]:
+        span = self.start_span(
+            name,
+            context=context,
+            kind=kind,
+            attributes=attributes,
+            links=links,
+            start_time=start_time,
+            record_exception=False,
+            set_status_on_exception=False,
+        )
+        with self.use_span(
+            span,
+            end_on_exit=end_on_exit,
+            record_exception=record_exception,
+            set_status_on_exception=set_status_on_exception,
+        ):
+            yield span
 
 
 tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
