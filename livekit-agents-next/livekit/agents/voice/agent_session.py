@@ -195,7 +195,9 @@ UserTurnExceededHook = Callable[[RunContext[_C], UserTurnExceededEvent], Corouti
 # the session option keywords (`SessionKwargs` less `conn_options`, a parameter of its own) and
 # the required ones' defaults; the core resolves them (`_core.SessionOptions`). An unsaid
 # `NotRequired` key stays absent.
-_OPTION_KEYS = frozenset(SessionKwargs.__annotations__) - {"conn_options"}
+_OPTION_KEYS = (SessionKwargs.__required_keys__ | SessionKwargs.__optional_keys__) - {
+    "conn_options"
+}
 _OPTION_DEFAULTS: dict[str, Any] = {
     "stt_context_options": None,
     "max_tool_steps": 3,
