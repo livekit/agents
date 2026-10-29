@@ -460,6 +460,31 @@ async def test_streaming_recognize_response_to_speech_data_words():
     ]
 
 
+@pytest.mark.parametrize("is_final", [True, False])
+async def test_a_result_without_word_offsets_reports_unknown_timing(is_final: bool):
+    """chirp_3 forces ``enable_word_time_offsets=False``: its results carry no words, and their
+    timing must stay 0 rather than the stream offset, or ``turn_detection="stt"`` reads the
+    offset as the provider's end of speech and freezes the end-of-turn anchor."""
+    srr = cloud_speech_v2.StreamingRecognizeResponse(
+        results=[
+            cloud_speech_v2.StreamingRecognitionResult(
+                alternatives=[
+                    cloud_speech_v2.SpeechRecognitionAlternative(
+                        confidence=0.8, transcript="hello world"
+                    )
+                ],
+                is_final=is_final,
+            )
+        ]
+    )
+    result = _streaming_recognize_response_to_speech_data(
+        srr, min_confidence_threshold=0.0, start_time_offset=12.5
+    )
+    assert result is not None and result.text == "hello world"
+    assert (result.start_time, result.end_time) == (0.0, 0.0)
+    assert not result.words
+
+
 async def test_recognize_response_to_speech_event_words():
     resp = cloud_speech_v2.RecognizeResponse(
         results=[

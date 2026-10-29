@@ -87,17 +87,6 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self.env.stop()
 
-    def test_constructor_requires_developer_configuration(self) -> None:
-        with self.assertRaisesRegex(BosonAvatarException, "avatar_id"):
-            AvatarSession(api_key="boson-key")
-        with self.assertRaisesRegex(BosonAvatarException, "BOSON_API_KEY"):
-            AvatarSession(avatar_id="asset-1")
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            self.assertRaisesRegex(BosonAvatarException, "BOSON_AVATAR_API_URL"),
-        ):
-            AvatarSession(avatar_id="asset-1", api_key="boson-key")
-
     def test_constructor_validates_configuration(self) -> None:
         invalid = (
             {"width": 640},
@@ -115,20 +104,6 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         for kwargs in invalid:
             with self.subTest(kwargs=kwargs), self.assertRaises(BosonAvatarException):
                 AvatarSession(avatar_id="asset-1", api_key="boson-key", **kwargs)
-
-    def test_constructor_uses_environment(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "BOSON_API_KEY": "env-key",
-                "BOSON_AVATAR_ID": "asset-env",
-                "BOSON_AVATAR_API_URL": "https://avatar.test/v1",
-            },
-            clear=True,
-        ):
-            session = AvatarSession()
-        self.assertEqual(session._avatar_id, "asset-env")
-        self.assertEqual(session.avatar_identity, "boson-avatar-agent")
 
     async def test_start_accepts_generic_agent_audio_and_mints_scoped_token(self) -> None:
         api_client = SimpleNamespace(

@@ -232,3 +232,30 @@ async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
     if attempts == 1:
         assert isinstance(exc_info.value, APIStatusError)
         assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "usage, prompt, total",
+    [
+        ({"cacheReadInputTokens": 2000}, 2100, 2150),
+        ({"cacheWriteInputTokens": 1500}, 1600, 1650),
+        ({"cacheReadInputTokens": 300, "cacheWriteInputTokens": 200}, 600, 650),
+        ({"cacheReadInputTokens": None, "cacheWriteInputTokens": None}, 100, 150),
+    ],
+)
+def test_bedrock_prompt_tokens_include_cached_tokens(
+    usage: dict[str, int | None], prompt: int, total: int
+) -> None:
+    """``CompletionUsage.prompt_tokens`` includes cached tokens and ``total_tokens`` is prompt +
+    completion. Bedrock's ``inputTokens`` is net of the cache (read or written, possibly sent as
+    null), and its own ``totalTokens`` is not trusted."""
+    chunk = {
+        "metadata": {
+            "usage": {"inputTokens": 100, "outputTokens": 50, "totalTokens": 999999, **usage}
+        }
+    }
+    result = LLMStream._parse_chunk(object.__new__(LLMStream), "req-1", chunk)
+    assert result is not None and result.usage is not None
+    assert (result.usage.prompt_tokens, result.usage.total_tokens) == (prompt, total)
+    assert result.usage.cache_read_tokens == (usage.get("cacheReadInputTokens") or 0)
+    assert result.usage.cache_creation_tokens == (usage.get("cacheWriteInputTokens") or 0)

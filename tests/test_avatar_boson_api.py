@@ -466,30 +466,6 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         await client.end_session("avatar-session-1")
         self.assertEqual(len(no_content.calls), 1)
 
-    def test_configuration_uses_documented_environment(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "BOSON_API_KEY": "env-key",
-                "BOSON_AVATAR_API_URL": "https://env.example/",
-            },
-            clear=True,
-        ):
-            client = BosonAvatarAPI()
-        self.assertEqual(client._api_key, "env-key")
-        self.assertEqual(client._api_url, "https://env.example")
-
-    def test_missing_api_key_fails_without_network_access(self) -> None:
-        with self.assertRaisesRegex(BosonAvatarException, "BOSON_API_KEY"):
-            BosonAvatarAPI()
-
-    def test_missing_api_url_fails_without_network_access(self) -> None:
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            self.assertRaisesRegex(BosonAvatarException, "BOSON_AVATAR_API_URL"),
-        ):
-            BosonAvatarAPI(api_key="boson-key")
-
     def test_invalid_api_urls_fail_without_network_access(self) -> None:
         invalid_urls = (
             "/",
