@@ -2,9 +2,9 @@
 
 use super::Runtime;
 use super::legs::PendingLeg;
+use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::agent::ValidatedOutput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{HOST_TEARDOWN_TIMEOUT, SpawnerExt};
 use lk_agents_core::agent_run::OutputVerdict;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::effects::{Effect, StreamKind};
@@ -76,7 +76,11 @@ impl Runtime {
                 self.realtime_players.remove(&speech);
             }
             E::CloseRealtimePlayers => self.realtime_players.clear(),
-            E::CancelSpeech(handle) => handle.cancel_tasks(),
+            E::CancelSpeech(handle) => {
+                if let Some(speech) = handle.created() {
+                    self.speeches.cancel(speech);
+                }
+            }
             E::AttachRecorder { recorder, output: _ } => {
                 self.recorder_observers.detach(&self.shared, None);
                 let tap = lk_agents_voice::recorder_io::RecorderTap::new(
@@ -219,7 +223,8 @@ impl Runtime {
                 let task = Arc::clone(&handle);
                 let storage = self.storage.clone();
                 let queue = self.reports.clone();
-                let abort = self.shared.spawner.spawn_unboxed(async move {
+                let speeches = self.speeches.clone();
+                self.speeches.spawn(handle.id(), "speech", async move {
                     if let Some(storage) = storage {
                         match storage.acquire(task.id().0, context.request.chat_ctx.items.clone()).await {
                             Ok(items) => {
@@ -240,11 +245,10 @@ impl Runtime {
                         }
                     }
                     crate::voice::generation::pipeline_reply::pipeline_reply_task(
-                        shared, task, *context, player,
+                        shared, task, *context, player, speeches,
                     )
                     .await;
                 });
-                handle.add_task(abort);
             }
             // Not traced here: `Out::absorb` journalled it where it was decided.
             E::Emit(ev) => {

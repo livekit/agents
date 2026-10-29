@@ -184,9 +184,9 @@ async fn a_hard_aborted_generation_keeps_its_text_binding_until_source_cleanup_f
     api.set_transcription_output(Some(Arc::new(TextDestination(AtomicBool::new(false))))).unwrap();
     settle().await;
     assert!(!old.0.load(Ordering::SeqCst), "selection retired an admitted text segment");
-    // Execute the interruption watchdog body before the generation can poll its normal drain.
+    // The interruption watchdog cancels the speech's tasks while the generation's drain waits.
     assert!(speech.interrupt(true).unwrap());
-    assert!(speech.on_interruption_timeout());
+    api.time().advance(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
     settle().await;
     assert!(state.cancelled.get(), "hard cancellation did not reach the source owner");
     assert!(

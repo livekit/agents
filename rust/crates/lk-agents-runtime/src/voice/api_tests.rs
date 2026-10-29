@@ -508,9 +508,7 @@ async fn a_held_say_interrupted_before_the_swap_does_not_play() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
     let (_held, handle) = say_from(&api, Origin::Host);
-    let spawner =
-        Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current()));
-    handle.interrupt_for_host(false, spawner).expect("an interruptible say");
+    handle.interrupt_for_host(false).expect("an interruptible say");
     assert!(handle.interrupted_for_host(), "the interrupt is the handle's at once");
 
     drop(words);

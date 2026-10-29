@@ -322,11 +322,9 @@ impl Run {
                     }
                 })
                 .is_ok(),
-            Input::InterruptSpeech { speech, force } => {
-                self.host_speech(*speech).is_some_and(|speech| {
-                    speech.interrupt_for_host(*force, self.tasks.clone()).is_ok()
-                })
-            }
+            Input::InterruptSpeech { speech, force } => self
+                .host_speech(*speech)
+                .is_some_and(|speech| speech.interrupt_for_host(*force).is_ok()),
             Input::SetAllowInterruptions { speech, allow } => self
                 .host_speech(*speech)
                 .is_some_and(|speech| speech.set_allow_interruptions_for_host(*allow).is_ok()),

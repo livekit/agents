@@ -39,6 +39,7 @@ pub(crate) async fn realtime_generation_task(
     ctx: &ReplyContext,
     events: &mut RealtimePlayer,
     wake: &Tx,
+    speeches: &crate::voice::SpeechTasks,
 ) -> Result<StepOutcome, DriverError> {
     // The authorization, per step: the server's deltas queue meanwhile. It stops a server turn
     // talking over a `say()`, and a tool follow-up over what became current while tools ran.
@@ -60,7 +61,7 @@ pub(crate) async fn realtime_generation_task(
 
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     // The calls run as they arrive, alongside the playout.
-    let mut tools = ToolStep::new();
+    let mut tools = ToolStep::new(speeches.clone());
     let mut generation = Generation {
         shared,
         handle,

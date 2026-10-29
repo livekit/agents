@@ -4,6 +4,7 @@ use super::forward::{Voice, voice_leg};
 use super::llm::{SegEvent, produce_segments};
 use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
+use crate::voice::SpeechTasks;
 use crate::voice::generation::realtime_generation::realtime_generation_task;
 use lk_agents_abi::ChatMessage;
 use lk_agents_abi::errors::ProviderError;
@@ -23,14 +24,15 @@ use tokio::sync::mpsc;
 /// `_pipeline_reply_task`, and **the one task every speech runs** (`say` and realtime generations
 /// too). Spawned through the injected [`Spawner`](lk_agents_abi::Spawner), never `tokio::spawn`.
 /// `player`: a realtime speech's events, which the runtime routes to it from the socket.
-pub async fn pipeline_reply_task(
+pub(crate) async fn pipeline_reply_task(
     shared: Arc<SessionShared>,
     handle: Arc<SpeechHandle>,
     ctx: ReplyContext,
     player: Option<RealtimePlayer>,
+    speeches: SpeechTasks,
 ) {
     let speech = handle.id();
-    let error = match run(&shared, &handle, ctx, player).await {
+    let error = match run(&shared, &handle, ctx, player, &speeches).await {
         Ok(Finished { outcome, interrupted }) => {
             shared.report(GenEvent::Done { speech, outcome: Box::new(outcome), interrupted });
             return;
@@ -75,6 +77,7 @@ async fn run(
     handle: &Arc<SpeechHandle>,
     mut ctx: ReplyContext,
     mut player: Option<RealtimePlayer>,
+    speeches: &SpeechTasks,
 ) -> Result<Finished, DriverError> {
     let mut startup = ctx.startup(StartEvent::Begin { speech: handle.id() }, shared.time.read());
     loop {
@@ -96,9 +99,9 @@ async fn run(
                 let events =
                     player.as_mut().expect("the runtime gives a realtime speech its player");
                 let wake = &shared.queue;
-                realtime_generation_task(shared, handle, &ctx, events, wake).await?
+                realtime_generation_task(shared, handle, &ctx, events, wake, speeches).await?
             }
-            _ => pipeline_reply_task_impl(shared, handle, &ctx).await?,
+            _ => pipeline_reply_task_impl(shared, handle, &ctx, speeches).await?,
         };
         match outcome {
             StepOutcome::Done(finished) => return Ok(finished),
@@ -193,6 +196,7 @@ async fn pipeline_reply_task_impl(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
+    speeches: &SpeechTasks,
 ) -> Result<StepOutcome, DriverError> {
     // Taken, not borrowed: no lock across an await, and a second read finds `None`.
     let voice = match &ctx.source {
@@ -205,7 +209,7 @@ async fn pipeline_reply_task_impl(
     // stream must reach its `close`. Errors are read afterwards, words first.
     let (tx, rx) = mpsc::unbounded_channel::<SegEvent>();
     let ((words, tools), spoken) = tokio::join!(
-        produce_segments(shared, handle, ctx, tx),
+        produce_segments(shared, handle, ctx, tx, speeches),
         voice_leg(shared, handle, ctx, voice, rx)
     );
     // **Every call the model made is answered**, whatever became of the step, or the next request

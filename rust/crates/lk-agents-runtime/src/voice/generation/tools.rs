@@ -15,6 +15,8 @@ use std::sync::Arc;
 /// starts or drops each. **Order is the contract**: the step pairs by index.
 pub(crate) struct ToolStep {
     calls: Vec<Dispatched>,
+    /// Each call is the speech's task: a call outlives the reply until the speech is cancelled.
+    speeches: crate::voice::SpeechTasks,
 }
 
 struct Dispatched {
@@ -24,16 +26,15 @@ struct Dispatched {
 }
 
 impl ToolStep {
-    pub(crate) fn new() -> Self {
-        ToolStep { calls: Vec::new() }
+    pub(crate) fn new(speeches: crate::voice::SpeechTasks) -> Self {
+        ToolStep { calls: Vec::new(), speeches }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.calls.is_empty()
     }
 
-    /// Hands the call to the driver and runs it as told. The task is **not** registered on the
-    /// speech handle: a tool may outlive the turn.
+    /// Hands the call to the driver and runs it as told, as one of the speech's tasks.
     pub(crate) fn dispatch(
         &mut self,
         shared: &Arc<SessionShared>,
@@ -53,12 +54,10 @@ impl ToolStep {
         let made = GenEvent::ToolCallMade { speech, step, made: Box::new(made), go: go.id };
         shared.report_awaited(made, go);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let spawner = Arc::clone(&shared.spawner);
         let shared = Arc::clone(shared);
-        let task_owner = Arc::clone(handle);
         let handle = Arc::clone(handle);
         let task = ctx.task;
-        let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
+        self.speeches.spawn(speech, "tool call", async move {
             // Dropped unrun, or a loop gone before the start: owed nothing.
             let Ok(ToolGo::Start { call: id, item, host, first }) = first.await else {
                 let _ = tx.send(None);
@@ -74,7 +73,6 @@ impl ToolStep {
             shared.report(ended);
             let _ = tx.send(Some(execution));
         });
-        task_owner.add_task(abort);
         self.calls.push(Dispatched { call, rx });
     }
 }

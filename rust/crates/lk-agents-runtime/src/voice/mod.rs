@@ -23,6 +23,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{
     Driver, Event, Now, PeerHandle, QueueOwner, SessionCores, Tx,
 };
@@ -86,6 +87,40 @@ pub struct Runtime {
     /// The executor's tasks: readers, drains, pumps, provider calls and closes. Most end at
     /// `Closing`; the run drains them within the cleanup bound and cancels the rest.
     tasks: Arc<TaskSet>,
+    /// The tasks of the set each speech owns: its reply and the tool calls it made.
+    speeches: SpeechTasks,
+}
+
+/// Which of the session's tasks each speech owns. Cancelling the speech (its interruption
+/// watchdog) cancels them; a tool call outlives its reply until then.
+#[derive(Clone)]
+pub(crate) struct SpeechTasks {
+    tasks: Arc<TaskSet>,
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
+    owned: Arc<std::sync::Mutex<std::collections::BTreeMap<SpeechId, Vec<TaskId>>>>,
+}
+
+impl SpeechTasks {
+    pub(crate) fn spawn(
+        &self,
+        speech: SpeechId,
+        name: &str,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let task = self.tasks.spawn(self.spawner.as_ref(), name, work);
+        let mut owned = self.owned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        owned.retain(|_, tasks| {
+            tasks.retain(|task| self.tasks.contains(*task));
+            !tasks.is_empty()
+        });
+        owned.entry(speech).or_default().push(task);
+    }
+
+    fn cancel(&self, speech: SpeechId) {
+        let owned =
+            self.owned.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&speech);
+        owned.into_iter().flatten().for_each(|task| self.tasks.cancel(task));
+    }
 }
 
 impl Runtime {
@@ -106,11 +141,11 @@ impl Runtime {
             peer,
             storage,
         } = cores;
-        let video_parts = audio::VideoForwarding {
-            closing: shared.closing.subscribe(),
-            queue: reports.clone(),
-        };
+        let video_parts =
+            audio::VideoForwarding { closing: shared.closing.subscribe(), queue: reports.clone() };
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
+        let tasks = Arc::<TaskSet>::default();
+        let shared_spawner = Arc::clone(&shared.spawner);
         let mut runtime = Runtime {
             driver,
             storage,
@@ -134,7 +169,12 @@ impl Runtime {
             eot,
             predictions: Vec::new(),
             interruption,
-            tasks: Arc::default(),
+            speeches: SpeechTasks {
+                tasks: Arc::clone(&tasks),
+                spawner: Arc::clone(&shared_spawner),
+                owned: Arc::default(),
+            },
+            tasks,
         };
         if let Some(session) = realtime_events {
             runtime.pump_realtime(session);

@@ -47,8 +47,9 @@ pub(super) async fn produce_segments(
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     tx: mpsc::UnboundedSender<SegEvent>,
+    speeches: &crate::voice::SpeechTasks,
 ) -> (Result<LlmGenerationData, DriverError>, ToolStep) {
-    let mut tools = ToolStep::new();
+    let mut tools = ToolStep::new(speeches.clone());
     // A closed receiver means the voice gave up; dropping the chunk is right.
     let one_segment = |text: String| {
         if !text.is_empty() {

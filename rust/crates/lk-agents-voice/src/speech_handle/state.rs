@@ -67,7 +67,6 @@ pub struct SpeechState {
     restore: bool,
     watchdog_armed: bool,
     interrupted_at_done: bool,
-    completing_after_cancel: bool,
     authorized: bool,
     num_steps: u32,
     generations: Vec<bool>,
@@ -89,15 +88,12 @@ pub enum Input {
     ValidateHostHold,
     InterruptRefused,
     TakeWatchdog,
-    WatchdogFired,
-    TasksCancelled { interrupt_requested: bool },
     TakeInterruptedAtDone,
 }
 
 pub enum Effect {
     PublishAcceptedView(SpeechView),
     PublishRequestFlag(bool),
-    CancelTasks,
     NewGeneration,
     PublishAuthorization(bool),
     PublishStep(u32),
@@ -144,7 +140,6 @@ impl SpeechState {
             restore: allow,
             watchdog_armed: false,
             interrupted_at_done: false,
-            completing_after_cancel: false,
             authorized: false,
             num_steps: 1,
             generations: Vec::new(),
@@ -245,19 +240,6 @@ impl SpeechState {
             }
             Input::InterruptRefused => effects.push(Effect::PublishRequestFlag(false)),
             Input::TakeWatchdog => reply = Reply::Flag(std::mem::take(&mut self.watchdog_armed)),
-            Input::WatchdogFired => {
-                let fired = std::mem::take(&mut self.watchdog_armed);
-                if fired {
-                    self.completing_after_cancel = true;
-                    effects.push(Effect::CancelTasks);
-                }
-                reply = Reply::Flag(fired);
-            }
-            Input::TasksCancelled { interrupt_requested } => {
-                if std::mem::take(&mut self.completing_after_cancel) {
-                    self.complete(None, interrupt_requested, &mut effects);
-                }
-            }
             Input::TakeInterruptedAtDone => {
                 reply = Reply::Flag(std::mem::take(&mut self.interrupted_at_done))
             }

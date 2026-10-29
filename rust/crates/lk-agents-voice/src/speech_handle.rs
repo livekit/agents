@@ -135,14 +135,13 @@ enum HandleInput {
     Complete(Option<ProviderError>),
     HostRequest { force: bool, created: bool },
     ValidateHostSetter { allow: bool },
-    TasksCancelled,
 }
 
 struct Inner {
     state: SpeechState,
     chat_items: Vec<ChatItem>,
-    /// What the [`HOST_TEARDOWN_TIMEOUT`] watchdog cancels (`speech_handle._tasks`).
-    tasks: Vec<lk_agents_abi::AbortHandle>,
+    /// A host `interrupt(force)` accepted before the loop created the speech: sent at creation.
+    pending_interrupt: Option<bool>,
     /// The metrics of the user turn a preemptive reply was adopted for.
     user_metrics: Option<lk_agents_abi::MetricsReport>,
     /// The host's own object for the speech (its `SpeechHandle`), so every event, tool and hook
@@ -208,7 +207,7 @@ impl SpeechHandle {
     /// Capture live request observations under the same lock as the accepted transition.
     /// This interpreter remains here until the concrete host handle moves to runtime.
     fn transition(&self, input: HandleInput) -> Result<Reply, SpeechError> {
-        let (reply, cancel_tasks, generation_done) = {
+        let (reply, generation_done) = {
             let mut inner = lock(&self.inner);
             let input = match input {
                 HandleInput::Accepted(input) => input,
@@ -225,12 +224,9 @@ impl SpeechHandle {
                     allow,
                     interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
                 },
-                HandleInput::TasksCancelled => StateInput::TasksCancelled {
-                    interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
-                },
             };
             let transition = inner.state.handle(input)?;
-            let (mut cancel_tasks, mut generation_done) = (false, None);
+            let mut generation_done = None;
             for effect in transition.effects {
                 match effect {
                     StateEffect::PublishAcceptedView(view) => {
@@ -248,18 +244,11 @@ impl SpeechHandle {
                         self.authorized.send_replace(authorized);
                     }
                     StateEffect::PublishStep(step) => self.num_steps.store(step, Ordering::Release),
-                    StateEffect::CancelTasks => cancel_tasks = true,
                     StateEffect::GenerationDone { step } => generation_done = Some(step),
                 }
             }
-            (transition.reply, cancel_tasks, generation_done)
+            (transition.reply, generation_done)
         };
-        // Aborting a linked task can run its cleanup. Release storage before touching tasks.
-        if cancel_tasks {
-            self.cancel_tasks();
-            self.transition(HandleInput::TasksCancelled)
-                .expect("cancelled-task completion cannot refuse");
-        }
         if let Some(step) = generation_done {
             self.generation_cell(step).set(true);
         }
@@ -291,7 +280,7 @@ impl SpeechHandle {
             inner: Mutex::new(Inner {
                 state: SpeechState::new(allow_interruptions),
                 chat_items: Vec::new(),
-                tasks: Vec::new(),
+                pending_interrupt: None,
                 user_metrics: None,
                 host: None,
                 blocking_tools: Vec::new(),
@@ -330,9 +319,24 @@ impl SpeechHandle {
     }
 
     /// The loop answered the host's call: with the speech it created over this handle, or, when
-    /// the session ended first, not at all. Wakes whoever awaits the creation.
+    /// the session ended first, not at all. Wakes whoever awaits the creation; an interrupt the
+    /// host asked for meanwhile reaches the created speech now.
     pub(crate) fn answered(&self, created: bool) {
-        self.creation.send_if_modified(|creation| creation.answered(created));
+        let pending = {
+            let mut inner = lock(&self.inner);
+            self.creation.send_if_modified(|creation| creation.answered(created));
+            inner.pending_interrupt.take()
+        };
+        if let (Some(force), Some(speech)) = (pending, self.created()) {
+            self.send_interrupt(speech, force);
+        }
+    }
+
+    fn send_interrupt(&self, speech: SpeechId, force: bool) {
+        // A closed loop has nothing left to interrupt.
+        let _ = self.api.send(crate::agent_session::Command::from(
+            crate::agent_session::SpeechCommand::InterruptSpeech { speech, force },
+        ));
     }
 
     pub fn id(&self) -> SpeechId {
@@ -443,38 +447,16 @@ impl SpeechHandle {
     // No `subscribe_allow_interruptions`: nothing in the reference awaits `allow_interruptions`.
 
     /// `interrupt(force=...)`. Returns whether it landed now; on `true` the driver arms
-    /// [`HOST_TEARDOWN_TIMEOUT`] and calls [`on_interruption_timeout`](Self::on_interruption_timeout).
+    /// [`HOST_TEARDOWN_TIMEOUT`], after which the runtime cancels the speech's tasks.
     /// The guards, then `_cancel` (`speech_handle.SpeechHandle._cancel`).
     pub fn interrupt(&self, force: bool) -> Result<bool, SpeechError> {
         Ok(self.transition(HandleInput::Accepted(StateInput::Interrupt { force }))?.flag())
-    }
-
-    /// The watchdog body (`SpeechHandle._cancel`): cancel every linked task, then mark done.
-    /// Returns whether it fired.
-    pub fn on_interruption_timeout(&self) -> bool {
-        self.transition(HandleInput::Accepted(StateInput::WatchdogFired))
-            .expect("an interruption timeout cannot refuse")
-            .flag()
     }
 
     pub(crate) fn take_interruption_timeout(&self) -> bool {
         self.transition(HandleInput::Accepted(StateInput::TakeWatchdog))
             .expect("taking the interruption timeout cannot refuse")
             .flag()
-    }
-
-    /// Cancel every linked task, as `_cancel` does, without marking the speech done.
-    pub fn cancel_tasks(&self) {
-        let tasks = std::mem::take(&mut self.inner.lock().unwrap().tasks);
-        for task in &tasks {
-            task.abort();
-        }
-    }
-
-    /// `speech_handle._tasks.append(task)`. The handle only cancels these; done-when-all-done is
-    /// the driver's.
-    pub fn add_task(&self, task: lk_agents_abi::AbortHandle) {
-        self.inner.lock().unwrap().tasks.push(task);
     }
 
     pub fn authorized(&self) -> bool {
@@ -715,37 +697,20 @@ impl SpeechHandle {
     }
 
     /// `interrupt(force=)` (`speech_handle.py:185`), synchronous and in the reference's order. If
-    /// the speech does not exist yet, a task sends the command once it does, so the interrupt is
-    /// not lost.
+    /// the speech does not exist yet, the command is sent when the loop creates it.
     #[host(method(name = "interrupt", kw_only, defaults(force = false)))]
-    pub fn interrupt_for_host(
-        self: &Arc<Self>,
-        force: bool,
-        #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
-    ) -> Result<(), SpeechRefused> {
+    pub fn interrupt_for_host(&self, force: bool) -> Result<(), SpeechRefused> {
         let created = self.created();
         if !self.transition(HandleInput::HostRequest { force, created: created.is_some() })?.flag()
         {
             return Ok(());
         }
-        let interrupt = move |api: &Api, speech| {
-            // A closed loop has nothing left to interrupt.
-            let _ = api.send(crate::agent_session::Command::from(
-                crate::agent_session::SpeechCommand::InterruptSpeech { speech, force },
-            ));
-        };
-        let creation = *self.creation.borrow();
-        match creation.interrupt(created) {
-            CreationInterrupt::Send(speech) => interrupt(&self.api, speech),
+        // Read under the lock `answered` takes, so a creation racing this call sends it once.
+        let mut inner = lock(&self.inner);
+        match self.creation.borrow().interrupt(self.created()) {
+            CreationInterrupt::Send(speech) => self.send_interrupt(speech, force),
             CreationInterrupt::Ignore => {}
-            CreationInterrupt::Wait => {
-                let handle = Arc::clone(self);
-                lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
-                    if handle.wait_created().await.is_ok() {
-                        interrupt(&handle.api, handle.id());
-                    }
-                });
-            }
+            CreationInterrupt::Wait => inner.pending_interrupt = Some(force),
         }
         Ok(())
     }
