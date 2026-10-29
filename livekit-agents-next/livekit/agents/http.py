@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import Response
 from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Scope
+from starlette.websockets import WebSocket
 
 from . import _core
 from ._core import (
@@ -36,6 +39,11 @@ from ._generated.worker_endpoint import (
     EndpointOptions as EndpointOptions,
     EndpointRequest as EndpointRequest,
 )
+
+_HttpEndpoint = Callable[[Request], Response | Awaitable[Response]]
+_HttpEndpointT = TypeVar("_HttpEndpointT", bound=_HttpEndpoint)
+_WebSocketEndpoint = Callable[[WebSocket], Awaitable[None]]
+_WebSocketEndpointT = TypeVar("_WebSocketEndpointT", bound=_WebSocketEndpoint)
 
 _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]
 
@@ -69,32 +77,42 @@ class AgentHttp:
 
     def route(
         self, path: str, *, methods: Iterable[str], name: str | None = None
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        def decorator(func: _HttpEndpointT) -> _HttpEndpointT:
             self.add_route(path, func, methods=list(methods), name=name)
             return func
 
         return decorator
 
-    def get(self, path: str, **kw: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        return self.route(path, methods=["GET"], **kw)
+    def get(
+        self, path: str, *, name: str | None = None
+    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["GET"], name=name)
 
-    def post(self, path: str, **kw: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        return self.route(path, methods=["POST"], **kw)
+    def post(
+        self, path: str, *, name: str | None = None
+    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["POST"], name=name)
 
-    def put(self, path: str, **kw: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        return self.route(path, methods=["PUT"], **kw)
+    def put(
+        self, path: str, *, name: str | None = None
+    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["PUT"], name=name)
 
-    def patch(self, path: str, **kw: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        return self.route(path, methods=["PATCH"], **kw)
+    def patch(
+        self, path: str, *, name: str | None = None
+    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["PATCH"], name=name)
 
-    def delete(self, path: str, **kw: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        return self.route(path, methods=["DELETE"], **kw)
+    def delete(
+        self, path: str, *, name: str | None = None
+    ) -> Callable[[_HttpEndpointT], _HttpEndpointT]:
+        return self.route(path, methods=["DELETE"], name=name)
 
     def websocket(
         self, path: str, *, name: str | None = None
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    ) -> Callable[[_WebSocketEndpointT], _WebSocketEndpointT]:
+        def decorator(func: _WebSocketEndpointT) -> _WebSocketEndpointT:
             self.add_websocket_route(path, func, name=name)
             return func
 
@@ -103,7 +121,7 @@ class AgentHttp:
     def add_route(
         self,
         path: str,
-        endpoint: Callable[..., Any],
+        endpoint: _HttpEndpoint | ASGIApp,
         *,
         methods: list[str],
         name: str | None = None,
@@ -111,7 +129,7 @@ class AgentHttp:
         self._add(Route(path, endpoint, methods=methods, name=name))
 
     def add_websocket_route(
-        self, path: str, endpoint: Callable[..., Any], *, name: str | None = None
+        self, path: str, endpoint: _WebSocketEndpoint | ASGIApp, *, name: str | None = None
     ) -> None:
         self._add(WebSocketRoute(path, endpoint, name=name))
 
@@ -210,10 +228,10 @@ class AsgiApplication:
         receive: _core._core_AsgiReceive,
         send: _core._core_AsgiSend,
     ) -> asgi.AsgiFailure | None:
-        async def asgi_receive() -> dict[str, Any]:
+        async def asgi_receive() -> Message:
             return _received(await receive())
 
-        async def asgi_send(message: Any) -> None:
+        async def asgi_send(message: Message) -> None:
             await send(_sent(message))
 
         try:
@@ -226,8 +244,8 @@ class AsgiApplication:
         return None
 
 
-def _scope(scope: asgi.AsgiScope, request: EndpointRequest) -> dict[str, Any]:
-    d: dict[str, Any] = {
+def _scope(scope: asgi.AsgiScope, request: EndpointRequest) -> Scope:
+    d: Scope = {
         "type": scope.kind,
         "asgi": {"version": "3.0", "spec_version": "2.3"},
         "http_version": "1.1",
@@ -248,7 +266,7 @@ def _scope(scope: asgi.AsgiScope, request: EndpointRequest) -> dict[str, Any]:
     return d
 
 
-def _received(message: asgi.AsgiReceived) -> dict[str, Any]:
+def _received(message: asgi.AsgiReceived) -> Message:
     match message:
         case asgi.AsgiReceivedRequest(body=body, more_body=more_body):
             return {"type": "http.request", "body": body, "more_body": more_body}
@@ -265,7 +283,7 @@ def _received(message: asgi.AsgiReceived) -> dict[str, Any]:
     raise TypeError(f"unknown ASGI message {message!r}")
 
 
-def _sent(m: Any) -> asgi.AsgiSent:
+def _sent(m: Message) -> asgi.AsgiSent:
     """ASGI headers and bodies may be any bytes-like object."""
 
     def headers() -> list[tuple[bytes, bytes]]:
