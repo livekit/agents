@@ -77,7 +77,11 @@ impl Playout {
     pub fn captured(&mut self, key: Option<PlaybackSegment>, duration: Duration) {
         if self.first_segment.is_none() {
             self.first_segment = key;
-            self.segment_key = self.first_segment;
+        }
+        // The segment the audio went to: after a sink reset the rest of this forwarding's audio
+        // plays as a segment of its own, whose reports are this forwarding's.
+        if key.is_some() {
+            self.segment_key = key;
         }
         self.pushed += 1;
         self.pushed_len += duration;
@@ -120,7 +124,9 @@ impl Playout {
                     played: self.played,
                 }))
             }
+            // What played so far is heard; the rest plays from the segment's start again.
             SinkReport::Reset => {
+                self.completed = self.played;
                 effects.push(PlayoutEffect::Trace(PlayoutStep::SinkReset { speech }));
             }
             SinkReport::Playback(PlaybackEvent::Started(s)) => {
@@ -157,7 +163,7 @@ impl Playout {
                 if !(f.interrupted && f.playback_position.is_zero()) {
                     self.start(lk_agents_abi::unix_secs(now.wall), &mut effects);
                 }
-                self.played = self.played.max(f.playback_position);
+                self.played = self.played.max(self.completed + f.playback_position);
                 if !f.interrupted {
                     self.completed += f.playback_position;
                 }

@@ -3,6 +3,28 @@ use lk_agents_fuzz::drive::{Outcome, Run, finish, simulate_with};
 use lk_agents_fuzz::search;
 use lk_agents_voice::trace::{PlayoutStep, Step};
 
+// Catches: after a sink reset the rest of a speech's audio plays as a segment of its own, whose
+// reports the speech's playout dropped as another key's: its played position stayed where the
+// reset left it, and the words that playback released were journalled against it, ahead of the
+// audio (`transcript_follows_audio`, campaign seed 13704).
+#[test]
+fn the_rest_after_a_sink_reset_is_the_speechs_playback() {
+    let (outcome, journal) = explored(13_704);
+    let reset = journal
+        .iter()
+        .position(|step| matches!(step, Step::Playout(PlayoutStep::SinkReset { .. })))
+        .expect("the scenario: a sink reset mid-speech");
+    let Step::Playout(PlayoutStep::SinkReset { speech }) = &journal[reset] else { unreachable!() };
+    assert!(
+        journal[reset..].iter().any(|step| matches!(
+            step,
+            Step::Playout(PlayoutStep::TranscriptShown { speech: s, .. }) if s == speech
+        )),
+        "the rest's playback released none of the speech's words"
+    );
+    assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+}
+
 // Catches: a speech whose playback report was lost gave up on it; the report arriving later still
 // released its words, which the next speech's playout, the one listening by then, journalled as
 // its own with nothing of its audio played (`transcript_follows_audio`, campaign seed 15283).
