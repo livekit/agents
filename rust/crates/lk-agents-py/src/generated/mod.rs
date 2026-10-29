@@ -113,6 +113,8 @@ pub trait Implementations: 'static {
     type PlaybackReports: ::lk_agents_abi::voice::io::PlaybackReports;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
+    type DtmfResult: ::lk_agents_abi::voice::workflows::dtmf::DtmfResult;
+    type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo<Result = Self::DtmfResult>;
     type ConsoleIo: ::lk_agents_abi::voice::console::ConsoleIo;
     type VoiceSessionExecution: ::lk_agents_abi::voice::console::VoiceSessionExecution;
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime;
@@ -315,6 +317,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_room_disconnected, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_sip_dtmf_received, m)?)?;
     m.add_class::<voice::PlayoutLedger>()?;
+    m.add_class::<voice::GetDtmfResult>()?;
+    m.add_function(wrap_pyfunction!(voice::send_dtmf_events, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::receive_dtmf, m)?)?;
     m.add_class::<voice::ConsoleIo>()?;
     m.add_function(wrap_pyfunction!(voice::_core_voice_session_start, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;

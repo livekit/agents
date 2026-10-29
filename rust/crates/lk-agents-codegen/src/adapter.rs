@@ -290,7 +290,15 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     {
         s.push_str(&format!("{ind}#[pyo3(name = \"{}\")]\n", m.name));
     }
-    if m.kind != MethodKind::Setter && m.params.iter().any(|p| p.ty != Ty::CallContext) {
+    // Protocol slots have fixed call shapes; only constructors and __call__ take kwargs.
+    let fixed_protocol = !matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction)
+        && m.name.starts_with("__")
+        && m.name.ends_with("__")
+        && !matches!(m.name.as_str(), "__new__" | "__init__" | "__call__");
+    if m.kind != MethodKind::Setter
+        && !fixed_protocol
+        && m.params.iter().any(|p| p.ty != Ty::CallContext)
+    {
         s.push_str(&format!("{ind}#[pyo3(signature = ({}))]\n", signature(&m.params)));
     }
     let mut args = Vec::new();

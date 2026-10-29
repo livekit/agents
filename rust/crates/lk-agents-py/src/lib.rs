@@ -65,6 +65,8 @@ impl generated::Implementations for Selected {
 
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
+    type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
+    type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;
     type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;
     type FallbackTts =
         lk_agents_runtime::inference::fallback::FallbackTts<lk_agents_runtime::process::Process>;

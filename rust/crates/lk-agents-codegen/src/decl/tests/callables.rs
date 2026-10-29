@@ -898,6 +898,9 @@ fn static_class_calls_construct_values_and_compare_borrowed_instances() {
         text.contains("other: PyRef<'_, Value>") && text.contains("::equal(&self.0, &*other.0)"),
         "{text}"
     );
+    let equality = text.split("#[pyo3(name = \"__eq__\")]").nth(1).unwrap();
+    let attributes = equality.split("fn equal").next().unwrap();
+    assert!(!attributes.contains("signature"), "fixed Python protocols have no custom signature");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
     assert!(

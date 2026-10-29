@@ -43,10 +43,6 @@ pub struct SessionApi {
     /// The driver's clock: `close` on a virtual clock moves it.
     time: Timebase,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// The read-back guard of the last DTMF collection, read by
-    /// [`dtmf_reply_running`](Self::dtmf_reply_running).
-    dtmf_reply: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The last `with_filler` scope numbered by [`filler_start`](Self::filler_start).
     last_filler: std::sync::atomic::AtomicU64,
     /// Every `Agent` by its id, as the host installed it: the events naming an agent hand

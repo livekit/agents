@@ -10,9 +10,6 @@ use crate::workflows::instructions::render;
 use crate::workflows::prompts::dtmf as p;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
-use std::sync::Arc;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// `DtmfEvent(str, Enum)` (`utils.DtmfEvent`). Declared in code order: the discriminant is
@@ -101,39 +98,48 @@ pub fn format_dtmf_symbols(symbols: Vec<String>) -> Result<String, String> {
 pub struct DtmfResult(pub GetDtmfResult);
 
 /// GetDtmfResult(user_input: 'str')
-#[lk_agents_abi::host(object(
-    name = "GetDtmfResult",
-    cell = "value",
-    pid = false,
-    pyclass(eq, from_py_object),
-    derive(Clone, PartialEq)
-))]
 impl DtmfResult {
-    #[host(new(kw_only))]
     pub fn new(user_input: String) -> Self {
         DtmfResult(GetDtmfResult { user_input })
     }
 
-    #[host(getter)]
     pub fn user_input(&self) -> String {
         self.0.user_input.clone()
     }
 
-    #[host(method(name = "__repr__"))]
     pub fn host_repr(&self) -> String {
-        format!(
-            "GetDtmfResult(user_input={})",
-            lk_agents_core::text::py_repr(&self.0.user_input)
-        )
+        format!("GetDtmfResult(user_input={})", lk_agents_core::text::py_repr(&self.0.user_input))
     }
 
     /// `GetDtmfResult.from_dtmf_inputs(events)`: the digits pressed, formatted. An unknown event
     /// raises rather than being dropped.
-    #[host(method)]
     pub fn from_dtmf_inputs(events: Vec<String>) -> Result<Self, String> {
         Ok(DtmfResult(dtmf_result(&parse_all(&events, |e| format!("{e:?} is not a DTMF key"))?)))
     }
 }
+
+impl lk_agents_abi::voice::workflows::dtmf::DtmfResult for DtmfResult {
+    fn new(user_input: String) -> Self {
+        DtmfResult::new(user_input)
+    }
+    fn user_input(&self) -> String {
+        DtmfResult::user_input(self)
+    }
+    fn host_repr(&self) -> String {
+        DtmfResult::host_repr(self)
+    }
+    fn host_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+    fn from_dtmf_inputs(
+        events: Vec<String>,
+    ) -> Result<Self, lk_agents_abi::voice::workflows::dtmf::DtmfInputError> {
+        DtmfResult::from_dtmf_inputs(events)
+            .map_err(lk_agents_abi::voice::workflows::dtmf::DtmfInputError)
+    }
+}
+
+pub use lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DtmfAction {
@@ -185,7 +191,7 @@ impl DtmfOutcome {
     }
 }
 
-/// The event/timer half of DTMF collection. Not `Clone`: a copy would share the guard.
+/// The event/timer half of DTMF collection.
 #[derive(Debug)]
 pub struct DtmfCollector {
     num_digits: usize,
@@ -193,13 +199,12 @@ pub struct DtmfCollector {
     timeout: Duration,
     stop_event: DtmfEvent,
     inputs: Vec<DtmfEvent>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// `self._dtmf_reply_running`, shared with the host's `dtmf_reply_running()`.
-    reply_running: Arc<AtomicBool>,
+
+    /// The read-back guard remains held until its speech settles.
+    reply_running: bool,
 }
 
 impl DtmfCollector {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         num_digits: usize,
         ask_for_confirmation: bool,
@@ -215,19 +220,13 @@ impl DtmfCollector {
             timeout,
             stop_event,
             inputs: Vec::new(),
-            reply_running: Arc::new(AtomicBool::new(false)),
+            reply_running: false,
         })
     }
 
     /// `dtmf_reply_running()`.
     pub fn reply_running(&self) -> bool {
-        self.reply_running.load(Ordering::SeqCst)
-    }
-
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// The guard, for the host to read at any time.
-    pub fn reply_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.reply_running)
+        self.reply_running
     }
 
     /// `_on_sip_dtmf_received`. Takes the raw digit: the stop key is tested before parsing, and an
@@ -274,7 +273,7 @@ impl DtmfCollector {
 
     /// The debounce body (`._generate_dtmf_reply`) without its `finally`; the interrupt is the driver's.
     pub fn generate_reply(&mut self) -> DtmfReply {
-        self.reply_running.store(true, Ordering::SeqCst);
+        self.reply_running = true;
 
         // if input not fully received (i.e. timeout), return None
         if self.inputs.len() != self.num_digits {
@@ -300,7 +299,7 @@ impl DtmfCollector {
     /// The `finally`, on every arm. Split out so the confirm arm holds `reply_running` across the
     /// read-back: digits pressed meanwhile must not append.
     pub fn finish_reply(&mut self) {
-        self.reply_running.store(false, Ordering::SeqCst);
+        self.reply_running = false;
         self.inputs.clear();
     }
 }
@@ -348,6 +347,10 @@ impl From<DtmfCommand> for DtmfTaskEvent {
 }
 
 impl Dtmf {
+    pub(crate) fn reply_running(&self) -> bool {
+        self.running.as_ref().is_some_and(|dtmf| dtmf.collector.reply_running())
+    }
+
     pub(crate) fn handle(&mut self, ev: DtmfTaskEvent, now: Ts, out: &mut Out) {
         let action = match ev {
             DtmfTaskEvent::Start { collector, call } => {
@@ -501,109 +504,57 @@ impl Driver {
     }
 }
 
-/// The pause between two published keypad tones.
-pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
-
-/// `send_dtmf_events(events)`: each key published as a keypad tone in `room`, 0.3 s apart; the
-/// answer to the model names the keys sent, or the first that failed and why.
-#[lk_agents_abi::host(export)]
-pub async fn send_dtmf_events(
-    room: lk_agents_abi::voice::room_owner::RoomSession,
-    events: Vec<String>,
-    #[host(ambient)] clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
-) -> String {
-    let Some(room) = room.0.rtc() else {
-        return "Failed to send DTMF events: room is not connected".into();
-    };
-    for event in &events {
-        let sent = match DtmfEvent::parse(event) {
-            Some(key) => room
-                .local()
-                .publish_dtmf(u32::from(dtmf_event_to_code(key)), event.clone())
-                .await
-                .map_err(|err| match err {
-                    lk_agents_abi::voice::rtc::RtcError::Host(host) => host.message,
-                    other => other.to_string(),
-                }),
-            None => Err(format!("unknown DTMF symbol {event:?}")),
-        };
-        if let Err(error) = sent {
-            return format!("Failed to send DTMF event: {event}. Error: {error}");
-        }
-        clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
-    }
-    format!("Successfully sent DTMF events: {}", events.join(", "))
-}
-
-/// Why [`receive_dtmf`] stopped short.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[lk_agents_abi::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
-pub enum ReceiveDtmfError {
-    #[error("num_digits must be greater than 0")]
-    #[host(kind = "ValueError")]
-    NoDigits,
-    /// `DtmfEvent(digit)` refused the key, quoted as Python's `repr`.
-    #[error("{0} is not a valid DtmfEvent")]
-    #[host(kind = "ValueError")]
-    UnknownKey(String),
-    #[error("Digits input not fully received. Expect {0} digits, got {1}")]
-    Incomplete(usize, usize),
-    #[error("room event stream failed: {0}")]
-    Room(String),
-}
-
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-/// `receive_dtmf(room, num_digits, timeout, stop_event)`: the keys a SIP caller presses in
-/// `room`, until `num_digits` of them, the stop key, or `timeout` seconds without a key once the
-/// first is in. Fewer than `num_digits` is [`ReceiveDtmfError::Incomplete`].
-#[lk_agents_abi::host(export)]
-pub async fn receive_dtmf(
-    room: lk_agents_abi::voice::room_owner::RoomSession,
+/// Standalone room reception: no deadline before the first digit, then one gap per digit.
+pub struct DtmfReception {
     num_digits: usize,
-    timeout: f64,
-    stop_event: String,
-    #[host(ambient)] clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
-) -> Result<DtmfResult, ReceiveDtmfError> {
-    use lk_agents_core::text::py_repr;
-    if num_digits == 0 {
-        return Err(ReceiveDtmfError::NoDigits);
-    }
-    let stop = DtmfEvent::parse(&stop_event)
-        .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&stop_event)))?;
-    let room =
-        room.0.rtc().ok_or_else(|| ReceiveDtmfError::Room("room is not connected".into()))?;
-    let gap = Duration::try_from_secs_f64(timeout.max(0.0)).unwrap_or(Duration::MAX);
-    let mut events = room.events();
-    let mut digits = Vec::new();
-    let mut deadline = None;
-    loop {
-        let next = match deadline {
-            None => events.next().await,
-            Some(at) => tokio::select! {
-                next = events.next() => next,
-                _ = clock.wait_until(at) => break,
-            },
-        };
-        let Some(event) = next.map_err(|error| ReceiveDtmfError::Room(error.to_string()))? else {
-            break;
-        };
-        let lk_agents_abi::voice::rtc::RoomEvent::SipDtmf { digit, .. } = event else { continue };
-        if digit == stop.as_str() {
-            break;
+    stop: DtmfEvent,
+    gap: Duration,
+    digits: Vec<DtmfEvent>,
+    deadline: Option<Ts>,
+}
+
+impl DtmfReception {
+    pub fn new(
+        num_digits: usize,
+        timeout: f64,
+        stop_event: &str,
+    ) -> Result<Self, ReceiveDtmfError> {
+        use lk_agents_core::text::py_repr;
+        if num_digits == 0 {
+            return Err(ReceiveDtmfError::NoDigits);
         }
-        digits.push(
-            DtmfEvent::parse(&digit)
-                .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&digit)))?,
-        );
-        if digits.len() == num_digits {
-            break;
+        let stop = DtmfEvent::parse(stop_event)
+            .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(stop_event)))?;
+        let gap = Duration::try_from_secs_f64(timeout.max(0.0)).unwrap_or(Duration::MAX);
+        Ok(Self { num_digits, stop, gap, digits: Vec::new(), deadline: None })
+    }
+
+    pub fn deadline(&self) -> Option<Ts> {
+        self.deadline
+    }
+
+    /// `true` ends reception. The delimiter is never counted as a digit.
+    pub fn on_digit(&mut self, digit: &str, now: Ts) -> Result<bool, ReceiveDtmfError> {
+        use lk_agents_core::text::py_repr;
+        if digit == self.stop.as_str() {
+            return Ok(true);
         }
-        deadline = Some(clock.now().saturating_add(gap));
+        let key =
+            DtmfEvent::parse(digit).ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(digit)))?;
+        self.digits.push(key);
+        if self.digits.len() == self.num_digits {
+            return Ok(true);
+        }
+        self.deadline = Some(now.saturating_add(self.gap));
+        Ok(false)
     }
-    if digits.len() != num_digits {
-        return Err(ReceiveDtmfError::Incomplete(num_digits, digits.len()));
+
+    pub fn finish(self) -> Result<DtmfResult, ReceiveDtmfError> {
+        if self.digits.len() != self.num_digits {
+            return Err(ReceiveDtmfError::Incomplete(self.num_digits, self.digits.len()));
+        }
+        Ok(DtmfResult(dtmf_result(&self.digits)))
     }
-    Ok(DtmfResult(dtmf_result(&digits)))
 }
 
 #[cfg(test)]
@@ -661,5 +612,15 @@ mod tests {
         c.finish_reply();
         assert!(!c.reply_running());
         assert!(c.inputs.is_empty(), "the buffer clears on every arm");
+    }
+
+    #[test]
+    fn room_reception_arms_the_gap_after_digits_and_never_counts_the_delimiter() {
+        let mut reception = DtmfReception::new(2, 1.0, "#").unwrap();
+        assert_eq!(reception.deadline(), None);
+        assert!(!reception.on_digit("1", Ts::ZERO).unwrap());
+        assert_eq!(reception.deadline(), Some(Ts::from_nanos(1_000_000_000)));
+        assert!(reception.on_digit("#", Ts::ZERO).unwrap());
+        assert_eq!(reception.finish().unwrap_err(), ReceiveDtmfError::Incomplete(2, 1));
     }
 }

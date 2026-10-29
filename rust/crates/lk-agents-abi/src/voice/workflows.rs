@@ -327,3 +327,5 @@ const _: () = {
     inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetSecurityCodeResult> } }
     inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetExpirationDateResult> } }
 };
+
+pub mod dtmf;

@@ -20,6 +20,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
         config: config.clone(),
         agent: "agent".into(),
         vad: None,
+        dtmf_reply_running: false,
     }));
     let steps: Steps = Arc::default();
     let observed = steps.clone();

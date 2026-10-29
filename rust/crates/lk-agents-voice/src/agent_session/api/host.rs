@@ -265,6 +265,7 @@ impl SessionApi {
                 config: config.clone(),
                 agent: agent.clone(),
                 vad: None,
+                dtmf_reply_running: false,
             }));
         let builder = DriverBuilder {
             view: view_tx,
@@ -331,7 +332,6 @@ impl SessionApi {
             spawner,
             anchor: lk_agents_abi::WallAnchor::of(&*clock),
             time,
-            dtmf_reply: Mutex::new(None),
             last_filler: std::sync::atomic::AtomicU64::new(0),
             agents,
             host: HostParts::default(),
@@ -1099,12 +1099,10 @@ impl SessionApi {
             .map_err(|e| CommandRefused::Invalid(format!("dtmf_input_timeout: {e}")))?;
         let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
-        let guard = collector.reply_flag();
         let rx = self.ask(Origin::Host, Answer::dtmf, |call| DtmfCommand::Start {
             collector,
             call: Some(call),
         })?;
-        *self.dtmf_reply.lock().unwrap_or_else(|p| p.into_inner()) = Some(guard);
         Ok(Reply::new(async move { rx.await.unwrap_or(DtmfOutcome::Stopped).wire() }))
     }
 
@@ -1112,11 +1110,7 @@ impl SessionApi {
     /// reply (for the confirm arm, through the read-back speech).
     #[host(method(pid = false))]
     pub fn dtmf_reply_running(&self) -> bool {
-        self.dtmf_reply
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .is_some_and(|guard| guard.load(std::sync::atomic::Ordering::SeqCst))
+        self.view.borrow().dtmf_reply_running
     }
 
     /// `EndCallTool`: close the session once `speech`, the tool's, is done (with what is left to

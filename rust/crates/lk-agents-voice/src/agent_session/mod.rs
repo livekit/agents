@@ -390,6 +390,7 @@ pub struct SessionView {
     pub config: DriverConfig,
     pub agent: String,
     pub vad: Option<lk_agents_abi::resources::VadRef>,
+    pub dtmf_reply_running: bool,
 }
 
 pub struct SessionShared {

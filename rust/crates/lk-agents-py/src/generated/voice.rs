@@ -564,6 +564,79 @@ impl PlayoutLedger {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
+type GetDtmfResultImpl = <crate::Selected as super::Implementations>::DtmfResult;
+
+/// A collected, space-separated keypad sequence.
+#[pyclass(frozen, name = "GetDtmfResult", module = "livekit.agents._core")]
+pub struct GetDtmfResult(::std::sync::Arc<GetDtmfResultImpl>);
+
+#[pymethods]
+impl GetDtmfResult {
+    #[new]
+    #[pyo3(signature = (*, user_input))]
+    fn new(user_input: ::std::string::String) -> PyResult<GetDtmfResult> {
+        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::new(user_input);
+        Ok(GetDtmfResult(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn user_input(&self) -> PyResult<::std::string::String> {
+        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::user_input(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(name = "__repr__")]
+    fn host_repr(&self) -> PyResult<::std::string::String> {
+        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::host_repr(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(name = "__eq__")]
+    fn host_eq(&self, other: PyRef<'_, GetDtmfResult>) -> PyResult<bool> {
+        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::host_eq(&self.0, &*other.0);
+        Ok(out)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (events))]
+    fn from_dtmf_inputs(events: ::std::vec::Vec<::std::string::String>) -> PyResult<GetDtmfResult> {
+        let out = <GetDtmfResultImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfResult>::from_dtmf_inputs(events).map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::DtmfInputError| <::lk_agents_abi::voice::workflows::dtmf::DtmfInputError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(GetDtmfResult(::std::sync::Arc::new(out)))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
+type DtmfIoImpl = <crate::Selected as super::Implementations>::DtmfIo;
+
+fn _extract_dtmf_io_receive_dtmf_num_digits(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "num_digits")
+}
+
+fn _extract_dtmf_io_receive_dtmf_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+}
+
+#[pyfunction]
+#[pyo3(signature = (room, events))]
+pub fn send_dtmf_events<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, events: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    crate::host::future_into_py(py, async move {
+        let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::send_dtmf_events(room, events).await;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (room, num_digits, timeout, stop_event))]
+pub fn receive_dtmf<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_num_digits)] num_digits: usize, #[pyo3(from_py_with = _extract_dtmf_io_receive_dtmf_timeout)] timeout: f64, stop_event: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    crate::host::future_into_py(py, async move {
+        let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::receive_dtmf(room, num_digits, timeout, stop_event).await.map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError| <::lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::voice::GetDtmfResult(::std::sync::Arc::new(out)), py))
+    })
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/console.rs.
 type ConsoleIoImpl = <crate::Selected as super::Implementations>::ConsoleIo;
 

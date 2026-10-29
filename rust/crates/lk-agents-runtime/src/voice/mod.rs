@@ -12,6 +12,7 @@ mod legs;
 mod recorder;
 pub mod remote_session;
 mod storage;
+pub mod workflows;
 
 pub use legs::Executor;
 

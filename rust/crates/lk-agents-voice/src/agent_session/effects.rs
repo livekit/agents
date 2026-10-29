@@ -698,12 +698,14 @@ impl Driver {
             || view.config != self.session.config
             || view.agent != self.activity.agent
             || view.vad != self.session.vad
+            || view.dtmf_reply_running != self.activity.dtmf.reply_running()
         {
             self.view = Arc::new(crate::agent_session::SessionView {
                 launch_holds,
                 config: self.session.config.clone(),
                 agent: self.activity.agent.clone(),
                 vad: self.session.vad.clone(),
+                dtmf_reply_running: self.activity.dtmf.reply_running(),
             });
             effects.push(Effect::SessionView(Arc::clone(&self.view)));
         }
