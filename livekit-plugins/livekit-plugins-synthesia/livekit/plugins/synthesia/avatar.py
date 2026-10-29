@@ -25,7 +25,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from livekit import api, rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, VoiceSession, get_job_context
-from livekit.agents.job import server_setting
+from livekit.agents.job import _server_credentials
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
@@ -164,9 +164,9 @@ class AvatarSession(BaseAvatarSession):
             if self._state is _State.STARTED:
                 return
 
-            url = livekit_url or server_setting("LIVEKIT_URL")
-            lk_key = livekit_api_key or server_setting("LIVEKIT_API_KEY")
-            lk_secret = livekit_api_secret or server_setting("LIVEKIT_API_SECRET")
+            url, lk_key, lk_secret = _server_credentials(
+                livekit_url, livekit_api_key, livekit_api_secret
+            )
             # A blank key or secret still mints a syntactically valid token that
             # Synthesia accepts, since it cannot verify a signature made with the
             # developer's own secret. LiveKit only rejects it once the avatar

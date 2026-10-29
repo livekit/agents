@@ -12,7 +12,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.job import server_setting
+from livekit.agents.job import _server_credentials
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -89,18 +89,10 @@ class AvatarSession(BaseAvatarSession):
     ) -> None:
         await super().start(agent_session, room)
 
-        _livekit_url = livekit_url if utils.is_given(livekit_url) else server_setting("LIVEKIT_URL")
-        _livekit_api_key = (
-            livekit_api_key
-            if utils.is_given(livekit_api_key)
-            else server_setting("LIVEKIT_API_KEY")
+        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
+            livekit_url, livekit_api_key, livekit_api_secret
         )
-        _livekit_api_secret = (
-            livekit_api_secret
-            if utils.is_given(livekit_api_secret)
-            else server_setting("LIVEKIT_API_SECRET")
-        )
-        if not _livekit_url or not _livekit_api_key or not _livekit_api_secret:
+        if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise DIDException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
                 "by arguments or environment variables"
@@ -109,7 +101,7 @@ class AvatarSession(BaseAvatarSession):
         job_ctx = get_job_context()
         local_participant_identity = job_ctx.local_participant_identity
         livekit_token = (
-            api.AccessToken(api_key=_livekit_api_key, api_secret=_livekit_api_secret)
+            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
@@ -123,7 +115,7 @@ class AvatarSession(BaseAvatarSession):
             agent_id=self._agent_id,
             transport={
                 "provider": "livekit",
-                "server_url": _livekit_url,
+                "server_url": livekit_url,
                 "token": livekit_token,
                 "room_name": room.name,
             },

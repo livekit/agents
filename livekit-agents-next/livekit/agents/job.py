@@ -99,7 +99,7 @@ def get_job_context(*, required: bool = True) -> JobContext | None:
 get_current_job_context = get_job_context
 
 
-def server_setting(name: str) -> str | None:
+def _server_setting(name: str) -> str | None:
     """The server setting ``name`` (``LIVEKIT_URL``, ``LIVEKIT_API_KEY``, ...): in a job, the
     value its ``AgentServer`` runs with (an option given in code, else the worker's environment);
     elsewhere, the environment variable."""
@@ -107,6 +107,20 @@ def server_setting(name: str) -> str | None:
     if ctx is not None:
         return ctx._server_env.get(name)
     return os.environ.get(name)
+
+
+def _server_credentials(
+    url: NotGivenOr[str | None] = None,
+    api_key: NotGivenOr[str | None] = None,
+    api_secret: NotGivenOr[str | None] = None,
+) -> tuple[str, str, str]:
+    """Each given value, else the server's ``LIVEKIT_URL``/``API_KEY``/``API_SECRET``; ``""``
+    when neither has one."""
+    return (
+        url or _server_setting("LIVEKIT_URL") or "",
+        api_key or _server_setting("LIVEKIT_API_KEY") or "",
+        api_secret or _server_setting("LIVEKIT_API_SECRET") or "",
+    )
 
 
 def current_simulation() -> SimulationContext | None:

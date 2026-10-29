@@ -200,12 +200,9 @@ async def _upload_session_report(
         raise ValueError("session report summary exceeds the native input budget")
     metadata = dict(metadata or {})
     emission_context = otel_context.get_current()
-    from ..job import server_setting  # local import: job.py imports this module
+    from ..job import _server_credentials  # local import: job.py imports this module
 
-    credentials = (
-        server_setting("LIVEKIT_API_KEY") or "",
-        server_setting("LIVEKIT_API_SECRET") or "",
-    )
+    credentials = _server_credentials()[1:]
     credential_bytes = attribute_bytes(credentials)
     if credential_bytes > policy().max_record_bytes:
         raise ValueError("session report credentials exceed the native input budget")

@@ -17,7 +17,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.job import server_setting
+from livekit.agents.job import _server_credentials
 from livekit.agents.utils import http_context
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -93,21 +93,10 @@ class AvatarSession(BaseAvatarSession):
     ) -> None:
         await super().start(agent_session, room)
 
-        if livekit_url is NOT_GIVEN:
-            livekit_url = server_setting("LIVEKIT_URL") or NOT_GIVEN
-        if livekit_api_key is NOT_GIVEN:
-            livekit_api_key = server_setting("LIVEKIT_API_KEY") or NOT_GIVEN
-        if livekit_api_secret is NOT_GIVEN:
-            livekit_api_secret = server_setting("LIVEKIT_API_SECRET") or NOT_GIVEN
-
-        if (
-            livekit_url is NOT_GIVEN
-            or livekit_api_key is NOT_GIVEN
-            or livekit_api_secret is NOT_GIVEN
-            or not livekit_url
-            or not livekit_api_key
-            or not livekit_api_secret
-        ):
+        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
+            livekit_url, livekit_api_key, livekit_api_secret
+        )
+        if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise TrugenException(
                 "livekit_url, livekit_api_key, and livekit_api_secret not found; "
                 "either pass them as arguments here or set environment variables."

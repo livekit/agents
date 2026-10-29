@@ -2,7 +2,7 @@ import os
 
 from livekit import api, rtc
 from livekit.agents import NOT_GIVEN, NotGivenOr, VoiceSession, get_job_context
-from livekit.agents.job import server_setting
+from livekit.agents.job import _server_credentials
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
@@ -77,10 +77,8 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str | None] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
-        livekit_url = livekit_url or (server_setting("LIVEKIT_URL") or NOT_GIVEN)
-        livekit_api_key = livekit_api_key or (server_setting("LIVEKIT_API_KEY") or NOT_GIVEN)
-        livekit_api_secret = livekit_api_secret or (
-            server_setting("LIVEKIT_API_SECRET") or NOT_GIVEN
+        livekit_url, livekit_api_key, livekit_api_secret = _server_credentials(
+            livekit_url, livekit_api_key, livekit_api_secret
         )
         if not livekit_url or not livekit_api_key or not livekit_api_secret:
             raise AvatarTalkException(

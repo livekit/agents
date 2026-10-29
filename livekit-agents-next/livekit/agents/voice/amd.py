@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from .. import _bindings, _core, inference
 from .._generated.amd import AMDCategory, AMDPredictionEvent, DetectionOptions
 from ..inference._utils import default_api_key, default_api_secret
-from ..job import server_setting
+from ..job import _server_credentials
 from ..llm import LLM as _LLM
 from ..llm.tool_context import function_tool
 from ..log import logger
@@ -124,7 +124,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         super().__init__()
         if not is_given(llm) or not is_given(stt):
             auto_select = _core.amd_auto_select_models(
-                server_setting("LIVEKIT_URL") or "",
+                _server_credentials()[0],
                 default_api_key(None),
                 default_api_secret(None),
             )

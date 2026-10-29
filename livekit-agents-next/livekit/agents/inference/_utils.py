@@ -10,7 +10,7 @@ from livekit import api
 
 from .. import _core
 from .._generated.inference_llm import InferenceClass
-from ..job import server_setting
+from ..job import _server_setting
 from ..types import NotGivenOr
 from ..utils import is_given
 from ..utils.misc import shortuuid
@@ -33,7 +33,7 @@ HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 def get_default_inference_url() -> str:
     """``LIVEKIT_INFERENCE_URL``, else the staging or production gateway by the server's URL."""
-    return _core.inference_default_url(server_setting("LIVEKIT_URL"))
+    return _core.inference_default_url(_server_setting("LIVEKIT_URL"))
 
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
@@ -44,12 +44,12 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
 def default_api_key(explicit: str | None) -> str:
     """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the server's key; ``""`` when
     nothing resolves."""
-    return _core.inference_resolve_api_key(explicit, server_setting("LIVEKIT_API_KEY"))
+    return _core.inference_resolve_api_key(explicit, _server_setting("LIVEKIT_API_KEY"))
 
 
 def default_api_secret(explicit: str | None) -> str:
     """The same ladder for the secret."""
-    return _core.inference_resolve_api_secret(explicit, server_setting("LIVEKIT_API_SECRET"))
+    return _core.inference_resolve_api_secret(explicit, _server_setting("LIVEKIT_API_SECRET"))
 
 
 def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:
