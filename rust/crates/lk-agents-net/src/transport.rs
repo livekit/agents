@@ -150,6 +150,11 @@ pub trait WsTransport: Send + Sync {
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError>;
 }
 
+/// `ws.close_code or -1`: an unexpected close's status, `-1` when the peer sent no code or `0`.
+pub fn close_status(code: Option<u16>) -> i64 {
+    code.filter(|&c| c != 0).map_or(-1, i64::from)
+}
+
 /// `base_url.replace("http", "ws", 1)` when it starts with `http(s)://`, as a prefix swap.
 pub fn to_ws_url(base_url: &str) -> String {
     if let Some(rest) = base_url.strip_prefix("https://") {
@@ -174,6 +179,14 @@ mod tests {
         assert_eq!(to_ws_url("https://gw/v1?u=http://x"), "wss://gw/v1?u=http://x");
         // already a ws URL, or something unrecognised: untouched, as the guard implies
         assert_eq!(to_ws_url("wss://gw/v1"), "wss://gw/v1");
+    }
+
+    // Catches: `close_code == 0` passed through as a status (R2b).
+    #[test]
+    fn a_zero_or_absent_close_code_becomes_minus_one() {
+        assert_eq!(close_status(Some(0)), -1);
+        assert_eq!(close_status(None), -1);
+        assert_eq!(close_status(Some(1006)), 1006);
     }
 
     // Catches: collapsing the three connect failures into one APIConnectionError.

@@ -33,13 +33,9 @@ pub fn connect_error(failure: ConnectFailure) -> ApiError {
     }
 }
 
-/// `recv_task`'s unexpected-close branch (`inference/interruption.py:836`): `ws.close_code or -1`,
-/// so a `0` code becomes `-1`.
-pub fn closed_unexpectedly(close_code: Option<u16>, data: &str, extra: &str) -> StreamError {
-    let status = match close_code {
-        Some(0) | None => -1,
-        Some(code) => code as i64,
-    };
+/// `recv_task`'s unexpected-close branch (`inference/interruption.py:836`), `status` the
+/// [`close_status`](lk_agents_net::transport::close_status).
+pub fn closed_unexpectedly(status: i64, data: &str, extra: &str) -> StreamError {
     StreamError {
         request: None,
         error: ApiError::status(
@@ -75,13 +71,5 @@ mod tests {
         let other = connect_error(ConnectFailure::Http { status: 503 });
         assert_eq!(other.message, "failed to connect to LiveKit Adaptive Interruption");
         assert_eq!(other.status_code, None);
-    }
-
-    // Catches: `close_code == 0` passed through as a status (R2b).
-    #[test]
-    fn a_zero_or_absent_close_code_becomes_minus_one() {
-        assert_eq!(closed_unexpectedly(Some(0), "", "").error.status_code, Some(-1));
-        assert_eq!(closed_unexpectedly(None, "", "").error.status_code, Some(-1));
-        assert_eq!(closed_unexpectedly(Some(1006), "", "").error.status_code, Some(1006));
     }
 }

@@ -35,7 +35,9 @@ use crate::interruption::retry::{
 };
 use crate::interruption::{LABEL, MODEL, PROVIDER};
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
-use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
+use lk_agents_net::transport::{
+    TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
+};
 
 /// One connection's two halves.
 struct Socket {
@@ -539,8 +541,8 @@ async fn run_once(
                 }
             }
             msg = source.recv() => {
-                let code = source.close_code();
-                match handle_incoming(ctx, core, connection, msg, code, &closing) {
+                let status = close_status(source.close_code());
+                match handle_incoming(ctx, core, connection, msg, status, &closing) {
                     Err(error) => break Err(error),
                     Ok(Incoming::Continue) => {}
                     // The gateway closed after we asked it to: this is the orderly end.
@@ -613,7 +615,7 @@ fn handle_incoming(
     core: &Arc<Mutex<InterruptionCore>>,
     connection: u64,
     msg: Result<WsMessage, TransportError>,
-    close_code: Option<u16>,
+    close_status: i64,
     closing: &AtomicBool,
 ) -> Result<Incoming, StreamError> {
     let msg = match msg {
@@ -624,7 +626,7 @@ fn handle_incoming(
             return if closing.load(Ordering::Acquire) {
                 Ok(Incoming::Closed)
             } else {
-                Err(closed_unexpectedly(close_code, "", ""))
+                Err(closed_unexpectedly(close_status, "", ""))
             };
         }
         Ok(WsMessage::Binary(_) | WsMessage::Other) => return Ok(Incoming::Continue),

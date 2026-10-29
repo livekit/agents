@@ -11,7 +11,9 @@ use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock,
 };
-use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
+use lk_agents_net::transport::{
+    TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
+};
 use prost::Message as _;
 use tokio::sync::mpsc;
 
@@ -270,11 +272,9 @@ impl CloudTransport {
                         if closing.load(Ordering::SeqCst) {
                             return Ok(());
                         }
-                        // `ws.close_code or -1`.
-                        let code = ws_stream.close_code().filter(|&c| c != 0).map_or(-1, i64::from);
                         return Err(ApiError::status(
                             "turn detector connection closed unexpectedly",
-                            code,
+                            close_status(ws_stream.close_code()),
                             None,
                             Some(false),
                         ));
