@@ -8,13 +8,15 @@ use tokio::net::UnixStream;
 use tokio::time::Instant;
 
 use super::supervisor::{
-    Extra, KILL_GRACE, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB, WarnGate,
+    CleanupObservation, Extra, KILL_GRACE, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB,
+    SignalFailure, WarnGate,
 };
 use super::wire::{MAX_FRAME, decode, encode, read, write};
 use super::*;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::unix_now_ms;
 
+mod supervision;
 mod writer;
 
 // ---------------------------------------------------------------------------------------- wire
@@ -97,6 +99,12 @@ struct FakeHost {
     /// The child's end, dropped by a kill as the process's death would close it.
     child: Mutex<Option<DuplexStream>>,
     released: AtomicBool,
+    /// The stack dump request went out (a grace before the kill).
+    dumps: AtomicBool,
+    /// The kill fails with this cause.
+    kill_error: Mutex<Option<String>>,
+    incomplete: Mutex<Vec<CleanupObservation>>,
+    signal_failures: Mutex<Vec<SignalFailure>>,
 }
 
 impl ProcessCallbacks for Arc<FakeHost> {
@@ -115,9 +123,16 @@ impl ProcessCallbacks for Arc<FakeHost> {
 
     fn kill(&self) -> Result<(), String> {
         self.kills.fetch_add(1, Ordering::SeqCst);
+        if let Some(cause) = self.kill_error.lock().unwrap().clone() {
+            return Err(cause);
+        }
         self.alive.store(false, Ordering::SeqCst);
         self.child.lock().unwrap().take();
         Ok(())
+    }
+
+    fn request_stack_dump(&self) -> Result<bool, String> {
+        Ok(self.dumps.load(Ordering::SeqCst))
     }
 
     fn sample_memory(&self) -> Sample {
@@ -126,6 +141,14 @@ impl ProcessCallbacks for Arc<FakeHost> {
 
     fn release(&self) {
         self.released.store(true, Ordering::SeqCst);
+    }
+
+    fn incomplete_cleanup(&self, observation: CleanupObservation) {
+        self.incomplete.lock().unwrap().push(observation);
+    }
+
+    fn signal_failed(&self, failure: SignalFailure) {
+        self.signal_failures.lock().unwrap().push(failure);
     }
 }
 
