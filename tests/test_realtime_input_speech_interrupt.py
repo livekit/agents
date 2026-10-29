@@ -82,3 +82,12 @@ def test_input_speech_started_interrupts_interruptible_speech() -> None:
 
     assert handle.interrupted is True
     activity._rt_session.interrupt.assert_called_once()
+
+
+def test_server_speech_start_is_an_audio_activity_interruption() -> None:
+    """The realtime session's own speech detection interrupting the agent is a barge-in, and
+    the agent_turn trace names it as one rather than as a programmatic interrupt."""
+    activity = _activity(server_turn_detection=True)
+    handle = _speech_started(activity, allow_interruptions=True)
+    assert handle.interrupted
+    assert handle._interrupt_source == "audio_activity"

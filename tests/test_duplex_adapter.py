@@ -563,6 +563,72 @@ async def test_a_fragment_is_attached_when_the_audio_reaches_it(duplex) -> None:
     )
 
 
+async def test_words_that_arrive_after_the_last_frame_still_join_their_burst(duplex) -> None:
+    """The provider stops streaming after the utterance, so no frame follows the words: they are
+    attached when the burst ends rather than left for the next one."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.say("Hello there.", start_ms=5000, end_ms=5400)
+    fake.audio_ch.close()
+    await _settle()
+
+    assert len(generations) == 1
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello there."
+
+
+async def test_words_for_sound_already_played_go_out_as_text_on_their_own(duplex) -> None:
+    """The burst has ended by the time its last words arrive; by its anchor they sit on sound it
+    already played, so they are handed over at once and never anchor the next utterance."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.push(0.001, count=8)
+    await _settle()
+    assert len(generations) == 1
+    fake.say(" there.", start_ms=2200, end_ms=2300)
+    await _settle()
+
+    assert len(generations) == 2
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello"
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (0, " there.")
+
+    fake.say("Next.", start_ms=5000, end_ms=5200)
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    assert len(generations) == 3
+    (first,) = await _chunks(generations[2])
+    assert first == "Next."
+    assert isinstance(first, TimedString) and first.start_time == pytest.approx(0.0)
+
+
+async def test_late_words_do_not_join_the_burst_that_is_already_sounding(duplex) -> None:
+    fake, _session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.push(0.001, count=5)
+    fake.push(0.3, count=2)
+    await _settle()
+    assert len(generations) == 2
+    fake.say(" there.", start_ms=2200, end_ms=2300)
+    fake.say("Next.", start_ms=5000, end_ms=5200)
+    fake.push(0.3, count=2)
+    fake.push(0.001, count=8)
+    await _settle()
+
+    assert len(generations) == 3
+    assert (await asyncio.wait_for(_read(generations[2]), timeout=1)) == (0, " there.")
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1))[1] == "Next."
+
+
 async def test_transcript_no_audio_ever_claims_is_emitted_rather_than_lost(duplex, caplog) -> None:
     """Losing transcript is worse than an odd chat item; the model's silence is the clock."""
     fake, session, generations = duplex
@@ -843,6 +909,31 @@ async def test_a_lone_function_call_is_not_the_reply_the_speech_after_it_is() ->
     await session.aclose()
 
 
+async def test_late_words_are_not_the_reply_the_speech_after_them_is() -> None:
+    """Words for sound the model already produced cannot answer a request made after it."""
+    fake, session = _askable()
+    fake.push(0.001, count=20)
+    fake.push(0.5, count=3)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.push(0.001, count=8)
+    await _settle()
+
+    fut = session.generate_reply()
+    fake.say(" there.", start_ms=2200, end_ms=2300)
+    await _settle()
+    assert not fut.done()
+
+    fake.push(0.5, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    generation = await asyncio.wait_for(fut, 1)
+    assert generation.user_initiated
+    frames, text = await _read(generation)
+    assert frames and text == ""
+    await session.aclose()
+
+
 async def test_a_superseded_or_abandoned_ask_fails_rather_than_cancels() -> None:
     """The framework's reply task handles RealtimeError; a cancelled future would end it."""
     fake, session = _askable()
@@ -934,3 +1025,25 @@ async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> N
     assert [e.recoverable for e in errors] == [False]
     assert isinstance(errors[0].error, _Boom)
     assert errors[0].label == fake.duplex_model.label
+
+
+# a duplex model has no text modality: it hears and speaks only audio, and the adapter resolves a
+# reply from the sound the model produces. under a text simulation there is no audio, so the
+# session refuses to start rather than time out on the first turn
+
+
+async def test_a_duplex_model_refuses_a_text_simulation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents.voice import Agent, AgentSession
+
+    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
+    session = AgentSession(llm=_FakeDuplexModel())
+    with pytest.raises(RuntimeError, match="text simulation"):
+        await session.start(Agent(instructions="hi"))
+
+
+async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
+    from livekit.agents.voice import Agent, AgentSession
+
+    session = AgentSession(llm=_FakeDuplexModel())
+    await session.start(Agent(instructions="hi"))
+    await session.aclose()

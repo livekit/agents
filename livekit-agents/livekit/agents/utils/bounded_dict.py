@@ -50,23 +50,6 @@ class BoundedDict(OrderedDict[K, V]):
                 )
         return value
 
-    def set_or_update(self, key: K, factory: Callable[[], V], **kwargs: Any) -> V:
-        """Set a value for a key if it doesn't exist, or update it if it does.
-
-        Args:
-            key: The key to set or update.
-            factory: The factory function to create a new value if the key doesn't exist.
-            kwargs: The keyword arguments to update the value.
-
-        Returns:
-            The value of the key.
-        """
-        if self.get(key, None) is None:
-            self[key] = factory()
-        result = self.update_value(key, **kwargs)
-        assert result is not None
-        return result
-
     def pop_if(
         self,
         predicate: Callable[[V], bool] | None = None,

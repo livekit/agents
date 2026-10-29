@@ -191,18 +191,17 @@ examples:
         rows: 8
       - rpc: set_stt_model
         label: STT
-        default: deepgram/nova-3
+        default: assemblyai/universal-3-6-pro
         options:
           - { value: deepgram/nova-3, label: Deepgram Nova-3 }
           - { value: deepgram/nova-3-medical, label: Deepgram Nova-3 Medical }
           - { value: deepgram/flux-general-en, label: Deepgram Flux (English) }
           - { value: deepgram/flux-general-multi, label: Deepgram Flux (Multilingual) }
-          - { value: assemblyai/u3-rt-pro, label: AssemblyAI Universal-3 Pro }
+          - { value: assemblyai/universal-3-6-pro, label: AssemblyAI Universal-3.6 Pro }
           - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
           - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
           - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
-          - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
-          - { value: speechmatics/standard, label: Speechmatics Standard }
+          - { value: speechmatics/linden-1, label: Speechmatics Linden-1 }
           - { value: xai/stt-1, label: xAI Speech-to-Text }
       - rpc: set_llm_model
         label: LLM
@@ -264,6 +263,7 @@ examples:
           - { value: inworld/inworld-tts-1.5-mini, label: Inworld TTS 1.5 Mini }
           - { value: inworld/inworld-tts-1.5-max, label: Inworld TTS 1.5 Max }
           - { value: inworld/inworld-tts-2, label: Inworld TTS 2 }
+          - { value: inworld/inworld-tts-2-flash, label: Inworld TTS 2 Flash }
           - { value: rime/coda, label: Rime Coda }
           - { value: rime/mist, label: Rime Mist }
           - { value: rime/mistv2, label: Rime Mist v2 }

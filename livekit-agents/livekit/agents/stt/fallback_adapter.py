@@ -95,6 +95,7 @@ class FallbackAdapter(
                 aligned_transcript=aligned_transcript,
                 keyterms=any(t.capabilities.keyterms for t in stt),
                 chat_context=any(t.capabilities.chat_context for t in stt),
+                manual_flush=all(t.capabilities.manual_flush for t in stt),
             )
         )
 
@@ -120,13 +121,35 @@ class FallbackAdapter(
             stt_instance.on("metrics_collected", self._on_metrics_collected)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
 
+    def _next_instance(self) -> STT:
+        """The instance the next request goes to first: the first one marked available, or
+        the primary once all are down (they are then all retried, primary first). A failed
+        instance's recovery task flips it back to available, so a recovered primary is
+        reported again before it has served."""
+        for instance, status in zip(self._stt_instances, self._status, strict=True):
+            if status.available:
+                return instance
+        return self._stt_instances[0]
+
+    @property
+    def capabilities(self) -> STTCapabilities:
+        # update manual_flush as instance might be updated
+        self._capabilities.manual_flush = all(
+            instance.capabilities.manual_flush for instance in self._stt_instances
+        )
+        return self._capabilities
+
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that serves next (see :meth:`_next_instance`). Spans and
+        metrics read this, so a failover shows the model expected to answer rather than the
+        adapter; the instance that actually served is stamped per request by the stream."""
+        return self._next_instance().model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._next_instance().provider
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
@@ -386,6 +409,7 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
+                    main_stream._on_provider_progress = self._mark_provider_progress
                     # update main_stream start time offset so transcript timestamps are properly adjusted
                     main_stream.start_time_offset = self.start_time_offset + (
                         time.time() - self._start_time

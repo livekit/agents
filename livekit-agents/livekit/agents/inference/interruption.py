@@ -34,7 +34,7 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics.base import InterruptionMetrics, Metadata
 from ..telemetry import trace_types
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import (
     AudioArrayBuffer,
     BoundedDict,
@@ -55,6 +55,9 @@ DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
 _FRAMES_PER_SECOND = 40
+# Do not reconnect after an error. The session falls back to VAD-based
+# interruption instead, which is faster than a reconnect to a slow backend.
+DEFAULT_INTERRUPTION_CONN_OPTIONS = APIConnectOptions(max_retry=0)
 
 
 class InterruptionDetectionError(BaseModel):
@@ -388,7 +391,7 @@ class AdaptiveInterruptionDetector(
         return self._session
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: APIConnectOptions = DEFAULT_INTERRUPTION_CONN_OPTIONS
     ) -> InterruptionWebSocketStream:
         try:
             stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
@@ -828,10 +831,17 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     raise
 
             closing_ws = True
+            if ws.closed:
+                return
             msg = InterruptionWSSessionCloseMessage(
                 type=InterruptionWSMessageType.SESSION_CLOSE,
             )
-            await ws.send_str(msg.model_dump_json())
+            try:
+                await ws.send_str(msg.model_dump_json())
+            except ConnectionResetError:
+                # aiohttp raises ConnectionResetError (ClientConnectionResetError on newer
+                # versions) if the peer wins the close race. session.close is best-effort.
+                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -995,15 +1005,15 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     self._reconnect_event.clear()
                 finally:
                     closing_ws = True
-                    if ws is not None and not ws.closed:
-                        await ws.close()
-                        ws = None
                     await aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     try:
                         tasks_group.exception()
                     except asyncio.CancelledError:
                         pass
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
             finally:
                 closing_ws = True
                 if ws is not None and not ws.closed:

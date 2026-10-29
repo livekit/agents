@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-import httpx
+import httpx  # spitch requires httpx<1 and isinstance-checks this Timeout
 
 import spitch
 from livekit.agents import (
