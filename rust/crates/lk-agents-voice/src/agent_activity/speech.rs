@@ -16,8 +16,8 @@ use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{
-    CoreStep, GenerationStep, HandoffStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep,
-    ToolStep, TurnStep,
+    CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep, ToolStep,
+    TurnStep,
 };
 use crate::tts::markup::ChatMessageExt;
 use lk_agents_abi::ChatItem;
@@ -263,12 +263,6 @@ impl Driver {
                     out,
                 );
                 self.answer_speech(call);
-            }
-            // accepted output from a speech's tool: recorded for the run that ends on it.
-            SpeechCommand::SetRunOutput { speech, output } => {
-                let ok = matches!(output, crate::run_result::RunOutput::Value(_));
-                out.trace(HandoffStep::RunOutput { speech, ok });
-                self.session.runs.outputs.insert(speech, output);
             }
             // The AMD system's authorization hold: the scheduling task keeps its head.
             SpeechCommand::PauseAuthorization => {

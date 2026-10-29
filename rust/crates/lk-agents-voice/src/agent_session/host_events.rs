@@ -256,13 +256,12 @@ impl SessionEvent {
             }),
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
             SessionEvent::RunSettled { run, outcome, speech } => {
-                let (final_output, error, run_error) = match outcome {
-                    RunOutcome::Completed { final_output } => (final_output.clone(), None, None),
-                    RunOutcome::Failed(RunFailure::Output(err)) => (None, Some(err.clone()), None),
-                    RunOutcome::Failed(RunFailure::Run(err)) => (None, None, Some(err.clone())),
+                let (final_output, run_error) = match outcome {
+                    RunOutcome::Completed { final_output } => (final_output.clone(), None),
+                    RunOutcome::Failed(RunFailure::Run(err)) => (None, Some(err.clone())),
                     RunOutcome::InputRequired { .. }
                     | RunOutcome::Failed(RunFailure::Speech)
-                    | RunOutcome::Closed => (None, None, None),
+                    | RunOutcome::Closed => (None, None),
                 };
                 let question = match outcome {
                     RunOutcome::InputRequired { question, verbatim, answer_tool } => {
@@ -279,7 +278,6 @@ impl SessionEvent {
                     outcome: outcome.as_str().to_owned(),
                     final_output,
                     question,
-                    error,
                     run_error,
                     speech_handle: speech.as_ref().map(crate::speech_handle::SpeechHandle::object),
                 })

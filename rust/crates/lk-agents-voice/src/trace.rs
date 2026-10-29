@@ -627,8 +627,6 @@ pub enum HandoffStep {
     RunOwned { run: crate::events::RunId, what: crate::run_result::Owned },
     /// The run let go of something it owned (`_unwatch_handle`).
     RunReleased { run: crate::events::RunId, what: crate::run_result::Owned },
-    /// accepted output recorded the run's output (`_maybe_run_final_output`).
-    RunOutput { speech: SpeechId, ok: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -955,7 +953,6 @@ impl Step {
                 RealtimeStep::Opened { .. } | RealtimeStep::Sent { .. } => None,
             },
             Step::Handoff(step) => match step {
-                HandoffStep::RunOutput { speech, .. } => Some(*speech),
                 HandoffStep::HookIssued { speech, .. } => *speech,
                 HandoffStep::TaskEntered { speech, .. } => Some(*speech),
                 HandoffStep::TaskEnded { .. } | HandoffStep::TaskRefused { .. } => None,

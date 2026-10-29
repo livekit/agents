@@ -1001,7 +1001,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_run_settled(self, wire: dict[str, Any]) -> None:
         if (run := wire["run"]) is None:
             return
-        error = wire["error"]
+        error: BaseException | None = None
         if (failure := wire["run_error"]) is not None:
             error = run_error(failure)
         if wire["outcome"] == "failed" and error is None and wire["speech_handle"] is not None:

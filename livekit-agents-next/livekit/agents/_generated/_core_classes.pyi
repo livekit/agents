@@ -566,13 +566,6 @@ class VoiceSession:
     def set_aec_warmup(self, duration: float | None) -> None: ...
     def resolved_options(self) -> dict[str, Any] | None: ...
     def push_video(self, content: ChatContent) -> bool: ...
-    def set_run_output(
-        self,
-        speech: SpeechHandle,
-        *,
-        value: Any | None = None,
-        error: Any | None = None,
-    ) -> None: ...
     def generate_reply(
         self,
         *,

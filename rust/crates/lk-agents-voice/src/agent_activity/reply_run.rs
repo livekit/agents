@@ -3,6 +3,7 @@
 //! retries, output acceptance, when to ask or stop); the floor decides when calls start and what
 //! an interruption, `max_tool_steps` or a `function_tools_executed` handler leave of a step.
 
+use crate::agent::Source;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Effect, Out};
 use crate::agent_session::{Answer, Driver, RequestId};
@@ -17,13 +18,12 @@ use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, Validat
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{
-    ChatItem, ChoiceDelta, FunctionCall, HostRef, LlmChunk, MetricsReport, Modality,
-    Role, ToolChoice, ToolSpec,
+    ChatItem, ChoiceDelta, FunctionCall, HostRef, LlmChunk, MetricsReport, Modality, Role,
+    ToolChoice, ToolSpec,
 };
 use lk_agents_core::agent_run::{
     AgentRun, Effect as RunEffect, Event, Opening, OutputVerdict, RunInput, StepId, StepVerdict,
 };
-use crate::agent::Source;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -70,27 +70,12 @@ impl std::fmt::Debug for ReplyRun {
 /// One call of the step, from its admission until its task heard its last move.
 #[derive(Default)]
 struct ReplyCall {
-    /// The call as it started (the floor's stamp); `None` before it starts.
-    started: Option<FunctionCall>,
+    /// Its task runs.
+    started: bool,
     /// The move the run decided, not yet told to the task.
     next: Option<ToolGo>,
     /// The task awaiting its next move.
     waiting: Option<RequestId>,
-}
-
-/// The move as the started call carries it: the stamp is the floor's.
-fn stamped(go: ToolGo, started: &FunctionCall) -> ToolGo {
-    match go {
-        ToolGo::Execute { mut item } => {
-            item.created_at = started.created_at;
-            ToolGo::Execute { item }
-        }
-        ToolGo::Settled { mut item, outcome } => {
-            item.created_at = started.created_at;
-            ToolGo::Settled { item, outcome }
-        }
-        other => other,
-    }
 }
 
 /// A move after which the call's task asks nothing more.
@@ -304,8 +289,9 @@ impl Driver {
 
     // ------------------------------------------------------------------ calls
 
-    /// The model made `call` on the reply's step: the run admits it. Its id in the run, or
-    /// `None` when the speech has no run to take it.
+    /// A call of the reply's step is authorized to start: the run admits it as the floor
+    /// stamped it, with the person's answers as they stand. Its id in the run, or `None` when the
+    /// speech has no run to take it.
     pub(crate) fn reply_call_made(
         &mut self,
         speech: SpeechId,
@@ -331,17 +317,12 @@ impl Driver {
         reply.and_then(|r| r.calls.get(&call)).is_some_and(|c| c.next.is_some())
     }
 
-    /// The call starts as `item`: its first move, and later moves carry its stamp.
-    pub(crate) fn reply_call_start(
-        &mut self,
-        speech: SpeechId,
-        call: CallId,
-        item: &FunctionCall,
-    ) -> ToolGo {
+    /// The call's task starts: its first move.
+    pub(crate) fn reply_call_start(&mut self, speech: SpeechId, call: CallId) -> ToolGo {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return ToolGo::Gone };
         let Some(entry) = reply.calls.get_mut(&call) else { return ToolGo::Gone };
-        let first = stamped(entry.next.take().unwrap_or(ToolGo::Gone), item);
-        entry.started = Some(item.clone());
+        let first = entry.next.take().unwrap_or(ToolGo::Gone);
+        entry.started = true;
         if last(&first) {
             reply.calls.remove(&call);
         }
@@ -433,10 +414,10 @@ impl Driver {
                 let (item, outcome) = (Box::new(item.clone()), settled.outcome.clone());
                 entry.next = Some(ToolGo::Settled { item, outcome });
             }
-            let (Some(started), Some(go)) = (&entry.started, entry.waiting) else { continue };
+            let (true, Some(go)) = (entry.started, entry.waiting) else { continue };
             let Some(next) = entry.next.take() else { continue };
             entry.waiting = None;
-            told.push((*id, go, stamped(next, started)));
+            told.push((*id, go, next));
         }
         for (id, go, next) in told {
             if last(&next) {

@@ -36,10 +36,10 @@ impl Driver {
 
     /// The model made a call: the core admits it (arguments a template leaked into repaired, an
     /// `InputRequired(tool=)` answer in place of the model's arguments). A call `tool_choice="none"`
-    /// forbade is recorded as made and never runs. Any other joins its reply's run, and starts
-    /// once its step is authorized to play (a call made while another speech plays, or by a
-    /// preemptive generation, waits) and the run decided its first move; hosted by the reply's
-    /// agent unless it names a tool the request did not offer.
+    /// forbade is recorded as made and never runs. Any other waits for its step's authorization
+    /// to play (a call made while another speech plays, or by a preemptive generation, waits),
+    /// then joins its reply's run and starts with the first move the run decides; hosted by the
+    /// reply's agent unless it names a tool the request did not offer.
     pub(crate) fn on_tool_made(
         &mut self,
         now: Ts,
@@ -66,23 +66,20 @@ impl Driver {
             self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name);
             return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }
-        let Some(id) = self.reply_call_made(speech, call.clone(), out) else {
-            return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
-        };
         let agent = agent.filter(|_| admission == Admission::Offered);
-        let call = Deferred { speech, step, id, call, advertised, agent, go };
+        let call = Deferred { speech, step, id: None, call, advertised, agent, go };
         self.activity.tools.deferred.push(call);
         self.settle_deferred_calls(out);
     }
 
-    /// Starts each waiting call whose step is authorized and whose first move its run decided, in
-    /// the model's order, and drops unrun those whose speech was interrupted or done first.
-    /// `true` when one was.
+    /// Starts each waiting call whose step is authorized, in the model's order, once its run
+    /// decided its first move, and drops unrun those whose speech was interrupted or done before
+    /// the authorization. `true` when one was.
     pub(crate) fn settle_deferred_calls(&mut self, out: &mut Out) -> bool {
         let mut settled = false;
         let mut waiting = Vec::new();
         let now = self.step.now;
-        for d in std::mem::take(&mut self.activity.tools.deferred) {
+        for mut d in std::mem::take(&mut self.activity.tools.deferred) {
             // Behind an earlier call of the same speech still waiting: started in order.
             if waiting.iter().any(|w: &Deferred| w.speech == d.speech) {
                 waiting.push(d);
@@ -94,17 +91,27 @@ impl Driver {
             // `tool_execution_started_cb`.
             let handle = self.activity.speech_scheduler.handle(d.speech).cloned();
             match handle {
-                Some(h) if h.step_authorized(d.step) && self.reply_first_ready(d.speech, d.id) => {
-                    self.start_call(now, d, &h, out)
+                Some(h) if h.step_authorized(d.step) => {
+                    // `_tool_execution_started_cb`: stamped with its start (history is ordered by
+                    // `created_at`, and it was made before the step was authorized).
+                    if d.id.is_none() {
+                        d.call.created_at = self.step.wall();
+                        d.id = self.reply_call_made(d.speech, d.call.clone(), out);
+                    }
+                    match d.id {
+                        Some(id) if !self.reply_first_ready(d.speech, id) => {
+                            waiting.push(d);
+                            continue;
+                        }
+                        Some(id) => self.start_call(now, d, id, &h, out),
+                        None => out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
+                    }
                 }
-                Some(h) if !h.interrupted() && !h.done() || h.step_authorized(d.step) => {
+                Some(h) if !h.interrupted() && !h.done() => {
                     waiting.push(d);
                     continue;
                 }
-                Some(_) | None => {
-                    self.reply_call_dropped(d.speech);
-                    out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone));
-                }
+                Some(_) | None => out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
             }
             settled = true;
         }
@@ -112,16 +119,13 @@ impl Driver {
         settled
     }
 
-    /// `_tool_execution_started_cb`: the call is stamped with its start (history is ordered by
-    /// `created_at`, and it was made before the step was authorized), told to the speech, and
-    /// started with its first move.
-    fn start_call(&mut self, now: Ts, d: Deferred, h: &SpeechHandle, out: &mut Out) {
-        let Deferred { speech, step, id, mut call, advertised, agent, go } = d;
-        call.created_at = self.step.wall();
+    /// The call is told to the speech and started with its first move.
+    fn start_call(&mut self, now: Ts, d: Deferred, id: CallId, h: &SpeechHandle, out: &mut Out) {
+        let Deferred { speech, step, call, advertised, agent, go, .. } = d;
         if advertised {
             h.item_added(&ChatItem::FunctionCall(call.clone()));
         }
-        let first = Box::new(self.reply_call_start(speech, id, &call));
+        let first = Box::new(self.reply_call_start(speech, id));
         let host = self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), out);
         let start = ToolGo::Start { call: id, item: Box::new(call), host, first };
         out.answer(Some(go), Answer::ToolGo(start));

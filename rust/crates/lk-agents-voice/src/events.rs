@@ -277,8 +277,6 @@ impl RunOutcome {
 pub enum RunFailure {
     /// The last owned speech failed; its `exception()` is the error.
     Speech,
-    /// an output error from inside the last speech.
-    Output(lk_agents_abi::HostRef),
     /// The last speech's reply ended on a framework outcome, as `agent.run()` raises it.
     Run(lk_agents_abi::agent::run::RunError),
 }

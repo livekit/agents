@@ -623,8 +623,6 @@ inputs! {
     ReleaseIdleHold { hold: Ref<Hold> } leaf speech::ReleaseIdleHold;
     ClaimUserTurn { } leaf speech::ClaimUserTurn;
     ReleaseUserTurn { } leaf speech::ReleaseUserTurn;
-    /// `AgentTask.complete(result)` from inside a speech's tool.
-    SetRunOutput { speech: Ref<Speech>, ok: bool } leaf speech::SetRunOutput;
     /// A background tool speaking again after its first `ctx.update()`.
     /// `progress: None` is its end, answered as `end`.
     ToolUpdate { tool: Ref<Tool>, progress: Option<AgentText>, end: ToolAnswer } leaf speech::ToolUpdate;

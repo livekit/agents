@@ -31,10 +31,8 @@ pub struct RunSpec {
 /// What a speech's reply settled on, for the run ending on the speech.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunOutput {
-    /// The output the reply's agent accepted, or a tool's `complete(result)`.
+    /// The output the reply's agent accepted.
     Value(HostRef),
-    /// `complete(exception)`: the interned exception, which the run raises.
-    Error(HostRef),
     /// The reply ended on a framework outcome (retries spent, a validator failed).
     Failed(RunError),
     /// A tool asked the person (`InputRequired`).
@@ -154,7 +152,6 @@ impl Runs {
             // `__last_speech_handle._error` (`run_result.RunResult._mark_done`).
             (true, _) => RunOutcome::Failed(RunFailure::Speech),
             // `isinstance(final_output, BaseException)` (`.resolve_expressive_options`).
-            (false, Some(RunOutput::Error(e))) => RunOutcome::Failed(RunFailure::Output(e)),
             (false, Some(RunOutput::Failed(e))) => RunOutcome::Failed(RunFailure::Run(e)),
             (false, Some(RunOutput::Value(v))) => RunOutcome::Completed { final_output: Some(v) },
             (false, Some(RunOutput::Ask { question, verbatim, answer_tool })) => {

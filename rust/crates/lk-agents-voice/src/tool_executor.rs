@@ -39,9 +39,9 @@ pub(crate) struct Tools {
     pub(crate) approval_answers: std::collections::BTreeSet<String>,
     /// Mints the hosted callbacks' operations, unique in the session.
     pub(crate) next_operation: u64,
-    /// Calls made before their step was authorized to play, in the model's order: started once
-    /// it is and their run decided their first move, dropped unrun if the speech is interrupted
-    /// or done first.
+    /// Calls made before their step was authorized to play, in the model's order: joined to
+    /// their reply's run and started once it is, dropped unrun if the speech is interrupted or
+    /// done first.
     pub(crate) deferred: Vec<Deferred>,
     /// The calls `tool_choice="none"` dropped, by step, reported when the step's tools finish.
     pub(crate) dropped: BTreeMap<(SpeechId, u32), Vec<String>>,
@@ -66,8 +66,8 @@ pub struct MadeCall {
 pub(crate) struct Deferred {
     pub(crate) speech: SpeechId,
     pub(crate) step: u32,
-    /// Its id in the reply's run.
-    pub(crate) id: CallId,
+    /// Its id in the reply's run, once it joined it.
+    pub(crate) id: Option<CallId>,
     pub(crate) call: FunctionCall,
     pub(crate) advertised: bool,
     pub(crate) agent: Option<Arc<dyn AgentFrame>>,

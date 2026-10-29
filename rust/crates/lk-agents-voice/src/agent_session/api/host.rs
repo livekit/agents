@@ -758,27 +758,6 @@ impl SessionApi {
         Ok(self.push_video(image))
     }
 
-    /// an accepted output from inside `speech`'s tool: the output the run
-    /// ending on that speech reads. `error` is the `isinstance(result, Exception)` arm.
-    #[host(method(kw_only = "value"))]
-    pub fn set_run_output(
-        &self,
-        speech: &SpeechHandle,
-        value: Option<lk_agents_abi::HostRef>,
-        error: Option<lk_agents_abi::HostRef>,
-    ) -> Result<(), SessionRefused> {
-        // A handle the loop has not created yet has no speech: the caller is outside any speech.
-        let Some(speech) = speech.created() else {
-            return Ok(());
-        };
-        let output = match (value, error) {
-            (_, Some(err)) => crate::run_result::RunOutput::Error(err),
-            (Some(v), None) => crate::run_result::RunOutput::Value(v),
-            (None, None) => return Ok(()),
-        };
-        self.send(SpeechCommand::SetRunOutput { speech, output })
-    }
-
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it.
     ///
     /// The overrides apply to this reply only. `tool_choice=None` lets the provider decide, unlike

@@ -661,9 +661,8 @@ async fn rare_host_calls_reach_a_running_session() {
     let frames = Items(Default::default());
     let recorded = api.say_audio("Hi.".into(), Box::new(frames), None, true, None).unwrap();
     recorded.wait_until_created().await.unwrap();
-    // Outside any speech: nothing to end; no output to set.
+    // Outside any speech: nothing to end.
     api.end_call(&SpeechHandle::detached(String::new(), true)).unwrap();
-    api.set_run_output(&streamed, None, None).unwrap();
 
     assert_eq!(api.keyterms(), None);
     assert!(!api.amd_listening());

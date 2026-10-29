@@ -77,7 +77,6 @@
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::set_io_enabled|host (method)",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::set_participant::arg identity|host (required)",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::set_participant|host (method)",
-  "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::set_run_output|host (method (kw_only = \"value\"))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::set_transcription_output::arg sink|host (required)",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::set_transcription_output|host (method)",
   "host|rust/crates/lk-agents-voice/src/agent_session/api/host.rs|impl  for SessionApi::shutdown|host (method (kw_only , defaults (drain = true)))",

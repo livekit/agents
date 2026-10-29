@@ -440,7 +440,6 @@ impl Driver {
                 | SpeechCommand::SetAllowInterruptions { .. }
                 | SpeechCommand::HoldInterruptions { .. }
                 | SpeechCommand::EndCall { .. }
-                | SpeechCommand::SetRunOutput { .. }
                 | SpeechCommand::ToolUpdate { .. }
                 | SpeechCommand::FillerStart { .. }
                 | SpeechCommand::FillerStop { .. },

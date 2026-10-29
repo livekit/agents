@@ -30,8 +30,8 @@ use std::{
 };
 
 use lk_agents_abi::{
-    AudioFrame, BoxFuture, ChatItem, ChatMessage, HostRef, ImageContent, ImageSource, Maybe,
-    MediaRef, Realtime, Spawner, Ts,
+    AudioFrame, BoxFuture, ChatItem, ChatMessage, ImageContent, ImageSource, Maybe, MediaRef,
+    Realtime, Spawner, Ts,
     errors::RefRegistry,
     metrics::base::AgentMetrics,
     turn::interruption::InterruptionSource,

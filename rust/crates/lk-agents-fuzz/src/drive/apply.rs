@@ -372,12 +372,6 @@ impl Run {
                 api.release_user_turn();
                 self.loop_runs()
             }
-            Input::SetRunOutput { speech, ok } => {
-                let Some(speech) = self.host_speech(*speech) else { return false };
-                let output = Some(self.host_ref());
-                let (value, error) = if *ok { (output, None) } else { (None, output) };
-                api.set_run_output(&speech, value, error).is_ok()
-            }
             Input::ToolUpdate { tool, progress, end } => {
                 let Some(call_id) = self.tool_call_id(*tool) else { return false };
                 let outcome = match progress {
@@ -732,11 +726,6 @@ impl Run {
             Detail::Tool { call_id, .. } => Some(call_id.clone()),
             _ => None,
         }
-    }
-
-    /// The host's side of a `RunOutput`: an object the driver only ever hands back.
-    fn host_ref(&self) -> HostRef {
-        HostRef::new(self.record.now().seq, &self.refs)
     }
 }
 

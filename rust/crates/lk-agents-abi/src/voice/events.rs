@@ -604,12 +604,10 @@ pub struct RunSettledWire {
     pub run: Option<crate::HostRef>,
     /// `RunOutcome::as_str`: `"completed"`, `"input_required"`, `"failed"` or `"closed"`.
     pub outcome: String,
-    /// The interned object a tool handed `AgentTask.complete()`, resolved; `None` otherwise.
+    /// The output the run's last reply accepted, resolved; `None` otherwise.
     pub final_output: Option<crate::HostRef>,
     /// What an `"input_required"` run asks the person.
     pub question: Option<RunQuestion>,
-    /// The exception a tool completed with, resolved; `None` otherwise.
-    pub error: Option<crate::HostRef>,
     /// Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent).
     pub run_error: Option<crate::agent::run::RunError>,
     /// The last owned speech's `_core.SpeechHandle`; `None` when the run owned none.
