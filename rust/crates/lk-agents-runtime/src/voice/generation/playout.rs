@@ -481,7 +481,16 @@ impl Playing<'_> {
                     CutEvent::Probed(report)
                 }
                 CutEffect::Yield => {
-                    tokio::task::yield_now().await;
+                    let mut yielded = false;
+                    std::future::poll_fn(|cx| {
+                        if std::mem::replace(&mut yielded, true) {
+                            std::task::Poll::Ready(())
+                        } else {
+                            cx.waker().wake_by_ref();
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
                     CutEvent::Yielded { closing: *self.shared.closing.borrow() }
                 }
                 CutEffect::WaitUntil(at) => {
