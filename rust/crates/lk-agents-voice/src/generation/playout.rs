@@ -304,3 +304,130 @@ impl Playout {
         }
     }
 }
+/// How the physical source or capture pump ended.
+pub enum SegmentEnd {
+    Audio,
+    Cut,
+    Provider(crate::agent_session::DriverError),
+}
+
+/// A source failure with only the sink's confirmed lower bound of heard audio.
+pub struct SourceFailed {
+    pub error: crate::agent_session::DriverError,
+    pub synchronized: Option<String>,
+    pub heard: Option<crate::transcription::Heard>,
+}
+
+impl From<crate::agent_session::DriverError> for SourceFailed {
+    fn from(error: crate::agent_session::DriverError) -> Self {
+        Self { error, synchronized: None, heard: None }
+    }
+}
+
+/// What the requested drain, receipt application or clear actually completed with.
+pub enum FinishEvent {
+    Receipt(Result<Option<PlaybackFinished>, crate::agent_session::DriverError>),
+    Accepted(PlaybackFinished),
+    Cut(crate::transcription::Heard),
+    Confirmed,
+}
+
+/// Terminal I/O is sequenced by the voice core, after the resampler's tail was handled.
+pub enum FinishEffect {
+    Drain,
+    Accept(PlaybackFinished),
+    Cut(String),
+    Confirm,
+    Complete(Result<crate::transcription::Heard, SourceFailed>),
+}
+
+pub enum SegmentFinish {
+    Waiting { text: String, source_error: Option<crate::agent_session::DriverError> },
+    Accepting { text: String, source_error: Option<crate::agent_session::DriverError> },
+    Cutting { source_error: Option<crate::agent_session::DriverError> },
+    Confirming { error: crate::agent_session::DriverError, synchronized: Option<String> },
+    Done,
+}
+
+impl SegmentFinish {
+    pub fn begin(end: SegmentEnd, text: String, playout: &Playout) -> (Self, FinishEffect) {
+        let source_error = match end {
+            SegmentEnd::Cut => {
+                return (Self::Cutting { source_error: None }, FinishEffect::Cut(text));
+            }
+            SegmentEnd::Provider(error) => Some(error),
+            SegmentEnd::Audio => None,
+        };
+        if playout.pushed > 0 {
+            return (Self::Waiting { text, source_error }, FinishEffect::Drain);
+        }
+        match source_error {
+            Some(error) => (Self::Confirming { error, synchronized: None }, FinishEffect::Confirm),
+            None => (
+                Self::Done,
+                FinishEffect::Complete(Ok(crate::transcription::Heard {
+                    text,
+                    complete: true,
+                    ..crate::transcription::Heard::default()
+                })),
+            ),
+        }
+    }
+
+    pub fn handle(&mut self, event: FinishEvent, playout: &Playout) -> FinishEffect {
+        let state = std::mem::replace(self, Self::Done);
+        match (state, event) {
+            (Self::Waiting { text, source_error }, FinishEvent::Receipt(Ok(Some(receipt)))) => {
+                *self = Self::Accepting { text, source_error };
+                FinishEffect::Accept(receipt)
+            }
+            (
+                Self::Waiting { text, source_error: Some(error) },
+                FinishEvent::Receipt(Ok(None) | Err(_)),
+            ) => {
+                *self = Self::Cutting { source_error: Some(error) };
+                FinishEffect::Cut(text)
+            }
+            (Self::Waiting { text, source_error: None }, FinishEvent::Receipt(Ok(None))) => {
+                *self = Self::Cutting { source_error: None };
+                FinishEffect::Cut(text)
+            }
+            (Self::Waiting { source_error: None, .. }, FinishEvent::Receipt(Err(error))) => {
+                self.confirm(error, None)
+            }
+            (Self::Accepting { text, source_error }, FinishEvent::Accepted(receipt)) => {
+                match source_error {
+                    Some(error) => self.confirm(
+                        error,
+                        receipt
+                            .synchronized_transcript
+                            .map(|text| crate::transcription::Visible::of(&text).text),
+                    ),
+                    None => {
+                        FinishEffect::Complete(Ok(playout.heard(text, Completion::Played(receipt))))
+                    }
+                }
+            }
+            (Self::Cutting { source_error }, FinishEvent::Cut(heard)) => match source_error {
+                Some(error) => self.confirm(error, None),
+                None => FinishEffect::Complete(Ok(heard)),
+            },
+            (Self::Confirming { error, synchronized }, FinishEvent::Confirmed) => {
+                FinishEffect::Complete(Err(SourceFailed {
+                    error,
+                    synchronized,
+                    heard: Some(playout.heard(String::new(), Completion::Unconfirmed)),
+                }))
+            }
+            _ => panic!("playout completion does not match its requested operation"),
+        }
+    }
+    fn confirm(
+        &mut self,
+        error: crate::agent_session::DriverError,
+        synchronized: Option<String>,
+    ) -> FinishEffect {
+        *self = Self::Confirming { error, synchronized };
+        FinishEffect::Confirm
+    }
+}

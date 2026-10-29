@@ -17,7 +17,6 @@ use lk_agents_voice::generation::playout::{
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{PlayoutStep, SinkCall};
 use lk_agents_voice::transcription::Heard;
-use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -80,19 +79,10 @@ pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator
     );
 }
 
-/// A segment whose source failed: the error, and the synchroniser's words up to where its audio
-/// played, when some did and a synchroniser reported them.
-pub(crate) struct SourceFailed {
-    pub(crate) error: DriverError,
-    pub(crate) synchronized: Option<String>,
-    pub(crate) heard: Option<Heard>,
-}
-
-impl From<DriverError> for SourceFailed {
-    fn from(error: DriverError) -> Self {
-        SourceFailed { error, synchronized: None, heard: None }
-    }
-}
+pub(crate) use lk_agents_voice::generation::playout::SourceFailed;
+use lk_agents_voice::generation::playout::{
+    FinishEffect, FinishEvent, SegmentEnd as Ended, SegmentFinish,
+};
 
 /// `perform_audio_forwarding` for one segment. `out: None` drains and drops the frames, reporting
 /// nothing. The clean path ends with `flush`, then waits for the sink to report played out.
@@ -181,45 +171,27 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     }
     playing.report_push();
     let text = segment.text();
-    match ended {
-        Ended::Cut => Ok(playing.cut(segment, text).await),
-        Ended::Provider(e) => {
-            // What was synthesised plays out before the caller forwards the rest as text: the
-            // reference waits for the playout whether or not the TTS failed (`forward_generation`).
-            let mut synchronized = None;
-            if playing.state.pushed > 0 {
+    let (mut finish, mut effect) = SegmentFinish::begin(ended, text, &playing.state);
+    loop {
+        let event = match effect {
+            FinishEffect::Drain => {
                 playing.flush_batch();
-                match with_playout_controls(segment, playing.played_out_report()).await {
-                    Ok(Some(ev)) => {
-                        playing.played_out(segment, &ev);
-                        synchronized = ev.synchronized_transcript.map(|t| Visible::of(&t).text);
-                    }
-                    Ok(None) | Err(_) => {
-                        playing.cut(segment, text).await;
-                    }
-                }
+                FinishEvent::Receipt(
+                    with_playout_controls(segment, playing.played_out_report()).await,
+                )
             }
-            Err(SourceFailed { error: e, synchronized, heard: Some(playing.confirmed_heard()) })
-        }
-        // No audio: flushing would make `wait_for_playout` answer with the previous event.
-        Ended::Audio if playing.state.pushed == 0 => Ok(silent(text, true)),
-        Ended::Audio => {
-            playing.flush_batch();
-            let ev = match with_playout_controls(segment, playing.played_out_report()).await {
-                Ok(Some(ev)) => ev,
-                Ok(None) => return Ok(playing.cut(segment, text).await),
-                Err(error) => {
-                    return Err(SourceFailed {
-                        error,
-                        synchronized: None,
-                        heard: Some(playing.confirmed_heard()),
-                    });
-                }
-            };
-            playing.played_out(segment, &ev);
-            // A synchroniser's words up to the played position, not the words sent.
-            Ok(playing.state.heard(text, Completion::Played(ev)))
-        }
+            FinishEffect::Accept(receipt) => {
+                playing.played_out(segment, &receipt);
+                FinishEvent::Accepted(receipt)
+            }
+            FinishEffect::Cut(text) => FinishEvent::Cut(playing.cut(segment, text).await),
+            FinishEffect::Confirm => {
+                playing.drain_reports();
+                FinishEvent::Confirmed
+            }
+            FinishEffect::Complete(result) => return result,
+        };
+        effect = finish.handle(event, &playing.state);
     }
 }
 
@@ -343,14 +315,6 @@ impl PlaybackObserver for ShownUnvoiced {
     }
 }
 
-/// How the push loop ended.
-enum Ended {
-    Audio,
-    /// Interrupted, or the sink failed: the track is gone, and pushing into it helps nobody.
-    Cut,
-    Provider(DriverError),
-}
-
 /// One segment on its way to the sink. Never off a push. The segment is not held here, so its
 /// `next()` can be pending while reports are folded (`watched`) and settled once it is free
 /// (`settle`).
@@ -387,13 +351,6 @@ impl Playing<'_> {
         if self.state.started || !(ev.interrupted && ev.playback_position.is_zero()) {
             self.finished(ev.playback_position, ev.interrupted);
         }
-    }
-
-    /// The confirmed lower bound at a failed report boundary. The physical operation remains
-    /// pending; this value neither clears the leaf nor credits unreported audio or words.
-    fn confirmed_heard(&mut self) -> Heard {
-        self.drain_reports();
-        self.state.heard(String::new(), Completion::Unconfirmed)
     }
 
     fn report_push(&self) {
