@@ -128,6 +128,7 @@ from .voice.run_result import (
     RunInputRequired,
     RunResult,
     RunUsage,
+    VoiceRunResult,
     mock_tools,
 )
 from .voice.run_stream import (
@@ -294,6 +295,7 @@ __all__ = [
     "RunCompleted",
     "RunInputRequired",
     "RunUsage",
+    "VoiceRunResult",
     "RunStream",
     "StreamEvent",
     "TextDeltaEvent",
