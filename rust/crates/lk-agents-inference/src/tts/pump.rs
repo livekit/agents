@@ -257,7 +257,7 @@ impl Pump {
                 Either::Right((Either::Right((received, _)), _)) => match received {
                     Err(error) => Event::Failed(connect_error(WHAT, error)),
                     Ok(WsMessage::Closed) => Event::ServerEof,
-                    Ok(WsMessage::Other) => Event::Tick,
+                    Ok(WsMessage::Binary(_) | WsMessage::Other) => Event::Tick,
                     Ok(WsMessage::Text(raw)) => match wire::decode(&raw, provider) {
                         Some(wire::Incoming::OutputAudio { session_id, audio }) => {
                             match base64::engine::general_purpose::STANDARD.decode(audio) {

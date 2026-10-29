@@ -134,7 +134,6 @@ pub use utils::clock::{
     Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, simulated_epoch,
     timeout, unix_now, unix_secs,
 };
-pub use utils::duplex::{WebSocketSink, WebSocketStream};
 pub use utils::filters::FilterError;
 pub use utils::frame::FrameId;
 pub use utils::lock;

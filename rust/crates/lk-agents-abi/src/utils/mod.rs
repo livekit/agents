@@ -12,7 +12,6 @@ pub mod byte_stream;
 pub mod clock;
 pub mod connection_pool;
 pub mod dates;
-pub mod duplex;
 pub mod filters;
 pub mod frame;
 pub mod host_ref;

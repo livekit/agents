@@ -14,7 +14,7 @@ use lk_agents_abi::{ApiConnectOptions, AudioFrame, EotPrediction, ProviderId};
 
 use super::{
     CloudOptions, CloudTransport, EotRequestId, EotSession, EotStream, EotTransport, LocalEotModel,
-    LocalTransport, MetricsCallback, TransportFactory, TransportShell, TungsteniteEotConnector,
+    LocalTransport, MetricsCallback, TransportFactory, TransportShell,
 };
 use crate::env::{Env, Standalone};
 
@@ -57,8 +57,8 @@ impl<E: Env> NativeEot<E> {
             if model == TurnDetectorModel::V1 {
                 let (cloud, clock) = (cloud.clone(), clock.clone());
                 return TransportShell::mount(model.as_str(), thresholds.clone(), move |sink| {
-                    let transport =
-                        CloudTransport::new(cloud, sink, Arc::new(TungsteniteEotConnector));
+                    let socket = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
+                    let transport = CloudTransport::new(cloud, sink, socket);
                     Arc::new(transport.with_clock(clock)) as Arc<dyn EotTransport>
                 });
             }

@@ -1,5 +1,5 @@
 //! `_CloudTransport` (`transports.py:74`): the gateway WebSocket, protobuf both ways. The socket
-//! is a [`WebSocketConnector`]; this file owns the protocol, metrics and error taxonomy.
+//! is a [`WsTransport`]; this file owns the protocol, metrics and error taxonomy.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +11,7 @@ use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock,
 };
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use prost::Message as _;
 use tokio::sync::mpsc;
 
@@ -35,15 +36,10 @@ pub struct CloudOptions {
     pub headers: HeaderProvider,
 }
 
-pub use lk_agents_abi::{WebSocketSink, WebSocketStream};
-
-#[async_trait]
-pub trait WebSocketConnector: Send + Sync {
-    async fn connect(
-        &self,
-        url: &str,
-        headers: &[(String, String)],
-    ) -> Result<(Box<dyn WebSocketSink>, Box<dyn WebSocketStream>), ApiError>;
+/// Every socket failure is non-retryable, as in `_connect_ws`: the cloud->local fallback is the
+/// recovery.
+fn socket_error(err: TransportError) -> ApiError {
+    lk_agents_net::transport::connect_error("LiveKit turn detector", err).with_retryable(false)
 }
 
 /// `/eot` path (`transports.py:154`).
@@ -74,7 +70,7 @@ struct CloudState {
 pub struct CloudTransport {
     opts: CloudOptions,
     sink: Arc<dyn PredictionSink>,
-    connector: Arc<dyn WebSocketConnector>,
+    transport: Arc<dyn WsTransport>,
     state: Mutex<CloudState>,
     clock: Arc<dyn Clock>,
 }
@@ -83,12 +79,12 @@ impl CloudTransport {
     pub fn new(
         opts: CloudOptions,
         sink: Arc<dyn PredictionSink>,
-        connector: Arc<dyn WebSocketConnector>,
+        transport: Arc<dyn WsTransport>,
     ) -> Self {
         CloudTransport {
             opts,
             sink,
-            connector,
+            transport,
             state: Mutex::new(CloudState::default()),
             clock: Arc::new(RealClock::new()),
         }
@@ -190,7 +186,7 @@ impl CloudTransport {
 
     async fn connect(
         &self,
-    ) -> Result<(Box<dyn WebSocketSink>, Box<dyn WebSocketStream>), ApiError> {
+    ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
         let mut headers = (self.opts.headers)();
         let token =
             lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
@@ -201,10 +197,10 @@ impl CloudTransport {
             .map(|(_, value)| value.clone());
 
         let url = eot_url(&self.opts.base_url);
-        let connect = self.connector.connect(&url, &headers);
+        let connect = self.transport.connect(&url, headers);
         let deadline = self.opts.conn_options.connect_deadline(self.clock.now());
         // On the session clock, not tokio's: the bound a virtual clock can fire and a test can see.
-        let (mut sink, stream) = match lk_agents_abi::before(&*self.clock, deadline, connect).await
+        let (sink, stream) = match lk_agents_abi::before(&*self.clock, deadline, connect).await
         {
             // Every arm is `retryable=False`, as `_connect_ws` sets it: the fallback is the
             // recovery.
@@ -214,7 +210,7 @@ impl CloudTransport {
                     ApiError { phase: Some(TimeoutPhase::Connect), ..ApiError::timeout(message) };
                 return Err(error.with_retryable(false));
             }
-            Ok(Err(e)) => return Err(e),
+            Ok(Err(e)) => return Err(socket_error(e)),
             Ok(Ok(halves)) => halves,
         };
 
@@ -230,14 +226,14 @@ impl CloudTransport {
                 }),
             })),
         };
-        sink.send(session_create.encode_to_vec()).await?;
+        sink.send_binary(session_create.encode_to_vec()).await.map_err(socket_error)?;
 
         self.state.lock().expect("cloud state mutex").session_id = session_id;
         Ok((sink, stream))
     }
 
     async fn run_once(&self) -> Result<(), ApiError> {
-        let (mut ws_sink, mut ws_stream) = self.connect().await?;
+        let (ws_sink, mut ws_stream) = self.connect().await?;
         let (send, mut send_rx) = mpsc::unbounded_channel();
         self.state.lock().expect("cloud state mutex").send = Some(send);
 
@@ -254,7 +250,7 @@ impl CloudTransport {
                     closing.store(true, Ordering::SeqCst);
                 }
                 // A send failure while closing is not an error (`sender_task` swallows it).
-                if ws_sink.send(msg.encode_to_vec()).await.is_err() {
+                if ws_sink.send_binary(msg.encode_to_vec()).await.is_err() {
                     return Ok(());
                 }
             }
@@ -263,22 +259,23 @@ impl CloudTransport {
 
         let receiver = async {
             loop {
-                match ws_stream.recv().await {
-                    Some(Ok(data)) => {
+                match ws_stream.recv().await.map_err(socket_error)? {
+                    WsMessage::Binary(data) => {
                         let msg = proto::ServerMessage::decode(data.as_slice()).map_err(|e| {
                             ApiError::new(format!("malformed turn detector message: {e}"))
                                 .with_retryable(false)
                         })?;
                         self.process_message(msg)?;
                     }
-                    Some(Err(e)) => return Err(e),
-                    None => {
+                    // Text, ping and pong are skipped (tungstenite answers pings).
+                    WsMessage::Text(_) | WsMessage::Other => {}
+                    WsMessage::Closed => {
                         if closing.load(Ordering::SeqCst) {
                             return Ok(());
                         }
                         return Err(ApiError::status(
                             "turn detector connection closed unexpectedly",
-                            // `ws.close_code or -1`: the sink has no close code.
+                            // `ws.close_code or -1`, reported as -1.
                             -1,
                             None,
                             Some(false),
@@ -340,5 +337,52 @@ impl EotTransport for CloudTransport {
     /// cloud->local fallback is the recovery).
     async fn run(&self) -> Result<(), ApiError> {
         self.run_once().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_net::websocket::TungsteniteTransport;
+    use tokio_tungstenite::tungstenite::Error as WsError;
+
+    // Catches: a connect failure arriving as `retryable = true`, delaying the local fallback.
+    #[test]
+    fn every_connect_failure_is_non_retryable() {
+        for err in [
+            TransportError::Timeout,
+            TransportError::Connect("dns".to_owned()),
+            TransportError::Closed,
+            TransportError::Io("reset".to_owned()),
+        ] {
+            assert!(!socket_error(err).retryable);
+        }
+    }
+
+    // Catches: a rejected handshake losing its HTTP status.
+    #[test]
+    fn a_rejected_handshake_keeps_its_status_and_its_body() {
+        let response = tokio_tungstenite::tungstenite::http::Response::builder()
+            .status(401)
+            .body(Some(b"invalid inference grant".to_vec()))
+            .expect("a response");
+        let err = socket_error(lk_agents_net::websocket::classify_tungstenite(WsError::Http(
+            Box::new(response),
+        )));
+        assert_eq!(err.status_code, Some(401));
+        assert!(err.message.contains("invalid inference grant"));
+        assert!(!err.retryable);
+    }
+
+    #[tokio::test]
+    async fn an_unusable_header_fails_the_connection_rather_than_being_skipped() {
+        let error = TungsteniteTransport
+            .connect("ws://localhost", vec![("invalid\nheader".into(), "value".into())])
+            .await
+            .map(|_| ())
+            .map_err(socket_error)
+            .expect_err("invalid header fails before connecting");
+        assert!(error.message.contains("header"), "{}", error.message);
+        assert!(!error.retryable);
     }
 }

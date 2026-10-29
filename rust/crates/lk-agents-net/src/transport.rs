@@ -110,9 +110,10 @@ pub struct HttpRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WsMessage {
     Text(String),
+    Binary(Vec<u8>),
     /// `WSMsgType.{CLOSED, CLOSE, CLOSING}` collapsed into one, as the reference's tuple test does.
     Closed,
-    /// Binary, ping, pong — logged and skipped.
+    /// Ping, pong — skipped.
     Other,
 }
 

@@ -622,7 +622,7 @@ fn handle_incoming(
                 Err(closed_unexpectedly(close_code, "", ""))
             };
         }
-        Ok(WsMessage::Other) => return Ok(Incoming::Continue),
+        Ok(WsMessage::Binary(_) | WsMessage::Other) => return Ok(Incoming::Continue),
         Err(e) => {
             return Err(StreamError {
                 request: None,

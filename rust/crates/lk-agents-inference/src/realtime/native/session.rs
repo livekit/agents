@@ -723,7 +723,7 @@ impl Pump {
                         continue;
                     }
                     Ok(WsMessage::Closed) => return Err(self.lost()),
-                    Ok(WsMessage::Other) => continue,
+                    Ok(WsMessage::Binary(_) | WsMessage::Other) => continue,
                     Err(TransportError::Timeout) => continue,
                     Err(_) => return Err(self.lost()),
                 },

@@ -67,8 +67,7 @@ impl WsTransport for TungsteniteTransport {
     }
 }
 
-/// A rejected handshake's HTTP status (401 not retryable, 503 retryable). Shared with
-/// `eot::connector`.
+/// A rejected handshake's HTTP status (401 not retryable, 503 retryable).
 pub fn classify_tungstenite(err: tokio_tungstenite::tungstenite::Error) -> TransportError {
     use tokio_tungstenite::tungstenite::Error;
     match err {
@@ -146,13 +145,13 @@ impl WsReceiver for TungsteniteReceiver {
         use tokio_tungstenite::tungstenite::Message;
         Ok(match self.source.next().await {
             Some(Ok(Message::Text(text))) => WsMessage::Text(text.to_string()),
+            Some(Ok(Message::Binary(data))) => WsMessage::Binary(data.to_vec()),
             Some(Ok(Message::Close(frame))) => {
                 self.close_code = frame.map(|f| u16::from(f.code));
                 WsMessage::Closed
             }
             None => WsMessage::Closed,
-            // Ping/pong are answered by tungstenite; anything else is `Other` for the caller to
-            // log.
+            // Ping/pong are answered by tungstenite.
             Some(Ok(_)) => WsMessage::Other,
             Some(Err(err)) => return Err(classify_tungstenite(err)),
         })

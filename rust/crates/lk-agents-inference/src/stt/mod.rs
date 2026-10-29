@@ -1129,7 +1129,7 @@ impl Pump {
                         .unwrap_or(Ok(()));
                 }
                 // "unexpected LiveKit Inference STT message type" -- logged and skipped.
-                WsMessage::Other => continue,
+                WsMessage::Binary(_) | WsMessage::Other => continue,
                 WsMessage::Text(text) => {
                     let incoming = wire::decode(&text).ok_or_else(|| {
                         ApiError::new("Malformed STT gateway message").with_retryable(false)

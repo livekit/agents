@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind};
+use lk_agents_abi::errors::ApiErrorKind;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdError, ThresholdOptions, TurnDetectorModel,
@@ -14,10 +14,8 @@ use lk_agents_abi::tokenize::language::{
 use lk_agents_abi::{ApiConnectOptions, EotInferenceMetrics};
 use prost::Message as _;
 
-use crate::eot::cloud::{
-    CloudOptions, CloudTransport, HEADER_SESSION_ID, WebSocketConnector, WebSocketSink,
-    WebSocketStream,
-};
+use crate::eot::cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID};
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use crate::eot::local::{AudioRingBuffer, LocalEotModel, LocalTransport};
 use crate::eot::proto;
 use crate::eot::session::{
@@ -359,26 +357,39 @@ struct FakeSink {
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
-impl WebSocketSink for FakeSink {
-    fn send(&mut self, data: Vec<u8>) -> lk_agents_abi::BoxFuture<'_, Result<(), ApiError>> {
-        Box::pin(async move {
-            self.sent.lock().unwrap().push(data);
-            Ok(())
-        })
+#[async_trait]
+impl WsSender for FakeSink {
+    async fn send_text(&self, _text: String) -> Result<(), TransportError> {
+        unreachable!("the EOT protocol is binary")
     }
+
+    async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError> {
+        self.sent.lock().unwrap().push(data);
+        Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        false
+    }
+
+    async fn close(&self) {}
 }
 
 /// One connection's inbound frames, and the headers it was opened with.
-type Incoming = tokio::sync::mpsc::UnboundedReceiver<Result<Vec<u8>, ApiError>>;
+type Incoming = tokio::sync::mpsc::UnboundedReceiver<Result<Vec<u8>, TransportError>>;
 type Headers = Arc<Mutex<Vec<Vec<(String, String)>>>>;
 
 struct FakeStream {
     incoming: Incoming,
 }
 
-impl WebSocketStream for FakeStream {
-    fn recv(&mut self) -> lk_agents_abi::BoxFuture<'_, Option<Result<Vec<u8>, ApiError>>> {
-        Box::pin(async move { self.incoming.recv().await })
+#[async_trait]
+impl WsReceiver for FakeStream {
+    async fn recv(&mut self) -> Result<WsMessage, TransportError> {
+        match self.incoming.recv().await {
+            Some(frame) => frame.map(WsMessage::Binary),
+            None => Ok(WsMessage::Closed),
+        }
     }
 }
 
@@ -392,19 +403,19 @@ struct FakeConnector {
 }
 
 #[async_trait]
-impl WebSocketConnector for FakeConnector {
+impl WsTransport for FakeConnector {
     async fn connect(
         &self,
         url: &str,
-        headers: &[(String, String)],
-    ) -> Result<(Box<dyn WebSocketSink>, Box<dyn WebSocketStream>), ApiError> {
+        headers: Vec<(String, String)>,
+    ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
         self.urls.lock().unwrap().push(url.to_owned());
-        self.headers.lock().unwrap().push(headers.to_vec());
+        self.headers.lock().unwrap().push(headers);
         if self.hang {
             std::future::pending::<()>().await;
         }
         let incoming = self.incoming.lock().unwrap().take().expect("one connection per test");
-        Ok((Box::new(FakeSink { sent: self.sent.clone() }), Box::new(FakeStream { incoming })))
+        Ok((Arc::new(FakeSink { sent: self.sent.clone() }), Box::new(FakeStream { incoming })))
     }
 }
 
@@ -413,7 +424,7 @@ struct CloudFixture {
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
     urls: Arc<Mutex<Vec<String>>>,
     headers: Headers,
-    server: tokio::sync::mpsc::UnboundedSender<Result<Vec<u8>, ApiError>>,
+    server: tokio::sync::mpsc::UnboundedSender<Result<Vec<u8>, TransportError>>,
 }
 
 fn cloud_fixture(sink: Arc<RecordingSink>) -> CloudFixture {

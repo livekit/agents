@@ -1,13 +1,11 @@
 //! Audio end-of-turn detection, `inference/eot/*`: caller-minted request ids, so stale answers are
 //! recognised.
 //!
-//! `session` holds every decision; `transport`, `cloud` (gateway protocol over a
-//! [`WebSocketConnector`]), `connector` (the real socket) and `local` (the mini model over a
-//! [`LocalEotModel`]) carry them out, mounted by `shell`. Connection headers come from the host
+//! `session` holds every decision; `transport`, `cloud` (gateway protocol over the shared
+//! WebSocket transport) and `local` (the mini model over a [`LocalEotModel`]) carry them out, mounted by `shell`. Connection headers come from the host
 //! through [`CloudOptions::headers`].
 
 mod cloud;
-mod connector;
 mod detector;
 mod eot;
 mod local;
@@ -25,11 +23,7 @@ use livekit_protocol::agent as proto;
 #[cfg(test)]
 mod tests;
 
-pub use cloud::{
-    CloudOptions, CloudTransport, HEADER_SESSION_ID, HeaderProvider, WebSocketConnector,
-    WebSocketSink, WebSocketStream,
-};
-pub use connector::TungsteniteEotConnector;
+pub use cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID, HeaderProvider};
 pub use detector::{DetectorStream, NativeEot};
 pub use eot::{
     CancelReason, DEFAULT_PREDICTION_TIMEOUT, DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning,
