@@ -1,4 +1,4 @@
-use crate::config::{DEFAULT_LOAD_THRESHOLD_DEV, DEFAULT_LOAD_THRESHOLD_PROD, EnvOption};
+use crate::config::{DEFAULT_LOAD_THRESHOLD_DEV, DEFAULT_LOAD_THRESHOLD_PROD};
 use crate::load::*;
 
 fn inputs() -> LoadInputs {
