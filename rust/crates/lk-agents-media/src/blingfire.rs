@@ -1,4 +1,4 @@
-//! Sentence and word boundaries from `microsoft/BlingFire`, the same pinned upstream and C++
+//! Sentence boundaries from `microsoft/BlingFire`, the same pinned upstream and C++
 //! wrapper as the Python wheel and Node addon, so boundaries (where the TTS breathes) agree.
 //! Offsets are codepoints, not bytes; the empty string is guarded before the C call.
 
@@ -10,8 +10,6 @@ struct RawResult {
 }
 
 unsafe extern "C" {
-    fn lk_bf_tokenize_plain(input: *const c_char, mode: c_int) -> *mut c_char;
-    fn lk_bf_free_string(p: *mut c_char);
     fn lk_bf_tokenize_with_offsets(
         input: *const c_char,
         mode: c_int,
@@ -60,31 +58,15 @@ pub enum Error {
 }
 
 const MODE_SENTENCES: c_int = 0;
-const MODE_WORDS: c_int = 1;
 
-fn tokenize_plain(text: &str, mode: c_int) -> Result<String, Error> {
-    let input = CString::new(text).map_err(|_| Error::InteriorNul)?;
-
-    // SAFETY: `input` outlives the call; the returned pointer is either null or a malloc'd
-    // NUL-terminated string that we free below.
-    unsafe {
-        let raw = lk_bf_tokenize_plain(input.as_ptr(), mode);
-        if raw.is_null() {
-            return Err(Error::Failed);
-        }
-        let out = CStr::from_ptr(raw).to_string_lossy().into_owned();
-        lk_bf_free_string(raw);
-        Ok(out)
-    }
-}
-
-fn tokenize_with_offsets(text: &str, mode: c_int, offsets: Offsets) -> Result<Tokenized, Error> {
+/// Offsets are codepoints for Python and UTF-16 units for Node.
+pub fn text_to_sentences_with_offsets(text: &str, offsets: Offsets) -> Result<Tokenized, Error> {
     let input = CString::new(text).map_err(|_| Error::InteriorNul)?;
 
     // SAFETY: the handle is owned by C++ for the duration of this block and freed before
     // returning; every accessor is called with a non-null handle and an in-range index.
     unsafe {
-        let handle = lk_bf_tokenize_with_offsets(input.as_ptr(), mode, offsets.as_int());
+        let handle = lk_bf_tokenize_with_offsets(input.as_ptr(), MODE_SENTENCES, offsets.as_int());
         if handle.is_null() {
             return Err(Error::Failed);
         }
@@ -107,22 +89,6 @@ fn tokenize_with_offsets(text: &str, mode: c_int, offsets: Offsets) -> Result<To
         lk_bf_result_free(handle);
         Ok(Tokenized { text, spans })
     }
-}
-
-pub fn text_to_sentences(text: &str) -> Result<String, Error> {
-    tokenize_plain(text, MODE_SENTENCES)
-}
-
-pub fn text_to_words(text: &str) -> Result<String, Error> {
-    tokenize_plain(text, MODE_WORDS)
-}
-
-pub fn text_to_sentences_with_offsets(text: &str, offsets: Offsets) -> Result<Tokenized, Error> {
-    tokenize_with_offsets(text, MODE_SENTENCES, offsets)
-}
-
-pub fn text_to_words_with_offsets(text: &str, offsets: Offsets) -> Result<Tokenized, Error> {
-    tokenize_with_offsets(text, MODE_WORDS, offsets)
 }
 
 // ==================================================================================================
@@ -347,7 +313,10 @@ mod tests {
     // the answer is an error, not an abort.
     #[test]
     fn an_interior_nul_is_an_error_and_not_a_panic() {
-        assert_eq!(text_to_sentences("a\0b").unwrap_err(), Error::InteriorNul);
+        assert_eq!(
+            text_to_sentences_with_offsets("a\0b", Offsets::Codepoints).unwrap_err(),
+            Error::InteriorNul
+        );
         assert_eq!(split_sentences("a\0b", 1, false).unwrap_err(), Error::InteriorNul);
     }
 
