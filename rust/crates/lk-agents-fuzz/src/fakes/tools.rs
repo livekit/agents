@@ -59,6 +59,9 @@ pub struct FakeTools {
     /// The calls the driver cancelled: their task is cancelled, so a body still running cannot
     /// detach afterwards (seed 5818).
     cancelled: Mutex<std::collections::BTreeSet<String>>,
+    /// The bodies still running, by call id: a cancel ends one at once, as the host cancels the
+    /// callback's task (`AgentHost.cancel`).
+    running: Mutex<BTreeMap<String, oneshot::Sender<()>>>,
 }
 
 impl FakeTools {
@@ -72,6 +75,7 @@ impl FakeTools {
             refs,
             detached: Mutex::default(),
             cancelled: Mutex::default(),
+            running: Mutex::default(),
         })
     }
 }
@@ -271,6 +275,9 @@ impl AgentHost for FakeTools {
     fn cancel(&self, invocation: &Invocation) {
         let call_id = call_of(invocation).call_id.clone();
         self.cancelled.lock().unwrap().insert(call_id.clone());
+        if let Some(cancel) = self.running.lock().unwrap().remove(&call_id) {
+            let _ = cancel.send(());
+        }
         if let Some(slot) = self.detached.lock().unwrap().remove(&call_id) {
             self.registry.mark_closed(slot);
         }
@@ -278,6 +285,8 @@ impl AgentHost for FakeTools {
 }
 
 impl FakeTools {
+    /// The body's outcome, or `Cancelled` once the driver cancels it: the callback's task is
+    /// cancelled wherever it waits.
     async fn answer(&self, call: &FunctionCall, handle: &SpeechHandle) -> ToolOutcome {
         let speech = handle.id().0;
         let (sender, receiver) = oneshot::channel();
@@ -286,6 +295,27 @@ impl FakeTools {
             Detail::Tool { call_id: call.call_id.clone(), name: call.name.clone(), speech },
             Control::Tool(sender),
         );
+        let (cancel, cancelled) = oneshot::channel();
+        self.running.lock().unwrap().insert(call.call_id.clone(), cancel);
+        let outcome = tokio::select! {
+            biased;
+            Ok(()) = cancelled => None,
+            outcome = self.body(call, handle, slot, receiver) => Some(outcome),
+        };
+        self.running.lock().unwrap().remove(&call.call_id);
+        outcome.unwrap_or_else(|| {
+            self.registry.mark_closed(slot);
+            ToolOutcome::Cancelled
+        })
+    }
+
+    async fn body(
+        &self,
+        call: &FunctionCall,
+        handle: &SpeechHandle,
+        slot: Slot,
+        receiver: oneshot::Receiver<Body>,
+    ) -> ToolOutcome {
         match receiver.await {
             Ok(Body::Answer(answer)) => {
                 if let ToolOutcome::Update { .. } = answer {
