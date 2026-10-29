@@ -243,75 +243,88 @@ impl Pump<'_> {
         );
         let mut playback =
             SynthesisPlayout { tx: tx.clone(), rx, gate: &mut *self.gate, binding: &mut binding };
-        let heard = match (opened.route, &mut self.voice, audio_out.as_deref()) {
-            (SegmentRoute::Synthesis, Voice::Tts(tts), Some(_)) => {
-                let tts = Arc::clone(tts);
-                let rx = &mut self.rx;
-                let synthesized = perform_tts_inference(
-                    shared,
-                    self.handle,
-                    self.acc,
-                    tts.as_ref(),
-                    *idx,
-                    first,
-                    rx,
-                    deltas,
-                    aligned.as_mut(),
-                    &mut playback,
-                )
-                .await;
-                match synthesized {
-                    Ok(heard) => {
-                        *idx += 1;
-                        heard
-                    }
-                    Err(lost) => {
-                        let mut state = SynthesisLoss::default();
-                        let mut effects: std::collections::VecDeque<_> = state
-                            .handle(LossEvent::Failed {
-                                lost,
-                                aligned: aligned.as_ref().map(|a| a.state.clone()),
-                            })
-                            .into();
-                        loop {
-                            match effects
-                                .pop_front()
-                                .expect("synthesis loss settles after draining")
-                            {
-                                LossEffect::Fail(error) => return Err(error),
-                                LossEffect::ReleaseVoice => self.voice = Voice::Silent,
-                                LossEffect::CutShort => self.acc.cut_short(),
-                                LossEffect::Capture(text) => capture(text_out, &text).await,
-                                LossEffect::Drain { opening, forward_text } => {
-                                    let text = if forward_text { text_out } else { None };
-                                    let drained = drain_segment_text(rx, opening, text).await;
-                                    effects.extend(state.handle(LossEvent::Drained(drained)));
+        let segment = async {
+            Ok(match (opened.route, &mut self.voice, audio_out.as_deref()) {
+                (SegmentRoute::Synthesis, Voice::Tts(tts), Some(_)) => {
+                    let tts = Arc::clone(tts);
+                    let rx = &mut self.rx;
+                    let synthesized = perform_tts_inference(
+                        shared,
+                        self.handle,
+                        self.acc,
+                        tts.as_ref(),
+                        *idx,
+                        first,
+                        rx,
+                        deltas,
+                        aligned.as_mut(),
+                        &mut playback,
+                    )
+                    .await;
+                    match synthesized {
+                        Ok(heard) => {
+                            *idx += 1;
+                            heard
+                        }
+                        Err(lost) => {
+                            let mut state = SynthesisLoss::default();
+                            let mut effects: std::collections::VecDeque<_> = state
+                                .handle(LossEvent::Failed {
+                                    lost,
+                                    aligned: aligned.as_ref().map(|a| a.state.clone()),
+                                })
+                                .into();
+                            loop {
+                                match effects
+                                    .pop_front()
+                                    .expect("synthesis loss settles after draining")
+                                {
+                                    LossEffect::Fail(error) => return Err(error),
+                                    LossEffect::ReleaseVoice => self.voice = Voice::Silent,
+                                    LossEffect::CutShort => self.acc.cut_short(),
+                                    LossEffect::Capture(text) => capture(text_out, &text).await,
+                                    LossEffect::Drain { opening, forward_text } => {
+                                        let text = if forward_text { text_out } else { None };
+                                        let drained = drain_segment_text(rx, opening, text).await;
+                                        effects.extend(state.handle(LossEvent::Drained(drained)));
+                                    }
+                                    LossEffect::Heard(heard) => break heard,
                                 }
-                                LossEffect::Heard(heard) => break heard,
                             }
                         }
                     }
                 }
-            }
-            (SegmentRoute::CallerFrames, Voice::Frames(frames), Some(out)) => {
-                let words = drain_segment_text(&mut self.rx, first, text_out).await;
-                let mut segment = Frames { shared, acc: self.acc, rx: frames };
-                let mut heard =
-                    perform_audio_forwarding(shared, self.handle, Some(out), &mut segment)
-                        .await
-                        .map_err(|failed| failed.error)?;
-                heard.text = words.text;
-                heard
-            }
-            (SegmentRoute::Text, _, _) => {
-                silent(drain_segment_text(&mut self.rx, first, text_out).await.text, true)
-            }
-            _ => unreachable!("segment plan matches its bound ports"),
-        };
-        // Backstop flush for a segment whose loop broke before its `End`. Once-only.
+                (SegmentRoute::CallerFrames, Voice::Frames(frames), Some(out)) => {
+                    let words = drain_segment_text(&mut self.rx, first, text_out).await;
+                    let mut segment = Frames { shared, acc: self.acc, rx: frames };
+                    let mut heard =
+                        perform_audio_forwarding(shared, self.handle, Some(out), &mut segment)
+                            .await
+                            .map_err(|failed| failed.error)?;
+                    heard.text = words.text;
+                    heard
+                }
+                (SegmentRoute::Text, _, _) => {
+                    silent(drain_segment_text(&mut self.rx, first, text_out).await.text, true)
+                }
+                _ => unreachable!("segment plan matches its bound ports"),
+            })
+        }
+        .await;
+        // Backstop flush for a segment whose loop broke before its `End`, or failed: its words
+        // must not stay open in a synchroniser. Once-only.
         if let Some(out) = text_out {
             out.flush();
         }
+        let heard = match segment {
+            Ok(heard) => heard,
+            Err(error) => {
+                if synthesis {
+                    let _ = playback.flush_text(shared, self.handle).await;
+                }
+                return Err(error);
+            }
+        };
         // Both legs end every segment, one whose words went down the transcript leg with no
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included. The activated binding decides it: activation may have re-targeted it.
