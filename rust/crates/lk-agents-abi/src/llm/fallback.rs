@@ -78,6 +78,7 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
         env: &Self::Env,
         ttss: Vec<std::sync::Arc<dyn crate::Tts>>,
         #[host(kw, default = 2)] max_retry_per_tts: u32,
+        #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = None)] sample_rate: Option<u32>,
         #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
     ) -> Result<Self, crate::llm::inference::InvalidPayload>;

@@ -133,6 +133,7 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
         env: &Self::Env,
         models: Vec<HostRef>,
         #[host(kw, default = 10.0)] cooldown: f64,
+        #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = true)] regenerate_on_swap: bool,
         #[host(default = None)] on_availability: Option<HostRef>,
     ) -> Result<Self, RealtimeConfigurationError>;

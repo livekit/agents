@@ -113,6 +113,7 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
             ChainModel::Native(Arc::new(Model(Arc::clone(&backup)))),
         ],
         10.0,
+        None,
         true,
         Arc::new(Record(Arc::clone(&changes))),
         Arc::new(lk_agents_net::clock::RealClock::default()),
@@ -211,6 +212,7 @@ async fn cancellation_case(failed_open: bool) {
     let model = RealtimeFallbackModel::new(
         vec![ChainModel::Native(Arc::new(Model(primary.clone()))), ChainModel::Native(backup)],
         10.0,
+        None,
         false,
         changes.clone(),
         Arc::new(lk_agents_net::clock::RealClock::default()),
@@ -286,6 +288,7 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
             ChainModel::Native(Arc::new(Model(scripted(vec![])))),
         ],
         10.0,
+        None,
         false,
         changes.clone(),
         Arc::new(lk_agents_net::clock::RealClock::default()),
@@ -317,6 +320,7 @@ async fn repeating_the_same_backend_does_not_create_a_second_fallback_identity()
     let model = RealtimeFallbackModel::new(
         vec![ChainModel::Native(child.clone()), ChainModel::Native(child)],
         10.0,
+        None,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
         Arc::new(lk_agents_net::clock::RealClock::default()),
@@ -361,6 +365,7 @@ async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_child
     let model = RealtimeFallbackModel::new(
         vec![ChainModel::Native(Arc::new(Model(primary))), ChainModel::Native(backup.clone())],
         0.0,
+        None,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
         Arc::new(lk_agents_net::clock::RealClock::default()),
@@ -383,6 +388,7 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
             ChainModel::Native(Arc::new(Model(backup.clone()))),
         ],
         10.0,
+        None,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
         Arc::new(lk_agents_net::clock::RealClock::default()),
@@ -445,4 +451,44 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
         matches!(rejected, Some(Event::GenerateReplyFailed(failed)) if failed.req_id == "oversized" && failed.error.code.as_deref() == Some("realtime_fallback_backlog_exceeded"))
     );
     session.aclose().await;
+}
+
+struct HangingOpen;
+impl Realtime for HangingOpen {
+    fn label(&self) -> String {
+        "hanging-open".into()
+    }
+    fn capabilities(&self) -> RealtimeCapabilities {
+        RealtimeCapabilities { audio_output: true, ..Default::default() }
+    }
+    fn session(
+        &self,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn attempt_timeout_skips_a_model_whose_open_hangs() {
+    let model = RealtimeFallbackModel::new(
+        vec![
+            ChainModel::Native(Arc::new(Model(scripted(vec![fatal()])))),
+            ChainModel::Native(Arc::new(HangingOpen)),
+            ChainModel::Native(Arc::new(Model(scripted(vec![])))),
+        ],
+        10.0,
+        Some(0.05),
+        false,
+        Arc::new(crate::fallback::IgnoreEvents),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
+    )
+    .unwrap();
+    let session = model.session(false).await.unwrap();
+    assert!(matches!(session.next_event().await, Some(Event::Error(_))));
+    let swapped = tokio::time::timeout(std::time::Duration::from_secs(5), session.next_event())
+        .await
+        .expect("a hanging open held the swap past its attempt_timeout");
+    assert!(matches!(swapped, Some(Event::SessionSwapped { .. })), "{swapped:?}");
+    assert_eq!(model.active_index(), 2);
 }

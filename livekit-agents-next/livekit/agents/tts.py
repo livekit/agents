@@ -172,6 +172,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         *,
         max_retry_per_tts: int = 2,
         sample_rate: int | None = None,
+        attempt_timeout: float | None = None,
     ) -> None:
         """
         Args:
@@ -179,6 +180,8 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             max_retry_per_tts: Retries of each before moving to the next.
             sample_rate: The output rate; the highest of the TTS by default, the others
                 resampled.
+            attempt_timeout: Caps each phase of one attempt; ``None`` keeps the caller's
+                ``conn_options`` limits.
         """
         if not tts:
             raise ValueError("at least one TTS instance must be provided.")
@@ -186,6 +189,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             raise ValueError("all TTS must have the same number of channels")
         self._tts_instances = tts
         self._max_retry_per_tts = max_retry_per_tts
+        self._attempt_timeout = attempt_timeout
         sample_rate = sample_rate or max(t.sample_rate for t in tts)
         super().__init__(
             # the chain's own merge, read before any chain is built
@@ -205,6 +209,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             lambda: _core.FallbackTts(
                 [_bindings.core_leg(t) for t in self._tts_instances],
                 max_retry_per_tts=self._max_retry_per_tts,
+                attempt_timeout=self._attempt_timeout,
                 sample_rate=self.sample_rate,
                 on_availability=self,
             ),

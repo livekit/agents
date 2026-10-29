@@ -16,7 +16,7 @@ use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainPolicy {
     pub max_retry_per_backend: u32,
-    /// Caps each phase of an attempt; `None` keeps the caller's limits, as TTS does (`tts/fallback_adapter.py:193`).
+    /// Caps each phase of an attempt; `None` keeps the caller's limits (TTS's default).
     pub attempt_timeout: Option<f64>,
     /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
     pub retry_interval: Option<f64>,

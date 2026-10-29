@@ -40,6 +40,7 @@ class RealtimeModelFallbackAdapter(
         *,
         cooldown: float = 10.0,
         regenerate_on_swap: bool = True,
+        attempt_timeout: float | None = None,
     ) -> None:
         """Fall back between realtime models while preserving chat context.
 
@@ -48,6 +49,8 @@ class RealtimeModelFallbackAdapter(
                 the ``audio_output`` and ``turn_detection`` capabilities.
             cooldown: Seconds a failed model stays unavailable before it can be preferred again.
             regenerate_on_swap: Re-issue the reply on the new session if one was in progress.
+            attempt_timeout: Seconds one model's session may take to open before the next is
+                tried; ``None`` waits for the model's own connection limits.
 
         Raises:
             ValueError: If no models are given or their hard capabilities disagree.
@@ -60,6 +63,7 @@ class RealtimeModelFallbackAdapter(
         self._models = models
         self._cooldown = cooldown
         self._regenerate_on_swap = regenerate_on_swap
+        self._attempt_timeout = attempt_timeout
         self._native: _core.RealtimeFallbackModel | None = None
 
     @property
@@ -86,6 +90,7 @@ class RealtimeModelFallbackAdapter(
         self._native = _core.RealtimeFallbackModel(
             children,
             cooldown=self._cooldown,
+            attempt_timeout=self._attempt_timeout,
             regenerate_on_swap=self._regenerate_on_swap,
             on_availability=self,
         )

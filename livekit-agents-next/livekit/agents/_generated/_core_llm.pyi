@@ -141,6 +141,7 @@ class FallbackTts:
         ttss: Sequence[TTS[Any]],
         *,
         max_retry_per_tts: int = 2,
+        attempt_timeout: float | None = None,
         sample_rate: int | None = None,
         on_availability: FallbackListener | None = None,
     ) -> None: ...
@@ -369,6 +370,7 @@ class RealtimeFallbackModel:
         models: Sequence[object],
         *,
         cooldown: float = 10.0,
+        attempt_timeout: float | None = None,
         regenerate_on_swap: bool = True,
         on_availability: object | None = None,
     ) -> None: ...

@@ -345,6 +345,10 @@ fn _extract_fallback_tts_new_max_retry_per_tts(obj: &Bound<'_, PyAny>) -> PyResu
     ::lk_agents_abi::python::number_from_py::<u32>(&obj, "max_retry_per_tts")
 }
 
+fn _extract_fallback_tts_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some) }
+}
+
 fn _extract_fallback_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
     if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some) }
 }
@@ -356,13 +360,13 @@ pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
 #[pymethods]
 impl FallbackTts {
     #[new]
-    #[pyo3(signature = (ttss, *, max_retry_per_tts = 2, sample_rate = None, on_availability = None))]
-    fn new(ttss: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)] max_retry_per_tts: u32, #[pyo3(from_py_with = _extract_fallback_tts_new_sample_rate)] sample_rate: ::std::option::Option<u32>, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackTts> {
+    #[pyo3(signature = (ttss, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
+    fn new(ttss: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)] max_retry_per_tts: u32, #[pyo3(from_py_with = _extract_fallback_tts_new_attempt_timeout)] attempt_timeout: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_fallback_tts_new_sample_rate)] sample_rate: ::std::option::Option<u32>, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackTts> {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let ttss = ttss.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::tts::TtsProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
         let on_availability = on_availability.map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v)).transpose()?;
-        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, ttss, max_retry_per_tts, sample_rate, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, ttss, max_retry_per_tts, attempt_timeout, sample_rate, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(FallbackTts(::std::sync::Arc::new(out)))
     }
 
@@ -999,6 +1003,10 @@ fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyRe
     ::lk_agents_abi::python::number_from_py::<f64>(&obj, "cooldown")
 }
 
+fn _extract_realtime_fallback_model_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some) }
+}
+
 /// The generated facade holds native resources; host provider objects use the shared bridge.
 #[pyclass(frozen, name = "RealtimeFallbackModel", module = "livekit.agents._core")]
 pub struct RealtimeFallbackModel(pub(crate) ::std::sync::Arc<RealtimeFallbackModelImpl>);
@@ -1006,11 +1014,11 @@ pub struct RealtimeFallbackModel(pub(crate) ::std::sync::Arc<RealtimeFallbackMod
 #[pymethods]
 impl RealtimeFallbackModel {
     #[new]
-    #[pyo3(signature = (models, *, cooldown = 10.0, regenerate_on_swap = true, on_availability = None))]
-    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
+    #[pyo3(signature = (models, *, cooldown = 10.0, attempt_timeout = None, regenerate_on_swap = true, on_availability = None))]
+    fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_attempt_timeout)] attempt_timeout: ::std::option::Option<f64>, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(&env, models, cooldown, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
     }
 

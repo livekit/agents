@@ -29,6 +29,7 @@ pub struct FallbackSession {
     pub(super) children: Vec<ChainModel>,
     pub(super) priority: Vec<ResourceId>,
     pub(super) cooldown: std::time::Duration,
+    pub(super) attempt_timeout: Option<std::time::Duration>,
     pub(super) caps: RealtimeCapabilities,
     pub(super) regenerate_on_swap: bool,
     pub(super) observer: Arc<dyn ChainObserver>,
@@ -134,7 +135,12 @@ impl FallbackSession {
                         continue;
                     }
                     let event = match self.children[index]
-                        .open(self.turn_detection_disabled, self.anchor)
+                        .open(
+                            self.turn_detection_disabled,
+                            self.anchor,
+                            &*self.clock,
+                            self.attempt_timeout,
+                        )
                         .await
                     {
                         Ok(session) => {

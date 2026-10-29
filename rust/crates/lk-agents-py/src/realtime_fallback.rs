@@ -22,6 +22,7 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
         env: &ProcessEnv,
         models: Vec<HostRef>,
         cooldown: f64,
+        attempt_timeout: Option<f64>,
         regenerate_on_swap: bool,
         on_availability: Option<HostRef>,
     ) -> Result<Self, RealtimeConfigurationError> {
@@ -48,7 +49,14 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
             Ok((children, observer))
         })
         .map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))?;
-        RealtimeFallbackModel::new(children, cooldown, regenerate_on_swap, observer, env.clock.clone())
+        RealtimeFallbackModel::new(
+            children,
+            cooldown,
+            attempt_timeout,
+            regenerate_on_swap,
+            observer,
+            env.clock.clone(),
+        )
         .map(RealtimeFallback)
         .map_err(RealtimeConfigurationError::Invalid)
     }

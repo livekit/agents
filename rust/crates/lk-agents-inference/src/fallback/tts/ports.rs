@@ -21,12 +21,16 @@ impl port::FallbackTts for FallbackTts {
         env: &ProcessEnv,
         ttss: Vec<Arc<dyn Tts>>,
         max_retry_per_tts: u32,
+        attempt_timeout: Option<f64>,
         sample_rate: Option<u32>,
         on_availability: Option<Arc<dyn ChainObserver>>,
     ) -> Result<Self, InvalidPayload> {
         // `sample_rate = None` takes the maximum of the entries' rates and upsamples the rest.
-        let policy =
-            ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
+        let policy = ChainPolicy {
+            max_retry_per_backend: max_retry_per_tts,
+            attempt_timeout,
+            ..ChainPolicy::tts_defaults()
+        };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         let spawner = (env.spawner)().map_err(InvalidPayload)?;
         FallbackTts::new(

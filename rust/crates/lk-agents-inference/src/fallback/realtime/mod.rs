@@ -19,8 +19,9 @@ use session::SessionState;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
 use lk_agents_abi::llm::fallback::AvailabilityChanged;
 use lk_agents_abi::llm::realtime::{
     Event, GenerationDone, GenerationStatus, HostRealtime, MessageDone, MessageModalities,
@@ -65,19 +66,32 @@ impl ChainModel {
         }
     }
 
+    /// A session on this model; an open that outlasts `attempt_timeout` fails as a connect
+    /// timeout.
     async fn open(
         &self,
         turn_detection_disabled: bool,
         anchor: WallAnchor,
+        clock: &dyn lk_agents_abi::Clock,
+        attempt_timeout: Option<Duration>,
     ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
-        match self {
-            ChainModel::Native(m) => m.session(turn_detection_disabled).await,
-            // Given its anchor and spawner, it needs no environment.
-            ChainModel::Host(h, spawner) => {
-                <HostRealtimeModel>::new(Arc::clone(h), anchor, Arc::clone(spawner))
-                    .session(turn_detection_disabled)
-                    .await
+        let open = async {
+            match self {
+                ChainModel::Native(m) => m.session(turn_detection_disabled).await,
+                // Given its anchor and spawner, it needs no environment.
+                ChainModel::Host(h, spawner) => {
+                    <HostRealtimeModel>::new(Arc::clone(h), anchor, Arc::clone(spawner))
+                        .session(turn_detection_disabled)
+                        .await
+                }
             }
+        };
+        let Some(limit) = attempt_timeout else { return open.await };
+        let deadline = clock.now().saturating_add(limit);
+        tokio::select! {
+            biased;
+            opened = open => opened,
+            () = clock.wait_until(deadline) => Err(ApiError::timed_out(TimeoutPhase::Connect).into()),
         }
     }
 }
@@ -90,6 +104,8 @@ pub struct RealtimeFallbackModel {
     children: Vec<ChainModel>,
     caps: RealtimeCapabilities,
     cooldown: f64,
+    /// Caps each model's session open.
+    attempt_timeout: Option<Duration>,
     regenerate_on_swap: bool,
     observer: Arc<dyn ChainObserver>,
     anchor: WallAnchor,
@@ -103,6 +119,7 @@ impl RealtimeFallbackModel {
     pub fn new(
         children: Vec<ChainModel>,
         cooldown: f64,
+        attempt_timeout: Option<f64>,
         regenerate_on_swap: bool,
         observer: Arc<dyn ChainObserver>,
         clock: Arc<dyn lk_agents_abi::Clock>,
@@ -110,12 +127,14 @@ impl RealtimeFallbackModel {
         if children.is_empty() {
             return Err("at least one RealtimeModel instance must be provided.".to_owned());
         }
-        if std::time::Duration::try_from_secs_f64(cooldown).is_err() {
-            return Err(
-                "cooldown must be a finite, nonnegative duration within the supported range"
-                    .to_owned(),
-            );
-        }
+        let duration = |name: &str, seconds: f64| {
+            Duration::try_from_secs_f64(seconds).map_err(|_| {
+                format!("{name} must be a finite, nonnegative duration within the supported range")
+            })
+        };
+        duration("cooldown", cooldown)?;
+        let attempt_timeout =
+            attempt_timeout.map(|seconds| duration("attempt_timeout", seconds)).transpose()?;
         let caps =
             merge_capabilities(&children.iter().map(ChainModel::capabilities).collect::<Vec<_>>())
                 .map_err(|e| e.to_string())?;
@@ -123,6 +142,7 @@ impl RealtimeFallbackModel {
             children,
             caps,
             cooldown,
+            attempt_timeout,
             regenerate_on_swap,
             observer,
             anchor: WallAnchor::of(&*clock),
@@ -167,13 +187,16 @@ impl Realtime for RealtimeFallbackModel {
         turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
-            let first = self.children[0].open(turn_detection_disabled, self.anchor).await?;
+            let first = self.children[0]
+                .open(turn_detection_disabled, self.anchor, &*self.clock, self.attempt_timeout)
+                .await?;
             let (restart_tx, restart_rx) = tokio::sync::watch::channel(false);
             self.active.store(0, std::sync::atomic::Ordering::Relaxed);
             let session = Arc::new(FallbackSession {
                 children: self.children.clone(),
                 priority: self.children.iter().map(ChainModel::resource_id).collect(),
-                cooldown: std::time::Duration::from_secs_f64(self.cooldown),
+                cooldown: Duration::from_secs_f64(self.cooldown),
+                attempt_timeout: self.attempt_timeout,
                 caps: self.caps,
                 regenerate_on_swap: self.regenerate_on_swap,
                 observer: Arc::clone(&self.observer),
