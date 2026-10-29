@@ -1,0 +1,7 @@
+{
+  "include": ["src", "tests"],
+  "exclude": ["tests/probe_sdk_cleanup.py"],
+  "extraPaths": ["src"],
+  "pythonVersion": "3.15",
+  "typeCheckingMode": "strict"
+}

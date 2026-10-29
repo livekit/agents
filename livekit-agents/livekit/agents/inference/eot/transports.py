@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import aiohttp
 import numpy as np
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
-from livekit.local_inference import EOT as _EOT
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
@@ -382,16 +382,20 @@ class _CloudTransport:
 
 
 class _LocalTransport:
-    """In-process ctypes transport for `turn-detector-v1-mini`."""
+    """Local native transport for `turn-detector-v1-mini`."""
 
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
+        from livekit.local_inference import EOT as _EOT
+
         self._opts = opts
         self._buf = utils.AudioArrayBuffer(
             buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
-        self._tasks: set[asyncio.Task[Any]] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._close_task: asyncio.Task[None] | None = None
+        self._closing = False
 
     @property
     def session_id(self) -> str | None:
@@ -401,6 +405,8 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def run_inference(self, request_id: str) -> None:
+        if self._closing:
+            return
         task = asyncio.create_task(self._predict(request_id, self._buf.read()))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -427,9 +433,28 @@ class _LocalTransport:
             self._buf.shift(len(self._buf))
 
     def detach(self) -> None:
-        for task in list(self._tasks):
+        self._closing = True
+        for task in tuple(self._tasks):
             task.cancel()
-        self._tasks.clear()
+
+    async def aclose(self) -> None:
+        task = self._close_task
+        if task is not None and task.done():
+            if task.cancelled() or task.exception() is not None:
+                task = None
+        if task is None:
+            self._close_task = task = asyncio.create_task(self._close())
+        await aio.join_task(task)
+
+    async def _close_native(self) -> None:
+        await aio.join_task(asyncio.create_task(asyncio.to_thread(self._eot.close)))
+
+    async def _close(self) -> None:
+        self._closing = True
+        async with AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(self._close_native)
+            cleanup.push_async_callback(aio.cancel_and_wait, *tuple(self._tasks))
+            self.detach()
 
     async def run(self) -> None:
         stream = self._stream_ref() if self._stream_ref is not None else None

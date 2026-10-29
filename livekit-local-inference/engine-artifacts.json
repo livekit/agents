@@ -1,0 +1,67 @@
+{
+  "engine_version": "0.2.7",
+  "source_commit": "c749f5a77488ca9bfb63b142c112c09a44349689",
+  "packages": [
+    {
+      "name": "@livekit/local-inference",
+      "version": "0.2.7",
+      "archive_sha256": "dfa5edbc54b8abd32e6ae842c79d83d5cd7fdf4f7de72f3373dd8e21b839af06",
+      "integrity": "sha512-3XniFtpZHiIlAgVibhIU1YDaHbh8uScYojwtqaI1Em440w+fzix3wPXLv+IPePAmuusJzvHLrEFaTwojaBLk4w==",
+      "metadata_dependencies": {
+        "node-gyp-build": "^4.8.0"
+      },
+      "metadata_main": "index.js",
+      "tarball": "https://registry.npmjs.org/@livekit/local-inference/-/local-inference-0.2.7.tgz",
+      "extracted_files_sha256": {
+        "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "MODEL_LICENSE": "dfd8e206e8d2f207c6e4ca174600610287afc649005127dabe68be74ccf60348",
+        "index.js": "b5f774d03964c3e44cff6abf69a8ca82e36bc17a58a96b98d0b787b0a4c93b64",
+        "package.json": "f65e13a1d1e7720f017a643b05aaf0ccc1e6c4dff3dbda4d0276a9f15491cae0",
+        "index.d.ts": "755f34fa1bbb873bfaf7f46c69489203c064d621d16a7ac430ef63a13a5e4505"
+      },
+      "archive": "local-inference-0.2.7.tgz"
+    },
+    {
+      "name": "@livekit/local-inference-darwin-arm64",
+      "version": "0.2.7",
+      "archive_sha256": "04fb206734e8df08d391bc2b95dd4047a0c1c53c5a1ae39bf07c850ab5b72190",
+      "integrity": "sha512-di4SAKcV/i9tCozvbtwZLBtRPAJYWCcLNNVWduqAQSaV2/klT2CZsGpoN0s7t8NamvL78q1LxzL2iJVc6pc75g==",
+      "metadata_dependencies": {},
+      "metadata_main": "local-inference.darwin-arm64.node",
+      "tarball": "https://registry.npmjs.org/@livekit/local-inference-darwin-arm64/-/local-inference-darwin-arm64-0.2.7.tgz",
+      "extracted_files_sha256": {
+        "local-inference.darwin-arm64.node": "947f0a152880dc79769924bbb571c11d730370cb38c6bb65d8a61189975ecf64",
+        "package.json": "1faabbd6240bcc46bb522ecc99f1be3b5f9d90a2f0528e65f41967e289d396a9"
+      },
+      "archive": "local-inference-darwin-arm64-0.2.7.tgz"
+    },
+    {
+      "name": "@livekit/local-inference-linux-x64-gnu",
+      "version": "0.2.7",
+      "archive_sha256": "4164c8d917bbc9611b523708d1091cd8d7665870fabb67e3fd11b2590e476eb6",
+      "integrity": "sha512-QG/0k0BwqnSz/qMU+Z/k0411iXkbVEdZ8XMBPjZGOorVYTQuMlovYd9hkSZvgnD84o/xeAMJekC6NcXv45FlGg==",
+      "metadata_dependencies": {},
+      "metadata_main": "local-inference.linux-x64-gnu.node",
+      "tarball": "https://registry.npmjs.org/@livekit/local-inference-linux-x64-gnu/-/local-inference-linux-x64-gnu-0.2.7.tgz",
+      "extracted_files_sha256": {
+        "package.json": "4ca23324c7ba65651fb542317577d221a53915768616785dfc84e10fd21869b2",
+        "local-inference.linux-x64-gnu.node": "b32975a463df22a8dfccbc17a3ccd5e6396f0fe97df534f79bcb9056536dc144"
+      },
+      "archive": "local-inference-linux-x64-gnu-0.2.7.tgz"
+    },
+    {
+      "name": "@livekit/local-inference-linux-arm64-gnu",
+      "version": "0.2.7",
+      "archive_sha256": "0fd8dba27f8a4de813cd868075251ec465cac9bfa84e12c87f95ac5308a86d2c",
+      "integrity": "sha512-zUP9RverLt66kQ9slr+T3FY1Ad9IwJ3BPnJsEB/NxUeflq5g0dbUjIjGvjBCL6DktqLRyXixEJx1J5QUKUWUsw==",
+      "metadata_dependencies": {},
+      "metadata_main": "local-inference.linux-arm64-gnu.node",
+      "tarball": "https://registry.npmjs.org/@livekit/local-inference-linux-arm64-gnu/-/local-inference-linux-arm64-gnu-0.2.7.tgz",
+      "extracted_files_sha256": {
+        "local-inference.linux-arm64-gnu.node": "0063ac5939aa2bfe19b9225712a34e0cb275c4536a2a57e82142d3ec47ffc468",
+        "package.json": "dfbbdce043722e754f7064ab267d45e2af4f94eb98327bb441facf40d0a941ee"
+      },
+      "archive": "local-inference-linux-arm64-gnu-0.2.7.tgz"
+    }
+  ]
+}

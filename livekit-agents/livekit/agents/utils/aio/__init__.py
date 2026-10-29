@@ -4,7 +4,7 @@ from .counter import AsyncAtomicCounter
 from .interval import Interval, interval
 from .sleep import Sleep, SleepFinished, sleep
 from .task_set import TaskSet
-from .utils import cancel_and_wait, gracefully_cancel
+from .utils import cancel_and_wait, gracefully_cancel, join_task
 from .wait_group import WaitGroup
 from .websocket import WebSocketMonitor
 
@@ -27,6 +27,7 @@ __all__ = [
     "duplex_unix",
     "itertools",
     "gracefully_cancel",
+    "join_task",
 ]
 
 # Cleanup docs of unexported modules

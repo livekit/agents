@@ -1,6 +1,36 @@
 import asyncio
 import functools
-from typing import Any
+from typing import Any, TypeVar
+
+_T = TypeVar("_T")
+
+
+async def join_task(task: asyncio.Task[_T]) -> _T:
+    """Join owned work before propagating cancellation of its observer."""
+    if task.get_loop() is not asyncio.get_running_loop():
+        raise ValueError("owned cleanup task belongs to another event loop")
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                raise
+            cancellation = exc
+        except BaseException:
+            if not task.done():
+                raise  # Preserve observer failures without querying an unsettled result.
+            break
+
+    try:
+        result = task.result()
+    except BaseException as exc:
+        if cancellation is not None:
+            raise exc from cancellation
+        raise
+    if cancellation is not None:
+        raise cancellation
+    return result
 
 
 async def cancel_and_wait(*futures: asyncio.Future[Any]) -> None:
