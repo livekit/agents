@@ -1,7 +1,6 @@
 //! [`StreamAdapter`] (`stt/stream_adapter.py`): a recognize-only STT as a streaming one. The VAD
 //! cuts the audio into utterances, each recognized on its own once it ends.
 
-use async_trait::async_trait;
 use std::marker::PhantomData;
 use std::sync::Arc;
 

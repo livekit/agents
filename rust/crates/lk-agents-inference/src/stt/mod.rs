@@ -11,7 +11,6 @@ pub mod wire;
 
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
-use async_trait::async_trait;
 use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,

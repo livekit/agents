@@ -13,7 +13,7 @@ use std::{collections::VecDeque, time::Duration, time::SystemTime};
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, PushAudio, Ts,
     errors::ApiError,
-    llm::realtime::{Event, Interrupt, RealtimeModelError},
+    llm::realtime::{Event, RealtimeModelError},
 };
 use lk_agents_inference::realtime::{
     ConnectionEffect, INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions,
@@ -213,13 +213,6 @@ impl Sim {
             }
         }
         self.now = until;
-        self.step();
-    }
-
-    /// The session's close, as the driver's `aclose` asks it.
-    pub fn close(&mut self) {
-        self.commands.push_back(Command::Interrupt(Interrupt { response_id: None }));
-        self.closing = true;
         self.step();
     }
 

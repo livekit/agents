@@ -6,7 +6,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use tokio::sync::Notify;
 
 use lk_agents_abi::errors::{ProviderError, chained_connection_error};

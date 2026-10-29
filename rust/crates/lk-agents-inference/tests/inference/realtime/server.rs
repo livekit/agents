@@ -48,7 +48,7 @@ use lk_agents_inference::realtime::{
 
 mod client;
 
-pub use client::{event_id_of, wire_name};
+pub use client::event_id_of;
 
 use lk_agents_test_support::corpus::{self, draw_ms, share};
 
@@ -117,15 +117,10 @@ pub enum Exo {
     SpeechStopped,
     /// A delta for a response nobody created.
     StrayDelta,
-    /// The server opens a response on its own (`input_audio_buffer.timeout_triggered` and the
-    /// like): no `client_event_id`.
-    ServerResponse,
     /// The oldest response still generating finishes now, all of it at once.
     FinishNow,
     /// A server-side `error` event, the session staying open.
     ServerError,
-    /// An `error` the session cannot go on after (`insufficient_quota`).
-    FatalError,
     /// The response in progress fails: `response.done` with `status: failed`.
     ResponseFailed,
     /// The last user item's transcription fails.
@@ -594,16 +589,6 @@ impl Server {
                 self.put(now, None, delta);
                 true
             }
-            Exo::ServerResponse => {
-                // Only the server's own turn detection opens a response unasked (its idle
-                // timeout, with `create_response`): with detection off it never does (seed 56103).
-                let detects = self.config.vad.is_some() && self.config.create_response;
-                if self.active.is_some() || !detects {
-                    return false;
-                }
-                self.respond(now, None, None, None);
-                true
-            }
             Exo::FinishNow => {
                 let Some(r) = self.active else { return false };
                 let keys: Vec<(Ts, u64)> = self
@@ -627,18 +612,6 @@ impl Server {
                     code: None,
                     type_: Some("server_error".into()),
                     message: "The server had an error while processing your request.".into(),
-                };
-                self.put(now, None, Incoming::Error(error));
-                true
-            }
-            Exo::FatalError => {
-                let message =
-                    "You exceeded your current quota, please check your plan and billing details.";
-                let error = ServerError {
-                    event_id: None,
-                    code: Some("insufficient_quota".into()),
-                    type_: Some("insufficient_quota".into()),
-                    message: message.into(),
                 };
                 self.put(now, None, Incoming::Error(error));
                 true
@@ -988,11 +961,6 @@ impl Server {
         self.pending.insert((t, self.seq), Pending { resp, body, reason: None, item });
     }
 
-    /// The assistant messages it generated and still holds: by generation, the audio each keeps.
-    pub fn held(&self) -> Vec<(u32, u64)> {
-        let assistant = |i: &&Item| i.assistant() && i.kind == "message";
-        self.items.iter().filter(assistant).filter_map(|i| Some((i.source?, i.pcm_ms))).collect()
-    }
 }
 
 fn later(t: Ts, ms: u64) -> Ts {

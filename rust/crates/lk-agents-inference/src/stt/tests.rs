@@ -1,5 +1,6 @@
 use super::*;
 use crate::testkit::{FakeWs, text};
+use async_trait::async_trait;
 use lk_agents_abi::SpeechEventType;
 use lk_agents_abi::TokioSpawner;
 use serde_json::json;

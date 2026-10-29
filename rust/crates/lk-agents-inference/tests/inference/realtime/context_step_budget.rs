@@ -25,18 +25,9 @@ struct Samples {
     cpu: Vec<Duration>,
     wall: Vec<Duration>,
     phase: &'static str,
-    maximum: Option<Maximum>,
+    /// The largest step's CPU time and what it was.
+    maximum: Option<(Duration, String)>,
     cleanup: RetirementStats,
-}
-
-#[derive(Debug)]
-struct Maximum {
-    cpu: Duration,
-    phase: &'static str,
-    operation: &'static str,
-    frames: usize,
-    first_item: Option<String>,
-    last_item: Option<String>,
 }
 
 impl Samples {
@@ -47,21 +38,19 @@ impl Samples {
         let cpu = thread_cpu().saturating_sub(cpu);
         self.cpu.push(cpu);
         self.wall.push(wall.elapsed());
-        if self.maximum.as_ref().is_none_or(|previous| cpu > previous.cpu) {
+        if self.maximum.as_ref().is_none_or(|(previous, _)| cpu > *previous) {
             let mut ids = result.frames.iter().filter_map(|frame| match frame {
                 Outgoing::ItemCreate { item, .. } => Some(item.id().to_owned()),
                 _ => None,
             });
             let first_item = ids.next();
             let last_item = ids.last().or_else(|| first_item.clone());
-            self.maximum = Some(Maximum {
-                cpu,
-                phase: self.phase,
-                operation,
-                frames: result.frames.len(),
-                first_item,
-                last_item,
-            });
+            let frames = result.frames.len();
+            let step = format!(
+                "{}/{operation}: {frames} frames, items {first_item:?}..{last_item:?}",
+                self.phase
+            );
+            self.maximum = Some((cpu, step));
         }
         result
     }
