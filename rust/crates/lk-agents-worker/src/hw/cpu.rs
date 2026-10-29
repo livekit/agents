@@ -12,11 +12,6 @@ use crate::hw::cgroup::{V1_PERIOD, V1_QUOTA, V1_USAGE, first_existing};
 /// Overrides every other answer in all three monitors.
 pub const NUM_CPUS_ENV: &str = "NUM_CPUS";
 
-/// `min(ceil(cpu_count), 4)`; a positive fractional count still allows one idle process.
-pub(crate) fn idle_process_target(cpu_count: f32) -> u32 {
-    (cpu_count.max(0.0).ceil() as u32).min(4)
-}
-
 /// Invalid values return `None`.
 pub fn cpu_count_from_env(raw: Option<&str>) -> Option<f32> {
     raw.and_then(|v| v.trim().parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0)
@@ -139,17 +134,6 @@ mod tests {
         assert_eq!(cpu_count_from_env(Some("many")), None);
         assert_eq!(cpu_count_from_env(Some("0")), None);
         assert_eq!(cpu_count_from_env(Some("-4")), None);
-    }
-
-    // Catches: dropping the `min(.., 4)` (right on every box up to four cores), or a floor at 1 in
-    // `cpu_count_v2` hiding a fractional limit. The prod default is this rule at an unbounded count.
-    #[test]
-    fn the_idle_process_target_is_capped_at_four_and_floored_at_one() {
-        for (cpus, want) in [(32.0, 4), (f32::INFINITY, 4), (4.0, 4), (3.0, 3), (0.1, 1), (0.0, 0)]
-        {
-            assert_eq!(idle_process_target(cpus), want, "{cpus}");
-        }
-        assert_eq!(idle_process_target(cpu_count_v2(None, "50000 100000", 8.0)), 1);
     }
 
     // Catches: a monitor that never answers, leaving the load at 0.0 forever on macOS/Windows.

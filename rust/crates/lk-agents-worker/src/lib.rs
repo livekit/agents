@@ -30,7 +30,7 @@ mod worker_tests;
 pub use auth::{TokenError, agent_join_token, extend_job_token, token_identity, worker_token};
 pub use config::{
     ASSIGNMENT_TIMEOUT, DRAIN_TIMEOUT, EnvOption, UPDATE_LOAD_INTERVAL, UPDATE_STATUS_INTERVAL,
-    WORKER_PROTOCOL_VERSION, WorkerConfig, WorkerOptions,
+    WORKER_PROTOCOL_VERSION, WorkerConfig,
 };
 pub use hw::{CpuMonitor, CpuMonitorKind};
 pub use lk_agents_abi::worker::worker::{

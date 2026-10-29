@@ -32,6 +32,31 @@ fn options_fall_back_to_the_environment_and_the_override_wins() {
     assert!(!s.cloud());
 }
 
+// Catches: the worker dialing ws_url when LIVEKIT_WORKER_URL names its address, an empty worker
+// token sent as a credential, or the deployment and an empty override lost on the way to
+// registration.
+#[test]
+fn the_worker_registers_and_connects_with_the_resolved_settings() {
+    let s = settings().with_env(env(&[
+        ("LIVEKIT_URL", "wss://env"),
+        ("LIVEKIT_WORKER_URL", "https://env:7883"),
+        ("LIVEKIT_WORKER_TOKEN", "hosted"),
+        ("LIVEKIT_AGENT_DEPLOYMENT", "staging"),
+        ("LIVEKIT_AGENT_NAME_OVERRIDE", ""),
+        ("LIVEKIT_AGENT_NAME", "from-env"),
+    ]));
+    let (worker, connection) = s.worker(false, vec![]);
+    assert_eq!(worker.ws_url, "wss://env");
+    assert_eq!(connection.server_url, "https://env:7883");
+    assert_eq!(connection.worker_token.as_deref(), Some("hosted"));
+    assert_eq!((worker.agent_name.as_str(), worker.deployment.as_str()), ("from-env", "staging"));
+    let s = settings().with_env(env(&[("LIVEKIT_URL", "wss://env"), ("LIVEKIT_WORKER_URL", "")]));
+    let (worker, connection) = s.worker(false, vec![]);
+    assert_eq!(connection.server_url, "wss://env", "the worker dials ws_url by default");
+    assert_eq!(connection.worker_token, None);
+    assert!(worker.deployment.is_empty());
+}
+
 // Catches: a missing credential reported as another, or routes allowed without an agent name.
 #[test]
 fn registration_needs_the_url_the_credentials_and_a_name_for_routes() {

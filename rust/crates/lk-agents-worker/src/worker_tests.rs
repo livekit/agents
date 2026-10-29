@@ -301,8 +301,7 @@ async fn registering_leaves_the_idle_process_target_on_the_handle() {
         load_threshold: EnvOption::Split { dev: f32::INFINITY, prod: 0.75 },
         ..prod.clone()
     };
-    let cap = Some(crate::hw::cpu::idle_process_target(f32::INFINITY));
-    for (cfg, want) in [(prod, cap), (dev, None)] {
+    for (cfg, want) in [(prod, Some(4)), (dev, None)] {
         let steps = vec![Step::Serves(vec![register_message("W-1")])];
         let (mut c, _wire, h) = conn_with(steps, 0, cfg, LoadHost::default());
         let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
