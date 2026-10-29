@@ -41,14 +41,6 @@ pub struct RecordDecl {
     pub doc: Vec<String>,
     pub extract: bool,
     pub emit: bool,
-    /// Its conversions are pyo3 trait impls in ABI, which the in-place exports call
-    /// (`crate::records::IN_PLACE`).
-    pub in_place: bool,
-    /// It derives `Clone`: an in-place record a legacy record holds is emitted by reference too.
-    pub clone: bool,
-    /// A legacy (`#[derive(Host)]`) model names it (`records::link_legacy`): in place, it keeps
-    /// what the legacy conversions ask of a member (by-reference emit, its union tag).
-    pub legacy: bool,
     /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
     /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
     pub transparent: bool,
@@ -588,9 +580,6 @@ pub struct Record {
     /// `::lk_agents_abi::llm::chat_context::ChatItem`.
     pub rust: String,
     pub host: HostForm,
-    /// A declared record the in-place exports still convert: it keeps pyo3 trait impls in ABI
-    /// (`crate::records::IN_PLACE`).
-    pub in_place: bool,
     /// A unit-only `#[derive(Host)]` enum: it crosses as its string (or `Enum` member), not as a
     /// dict of fields.
     pub literal: bool,

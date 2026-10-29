@@ -662,9 +662,7 @@ pub(crate) fn rust_literal(d: &Literal, ty: &Ty) -> String {
 fn native(ty: &Ty) -> bool {
     match ty {
         // A declared record crosses by its generated conversion functions, not a pyo3 trait.
-        Ty::Record(r) => {
-            r.in_place || !matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs)
-        }
+        Ty::Record(r) => !matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Error(_) => true,
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
@@ -772,7 +770,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::JsonObject => format!(
             "match ::lk_agents_abi::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
         ),
-        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
+        Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_from_py(&{v})", crate::records::conversion(module, name))
         }
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {

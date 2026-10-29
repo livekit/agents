@@ -48,7 +48,6 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
     }
     crate::records::check_none_defaults(&out)?;
     proxy::check_handed_back(&out)?;
-    crate::records::mark_in_place(&mut out);
     Ok(out)
 }
 
@@ -830,7 +829,6 @@ impl Resolver<'_> {
                 host: HostForm::Record { module: module_name, name },
                 extract,
                 emit,
-                in_place: false,
                 literal: false,
             }));
         }
@@ -844,7 +842,6 @@ impl Resolver<'_> {
                 host: HostForm::Annotation("str".into()),
                 extract: true,
                 emit: true,
-                in_place: false,
                 literal: false,
             }));
         }
@@ -863,7 +860,6 @@ impl Resolver<'_> {
                 host: HostForm::Annotation(host),
                 extract: has("extract"),
                 emit: has("emit"),
-                in_place: false,
                 literal: false,
             }));
         }
@@ -873,7 +869,6 @@ impl Resolver<'_> {
                 host: HostForm::CoreClass(ident.clone()),
                 extract: class_from_py_object(it),
                 emit: true,
-                in_place: false,
                 literal: false,
             }));
         }
@@ -921,7 +916,6 @@ impl Resolver<'_> {
                 host,
                 extract: unit || own_extract || words.iter().any(|w| w == "extract"),
                 emit: unit || words.iter().any(|w| w == "emit"),
-                in_place: false,
                 literal: unit,
             }));
         }
@@ -944,7 +938,6 @@ impl Resolver<'_> {
                     host: HostForm::CoreClass(ident.clone()),
                     extract: class_from_py_object(it),
                     emit: true,
-                    in_place: false,
                     literal: false,
                 }));
             }
@@ -963,7 +956,6 @@ impl Resolver<'_> {
                     host,
                     extract: pyclass.iter().any(|w| w == "from_py_object"),
                     emit: !input,
-                    in_place: false,
                     literal: false,
                 }));
             }
@@ -976,7 +968,6 @@ impl Resolver<'_> {
                 host: HostForm::WireStrs,
                 extract: false,
                 emit: true,
-                in_place: false,
                 literal: false,
             }));
         }

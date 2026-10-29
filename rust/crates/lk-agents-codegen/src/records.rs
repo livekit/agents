@@ -30,32 +30,19 @@ const PACKAGE: &str = "livekit.agents._generated";
 const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `#[host(record)]` declarations of `lk-agents-abi`.\n";
 
 /// What stays in ABI until the in-place exports are declarations: the declared proxies'
-/// `HostProxy` bridges and the in-place records' trait impls, `mod.rs` and one module per subject.
+/// `HostProxy` bridges, `mod.rs` and one module per subject.
 pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
-    let in_place = || decls.records.iter().filter(|r| r.in_place);
     let proxies = || decls.proxies.iter().filter(|proxy| legacy::proxy_in_place(&proxy.trait_path));
-    let mut families: Vec<&str> =
-        proxies().map(|p| p.family.as_str()).chain(in_place().map(|r| r.family.as_str())).collect();
+    let mut families: Vec<&str> = proxies().map(|p| p.family.as_str()).collect();
     families.sort();
     families.dedup();
     let mut root = format!("{HEADER}\n");
     for family in &families {
         root.push_str(&format!("mod {family};\n"));
     }
-    if in_place().next().is_some() {
-        root.push_str(NOT_A);
-    }
     let mut out = vec![Out { path: "mod.rs".into(), text: root }];
     for family in families {
-        let mut text =
-            format!("{HEADER}//!\n//! The `{family}` proxy bridges and in-place records.\n");
-        if in_place().any(|r| r.family == family) {
-            text.push_str("\nuse pyo3::prelude::*;\n");
-        }
-        for r in in_place().filter(|r| r.family == family) {
-            text.push_str(&format!("\n// Declared in {}.\n", r.source));
-            text.push_str(&record_rust(r, true, decls)?);
-        }
+        let mut text = format!("{HEADER}//!\n//! The `{family}` proxy bridges.\n");
         for p in proxies().filter(|p| p.family == family) {
             text.push_str(&format!("\n// Declared in {}.\n", p.source));
             text.push_str(&crate::proxy::legacy_bridge(p));
@@ -78,7 +65,7 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
         text.push_str(&format!("\npub mod {module} {{\n    use pyo3::prelude::*;\n"));
         for r in decls.records.iter().filter(|r| r.module == module) {
             text.push_str(&format!("\n    // Declared in {}.\n", r.source));
-            let body = if r.in_place { in_place_rust(r) } else { record_rust(r, false, decls)? };
+            let body = record_rust(r, decls)?;
             for line in body.lines() {
                 text.push_str(&if line.is_empty() {
                     "\n".to_owned()
@@ -91,14 +78,6 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
     }
     Ok(Out { path: "records.rs".into(), text })
 }
-
-/// Records the in-place exports still convert by pyo3 trait (an in-place export's parameter, a
-/// `#[derive(Host)]` record's field, handwritten runtime glue): their conversions stay trait impls
-/// written into ABI, which the shell's functions call. The list never grows by itself: an entry
-/// is only added by the commit that declares a record which was a `#[derive(Host)]` record (its
-/// trait impls move from the derive to the generated module), and leaves when its in-place
-/// consumers are declarations (`check_in_place`).
-pub const IN_PLACE: &[&str] = &[];
 
 /// A record field defaulting to `None` whose type is a declared record: that record is
 /// transparent with a unit variant, the host's `None`.
@@ -127,126 +106,9 @@ pub fn check_none_defaults(decls: &Declarations) -> Result<(), String> {
     Ok(())
 }
 
-/// Marks the in-place records, and the records their fields hold, wherever a type names them.
-pub fn mark_in_place(decls: &mut Declarations) {
-    let mut held: BTreeSet<String> = IN_PLACE
-        .iter()
-        .filter(|rust| decls.records.iter().any(|r| r.rust == **rust))
-        .map(|rust| (*rust).to_owned())
-        .collect();
-    loop {
-        let before = held.len();
-        let mut found = Vec::new();
-        for r in decls.records.iter().filter(|r| held.contains(&r.rust)) {
-            for f in fields(&r.body) {
-                records_in(&f.ty, &mut found);
-            }
-        }
-        held.extend(found);
-        if held.len() == before {
-            break;
-        }
-    }
-    for r in &mut decls.records {
-        r.in_place = held.contains(&r.rust);
-        for f in fields_mut(&mut r.body) {
-            mark(&mut f.ty, &held);
-        }
-    }
-    for c in &mut decls.classes {
-        let sinks = c.sinks.iter_mut().flat_map(|s| s.methods.iter_mut());
-        for m in c.methods.iter_mut().chain(sinks) {
-            m.params.iter_mut().for_each(|p| mark(&mut p.ty, &held));
-            mark(&mut m.ret.ok, &held);
-        }
-        for s in &mut c.sinks {
-            mark(&mut s.item, &held);
-        }
-    }
-    for p in &mut decls.proxies {
-        for m in &mut p.methods {
-            m.params.iter_mut().for_each(|q| mark(&mut q.ty, &held));
-            mark(&mut m.ret.ok, &held);
-        }
-    }
-}
-
-/// Every [`IN_PLACE`] entry is a declared record, and one the list did not hold at `HEAD` was a
-/// `#[derive(Host)]` record there: the list only trades a derive's trait impls for generated ones.
-pub fn check_in_place(root: &std::path::Path, decls: &Declarations) -> Result<(), String> {
-    legacy::check_proxies(decls)?;
-    let at_head = |path: &str| -> Option<String> {
-        let out = std::process::Command::new("git")
-            .args(["show", &format!("HEAD:{path}")])
-            .current_dir(root)
-            .output()
-            .ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    };
-    let held = at_head("rust/crates/lk-agents-codegen/src/records.rs").unwrap_or_default();
-    for rust in IN_PLACE {
-        let Some(r) = decls.records.iter().find(|r| r.rust == *rust) else {
-            return Err(format!("records::IN_PLACE: `{rust}` is not a declared record"));
-        };
-        if held.contains(&format!("\"{rust}\"")) {
-            continue;
-        }
-        let ident = rust.rsplit("::").next().unwrap_or(rust);
-        let derived = at_head(&r.source)
-            .and_then(|text| syn::parse_file(&text).ok())
-            .is_some_and(|file| derived_at(&file.items, ident));
-        if !derived {
-            return Err(format!(
-                "records::IN_PLACE: `{rust}` is new, and was not a #[derive(Host)] record at HEAD: an in-place consumer of a declared record converts through its generated functions"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// `ident` is a `#[derive(Host)]` struct or enum among `items` (inline modules included).
-pub(crate) fn derived_at(items: &[syn::Item], ident: &str) -> bool {
-    items.iter().any(|item| match item {
-        syn::Item::Struct(s) => s.ident == ident && crate::decl::resolve::derives_host(&s.attrs),
-        syn::Item::Enum(e) => e.ident == ident && crate::decl::resolve::derives_host(&e.attrs),
-        syn::Item::Mod(m) => m.content.as_ref().is_some_and(|(_, items)| derived_at(items, ident)),
-        _ => false,
-    })
-}
-
-fn records_in(ty: &Ty, out: &mut Vec<String>) {
-    match ty {
-        Ty::Record(r) if matches!(r.host, HostForm::Record { .. }) => out.push(r.rust.clone()),
-        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => {
-            records_in(t, out)
-        }
-        Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
-            records_in(k, out);
-            records_in(t, out);
-        }
-        Ty::Tuple(ts) => ts.iter().for_each(|t| records_in(t, out)),
-        _ => {}
-    }
-}
-
-fn mark(ty: &mut Ty, held: &BTreeSet<String>) {
-    match ty {
-        Ty::Record(r) => r.in_place = held.contains(&r.rust),
-        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => {
-            mark(t, held)
-        }
-        Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
-            mark(k, held);
-            mark(t, held);
-        }
-        Ty::Tuple(ts) => ts.iter_mut().for_each(|t| mark(t, held)),
-        Ty::Source { item, .. } | Ty::Sink { item, .. } => mark(item, held),
-        Ty::HostDuplex { input, output } | Ty::Duplex { input, output, .. } => {
-            mark(input, held);
-            mark(output, held);
-        }
-        _ => {}
-    }
+/// The in-place proxy bridges each still name a declared proxy.
+pub fn check_in_place(decls: &Declarations) -> Result<(), String> {
+    legacy::check_proxies(decls)
 }
 
 pub(crate) fn fields(body: &RecordBody) -> Vec<&Field> {
@@ -264,45 +126,13 @@ pub(crate) fn fields(body: &RecordBody) -> Vec<&Field> {
     }
 }
 
-fn fields_mut(body: &mut RecordBody) -> Vec<&mut Field> {
-    match body {
-        RecordBody::Struct(fields) => fields.iter_mut().collect(),
-        RecordBody::Variants(variants) => variants
-            .iter_mut()
-            .flat_map(|v| match &mut v.shape {
-                VariantShape::Unit | VariantShape::Tuple(None) => Vec::new(),
-                VariantShape::Tuple(Some(f)) => vec![f],
-                VariantShape::Named(fields) => fields.iter_mut().collect(),
-            })
-            .collect(),
-        RecordBody::Literals(_) => Vec::new(),
-    }
-}
-
-/// An in-place record's shell functions: calls of its ABI trait impls.
-fn in_place_rust(r: &RecordDecl) -> String {
-    let (rust, snake) = (&r.rust, cell(&r.name).to_lowercase());
-    let mut s = String::new();
-    if r.extract {
-        s.push_str(&format!(
-            "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n    obj.extract::<{rust}>()\n}}\n"
-        ));
-    }
-    if r.emit {
-        s.push_str(&format!(
-            "\npub fn {snake}_to_py<'py>(py: Python<'py>, value: {rust}) -> PyResult<Bound<'py, PyAny>> {{\n    ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)\n}}\n"
-        ));
-    }
-    s
-}
-
 const NOT_A: &str = "\n/// `obj` is not an instance of the model(s) `expected` names.\nfn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyErr {\n    use ::pyo3::types::{PyAnyMethods as _, PyTypeMethods as _};\n    let got = obj.get_type().name().map(|n| n.to_string()).unwrap_or_default();\n    ::pyo3::exceptions::PyTypeError::new_err(format!(\"expected {expected}, got {got}\"))\n}\n";
 
 /// Whether `ty` holds a declared record: it then crosses by the records' conversion functions.
 pub(crate) fn holds_record(ty: &Ty) -> bool {
     match ty {
         Ty::Record(r) => {
-            matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs) && !r.in_place
+            matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs)
         }
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) => holds_record(t),
         Ty::Map(k, t) => holds_record(k) || holds_record(t),
@@ -317,11 +147,8 @@ pub(crate) fn conversion(module: &str, name: &str) -> String {
     format!("crate::generated::records::{module}::{}", cell(name).to_lowercase())
 }
 
-fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<String, String> {
+fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
     if r.transparent {
-        if as_trait {
-            return Err(format!("{}: a transparent record is not converted in place", r.rust));
-        }
         return transparent_rust(r, decls);
     }
     let module = format!("{PACKAGE}.{}", r.module);
@@ -373,7 +200,7 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
                 let (pattern, sets) = struct_emits(fields)?;
                 format!(
                     "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {}\n",
-                    construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)", as_trait)
+                    construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)")
                 )
             } else {
                 String::new()
@@ -392,11 +219,11 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
                     v.rust_name
                 ));
                 let call = if sets.is_empty() {
-                    construct(&class_ref(&module, &v.name), "()", "None", as_trait)
+                    construct(&class_ref(&module, &v.name), "()", "None")
                 } else {
                     format!(
                         "{{\n                let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}                {}\n            }}",
-                        construct(&class_ref(&module, &v.name), "()", "Some(&kwargs)", as_trait)
+                        construct(&class_ref(&module, &v.name), "()", "Some(&kwargs)")
                     )
                 };
                 emit.push_str(&format!("            Self::{}{arm} => {call},\n", v.rust_name));
@@ -424,10 +251,7 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
             let value = match r.enumeration {
                 true => {
                     classes.push(r.name.clone());
-                    format!(
-                        "{}?",
-                        construct(&class_ref(&module, &r.name), "(value,)", "None", as_trait)
-                    )
+                    format!("{}?", construct(&class_ref(&module, &r.name), "(value,)", "None"))
                 }
                 false => "::pyo3::types::PyString::new(py, value).into_any()".to_owned(),
             };
@@ -439,32 +263,6 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
     };
     for c in &classes {
         s.push_str(&format!("static {}: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =\n    ::pyo3::sync::PyOnceLock::new();\n", cell(c)));
-    }
-    if as_trait {
-        if r.extract {
-            s.push_str(&format!(
-                "\nimpl<'a, 'py> FromPyObject<'a, 'py> for {rust} {{\n    type Error = PyErr;\n\n    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {{\n        let obj = &*obj;\n{}{extract}    }}\n}}\n",
-                if classes.is_empty() { "" } else { "        let py = obj.py();\n" }
-            ));
-        }
-        if r.emit {
-            s.push_str(&format!(
-                "\nimpl<'py> IntoPyObject<'py> for {rust} {{\n    type Target = PyAny;\n    type Output = Bound<'py, PyAny>;\n    type Error = PyErr;\n\n    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{emit}    }}\n}}\n"
-            ));
-        }
-        // A legacy record holding it emits its fields by reference.
-        if r.legacy && r.emit && r.clone {
-            s.push_str(&format!(
-                "\nimpl<'py> IntoPyObject<'py> for &{rust} {{\n    type Target = PyAny;\n    type Output = Bound<'py, PyAny>;\n    type Error = PyErr;\n\n    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::std::clone::Clone::clone(self).into_pyobject(py)\n    }}\n}}\n"
-            ));
-        }
-        // A legacy union picks it by its constant discriminant, read off the model.
-        if let (true, true, [(key, value)]) = (r.legacy, r.extract, &r.constants[..]) {
-            s.push_str(&format!(
-                "\nimpl ::lk_agents_abi::python::HostReadTag for {rust} {{\n    const KEY: &'static str = {key:?};\n    const TAG: &'static str = {value:?};\n    const ITEMS: bool = false;\n}}\n"
-            ));
-        }
-        return Ok(s);
     }
     let snake = cell(&r.name).to_lowercase();
     if r.extract {
@@ -512,15 +310,9 @@ fn class_ref(module: &str, class: &str) -> String {
     }
 }
 
-/// `class(*args, **kwargs)`: a model built in place. The registration shell's conversions build
-/// it through HostInvoker's Python entry; an in-place ABI conversion (`IN_PLACE`) still calls it.
-fn construct(class: &str, args: &str, kwargs: &str, as_trait: bool) -> String {
-    match as_trait {
-        true if (args, kwargs) == ("()", "None") => format!("{class}.call0()"),
-        true if kwargs == "None" => format!("{class}.call1({args})"),
-        true => format!("{class}.call({args}, {kwargs})"),
-        false => format!("crate::host::construct({class}.as_any(), {args}, {kwargs})"),
-    }
+/// `class(*args, **kwargs)`: a model built through HostInvoker's Python entry.
+fn construct(class: &str, args: &str, kwargs: &str) -> String {
+    format!("crate::host::construct({class}.as_any(), {args}, {kwargs})")
 }
 
 /// A `typed_dict` record's extract and emit bodies: keys of a plain dict, an optional field's key
@@ -700,7 +492,7 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             "{v}.try_iter()?.map(|item| {{ let item = &item?; {} }}).collect::<PyResult<::std::collections::BTreeSet<_>>>()",
             read(t, "item", path)?
         ),
-        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
+        Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_from_py({v})", conversion(module, name))
         }
         Ty::Record(r) => {
@@ -751,7 +543,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                     arms.push_str(&format!(
                         "        {rust}::{} => {}?,\n",
                         v.rust_name,
-                        construct(&class, "()", "None", false)
+                        construct(&class, "()", "None")
                     ));
                     continue;
                 }

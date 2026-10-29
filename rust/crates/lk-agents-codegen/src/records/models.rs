@@ -67,7 +67,6 @@ fn split_header(text: &str) -> (&str, &str) {
 
 /// Legacy models naming a declared record (a union member, a field) name its model: in the same
 /// module as written, else imported from its module; a Rust name two records share is refused.
-/// A record a legacy union holds is marked [`RecordDecl::legacy`].
 pub fn link_legacy(legacy: &mut [crate::ir::Decl], decls: &mut Declarations) -> Result<(), String> {
     use crate::ir::{Body, Foreign, Host, Ty as L};
     let owned: BTreeSet<String> = legacy.iter().map(|d| d.rust_name.clone()).collect();
@@ -86,7 +85,6 @@ pub fn link_legacy(legacy: &mut [crate::ir::Decl], decls: &mut Declarations) -> 
         module: &str,
         owned: &BTreeSet<String>,
         records: &Records,
-        held: &mut BTreeSet<String>,
     ) -> Result<(), String> {
         match t {
             L::Declared(n) if !owned.contains(n.as_str()) => match records.get(n.as_str()) {
@@ -94,7 +92,6 @@ pub fn link_legacy(legacy: &mut [crate::ir::Decl], decls: &mut Declarations) -> 
                     return Err(format!("`{n}` names two declared records: name the one meant"));
                 }
                 Some(Some((m, name))) => {
-                    held.insert(n.clone());
                     let python_from = if m == module {
                         Vec::new()
                     } else {
@@ -108,40 +105,31 @@ pub fn link_legacy(legacy: &mut [crate::ir::Decl], decls: &mut Declarations) -> 
                 }
                 None => {}
             },
-            L::Option(i) | L::List(i) => walk(i, module, owned, records, held)?,
+            L::Option(i) | L::List(i) => walk(i, module, owned, records)?,
             L::Map(k, v) => {
-                walk(k, module, owned, records, held)?;
-                walk(v, module, owned, records, held)?;
+                walk(k, module, owned, records)?;
+                walk(v, module, owned, records)?;
             }
             L::Tuple(items) => {
                 for i in items {
-                    walk(i, module, owned, records, held)?;
+                    walk(i, module, owned, records)?;
                 }
             }
             _ => {}
         }
         Ok(())
     }
-    let mut held = BTreeSet::new();
     for d in legacy.iter_mut() {
         let module = d.target(Host::Python).map(|t| t.module.clone()).unwrap_or_default();
         let at = format!("{}: {}", d.source, d.rust_name);
-        // A union member is emitted by reference and picked by its tag; a field only by value.
-        let (tys, members): (Vec<&mut L>, bool) = match &mut d.body {
-            Body::Struct(fields) => (fields.iter_mut().map(|f| &mut f.ty).collect(), false),
-            Body::Union(members) => (members.iter_mut().map(|m| &mut m.ty).collect(), true),
-            Body::Unit(_) => (Vec::new(), false),
+        let tys: Vec<&mut L> = match &mut d.body {
+            Body::Struct(fields) => fields.iter_mut().map(|f| &mut f.ty).collect(),
+            Body::Union(members) => members.iter_mut().map(|m| &mut m.ty).collect(),
+            Body::Unit(_) => Vec::new(),
         };
-        let mut found = BTreeSet::new();
         for t in tys {
-            walk(t, &module, &owned, &records, &mut found).map_err(|e| format!("{at}: {e}"))?;
+            walk(t, &module, &owned, &records).map_err(|e| format!("{at}: {e}"))?;
         }
-        if members {
-            held.extend(found);
-        }
-    }
-    for r in &mut decls.records {
-        r.legacy = held.contains(r.rust.rsplit("::").next().unwrap_or(&r.rust));
     }
     Ok(())
 }

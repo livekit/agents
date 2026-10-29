@@ -10,7 +10,7 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         Ty::Record(Record { host: HostForm::WireStrs, .. }) => {
             emit(&Ty::Str, &format!("{x}.as_str()"))?
         }
-        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
+        Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_to_py(py, {x})?", conversion(module, name))
         }
         Ty::Tuple(ts) => {

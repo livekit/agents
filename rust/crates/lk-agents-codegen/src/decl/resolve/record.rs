@@ -50,7 +50,8 @@ impl Resolver<'_> {
                 "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value, and at most one unit variant crossing as None"
             ));
         }
-        if typed_dict && (persisted || !constants.is_empty() || !matches!(item, syn::Item::Struct(_)))
+        if typed_dict
+            && (persisted || !constants.is_empty() || !matches!(item, syn::Item::Struct(_)))
         {
             return Err(format!("{at}: a typed_dict record is a plain struct of keys"));
         }
@@ -134,9 +135,6 @@ impl Resolver<'_> {
             doc: doc(item_attrs(item)),
             extract,
             emit,
-            in_place: false,
-            clone: derives(item_attrs(item), "Clone"),
-            legacy: false,
             transparent,
             typed_dict,
             enumeration,

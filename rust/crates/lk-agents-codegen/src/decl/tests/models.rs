@@ -102,16 +102,6 @@ fn a_legacy_union_names_a_declared_record_member() {
     assert!(
         matches!(&members[1].ty, crate::ir::Ty::Foreign(f) if f.python == "Updated" && f.python_from.is_empty())
     );
-    assert!(decls.records[0].legacy);
-    let mut in_place = decls.clone();
-    in_place.records[0].in_place = true;
-    let abi: String =
-        crate::records::rust(&in_place).expect("emits").into_iter().map(|o| o.text).collect();
-    assert!(
-        abi.contains("IntoPyObject<'py> for &::lk_agents_abi::llm::class::Updated")
-            && abi.contains("const TAG: &'static str = \"updated\";"),
-        "{abi}"
-    );
     let legacy_py = "# GENERATED FILE -- DO NOT EDIT.\n\nfrom __future__ import annotations\n\nfrom pydantic import BaseModel\n\n\nclass Started(BaseModel):\n    id: str\n\n\nUpdate = Started | Updated\n";
     let models = crate::records::python(&decls).expect("models");
     let merged = crate::records::merge(legacy_py, &models[0].text).expect("merges");

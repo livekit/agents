@@ -3,7 +3,7 @@
 //! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
 //! `#[host(record)]` declarations of `lk-agents-abi`.
 //!
-//! The `stt` proxy bridges and in-place records.
+//! The `stt` proxy bridges.
 
 // Declared in rust/crates/lk-agents-abi/src/stt/stt.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::Stt {

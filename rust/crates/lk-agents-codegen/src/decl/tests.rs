@@ -1100,19 +1100,6 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
 }
 
-// Catches: a record joining `records::IN_PLACE` that was never a `#[derive(Host)]` record (new trait
-// impls in ABI), or one that was, nested in an inline module, refused.
-#[test]
-fn only_a_derived_record_can_join_the_in_place_records() {
-    let file: syn::File = syn::parse_str(
-        "#[derive(Debug, Host)] pub struct Old; pub struct Plain; pub mod inner { #[derive(lk_agents_host_derive::Host)] pub enum Nested { A } }",
-    )
-    .unwrap();
-    assert!(crate::records::derived_at(&file.items, "Old"));
-    assert!(crate::records::derived_at(&file.items, "Nested"));
-    assert!(!crate::records::derived_at(&file.items, "Plain"));
-}
-
 // Catches: a declared proxy refused as a host call's argument (a typed noise-cancellation choice
 // passed back to the SDK), handed back as the view over it rather than the object the host
 // passed, a trait no proxy can be found behind accepted, or a host stream a synchronous call
