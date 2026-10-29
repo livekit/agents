@@ -71,10 +71,8 @@ impl Message {
             return Err(StorageError::Invalid("an A2A message needs a messageId".into()));
         }
         attachments::validate_received_parts(message)?;
-        // a delegation's `chat_ctx` part is the caller's conversation, validated here and read by
-        // `caller_history_of`; it is not part of the turn's text
-        caller_history::CallerHistory::from_message(message)
-            .map_err(|error| StorageError::Invalid(error.to_string()))?;
+        // a delegation's `chat_ctx` part is the caller's conversation, read by `caller_history_of`
+        // before the message is parsed; it is not part of the turn's text
         let mut raw = message.clone();
         raw.parts.retain(|p| !is_chat_ctx_part(p));
         let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
@@ -155,13 +153,14 @@ fn is_chat_ctx_part(part: &a2a::Part) -> bool {
             == Some("chat_ctx")
 }
 
-/// The `chat_ctx` data part of a delegation, as the part's `data`: the caller's
-/// conversation, read from the A2A message before `Message::from_a2a` strips the part.
-pub fn caller_history_of(message: &a2a::Message) -> Option<Value> {
-    message.parts.iter().filter(|p| is_chat_ctx_part(p)).find_map(|p| match &p.content {
-        a2a::PartContent::Data(d) if d.is_object() => Some(d.clone()),
-        _ => None,
-    })
+/// The `chat_ctx` data part of a delegation, validated (a2a.md#conversation-data-part): the
+/// caller's conversation, read from the A2A message before `Message::from_a2a` strips the part.
+pub fn caller_history_of(message: &a2a::Message) -> Result<Option<Value>, StorageError> {
+    let invalid = |error: caller_history::HistoryError| StorageError::Invalid(error.to_string());
+    caller_history::CallerHistory::from_message(message)
+        .map_err(invalid)?
+        .map(|history| history.to_value().map_err(invalid))
+        .transpose()
 }
 
 /// A failure the host's stream raised: a cancellation ends the run `canceled`, a storage error
@@ -358,7 +357,7 @@ mod tests {
             {"text": "fare?"},
             {"data": {"items": []}, "metadata": {"https://livekit.io/a2a/ext/agents/v1/kind": "chat_ctx"}},
         ]}));
-        assert_eq!(caller_history_of(&with_history), Some(json!({"items": []})));
+        assert_eq!(caller_history_of(&with_history).unwrap(), Some(json!({"items": []})));
         let stripped = Message::from_a2a(&with_history, 1.0, None).unwrap();
         assert_eq!(stripped.parts, vec![a2a::Part::text("fare?")]);
         assert_eq!(stripped.to_a2a().parts, vec![a2a::Part::text("fare?")]);
@@ -368,7 +367,7 @@ mod tests {
                 "arguments": "{}", "created_at": 1.0}]},
              "metadata": {"https://livekit.io/a2a/ext/agents/v1/kind": "chat_ctx"}},
         ]}));
-        assert!(Message::from_a2a(&unpaired, 1.0, None).is_err());
+        assert!(caller_history_of(&unpaired).is_err());
     }
 
     // Catches: a sender's `livekit/<name>` key read as LiveKit's own (a2a.md#metadata-keys), e.g.
@@ -380,7 +379,7 @@ mod tests {
             "parts": [{"data": {"items": []}, "metadata": {"livekit/kind": "chat_ctx"}}]}));
         let m = Message::from_a2a(&raw, 0.0, None).unwrap();
         assert_eq!(m.channel, A2A_CHANNEL);
-        assert_eq!(caller_history_of(&raw), None);
+        assert_eq!(caller_history_of(&raw).unwrap(), None);
         assert_eq!(m.parts, raw.parts, "the data part is the turn's, not a caller history");
     }
 

@@ -135,7 +135,7 @@ impl Turn {
         task_id: Option<String>,
     ) -> Result<TurnResult, StorageError> {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
-        let caller_history = caller_history_of(&message);
+        let caller_history = caller_history_of(&message)?;
         let epoch = tokio::time::Instant::now();
         let wall = now_secs();
         let msg = Message::from_a2a(&message, wall, None)?;
