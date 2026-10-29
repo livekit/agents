@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 pub mod a2a;
 pub mod agent;
+pub mod errors;
 pub mod evals;
 pub mod inference;
 pub mod llm;
@@ -44,6 +45,7 @@ pub trait Implementations: 'static {
     type VoiceAgent: ::lk_agents_abi::agent::VoiceAgent;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
+    type ApiErrorFunctions: ::lk_agents_abi::errors::ApiErrorFunctions;
     type JudgeRunner: ::lk_agents_abi::evals::JudgeRunner;
     type Evaluations: ::lk_agents_abi::evals::Evaluations;
     type InferenceCredentials: ::lk_agents_abi::inference::InferenceCredentials;
@@ -167,6 +169,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
+    m.add_function(wrap_pyfunction!(errors::http_error_display, m)?)?;
     m.add_class::<evals::_core_JudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;

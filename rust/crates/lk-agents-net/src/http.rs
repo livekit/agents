@@ -14,6 +14,15 @@ use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
 use tokio::sync::{Notify, mpsc};
 
+/// The host's `APIError` helpers: an HTTP status's message as the native client words it.
+pub struct HttpErrors;
+
+impl lk_agents_abi::errors::ApiErrorFunctions for HttpErrors {
+    fn http_error_message(message: &str, status: i64, reason: Option<String>) -> String {
+        lk_agents_abi::errors::http_error_message(message, status, reason.as_deref())
+    }
+}
+
 /// A transport observation and the instant it was made.
 #[derive(Debug)]
 pub struct Stamped<E> {

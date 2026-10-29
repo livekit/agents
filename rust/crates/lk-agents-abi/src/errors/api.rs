@@ -1,4 +1,4 @@
-//! `APIError` & co. as a plain Rust value, plus the two rules Python delegates.
+//! `APIError` & co. as a plain Rust value, plus the rules its host classes apply.
 
 /// Flat; [`ApiErrorKind::is_a`] knows the subclass edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,9 +35,8 @@ pub const TRANSIENT_CLIENT_STATUSES: [i64; 2] = [408, 429];
 
 pub const CANCELLED_STATUS: i64 = 499;
 
-/// The rule `APIStatusError.__init__` delegates: is this status retryable? A non-transient 4xx is
+/// The rule `APIStatusError.__init__` applies: is this status retryable? A non-transient 4xx is
 /// forced non-retryable even when the caller passed `retryable=True` (#5831).
-#[crate::host(export(pid = false, name = "status_retryable"))]
 pub fn retryable_for_status(status_code: i64, retryable: Option<bool>) -> bool {
     let requested = retryable.unwrap_or(true);
     if (400..500).contains(&status_code) && !TRANSIENT_CLIENT_STATUSES.contains(&status_code) {
@@ -53,7 +52,6 @@ pub fn http_reason(status: i64) -> Option<&'static str> {
 
 /// What `create_api_error_from_http` shows the user: message and reason when the message adds
 /// detail, else just the reason (never `"Not Found (404 Not Found)"`).
-#[crate::host(export(pid = false, name = "http_error_display"))]
 pub fn http_error_message(message: &str, status: i64, reason: Option<&str>) -> String {
     let reason = match reason {
         Some(reason) => reason.to_owned(),
@@ -64,6 +62,15 @@ pub fn http_error_message(message: &str, status: i64, reason: Option<&str>) -> S
     } else {
         format!("{reason} ({status})")
     }
+}
+
+/// The helpers the host's `APIError` classes apply.
+#[crate::host(functions(pid = false))]
+pub trait ApiErrorFunctions {
+    /// The message of an `APIStatusError` built from an HTTP status: the message and the reason
+    /// when the message adds detail, else just the reason.
+    #[host(function, name = "http_error_display")]
+    fn http_error_message(message: &str, status: i64, reason: Option<String>) -> String;
 }
 
 /// The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the

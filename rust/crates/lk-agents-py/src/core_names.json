@@ -305,7 +305,6 @@
     "split_paragraphs",
     "split_sentences",
     "split_words",
-    "status_retryable",
     "steering_instructions",
     "strip_all_markup",
     "strip_expr_markup",

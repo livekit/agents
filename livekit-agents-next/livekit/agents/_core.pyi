@@ -116,7 +116,6 @@ from ._generated._core_classes import (
     filter_emoji as filter_emoji,
     format_dtmf as format_dtmf,
     frame as frame,
-    http_error_display as http_error_display,
     hyphenate_word as hyphenate_word,
     instructions_message_id as instructions_message_id,
     interruption_timeout as interruption_timeout,
@@ -133,11 +132,13 @@ from ._generated._core_classes import (
     session_messages_topic as session_messages_topic,
     session_state_option_fields as session_state_option_fields,
     speech_priorities as speech_priorities,
-    status_retryable as status_retryable,
     tool_call_output as tool_call_output,
     validate_card_number as validate_card_number,
     validate_synthesis as validate_synthesis,
     video_queue_frames as video_queue_frames,
+)
+from ._generated._core_errors import (
+    http_error_display as http_error_display,
 )
 from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
