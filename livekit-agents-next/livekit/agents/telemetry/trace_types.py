@@ -24,22 +24,6 @@ ATTR_DISPATCH_ID = "lk.dispatch_id"
 ATTR_WORKER_ID = "lk.job.worker_id"
 ATTR_JOB_AGENT_ID = "lk.job.agent_id"
 
-# job dispatch timeline (job_entrypoint and job_dispatch spans). The stage instants are
-# timestamped events (job_received, job_accepted, job_assigned, process_assigned,
-# entrypoint_started); these attributes are the seconds between adjacent stages, so the
-# chain reads off the span without timestamp arithmetic. They sum to the dispatch latency.
-ATTR_JOB_ACCEPT_LATENCY = "lk.job.accept_latency"
-"""Seconds from the availability request to the worker's accept (the request handler)."""
-ATTR_JOB_ASSIGNMENT_LATENCY = "lk.job.assignment_latency"
-"""Seconds from the accept to the server's assignment (a server round trip)."""
-ATTR_JOB_LAUNCH_LATENCY = "lk.job.launch_latency"
-"""Seconds from the assignment to a process taking the job (pool acquisition)."""
-ATTR_JOB_ENTRYPOINT_LATENCY = "lk.job.entrypoint_latency"
-"""Seconds from the process taking the job to the user entrypoint running in it."""
-ATTR_JOB_DISPATCH_LATENCY = "lk.job.dispatch_latency"
-"""Seconds from the availability request to the entrypoint running: the whole chain."""
-
-
 # room connect / room io
 ATTR_ROOM_AUTO_SUBSCRIBE = "lk.room.auto_subscribe"
 ATTR_ROOM_E2EE = "lk.room.e2ee"
@@ -74,44 +58,21 @@ ATTR_FUNCTION_TOOL_ARGS = "lk.pii.function_tool.arguments"
 ATTR_FUNCTION_TOOL_IS_ERROR = "lk.function_tool.is_error"
 ATTR_FUNCTION_TOOL_OUTPUT = "lk.pii.function_tool.output"
 
-
-"""Times the endpointing wait restarted on a later trigger (late transcript, VAD)."""
-
-
 # OpenTelemetry GenAI semantic conventions, mirroring the attribute registry of
 # https://github.com/open-telemetry/semantic-conventions-genai. Backends ingest these
 # directly, so the names must stay byte-for-byte identical to the registry. The ones the
-# spec flags as sensitive are listed in `telemetry.traces.GEN_AI_PII_ATTRIBUTES`, since a
+# spec flags as sensitive are redacted by name in `lk_agents_core::telemetry::policy`, since a
 # standard name cannot carry the `lk.pii.` marker segment.
 
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
-
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
-
-
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 
 ATTR_GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
-
-
-ATTR_GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
-ATTR_GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
-ATTR_GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
-ATTR_GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
-
-ATTR_GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
-ATTR_GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
-ATTR_GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
-
-ATTR_GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents"
-ATTR_GEN_AI_RETRIEVAL_QUERY_TEXT = "gen_ai.retrieval.query.text"
-ATTR_GEN_AI_MEMORY_QUERY_TEXT = "gen_ai.memory.query.text"
-ATTR_GEN_AI_MEMORY_RECORDS = "gen_ai.memory.records"
 ATTR_GEN_AI_EVALUATION_NAME = "gen_ai.evaluation.name"
 ATTR_GEN_AI_EVALUATION_SCORE_LABEL = "gen_ai.evaluation.score.label"
 ATTR_GEN_AI_EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
-ATTR_GEN_AI_PROMPT_VARIABLE = "gen_ai.prompt.variable"  # template: gen_ai.prompt.variable.<key>
 
 ATTR_ERROR_TYPE = "error.type"
 
@@ -124,18 +85,7 @@ ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"
 ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS = "gen_ai.usage.input_cached_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS = "gen_ai.usage.output_text_tokens"
 
-# OpenTelemetry GenAI event names (for structured logging)
-EVENT_GEN_AI_SYSTEM_MESSAGE = "gen_ai.system.message"
-EVENT_GEN_AI_USER_MESSAGE = "gen_ai.user.message"
-EVENT_GEN_AI_ASSISTANT_MESSAGE = "gen_ai.assistant.message"
-EVENT_GEN_AI_TOOL_MESSAGE = "gen_ai.tool.message"
-EVENT_GEN_AI_CHOICE = "gen_ai.choice"
-EVENT_GEN_AI_CLIENT_INFERENCE_OPERATION_DETAILS = "gen_ai.client.inference.operation.details"
-
-
 # Exception attributes
 ATTR_EXCEPTION_TRACE = "exception.stacktrace"
 ATTR_EXCEPTION_TYPE = "exception.type"
 ATTR_EXCEPTION_MESSAGE = "exception.message"
-
-
