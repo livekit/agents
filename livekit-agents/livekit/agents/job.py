@@ -36,6 +36,7 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
+from ._hosted_logs import logs_handed_off
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -280,6 +281,8 @@ class JobContext:
         if self._info.fake_job or not self._info.job.enable_recording:
             return
         if not _observability_url(self._info.url):
+            return
+        if logs_handed_off():
             return
 
         self._early_log_handler = _BufferingHandler()

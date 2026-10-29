@@ -20,7 +20,20 @@ documentation, and examples.
 
 import typing
 
-from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
+from . import (
+    _hosted_logs as _hosted_logs,
+    cli,
+    inference,
+    ipc,
+    llm,
+    metrics,
+    stt,
+    tokenize,
+    tts,
+    utils,
+    vad,
+    voice,
+)
 from ._exceptions import (
     APIConnectionError,
     APIError,
