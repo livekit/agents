@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/voice/agent.py
+  s_6f97755ebfd073::t_e12a61303ff8e8 1039-1049,1052-1057,1059-1124,1126-1129,1131
+tests/test_agent_task_chain_speech.py
+  s_6f97755ebfd073::t_e12a61303ff8e8 24,181-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8530d8616d31640c5ee041c42a841b56cafed719",
+  "prompts": {},
+  "sessions": {
+    "s_6f97755ebfd073": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a183cf-e0f6-7750-9e79-3570450cbc08",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
