@@ -2465,6 +2465,11 @@ class AgentActivity(RecognitionHooks):
             self._update_paused_speech(current_speech, timeout=0)
             audio_output.pause()
 
+        if ev is None and self.vad is None:
+            # without a local VAD, the STT start of speech is the earliest sign of user speech,
+            # use it for barge-in instead of waiting for the first interim transcript
+            self._interrupt_by_audio_activity()
+
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
         if ev:

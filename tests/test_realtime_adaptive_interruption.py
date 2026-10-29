@@ -165,6 +165,9 @@ def test_replayed_start_preserves_confirmed_interruption() -> None:
     activity = AgentActivity.__new__(AgentActivity)
     activity._session = MagicMock()
     activity._session.agent_state = "speaking"
+    # adaptive interruption runs with a local VAD
+    activity._session._text_only = False
+    activity._agent = SimpleNamespace(vad=NOT_GIVEN)
     activity._audio_recognition = MagicMock()
     activity._interruption_detected = True
     activity._user_silence_event = asyncio.Event()

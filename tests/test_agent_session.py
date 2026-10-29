@@ -168,6 +168,40 @@ def test_interim_transcript_interrupts_only_without_local_vad(
         activity._interrupt_by_audio_activity.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("has_local_vad", "from_stt", "should_interrupt"),
+    [
+        (False, True, True),
+        (True, True, False),
+        (True, False, False),
+    ],
+)
+def test_stt_start_of_speech_interrupts_only_without_local_vad(
+    has_local_vad: bool, from_stt: bool, should_interrupt: bool
+) -> None:
+    activity = object.__new__(AgentActivity)
+    activity._agent = SimpleNamespace(vad=NOT_GIVEN)
+    activity._session = SimpleNamespace(
+        _text_only=False,
+        vad=Mock(spec=vad.VAD) if has_local_vad else None,
+        agent_state="speaking",
+        _update_user_state=Mock(),
+    )
+    activity._audio_recognition = None
+    activity._user_silence_event = asyncio.Event()
+    activity._cancel_false_interruption_timer = Mock()
+    activity._interrupt_by_audio_activity = Mock()
+
+    activity.on_start_of_speech(
+        None if from_stt else Mock(spec=vad.VADEvent), speech_start_time=time.time()
+    )
+
+    if should_interrupt:
+        activity._interrupt_by_audio_activity.assert_called_once_with()
+    else:
+        activity._interrupt_by_audio_activity.assert_not_called()
+
+
 async def test_events_and_metrics() -> None:
     speed = 1
     actions = FakeActions()
