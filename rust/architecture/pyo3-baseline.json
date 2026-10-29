@@ -34,7 +34,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/python/generated/worker.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/host_errors.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/host_tests.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/python/loop_time.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/mod.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/node.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/values.rs",

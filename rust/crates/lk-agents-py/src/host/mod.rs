@@ -25,6 +25,8 @@ use tokio::sync::oneshot;
 #[cfg(test)]
 mod cancellation_tests;
 pub mod loop_monitor;
+/// A virtual-time asyncio loop as the core's executor and clock.
+pub mod loop_time;
 #[cfg(test)]
 mod parentage_tests;
 pub mod source;
@@ -323,11 +325,41 @@ where
     F: Future<Output = PyResult<T>> + Send + 'static,
     T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
-    if let Some(rt) = lk_agents_abi::python::LoopRuntime::current(py) {
+    if let Some(rt) = loop_time::LoopRuntime::current(py) {
         return rt.future_into_py(py, fut);
     }
     process_handle()?;
     pyo3_async_runtimes::generic::future_into_py::<ProcessRuntime, _, _>(py, fut)
+}
+
+/// [`future_into_py`] as the in-place expansions reach it.
+fn erased_future_into_py<'py>(
+    py: Python<'py>,
+    fut: BoxFuture<'static, PyResult<Py<PyAny>>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    future_into_py(py, fut)
+}
+
+fn loop_clock(py: Python<'_>) -> Option<Arc<dyn lk_agents_abi::Clock>> {
+    loop_time::LoopRuntime::current(py).map(|rt| rt.clock())
+}
+
+/// The running loop's executor on virtual time, else the process runtime's.
+fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
+    match Python::try_attach(loop_time::LoopRuntime::current).flatten() {
+        Some(rt) => rt.spawner(),
+        None => Arc::new(lk_agents_abi::TokioSpawner::new(
+            process_handle().expect("the process runtime"),
+        )),
+    }
+}
+
+lk_agents_abi::python::inventory::submit! {
+    lk_agents_abi::python::HostRuntime {
+        future_into_py: erased_future_into_py,
+        loop_clock,
+        spawner,
+    }
 }
 
 /// The process runtime's handle; a forked child's refusal raises.

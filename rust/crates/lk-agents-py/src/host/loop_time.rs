@@ -8,7 +8,7 @@
 //! On such a loop the core therefore runs on the loop thread: a small executor per loop
 //! ([`LoopRuntime`]) whose every wake queues a pump callback in `_ready` (so the loop never counts
 //! as idle while the core has work), and a clock whose `now` is `loop.time()` and whose waits are
-//! `loop.call_at`. The ambient [`Clock`](crate::Clock) and [`Spawner`](crate::Spawner) of a binding
+//! `loop.call_at`. The ambient [`Clock`] and [`Spawner`] of a binding
 //! called on that loop are this runtime's ([`LoopRuntime::current`]); anywhere else nothing
 //! changes.
 //!
@@ -20,14 +20,11 @@
 //! synchronous wait on the core from the loop thread would deadlock, since the core runs there.
 
 use std::cell::RefCell;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::ThreadId;
@@ -35,9 +32,10 @@ use std::time::{Duration, SystemTime};
 
 use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
+use pyo3_async_runtimes::generic::ContextExt;
 
-use crate::utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner};
-use crate::{Clock, Ts};
+use lk_agents_abi::utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner};
+use lk_agents_abi::{Clock, Ts, lock};
 
 /// The env knob; see the module docs.
 pub const VIRTUAL_TIME_ENV: &str = "LK_AGENTS_VIRTUAL_TIME";
@@ -50,8 +48,6 @@ const PUMP_BUDGET: usize = 256;
 
 /// `_TICK_EPSILON` in `tests/virtual_time.py`: wall stamps stay strictly increasing.
 const TICK_EPSILON: Duration = Duration::from_micros(1);
-
-use crate::lock;
 
 // --------------------------------------------------------------------- the float rule
 
@@ -69,7 +65,6 @@ fn loop_when(origin: f64, at: Ts) -> f64 {
 /// Monotone, and never below a deadline that fired: `origin + at` read back through `loop.time()`
 /// can round below `at`, and a driver that sees `now < at` after its timer fired re-arms forever.
 #[derive(Default)]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 struct HighWater(AtomicU64);
 
 impl HighWater {
@@ -90,7 +85,6 @@ struct Entry {
     runtime: Option<Arc<LoopRuntime>>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Strong references, so a loop's id cannot be reused while it is listed; closed loops are swept
 /// (and their tasks dropped) when a new loop registers.
 static REGISTRY: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
@@ -122,7 +116,6 @@ enum Mode {
     Auto,
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn mode() -> Mode {
     match std::env::var(VIRTUAL_TIME_ENV).map(|v| v.trim().to_ascii_lowercase()) {
         Ok(v) if matches!(v.as_str(), "on" | "1" | "true" | "yes") => Mode::On,
@@ -207,21 +200,14 @@ pub struct LoopRuntime {
     /// `time.time()` at `Ts::ZERO`, for a wall read off the loop thread.
     wall_origin: f64,
     high_water: HighWater,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     last_wall: Mutex<SystemTime>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     queue: Mutex<VecDeque<Arc<Task>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Loop-thread work handed over from another thread (arming or cancelling a timer).
     ops: Mutex<Vec<LoopOp>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Every live task, so a closed loop can drop the parked ones too.
     tasks: Mutex<HashMap<u64, Arc<Task>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     next_id: AtomicU64,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pump_pending: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: AtomicBool,
     pump: OnceLock<Py<PyAny>>,
 }
@@ -239,7 +225,6 @@ impl LoopRuntime {
         lookup(py, &running)
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn new(py: Python<'_>, event_loop: &Bound<'_, PyAny>) -> PyResult<Arc<Self>> {
         let origin: f64 = event_loop.call_method0("time")?.extract()?;
         let wall_origin: f64 = py.import("time")?.call_method0("time")?.extract()?;
@@ -290,7 +275,6 @@ impl LoopRuntime {
         self.closed.load(Ordering::Acquire)
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn spawn_task(self: &Arc<Self>, fut: BoxFuture<'static, ()>) -> Arc<Task> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let task = Arc::new(Task {
@@ -320,7 +304,6 @@ impl LoopRuntime {
         self.request_pump();
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// Queues one pump in the loop's `_ready`. From another thread the GIL is taken on a blocking
     /// thread, never inside the waker (the waker's caller may hold a lock the loop thread wants).
     fn request_pump(self: &Arc<Self>) {
@@ -331,9 +314,11 @@ impl LoopRuntime {
             Python::attach(|py| self.call_soon_pump(py, false));
         } else {
             let me = Arc::clone(self);
-            pyo3_async_runtimes::tokio::get_runtime().spawn_blocking(move || {
-                Python::attach(|py| me.call_soon_pump(py, true));
-            });
+            let pump = move || Python::attach(|py| me.call_soon_pump(py, true));
+            match super::process_handle() {
+                Ok(runtime) => drop(runtime.spawn_blocking(pump)),
+                Err(_) => drop(std::thread::spawn(pump)),
+            }
         }
     }
 
@@ -353,8 +338,9 @@ impl LoopRuntime {
             return;
         }
         let _current = CurrentGuard::enter(self);
-        // So network I/O and `tokio::spawn` inside the core still reach the global runtime.
-        let _tokio = pyo3_async_runtimes::tokio::get_runtime().enter();
+        // So network I/O and `tokio::spawn` inside the core reach the process runtime.
+        let runtime = super::process_handle().ok();
+        let _tokio = runtime.as_ref().map(tokio::runtime::Handle::enter);
         self.observe(py);
         let ops = std::mem::take(&mut *lock(&self.ops));
         for op in ops {
@@ -424,7 +410,6 @@ impl LoopRuntime {
         *last
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Arms `loop.call_at` for `at` on the loop thread.
     fn arm(self: &Arc<Self>, py: Python<'_>, at: Ts, timer: &Arc<Mutex<Timer>>) {
         if lock(timer).dropped || self.is_closed() {
@@ -494,7 +479,8 @@ impl LoopRuntime {
         let target = py_fut.clone().unbind();
         let task = self.spawn_task(Box::pin(async move {
             let result =
-                pyo3_async_runtimes::tokio::scope(locals, CatchUnwind(Box::pin(fut))).await;
+                <super::ProcessRuntime as ContextExt>::scope(locals, CatchUnwind(Box::pin(fut)))
+                    .await;
             Python::attach(|py| {
                 let target = target.bind(py);
                 if target.call_method0("done").and_then(|d| d.is_truthy()).unwrap_or(true) {
@@ -550,32 +536,15 @@ where
     }
 }
 
-/// `future_into_py` that runs on the loop when virtual time applies to it
-/// ([`LoopRuntime::current`]), else `pyo3_async_runtimes::tokio::future_into_py`.
-pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
-where
-    F: Future<Output = PyResult<T>> + Send + 'static,
-    T: for<'py> IntoPyObject<'py> + Send + 'static,
-{
-    match LoopRuntime::current(py) {
-        Some(rt) => rt.future_into_py(py, fut),
-        None => pyo3_async_runtimes::tokio::future_into_py(py, fut),
-    }
-}
-
 // --------------------------------------------------------------------- tasks
 
 struct Task {
     id: u64,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `None` while polled (so an abort or a wake from inside the poll never locks it) and once done.
     fut: Mutex<Option<BoxFuture<'static, ()>>>,
     runtime: Weak<LoopRuntime>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     queued: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     aborted: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     finished: AtomicBool,
 }
 
@@ -647,18 +616,26 @@ impl Wake for Task {
     }
 }
 
-impl Abort for Arc<Task> {
+impl Task {
     /// Dropped at its next pump, on the loop thread (never inside the caller's own poll).
-    fn abort(&self) {
+    fn abort(self: &Arc<Self>) {
         if self.finished.load(Ordering::Acquire) {
             return;
         }
         self.aborted.store(true, Ordering::Release);
         self.schedule();
     }
+}
+
+struct TaskAbort(Arc<Task>);
+
+impl Abort for TaskAbort {
+    fn abort(&self) {
+        self.0.abort();
+    }
 
     fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
+        self.0.finished.load(Ordering::Acquire)
     }
 }
 
@@ -668,7 +645,7 @@ struct LoopSpawner(Arc<LoopRuntime>);
 
 impl Spawner for LoopSpawner {
     fn spawn(&self, f: BoxFuture<'static, ()>) -> AbortHandle {
-        AbortHandle::new(self.0.spawn_task(f))
+        AbortHandle::new(TaskAbort(self.0.spawn_task(f)))
     }
 }
 
@@ -685,14 +662,12 @@ struct Timer {
 struct LoopWait {
     rt: Arc<LoopRuntime>,
     at: Ts,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     timer: Option<Arc<Mutex<Timer>>>,
 }
 
 impl Future for LoopWait {
     type Output = ();
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if self.rt.now() >= self.at {
             return Poll::Ready(());
@@ -707,8 +682,12 @@ impl Future for LoopWait {
             }
             return Poll::Pending;
         }
-        #[rustfmt::skip]
-        let timer = Arc::new(Mutex::new(Timer { fired: false, dropped: false, waker: Some(cx.waker().clone()), handle: None }));
+        let timer = Arc::new(Mutex::new(Timer {
+            fired: false,
+            dropped: false,
+            waker: Some(cx.waker().clone()),
+            handle: None,
+        }));
         self.timer = Some(Arc::clone(&timer));
         let (rt, at) = (Arc::clone(&self.rt), self.at);
         if rt.on_loop_thread() {
@@ -748,7 +727,7 @@ impl Clock for LoopClock {
         self.0.now()
     }
 
-    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
+    fn wait_until(&self, at: Ts) -> BoxFuture<'_, ()> {
         Box::pin(async move { LoopWait { rt: Arc::clone(&self.0), at, timer: None }.await })
     }
 

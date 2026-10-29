@@ -8,7 +8,6 @@ mod generated;
 mod host_errors;
 #[cfg(test)]
 mod host_tests;
-mod loop_time;
 mod node;
 mod values;
 #[cfg(test)]
@@ -17,7 +16,6 @@ mod conversion_tests;
 pub use bridge::*;
 pub use buffers::*;
 pub use host_errors::*;
-pub use loop_time::{LoopRuntime, VIRTUAL_TIME_ENV, future_into_py};
 pub use node::{Convert, HostSource, ItemSink, ItemStream, NodeCallState, NodeCalls, item_stream};
 pub use values::*;
 

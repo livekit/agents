@@ -58,7 +58,7 @@ impl ItemStream {
         let rx = Arc::clone(&self.rx);
         super::future_into_py(py, async move {
             rx.lock().await.take();
-            Ok(())
+            Ok(Python::attach(|py| py.None()))
         })
     }
 }

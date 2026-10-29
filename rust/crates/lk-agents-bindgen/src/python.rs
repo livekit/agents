@@ -928,7 +928,7 @@ fn body_parts(s: &Sig, call: &Call, wrap: Option<(&syn::Ident, Wrap)>) -> (Token
                 let out = reply.await;
                 #awaited_fail
                 #convert
-                ::std::result::Result::Ok(out)
+                ::pyo3::Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
             })
         };
         return (pre, rest);
@@ -958,7 +958,7 @@ fn body_parts(s: &Sig, call: &Call, wrap: Option<(&syn::Ident, Wrap)>) -> (Token
                 let out = #target;
                 #fail
                 #convert
-                ::std::result::Result::Ok(#ok)
+                ::pyo3::Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(#ok, py))
             })
         };
         return (pre, rest);

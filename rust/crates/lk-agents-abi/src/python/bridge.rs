@@ -48,21 +48,52 @@ pub trait HostBridge: Send + Sync + 'static {
     }
 }
 
+/// The binding's async runtime, submitted by `lk-agents-py`: the in-place expansions await on it
+/// and take their ambient clock and spawner from it.
+pub struct HostRuntime {
+    /// A future resolving to a host value as the awaitable a `_core` coroutine method returns.
+    pub future_into_py: for<'py> fn(
+        Python<'py>,
+        crate::BoxFuture<'static, PyResult<Py<PyAny>>>,
+    ) -> PyResult<Bound<'py, PyAny>>,
+    /// The running loop's clock when it is on virtual time.
+    pub loop_clock: fn(Python<'_>) -> Option<std::sync::Arc<dyn crate::Clock>>,
+    /// The running loop's executor when it is on virtual time, else the process runtime's.
+    pub spawner: fn() -> std::sync::Arc<dyn crate::Spawner>,
+}
+
+inventory::collect!(HostRuntime);
+
+fn linked() -> Option<&'static HostRuntime> {
+    inventory::iter::<HostRuntime>.into_iter().next()
+}
+
+fn host_runtime() -> &'static HostRuntime {
+    linked().expect("no host runtime is linked (lk-agents-py)")
+}
+
+/// A Rust future resolving to a host value as the awaitable a `_core` coroutine method returns, on
+/// [`HostRuntime`].
+pub fn future_into_py(
+    py: Python<'_>,
+    fut: impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
+) -> PyResult<Bound<'_, PyAny>> {
+    (host_runtime().future_into_py)(py, Box::pin(fut))
+}
+
 /// A parameter marked `#[host(ambient)]`: the runtime's own clock and spawner, never the host's.
 pub trait Ambient {
     fn ambient() -> Self;
 }
 
-/// The scoped clock ([`HostClock`]), else the running loop's when it is on virtual time
-/// ([`LoopRuntime`](super::LoopRuntime)), else the wall clock.
+/// The scoped clock ([`HostClock`]), else the running loop's when it is on virtual time, else the
+/// wall clock.
 impl Ambient for std::sync::Arc<dyn crate::Clock> {
     fn ambient() -> Self {
-        CLOCK_SCOPE.with(|s| s.borrow().last().cloned()).unwrap_or_else(
-            || match Python::try_attach(super::LoopRuntime::current).flatten() {
-                Some(rt) => rt.clock(),
-                None => std::sync::Arc::new(crate::RealClock::new()),
-            },
-        )
+        CLOCK_SCOPE
+            .with(|s| s.borrow().last().cloned())
+            .or_else(|| crate::utils::clock::LoopClock::ambient().0)
+            .unwrap_or_else(|| std::sync::Arc::new(crate::RealClock::new()))
     }
 }
 
@@ -74,9 +105,8 @@ pub use crate::utils::clock::HostClock;
 
 impl Ambient for crate::utils::clock::LoopClock {
     fn ambient() -> Self {
-        crate::utils::clock::LoopClock(
-            Python::try_attach(super::LoopRuntime::current).flatten().map(|rt| rt.clock()),
-        )
+        let loop_clock = linked().map(|runtime| runtime.loop_clock);
+        crate::utils::clock::LoopClock(loop_clock.and_then(|f| Python::try_attach(f).flatten()))
     }
 }
 
@@ -125,17 +155,10 @@ impl<T: ?Sized> ClockNone for ClockOf<'_, T> {
     }
 }
 
-/// The running loop's executor when it is on virtual time ([`LoopRuntime`](super::LoopRuntime)),
-/// else `pyo3_async_runtimes::tokio`'s runtime: a second runtime would split a chain's tasks from
-/// its awaited futures.
+/// [`HostRuntime::spawner`]: one runtime, so a chain's tasks never split from its awaited futures.
 impl Ambient for std::sync::Arc<dyn crate::Spawner> {
     fn ambient() -> Self {
-        match Python::try_attach(super::LoopRuntime::current).flatten() {
-            Some(rt) => rt.spawner(),
-            None => std::sync::Arc::new(crate::TokioSpawner::new(
-                pyo3_async_runtimes::tokio::get_runtime().handle().clone(),
-            )),
-        }
+        (host_runtime().spawner)()
     }
 }
 

@@ -112,7 +112,7 @@ mod python {
             if failed {
                 log::warn!(target: LOG, "one or more job shutdown callbacks failed or overran");
             }
-            Ok(())
+            Ok(Python::attach(|py| py.None()))
         })
     }
 

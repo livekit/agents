@@ -12,7 +12,10 @@ pub fn native(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream
     let at = &tr.ident;
     for x in &m.0 {
         if !(x.key == "native" || x.key == "native.refused") {
-            return Err(syn::Error::new_spanned(at, format!("native({}) has no meaning", x.key.trim_start_matches("native."))));
+            return Err(syn::Error::new_spanned(
+                at,
+                format!("native({}) has no meaning", x.key.trim_start_matches("native.")),
+            ));
         }
     }
     // A bare marker is declaration metadata: its generated Python reader uses HostNative.

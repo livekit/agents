@@ -10,8 +10,6 @@
   "host-call:rust/crates/lk-agents-abi/src/python/generated/worker.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/host_errors.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/host_tests.rs",
-  "host-call:rust/crates/lk-agents-abi/src/python/loop_time.rs",
-  "host-call:rust/crates/lk-agents-abi/src/python/mod.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/node.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/values.rs",
   "host-call:rust/crates/lk-agents-abi/src/storage/mod.rs",

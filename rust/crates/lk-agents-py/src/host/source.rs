@@ -11,7 +11,7 @@ pub fn recv<'py, T: Send + 'static>(
     to_py: fn(Python<'_>, T) -> PyResult<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let source = source.clone();
-    lk_agents_abi::python::future_into_py(py, async move {
+    super::future_into_py(py, async move {
         match source.pull().await {
             Ok(Pulled::Item(item)) => Python::attach(|py| to_py(py, item)).map(Some),
             Ok(Pulled::End | Pulled::Cancelled) => Ok(None),
@@ -30,7 +30,7 @@ pub fn aclose<'py, T: Send + 'static>(
     py: Python<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let source = source.clone();
-    lk_agents_abi::python::future_into_py(py, async move {
+    super::future_into_py(py, async move {
         if source.close(lk_agents_abi::python::NATIVE_CLOSE_DEADLINE).await
             == lk_agents_abi::Closed::TimedOut
         {
