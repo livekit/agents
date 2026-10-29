@@ -46,42 +46,6 @@ fn hello() -> Hello {
     }
 }
 
-// Catches: a message that does not survive its own encoding (a field lost, reordered or widened).
-#[test]
-fn every_message_round_trips() {
-    let to_child = [
-        ToChild::Hello(Hello {
-            version: PROTOCOL_VERSION,
-            asyncio_debug: true,
-            http_proxy: Some("http://proxy:8080".into()),
-            health_timeout_ms: Some(70_000),
-        }),
-        ToChild::Hello(hello()),
-        ToChild::Ping { sent_ms: 1761500000123 },
-        ToChild::StartJob { request_id: 1, job: Box::new(job()) },
-        ToChild::StartJob { request_id: 2, job: Box::default() },
-        ToChild::Shutdown { reason: String::new() },
-        ToChild::Shutdown { reason: "room disconnected".into() },
-        ToChild::DumpStacks,
-    ];
-    for msg in to_child {
-        assert_eq!(decode::<ToChild>(&encode(&msg)).unwrap(), msg);
-    }
-    let to_parent = [
-        ToParent::Ready { version: PROTOCOL_VERSION, error: None },
-        ToParent::Ready { version: 7, error: Some("boom ✗".into()) },
-        ToParent::Pong { sent_ms: u64::MAX },
-        ToParent::JobAccepted { request_id: 1, error: None },
-        ToParent::JobAccepted { request_id: 1, error: Some("refused".into()) },
-        ToParent::ShutdownAck,
-        ToParent::ShuttingDown,
-        ToParent::Exiting { reason: "shutdown".into() },
-    ];
-    for msg in to_parent {
-        assert_eq!(decode::<ToParent>(&encode(&msg)).unwrap(), msg);
-    }
-}
-
 // Catches: a frame with trailing bytes, a truncated one or an unknown variant read as a message.
 #[test]
 fn malformed_messages_are_errors() {

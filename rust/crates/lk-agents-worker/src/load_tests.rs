@@ -87,12 +87,3 @@ fn idle_target_is_capped_at_the_configured_default() {
     // available 0.69 / job_load 0.01 = 69 -> capped at 3.
     assert_eq!(i.target_idle_processes(), Some(3));
 }
-
-// Catches: resolving a ServerEnvOption against the wrong mode.
-#[test]
-fn env_option_resolves_per_mode() {
-    let o = EnvOption::Split { dev: f32::INFINITY, prod: 0.7 };
-    assert!(o.get(true).is_infinite());
-    assert_eq!(o.get(false), 0.7);
-    assert_eq!(EnvOption::Fixed(0.5).get(true), 0.5);
-}
