@@ -454,13 +454,8 @@ impl Inner {
         if sender.send(Ok(wire::success(id.clone(), current, None))).await.is_err() {
             return Ok(());
         }
-        let refs =
-            row.internal.as_ref().map(|internal| internal.streams.as_slice()).unwrap_or_default();
-        let resume = rpc::resume(&task, refs, offset.as_deref())?;
         let streams = self.storage().await?.response_streams();
-        let last = resume.len();
-        for (index, (stream, after)) in resume.into_iter().enumerate() {
-            let follow = !row.status.is_terminal() && index + 1 == last;
+        for rpc::Replay { stream, after, follow } in rpc::resume(&task, &row, offset.as_deref())? {
             let mut reader = streams.read(&stream.stream_id, after.as_deref(), follow);
             loop {
                 let next = tokio::select! {

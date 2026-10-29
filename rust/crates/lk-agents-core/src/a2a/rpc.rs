@@ -458,13 +458,25 @@ pub fn sent(id: JsonRpcId, row: &TaskRow, context: &str, history: Option<usize>)
     wire::success(id, a2a::SendMessageResponse::Task(wire::task(row, context, history, true)), None)
 }
 
-/// Where a resubscribe resumes among the task's streams `refs`: the first stream to read, and
-/// the cursor's offset within it. A cursor of another task or stream is invalid.
+/// One response stream a resubscribe reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Replay<'a> {
+    pub stream: &'a StreamInfo,
+    /// The offset to read after; `None` from the start.
+    pub after: Option<String>,
+    /// Keep reading as it grows: only the last stream of a task still running.
+    pub follow: bool,
+}
+
+/// What a resubscribe to `row` reads: its response streams from the cursor's, the first from
+/// the cursor's offset. A cursor of another task or stream is invalid.
 pub fn resume<'a>(
     task: &TaskRef,
-    refs: &'a [StreamInfo],
+    row: &'a TaskRow,
     offset: Option<&str>,
-) -> Result<Vec<(&'a StreamInfo, Option<String>)>, StorageError> {
+) -> Result<Vec<Replay<'a>>, StorageError> {
+    let refs =
+        row.internal.as_ref().map(|internal| internal.streams.as_slice()).unwrap_or_default();
     let cursor = offset.map(wire::Cursor::decode).transpose()?;
     let start = match &cursor {
         None => 0,
@@ -476,10 +488,15 @@ pub fn resume<'a>(
                 StorageError::Invalid("response cursor belongs to a different task".into())
             })?,
     };
+    let last = refs.len().saturating_sub(start + 1);
     Ok(refs[start..]
         .iter()
         .enumerate()
-        .map(|(i, s)| (s, cursor.as_ref().filter(|_| i == 0).map(|c| c.offset.clone())))
+        .map(|(i, stream)| Replay {
+            stream,
+            after: cursor.as_ref().filter(|_| i == 0).map(|c| c.offset.clone()),
+            follow: !row.status.is_terminal() && i == last,
+        })
         .collect())
 }
 
@@ -703,13 +720,22 @@ mod tests {
             json!(error_code::TASK_NOT_CANCELABLE)
         );
         assert_eq!(code(canceled(id(), &task, Some(&row(TaskState::Canceled)))), Value::Null);
-        let streams = [StreamInfo { stream_id: "s1".into(), expires_at: 0 }];
+        let mut running = row(TaskState::Working);
+        let stream = |id: &str| StreamInfo { stream_id: id.into(), expires_at: 0 };
+        running.internal = Some(lk_agents_abi::storage::TaskInternal {
+            ask: None,
+            streams: vec![stream("s1"), stream("s2")],
+        });
         let other =
             wire::Cursor { task_id: "AST_2".into(), stream_id: "s1".into(), offset: "3".into() };
-        assert!(resume(&task, &streams, Some(&other.encode())).is_err());
+        assert!(resume(&task, &running, Some(&other.encode())).is_err());
         let ours = wire::Cursor { task_id: "AST_1".into(), ..other };
-        let from = resume(&task, &streams, Some(&ours.encode())).unwrap();
-        assert_eq!(from[0].1.as_deref(), Some("3"));
+        let from = resume(&task, &running, Some(&ours.encode())).unwrap();
+        assert_eq!(from[0].after.as_deref(), Some("3"));
+        // only the last stream of a running task is followed
+        assert_eq!(from.iter().map(|r| r.follow).collect::<Vec<_>>(), [false, true]);
+        let ended = TaskRow { status: TaskState::Completed, ..running.clone() };
+        assert!(resume(&task, &ended, None).unwrap().iter().all(|r| !r.follow));
     }
 
     #[test]
