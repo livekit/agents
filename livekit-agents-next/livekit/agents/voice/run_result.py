@@ -22,7 +22,7 @@ from typing import (
 )
 
 from opentelemetry import trace
-from typing_extensions import TypeAliasType, TypeVar as TypeVarDefault
+from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
 from .. import _core, llm
 from .._core_view import to_core_item
@@ -76,8 +76,15 @@ class RunUsage:
         return result
 
 
+class _SettledArgs(TypedDict):
+    new_messages: list[llm.ChatItem]
+    all_messages: list[llm.ChatItem]
+    usage: RunUsage
+    verbatim: str | None
+
+
 class _Settled:
-    """What both branches of a settled invocation expose: its history and usage."""
+    """What every branch of a settled invocation exposes: its history and usage."""
 
     def __init__(
         self,
@@ -115,7 +122,7 @@ class RunCompleted(_Settled, Generic[Output_T]):
 
     status: Literal["completed"] = "completed"
 
-    def __init__(self, *, output: Output_T, **settled: Any) -> None:
+    def __init__(self, *, output: Output_T, **settled: Unpack[_SettledArgs]) -> None:
         super().__init__(**settled)
         self.output = output
 
@@ -128,7 +135,9 @@ class RunInputRequired(_Settled):
 
     status: Literal["input_required"] = "input_required"
 
-    def __init__(self, *, question: str, _answer_tool: str | None = None, **settled: Any) -> None:
+    def __init__(
+        self, *, question: str, _answer_tool: str | None = None, **settled: Unpack[_SettledArgs]
+    ) -> None:
         super().__init__(**settled)
         self.question = question
         # the tool the person's next message is handed to (`InputRequired(tool=)`)
@@ -601,7 +610,7 @@ _SessionMockTools: weakref.WeakKeyDictionary[VoiceSession, MockTools] = weakref.
 
 
 def mock_tools(
-    agent: Agent, mocks: dict[str, Callable[..., Any]]
+    agent: Agent, mocks: dict[str, Callable[..., object]]
 ) -> contextlib.AbstractContextManager[None]:
     """Replace the bodies of ``agent``'s tools by mocks, sync or async, keyed by tool name, for
     the runs started inside the block and the calls they make, and for no other concurrent run::

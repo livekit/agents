@@ -110,6 +110,7 @@ from .events import (
     AgentState,
     CloseEvent,
     CloseReason,
+    Context_T,
     ConversationItemAddedEvent,
     ErrorEvent,
     EventTypes,
@@ -157,7 +158,6 @@ __all__ = [
 TextTransforms = Literal["filter_markdown", "filter_emoji"]
 """A transform the core applies to the text it sends to the TTS."""
 
-Userdata_T = TypeVar("Userdata_T", default=Any)
 
 # the hook running in this context, for `generate_reply(on_enter=)`
 _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
@@ -244,7 +244,7 @@ class VoiceActivityVideoSampler:
 _CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
 
 
-class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
     def __init__(
         self,
         *,
@@ -253,8 +253,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | str] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
-        userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
-        context: Any = None,
+        context: Context_T | None = None,
         thread: Thread | None = None,
         video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -268,7 +267,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             stt, vad, llm, tts: The providers, or a LiveKit Inference model string. ``vad``
                 defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
             tools: Tools shared by every agent of the session.
-            userdata, context, thread: Read by tools through ``RunContext``.
+            context, thread: Read by tools through ``RunContext``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             turn_detection, endpointing_opts: The session's turn completion and endpointing
                 policy, as ``update_options`` changes them.
@@ -321,8 +320,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
         )
 
-        self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-        self._context = context
+        # `ctx.context` on this call; `None` when the session has no application context
+        self._context = cast("Context_T", context)
         self._thread = thread
         # `ctx.execution_id` on this call: one conversational task across its turns
         self._execution_id = shortuuid("execution_")
@@ -380,16 +379,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     # --- state ---------------------------------------------------------------------------
 
     @property
-    def userdata(self) -> Userdata_T:
-        if self._userdata is None:
-            raise ValueError("VoiceSession userdata is not set")
-        return self._userdata
-
-    @userdata.setter
-    def userdata(self, value: Userdata_T) -> None:
-        self._userdata = value
-
-    @property
     def store(self) -> ContextStore:
         """The call's store for explicit ``load_context`` and ``save_context``: the thread's
         lane, or memory when the call has no thread or its lane did not load."""
@@ -398,7 +387,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._store
 
     @property
-    def context(self) -> Any:
+    def context(self) -> Context_T:
         """Application data and services supplied for this session."""
         return self._context
 
@@ -506,44 +495,44 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """The built-in steps, for a registered callback to wrap."""
         return DefaultPipeline(self)
 
-    def llm_node(self, f: LLMNode[Userdata_T]) -> LLMNode[Userdata_T]:
+    def llm_node(self, f: LLMNode[Context_T]) -> LLMNode[Context_T]:
         """Register the model request of every reply."""
         self._register("llm_node", f)
         return f
 
-    def stt_node(self, f: STTNode[Userdata_T]) -> STTNode[Userdata_T]:
+    def stt_node(self, f: STTNode[Context_T]) -> STTNode[Context_T]:
         """Register the recognition of the person's audio."""
         self._register("stt_node", f)
         return f
 
-    def tts_node(self, f: TTSNode[Userdata_T]) -> TTSNode[Userdata_T]:
+    def tts_node(self, f: TTSNode[Context_T]) -> TTSNode[Context_T]:
         """Register the synthesis of each spoken segment."""
         self._register("tts_node", f)
         return f
 
-    def transcription_node(self, f: TranscriptionNode[Userdata_T]) -> TranscriptionNode[Userdata_T]:
+    def transcription_node(self, f: TranscriptionNode[Context_T]) -> TranscriptionNode[Context_T]:
         """Register the transcript of each spoken segment, before the transcription output."""
         self._register("transcription_node", f)
         return f
 
     def realtime_audio_output_node(
-        self, f: RealtimeAudioOutputNode[Userdata_T]
-    ) -> RealtimeAudioOutputNode[Userdata_T]:
+        self, f: RealtimeAudioOutputNode[Context_T]
+    ) -> RealtimeAudioOutputNode[Context_T]:
         """Register a realtime model's audio, before playout."""
         self._register("realtime_audio_output_node", f)
         return f
 
     def on_user_turn_completed(
-        self, f: UserTurnCompletedHook[Userdata_T]
-    ) -> UserTurnCompletedHook[Userdata_T]:
+        self, f: UserTurnCompletedHook[Context_T]
+    ) -> UserTurnCompletedHook[Context_T]:
         """Register the hook run when the person's turn ends, before the reply; it edits the turn
         in place, or raises ``StopResponse`` to skip the reply."""
         self._register("on_user_turn_completed", f)
         return f
 
     def on_user_turn_exceeded(
-        self, f: UserTurnExceededHook[Userdata_T]
-    ) -> UserTurnExceededHook[Userdata_T]:
+        self, f: UserTurnExceededHook[Context_T]
+    ) -> UserTurnExceededHook[Context_T]:
         """Register the hook run when the person spoke past the turn limit without a reply,
         in place of the default short reply."""
         self._register("on_user_turn_exceeded", f)
@@ -787,7 +776,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._core is not None:
             self._core.shutdown(drain=drain)
 
-    async def __aenter__(self) -> VoiceSession[Userdata_T]:
+    async def __aenter__(self) -> VoiceSession[Context_T]:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -1389,7 +1378,7 @@ class VoiceTaskFailed(ToolError):
     for its model."""
 
 
-class VoiceTask(Generic[Output_T]):
+class VoiceTask(Generic[Output_T, Context_T]):
     """One bounded live interaction run by ``agent`` on the active ``VoiceSession``.
 
     Like ``TextSession``, a ``VoiceTask`` is not an ``Agent``: it runs one. Await ``run()``
@@ -1400,11 +1389,11 @@ class VoiceTask(Generic[Output_T]):
     ``on_exit`` or ``on_enter``. Cancelling the await, or closing the session, ends the task.
     """
 
-    def __init__(self, *, agent: Agent[Any, Output_T]) -> None:
+    def __init__(self, *, agent: Agent[Context_T, Output_T]) -> None:
         self._agent = agent
 
     @property
-    def agent(self) -> Agent[Any, Output_T]:
+    def agent(self) -> Agent[Context_T, Output_T]:
         return self._agent
 
     async def run(self) -> Output_T:

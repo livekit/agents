@@ -22,8 +22,10 @@ from livekit.agents import (
     RunResult,
     StopResponse,
     VoiceSession,
+    VoiceTask,
     llm,
 )
+from livekit.agents.beta.workflows import GetEmailResult, GetEmailTask
 
 
 @dataclass
@@ -148,3 +150,10 @@ def any_agent(agent: Agent) -> None: ...
 any_agent(backend)
 any_agent(fnol)
 any_agent(FrontDesk(instructions=""))
+
+
+assert_type(VoiceTask(agent=typed), VoiceTask[Claim, AppContext])
+
+
+async def collect() -> None:
+    assert_type(await GetEmailTask().run(), GetEmailResult)

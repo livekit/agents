@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import aiohttp
+from pydantic import JsonValue
 
 import livekit.rtc as rtc
 from livekit import api
@@ -249,7 +250,7 @@ class JobContext:
         self._primary_session: VoiceSession | None = None
         self._room.on("participant_connected", self._participant_available)
 
-        self._log_fields: dict[str, Any] = {}
+        self._log_fields: dict[str, JsonValue] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
         self._handlers_with_filter: list[logging.Handler] = []
 
@@ -637,7 +638,7 @@ class JobContext:
         return self._room.local_participant.identity
 
     @property
-    def log_context_fields(self) -> dict[str, Any]:
+    def log_context_fields(self) -> dict[str, JsonValue]:
         """
         Returns the current dictionary of log fields that will be injected into log records.
 
@@ -650,12 +651,12 @@ class JobContext:
         return self._log_fields
 
     @log_context_fields.setter
-    def log_context_fields(self, fields: dict[str, Any]) -> None:
+    def log_context_fields(self, fields: dict[str, JsonValue]) -> None:
         """
         Sets the log fields to be injected into future log records.
 
         Args:
-            fields (dict[str, Any]): A dictionary of key-value pairs representing
+            fields (dict[str, JsonValue]): A dictionary of key-value pairs representing
                 structured data to attach to each log entry. Typically includes contextual
                 information like job ID, trace information, or worker metadata.
         """
@@ -891,7 +892,7 @@ class JobContext:
     def add_participant_entrypoint(
         self,
         entrypoint_fnc: Callable[[JobContext, rtc.RemoteParticipant], Coroutine[None, None, None]],
-        *_: Any,
+        *,
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
     ) -> None:

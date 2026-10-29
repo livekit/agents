@@ -22,6 +22,8 @@ from .log import logger
 from .telemetry import capture_content_enabled, trace_types, tracer
 
 if TYPE_CHECKING:
+    from pydantic import JsonValue
+
     from .inference import LLMModels
     from .inference.llm import ChatCompletionOptions
 
@@ -456,7 +458,7 @@ def _judge_tools() -> list[Tool]:
     async def answer(raw_arguments: dict[str, object]) -> None:
         raise RuntimeError("judge tools are read by the core, never called")
 
-    schemas = cast("list[dict[str, object]]", _core._core_judge_tool_schemas())
+    schemas = cast("list[dict[str, JsonValue]]", _core._core_judge_tool_schemas())
     return [function_tool(answer, raw_schema=s) for s in schemas]
 
 

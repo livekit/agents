@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from ..log import logger
 
@@ -23,7 +23,7 @@ class BoundedDict(OrderedDict[K, V]):
         while self.maxsize is not None and len(self) > self.maxsize:
             self.popitem(last=False)
 
-    def update_value(self, key: K, **kwargs: Any) -> V | None:
+    def update_value(self, key: K, **kwargs: object) -> V | None:
         """Update the value of a key with the given keyword arguments.
         Only update the value if the field value is not None and the field exists on the value.
 
@@ -50,7 +50,7 @@ class BoundedDict(OrderedDict[K, V]):
                 )
         return value
 
-    def set_or_update(self, key: K, factory: Callable[[], V], **kwargs: Any) -> V:
+    def set_or_update(self, key: K, factory: Callable[[], V], **kwargs: object) -> V:
         """Set a value for a key if it doesn't exist, or update it if it does.
 
         Args:

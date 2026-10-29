@@ -172,7 +172,7 @@ class MCPServerHTTP(MCPServer):
         url: str,
         transport_type: Literal["sse", "streamable_http"] | None = None,
         allowed_tools: list[str] | None = None,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float = 5,
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,

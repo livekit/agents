@@ -20,6 +20,7 @@ from typing import (
     overload,
 )
 
+from pydantic import JsonValue
 from typing_extensions import ParamSpec, TypeVar
 
 from .. import inference, llm, stt, tts
@@ -564,7 +565,7 @@ class Agent(Generic[Context_T, Output_T]):
         *,
         name: str | None = None,
         description: str | None = None,
-        raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+        raw_schema: RawFunctionDescription | dict[str, JsonValue] | None = None,
         flags: ToolFlag = ToolFlag.NONE,
         on_duplicate: DuplicateMode = "allow",
         duplicate_scope: DuplicateScope = "name",
@@ -579,7 +580,7 @@ class Agent(Generic[Context_T, Output_T]):
         *,
         name: str | None = None,
         description: str | None = None,
-        raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+        raw_schema: RawFunctionDescription | dict[str, JsonValue] | None = None,
         flags: ToolFlag = ToolFlag.NONE,
         on_duplicate: DuplicateMode = "allow",
         duplicate_scope: DuplicateScope = "name",

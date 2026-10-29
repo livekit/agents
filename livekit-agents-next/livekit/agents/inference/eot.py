@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+import aiohttp
+from pydantic import JsonValue
+
 from livekit import rtc
 
 from .. import _core, utils
@@ -64,7 +67,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         local_fallback: bool = True,
-        http_session: Any = None,
+        http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -123,18 +126,18 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def provider(self) -> str:
         return "livekit"
 
-    def describe_options(self) -> dict[str, Any]:
+    def describe_options(self) -> dict[str, JsonValue]:
         """What the session report shows: the model, where it runs and the user's overrides."""
-        options: dict[str, Any] = {
+        options: dict[str, JsonValue] = {
             "model": self.model,
             "provider": self.provider,
             "sample_rate": self._sample_rate,
             "local_fallback": self._local_fallback,
         }
         if (overrides := self._detector.overrides) is not None:
-            options["threshold_overrides"] = overrides
+            options["threshold_overrides"] = _json(overrides)
         if (overrides := self._detector.backchannel_overrides) is not None:
-            options["backchannel_threshold_overrides"] = overrides
+            options["backchannel_threshold_overrides"] = _json(overrides)
         return options
 
     def _warn_overrides(self) -> None:
@@ -180,3 +183,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
 
 TurnDetectorStream = _core.EotStream
+
+
+def _json(overrides: float | dict[str, float]) -> JsonValue:
+    return dict[str, JsonValue](overrides) if isinstance(overrides, dict) else overrides

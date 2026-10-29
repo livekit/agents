@@ -417,7 +417,7 @@ class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
 def function_tool(
     f: Callable[_P, _R],
     *,
-    raw_schema: RawFunctionDescription | dict[str, Any],
+    raw_schema: RawFunctionDescription | dict[str, JsonValue],
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
@@ -429,7 +429,7 @@ def function_tool(
 def function_tool(
     f: None = None,
     *,
-    raw_schema: RawFunctionDescription | dict[str, Any],
+    raw_schema: RawFunctionDescription | dict[str, JsonValue],
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
@@ -470,7 +470,7 @@ def function_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
+    raw_schema: RawFunctionDescription | dict[str, JsonValue] | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
@@ -499,8 +499,9 @@ def function_tool(
 
         if needs_approval:
             raise ValueError("needs_approval needs a typed tool, not a raw_schema")
-        if not raw_schema.get("name"):
-            raise ValueError("raw function name cannot be empty")
+        name = raw_schema.get("name")
+        if not name or not isinstance(name, str):
+            raise ValueError("raw function name must be a non-empty string")
 
         if "parameters" not in raw_schema:
             # support empty parameters
@@ -511,7 +512,7 @@ def function_tool(
             schema["parameters"] = _core.inject_confirm_duplicate(schema["parameters"])
 
         info = RawFunctionToolInfo(
-            name=raw_schema["name"],
+            name=name,
             raw_schema=schema,
             flags=flags,
             on_duplicate=on_duplicate,

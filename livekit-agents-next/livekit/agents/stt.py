@@ -212,7 +212,7 @@ class StreamAdapterWrapper(RecognizeStream):
         *,
         stt: STT,
         native: _core.FallbackStt | _core.SttStreamAdapter,
-        language: Any,
+        language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
         # the core's chain reconnects: the stream does not retry on top of it

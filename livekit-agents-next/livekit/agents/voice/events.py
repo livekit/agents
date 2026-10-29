@@ -244,7 +244,6 @@ def event_dict(event: AgentEvent, *, json: bool = False) -> dict[str, Any]:
 
 
 Context_T = TypeVar("Context_T", default=Any)
-Userdata_T = TypeVar("Userdata_T", default=Any)
 
 
 class RunContext(Generic[Context_T]):
@@ -260,7 +259,7 @@ class RunContext(Generic[Context_T]):
         self,
         *,
         function_call: FunctionCall | None,
-        session: VoiceSession[Any] | None = None,
+        session: VoiceSession[Context_T] | None = None,
         speech_handle: SpeechHandle | None = None,
         run: _TextRun[Any] | None = None,
     ) -> None:
@@ -279,7 +278,7 @@ class RunContext(Generic[Context_T]):
         self._expert_answer: asyncio.Future[str] | None = None
 
     @property
-    def live_session(self) -> VoiceSession[Any] | None:
+    def live_session(self) -> VoiceSession[Context_T] | None:
         """The ``VoiceSession`` of the call; ``None`` outside a call."""
         return self._session
 
@@ -295,7 +294,7 @@ class RunContext(Generic[Context_T]):
         return self._speech_handle
 
     @property
-    def agent(self) -> Agent[Context_T, Any]:
+    def agent(self) -> Agent[Context_T, object]:
         """The agent this invocation runs; in a session's pipeline callback, the agent holding
         the call."""
         from .agent import _BindingContextVar
@@ -324,7 +323,7 @@ class RunContext(Generic[Context_T]):
         """The application context supplied to this invocation."""
         if self._run is not None:
             return self._run.context  # type: ignore[no-any-return]
-        return self._call().context  # type: ignore[no-any-return]
+        return self._call().context
 
     @property
     def usage(self) -> RunUsage:
@@ -348,7 +347,7 @@ class RunContext(Generic[Context_T]):
         hooks = self._run.hooks if self._run is not None else None
         return hooks.task_id if hooks is not None else None
 
-    def _call(self) -> VoiceSession[Any]:
+    def _call(self) -> VoiceSession[Context_T]:
         if self._session is None:
             raise RuntimeError("no live session: this RunContext is not on a call")
         return self._session
@@ -408,7 +407,7 @@ class RunContext(Generic[Context_T]):
             core.filler_stop(filler)
 
     @asynccontextmanager
-    async def foreground(self) -> AsyncIterator[VoiceSession[Any]]:
+    async def foreground(self) -> AsyncIterator[VoiceSession[Context_T]]:
         """Wait for idle, then hold the floor while interactive work runs (
         a ``say``), so no other speech or deferred tool reply lands in between."""
         session = self._call()

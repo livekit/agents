@@ -50,6 +50,7 @@ from .run_result import (
     RunNoOutput,
     RunResult,
     RunUsage,
+    _SettledArgs,
 )
 
 if TYPE_CHECKING:
@@ -289,7 +290,7 @@ def settled_result(
     )
     if accumulate:
         run.usage._add(usage)
-    common: dict[str, Any] = {
+    common: _SettledArgs = {
         "new_messages": [from_core_item(i) for i in result.new_messages],
         "all_messages": [from_core_item(i) for i in result.all_messages],
         "usage": usage,

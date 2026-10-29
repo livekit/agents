@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import weakref
-from collections.abc import Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from .. import _core, llm
 from .._generated import speech_defaults
@@ -138,7 +138,7 @@ class SpeechHandle:
             except Exception as e:
                 logger.warning(f"error in done_callback: {callback}", exc_info=e)
 
-    async def wait_if_not_interrupted(self, aw: list[asyncio.Future[Any]]) -> None:
+    async def wait_if_not_interrupted(self, aw: Sequence[Awaitable[object]]) -> None:
         """Wait for ``aw``, unless the speech is interrupted first; ``aw`` is never cancelled."""
         gathered = asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True)
         interrupted = asyncio.ensure_future(self._core.wait_for_interrupted())

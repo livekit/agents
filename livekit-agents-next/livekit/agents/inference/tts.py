@@ -3,6 +3,8 @@ from __future__ import annotations
 import functools
 from typing import Any, Literal, TypedDict
 
+import aiohttp
+
 from .. import _bindings, _core, tts
 from .._generated.inference_tts import FallbackModel
 from .._generated.language import LanguageCode
@@ -169,7 +171,7 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: Any = None,
+        http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
