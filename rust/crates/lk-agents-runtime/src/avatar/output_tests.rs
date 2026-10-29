@@ -2,7 +2,7 @@ use super::*;
 use lk_agents_abi::voice::io::{AudioOutputExt, PlaybackEvent, PlaybackObserver};
 use lk_agents_abi::{TokioSpawner, VirtualClock};
 use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind, TrackSource};
-use lk_agents_voice::avatar::stream_segment;
+use lk_agents_voice::avatar::{RPC_PLAYBACK_STARTED, stream_segment};
 
 #[derive(Default)]
 struct Events(Mutex<Vec<String>>);
@@ -401,7 +401,7 @@ async fn a_delayed_finish_from_a_reused_stream_id_cannot_finish_a_new_output_gen
     assert_ne!(old_method, new_method);
     assert!(f.room.local_participant().invoke_rpc(&old_method, "avatar", payload).is_none());
     // A callback already dispatched before unregistration retains the old key as well.
-    assert_eq!(f.out.inner.on_playback_finished(old, payload), "reject: stale playback segment");
+    assert_eq!(f.out.inner.on_playback_finished(old, payload), Reply::Stale);
     assert!(f.out.tracker().has_pending_segment(new));
     assert_eq!(
         f.room.local_participant().invoke_rpc(&new_method, "avatar", payload).as_deref(),

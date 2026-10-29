@@ -15,10 +15,9 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{
     AbortHandle, AudioFrame, Clock, Closed, Spawner, SpawnerExt, TaskSet, Ts, unix_secs,
 };
-use lk_agents_voice::avatar::output::{Finish, OutputState};
+use lk_agents_voice::avatar::output::{Finish, OutputState, Reply, check_caller, report_routes};
 use lk_agents_voice::avatar::{
-    AUDIO_STREAM_TOPIC, FinishedPayload, LOG, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED,
-    RPC_PLAYBACK_STARTED, playback_method, stream_name,
+    AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED, playback_method, stream_name,
 };
 use tokio::sync::watch;
 
@@ -173,28 +172,26 @@ impl Inner {
             state.core.register(segment.key, token.clone()).map_err(output_error)?;
             state.core.continued(segment.key)
         };
-        for base in [RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED] {
-            if base == RPC_PLAYBACK_STARTED && !self.wait_playback_start {
-                continue;
-            }
+        for &base in report_routes(self.wait_playback_start) {
             let method =
                 playback_method(base, &token).map_err(|error| IoError::Rtc(error.to_string()))?;
             let target = Arc::downgrade(self);
             let key = segment.key;
             let handler = RpcHandler::new(move |caller, payload| {
-                let Some(inner) = target.upgrade() else { return "reject: retired output".into() };
-                if caller != inner.destination {
-                    return "reject: unexpected participant".into();
+                let Some(inner) = target.upgrade() else { return Reply::Retired.wire() };
+                if let Err(reply) = check_caller(caller, &inner.destination) {
+                    return reply.wire();
                 }
-                if base == RPC_PLAYBACK_FINISHED {
+                let reply = if base == RPC_PLAYBACK_FINISHED {
                     inner.on_playback_finished(key, payload)
                 } else if continued
                     || inner.tracker.report_started(key, unix_secs(inner.clock.wall()))
                 {
-                    "ok".into()
+                    Reply::Ok
                 } else {
-                    "reject: stale playback segment".into()
-                }
+                    Reply::Stale
+                };
+                reply.wire()
             });
             self.room.local().register_rpc_method(method.clone(), handler)?;
             let retained =
@@ -208,37 +205,23 @@ impl Inner {
         Ok(continued)
     }
 
-    fn on_playback_finished(&self, key: PlaybackSegment, payload: &str) -> String {
-        let event = serde_json::from_str::<FinishedPayload>(payload)
-            .map_err(|e| e.to_string())
-            .and_then(|report| {
-                let playback_position = Duration::try_from_secs_f64(report.playback_position)
-                    .map_err(|e| e.to_string())?;
-                Ok(PlaybackFinished {
-                    playback_position,
-                    interrupted: report.interrupted,
-                    synchronized_transcript: report.synchronized_transcript,
-                })
-            });
-        let mut event = match event {
-            Ok(event) => event,
-            Err(error) => return format!("reject: {error}"),
-        };
-        let finish = self.segment.lock().unwrap_or_else(|p| p.into_inner()).core.finished(
-            key,
-            event.playback_position,
-            event.interrupted,
-        );
-        match finish {
-            None => return "reject: stale playback segment".into(),
-            Some(Finish::Continue { route }) => {
+    fn on_playback_finished(&self, key: PlaybackSegment, payload: &str) -> Reply {
+        let finish = self
+            .segment
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .core
+            .report_finished(key, payload);
+        let event = match finish {
+            Err(reply) => return reply,
+            Ok(Finish::Continue { route }) => {
                 self.reopen_segment(key, route);
-                return "ok".into();
+                return Reply::Ok;
             }
-            Some(Finish::Done { played }) => event.playback_position = played,
-        }
+            Ok(Finish::Done(event)) => event,
+        };
         if !self.tracker.playback_finished(key, event) {
-            return "reject: stale playback segment".into();
+            return Reply::Stale;
         }
         let timer = {
             let mut timer = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner());
@@ -252,7 +235,7 @@ impl Inner {
             timer.abort();
         }
         self.retire_segment(key);
-        "ok".into()
+        Reply::Ok
     }
 
     fn retire_segment(&self, key: PlaybackSegment) {
@@ -292,10 +275,7 @@ impl Inner {
 
     fn retire_route(&self, token: Option<AvatarPlaybackSegment>) {
         let Some(token) = token else { return };
-        for base in [RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED] {
-            if base == RPC_PLAYBACK_STARTED && !self.wait_playback_start {
-                continue;
-            }
+        for &base in report_routes(self.wait_playback_start) {
             let Ok(method) = playback_method(base, &token) else { continue };
             if let Err(error) = self.room.local().unregister_rpc_method(method) {
                 log::error!(target: LOG, error = error.to_string().as_str(); "failed to retire avatar playback route");

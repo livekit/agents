@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
+use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackFinished, PlaybackSegment};
+
+use super::{FinishedPayload, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputError {
@@ -13,11 +15,63 @@ pub enum OutputError {
     DifferentSegment,
 }
 
+/// The agent's answer to an avatar's playback report RPC.
+#[derive(Debug, PartialEq)]
+pub enum Reply {
+    Ok,
+    /// The report names a segment that already finished or retired.
+    Stale,
+    UnexpectedCaller,
+    /// The output that registered the route is gone.
+    Retired,
+    BadPayload(String),
+}
+
+impl Reply {
+    pub fn wire(self) -> String {
+        match self {
+            Reply::Ok => "ok".into(),
+            Reply::Stale => "reject: stale playback segment".into(),
+            Reply::UnexpectedCaller => "reject: unexpected participant".into(),
+            Reply::Retired => "reject: retired output".into(),
+            Reply::BadPayload(error) => format!("reject: {error}"),
+        }
+    }
+}
+
+/// The report routes each segment stream registers: `lk.playback_started` only when the agent
+/// waits for the avatar to start.
+pub fn report_routes(wait_playback_start: bool) -> &'static [&'static str] {
+    if wait_playback_start {
+        &[RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED]
+    } else {
+        &[RPC_PLAYBACK_FINISHED]
+    }
+}
+
+/// Only the avatar the output streams to reports its playback.
+pub fn check_caller(caller: &str, destination: &str) -> Result<(), Reply> {
+    if caller == destination { Ok(()) } else { Err(Reply::UnexpectedCaller) }
+}
+
+/// `lk.playback_finished`'s payload as the stream's finish.
+fn finished_report(payload: &str) -> Result<PlaybackFinished, Reply> {
+    let report = serde_json::from_str::<FinishedPayload>(payload)
+        .map_err(|error| Reply::BadPayload(error.to_string()))?;
+    let playback_position = Duration::try_from_secs_f64(report.playback_position)
+        .map_err(|error| Reply::BadPayload(error.to_string()))?;
+    Ok(PlaybackFinished {
+        playback_position,
+        interrupted: report.interrupted,
+        synchronized_transcript: report.synchronized_transcript,
+    })
+}
+
 /// What an avatar's `lk.playback_finished` does to its segment.
 #[derive(Debug, PartialEq)]
 pub enum Finish {
-    /// The segment is done, `played` of it heard over all its streams.
-    Done { played: Duration },
+    /// The segment is done; its position is what was heard over all its streams.
+    Done(PlaybackFinished),
     /// The avatar gave up on a stream the agent is still feeding (its idle timeout): the segment
     /// continues on a new stream; the given-up stream's route retires.
     Continue { route: Option<AvatarPlaybackSegment> },
@@ -85,20 +139,30 @@ impl OutputState {
         self.carried.get(&key).copied().filter(|_| !reopened)
     }
 
-    /// The avatar finished `key` having played `played` of its stream; `None` for a segment
-    /// already retired. Only an uninterrupted finish of the segment still capturing continues it.
+    /// The avatar's `lk.playback_finished` for `key`'s stream, `payload` as it sent it.
+    pub fn report_finished(
+        &mut self,
+        key: PlaybackSegment,
+        payload: &str,
+    ) -> Result<Finish, Reply> {
+        let report = finished_report(payload)?;
+        self.finished(key, report).ok_or(Reply::Stale)
+    }
+
+    /// The avatar finished `key`'s stream; `None` for a segment already retired. Only an
+    /// uninterrupted finish of the segment still capturing continues it.
     pub fn finished(
         &mut self,
         key: PlaybackSegment,
-        played: Duration,
-        interrupted: bool,
+        mut report: PlaybackFinished,
     ) -> Option<Finish> {
         let route = self.outstanding.get_mut(&key)?;
         let carried = self.carried.get(&key).copied().unwrap_or_default();
-        if interrupted || self.active != Some(key) {
-            return Some(Finish::Done { played: carried + played });
+        if report.interrupted || self.active != Some(key) {
+            report.playback_position += carried;
+            return Some(Finish::Done(report));
         }
-        self.carried.insert(key, carried + played);
+        self.carried.insert(key, carried + report.playback_position);
         Some(Finish::Continue { route: route.take() })
     }
 
@@ -201,14 +265,16 @@ mod tests {
         state.admit(key(1)).unwrap();
         state.register(key(1), token("first")).unwrap();
         let ms = Duration::from_millis;
+        let played =
+            |at| PlaybackFinished { playback_position: ms(at), ..PlaybackFinished::default() };
         assert_eq!(
-            state.finished(key(1), ms(10), false),
+            state.finished(key(1), played(10)),
             Some(Finish::Continue { route: Some(token("first")) })
         );
         state.admit(key(1)).expect("the agent keeps feeding the segment");
         state.register(key(1), token("second")).unwrap();
         assert_eq!(state.flush(key(1)), None, "the continuation stream reports its own finish");
-        assert_eq!(state.finished(key(1), ms(20), false), Some(Finish::Done { played: ms(30) }));
+        assert_eq!(state.finished(key(1), played(20)), Some(Finish::Done(played(30))));
     }
 
     #[test]
