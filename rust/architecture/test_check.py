@@ -16,11 +16,11 @@ from check import (
     length_violations,
     path_violations,
     pyo3_violations,
-    use_violations,
     ratchet,
-    warning_violations,
     read_baselines,
     tracked_rust_paths,
+    use_violations,
+    warning_violations,
 )
 
 
@@ -417,7 +417,7 @@ class ExecutorContracts(unittest.TestCase):
                 # Comments, doc comments and strings name `tokio::spawn` without using it.
                 "rust/crates/lk-agents-runtime/src/voice/reply.rs": (
                     "/// Spawned through the injected Spawner, never `tokio::spawn`.\n"
-                    "fn f() { // not tokio::time\n let s = \"tokio::spawn\"; /* select! { x } */ }\n"
+                    'fn f() { // not tokio::time\n let s = "tokio::spawn"; /* select! { x } */ }\n'
                 ),
                 # Outside the executors: the process runtime owns the Tokio runtime.
                 "rust/crates/lk-agents-runtime/src/process.rs": "fn f() { tokio::spawn(a); }\n",
@@ -480,7 +480,9 @@ class Pyo3Contracts(unittest.TestCase):
             )
             # Another use in an item already carrying one grows its count; removing a use
             # elsewhere does not pay for it.
-            grown = dict(uses, **{f"{err}:impl FromHostErr for E::from_host:pyo3::Python::attach": 3})
+            grown = dict(
+                uses, **{f"{err}:impl FromHostErr for E::from_host:pyo3::Python::attach": 3}
+            )
             del grown[f"{err}:<file>:pyo3::prelude"]
             self.assertEqual(
                 ratchet(grown, uses),

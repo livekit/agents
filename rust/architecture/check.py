@@ -183,7 +183,8 @@ def host_call_violations(root: Path, paths: list[str]) -> set[str]:
 # The runtime executors the DST runs (decision 92): they spawn and sleep only through the injected
 # Spawner and Clock, and every `select!` is `biased;`, so the DST's scheduler decides their order.
 EXECUTORS = tuple(
-    f"rust/crates/lk-agents-runtime/src/{module}/" for module in ("voice", "room_io", "avatar", "rtc")
+    f"rust/crates/lk-agents-runtime/src/{module}/"
+    for module in ("voice", "room_io", "avatar", "rtc")
 )
 TOKIO_RUNTIME = {
     "tokio-spawn": re.compile(r"\btokio::(?:task::)?spawn"),
