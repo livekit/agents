@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::turn::inference::EotStream as _;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 
 use lk_agents_inference::env::Env as _;
@@ -115,14 +116,14 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             stream.push_audio(lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160));
             let cancelled = stream.predict();
             stream.cancel_inference(false);
-            assert_eq!(cancelled.blocking_recv().unwrap().end_of_turn_probability, 0.0);
-            stream.flush();
+            assert_eq!(runtime.block_on(cancelled).unwrap().end_of_turn_probability, 0.0);
+            stream.flush(None);
             stream.push_audio(lk_agents_abi::AudioFrame::new(vec![1; 320], 16_000, 1, 160));
             queued = Some(stream.predict());
             // Later audio belongs to the next snapshot, even if construction has not finished.
             stream.push_audio(lk_agents_abi::AudioFrame::new(vec![2; 320], 16_000, 1, 160));
             if mode == "close" {
-                stream.aclose();
+                drop(stream.aclose());
             } else if !log_mode {
                 let (tx, rx) = std::sync::mpsc::sync_channel(1);
                 runtime.spawn(async move {
@@ -132,7 +133,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                     .expect("Tokio progresses during host construction");
             }
         });
-        assert_eq!(abandoned.blocking_recv().unwrap().end_of_turn_probability, 1.0);
+        assert_eq!(runtime.block_on(abandoned).unwrap().end_of_turn_probability, 1.0);
         runtime.block_on(async {
             let answer = tokio::time::timeout(Duration::from_secs(2), queued.unwrap())
                 .await
@@ -150,9 +151,9 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                 );
             }
         });
-        stream.aclose();
+        let closing = stream.aclose();
         runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(2), stream.wait_closed()).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), closing).await.unwrap();
         });
         if mode == "close" {
             assert!(seen.lock().unwrap().is_empty(), "settled replacement never ran after close");
@@ -237,11 +238,11 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
     assert!((answer.end_of_turn_probability - 0.7).abs() < 1e-9, "{answer:?}");
     assert!(!seen.lock().unwrap().is_empty(), "the local model heard the audio");
 
-    stream.aclose();
+    let closing = stream.aclose();
     let after =
         tokio::time::timeout(Duration::from_secs(5), stream.predict()).await.unwrap().unwrap();
     assert_eq!(after.end_of_turn_probability, 1.0, "a closed stream answers 1.0 at once");
-    stream.wait_closed().await;
+    closing.await;
 }
 
 #[test]
@@ -312,7 +313,6 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
             .unwrap();
         assert_eq!(next.end_of_turn_probability, 0.7);
         assert_eq!(constructions.load(std::sync::atomic::Ordering::SeqCst), 1);
-        stream.aclose();
-        stream.wait_closed().await;
+        stream.aclose().await;
     });
 }

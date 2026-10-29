@@ -10,11 +10,11 @@ use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdOptions, ThresholdOverride, TurnDetectorModel,
 };
 use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModels};
-use lk_agents_abi::{ApiConnectOptions, AudioFrame, EotPrediction, ProviderId};
+use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 
 use super::{
-    CloudOptions, CloudTransport, EotRequestId, EotSession, EotStream, EotTransport, LocalEotModel,
-    LocalTransport, MetricsCallback, TransportFactory, TransportShell,
+    CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,
+    EotTransport, LocalEotModel, LocalTransport, MetricsCallback, TransportFactory, TransportShell,
 };
 use crate::env::{Env, Standalone};
 
@@ -159,89 +159,14 @@ impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
         let session = EotSession::new(model, Arc::clone(&self.thresholds), self.local_fallback);
         let make = self.transports(headers, conn_options);
         let on_metrics = self.on_metrics.clone();
-        Ok(DetectorStream(EotStream::open(
+        Ok(EotStream::open(
             session,
             self.sample_rate,
             make,
             E::workers,
             on_metrics,
             spawner.as_ref(),
-        )))
-    }
-}
-
-/// `_core.EotStream`: a stream the detector opened, shared with its run loop.
-pub struct DetectorStream(Arc<EotStream>);
-
-impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
-    fn model(&self) -> TurnDetectorModel {
-        self.0.model()
-    }
-
-    fn is_fallback(&self) -> bool {
-        self.0.is_fallback()
-    }
-
-    fn is_degraded(&self) -> bool {
-        self.0.is_degraded()
-    }
-
-    async fn predict(&self) -> Result<EotPrediction, ProviderError> {
-        self.0.predict().await.map_err(|_| ApiError::new("turn detector stream closed").into())
-    }
-
-    fn cancel_inference(&self, timed_out: bool) {
-        self.0.cancel_inference(timed_out);
-    }
-
-    fn flush(&self, _reason: Option<String>) {
-        self.0.flush();
-    }
-
-    fn push_audio(&self, frame: AudioFrame) {
-        self.0.push_audio(frame);
-    }
-
-    fn end_input(&self) {
-        self.0.end_input();
-    }
-
-    async fn aclose(&self) {
-        self.0.aclose();
-        self.0.wait_closed().await;
-    }
-}
-
-impl lk_agents_abi::EotDetector for DetectorStream {
-    fn id(&self) -> ProviderId {
-        self.0.id()
-    }
-
-    fn push_audio(&self, frame: AudioFrame) {
-        self.0.push_audio(frame);
-    }
-
-    fn cancel(&self, timed_out: bool) {
-        self.0.cancel_inference(timed_out);
-    }
-
-    fn flush(&self, _reason: &str) {
-        self.0.flush();
-    }
-
-    fn thresholds(&self) -> Option<ThresholdOptions> {
-        Some(self.0.thresholds())
-    }
-
-    fn predict(
-        &self,
-        _timeout: Option<std::time::Duration>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
-        Box::pin(lk_agents_abi::turn::inference::EotStream::predict(self))
-    }
-
-    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(lk_agents_abi::turn::inference::EotStream::aclose(self))
+        ))
     }
 }
 
