@@ -21,7 +21,7 @@ from livekit.agents.http import (
     HSR_INTERNAL,
     HSR_PROTOCOL,
     HSR_TIMEOUT,
-    AgentHttp,
+    AgentRoutes,
     EndpointRequest,
     serve_endpoint,
 )
@@ -127,8 +127,8 @@ def parse_response(raw: bytes) -> tuple[h11.Response, bytes, h11.EndOfMessage]:
             raise AssertionError("response truncated")
 
 
-def app_with_routes() -> AgentHttp:
-    http = AgentHttp()
+def app_with_routes() -> AgentRoutes:
+    http = AgentRoutes()
 
     @http.get("/hello")
     async def hello(request: Request) -> Response:
@@ -203,7 +203,7 @@ def app_with_routes() -> AgentHttp:
 
 
 async def run_exchange(
-    http: AgentHttp, raw: bytes, info: EndpointRequest | None = None
+    http: AgentRoutes, raw: bytes, info: EndpointRequest | None = None
 ) -> FakeStream:
     stream = FakeStream()
     stream.feed(raw)

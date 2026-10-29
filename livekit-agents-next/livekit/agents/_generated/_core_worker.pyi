@@ -11,7 +11,7 @@ from livekit.agents.cli import _DevServer
 from livekit.agents.http import AsgiApplication, ExchangeStream
 from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
-from livekit.agents.worker import _ServerHost
+from livekit.agents.worker import _ServerCallbacks
 
 from .worker_cli import CliArgs, LogFields
 from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
@@ -293,7 +293,7 @@ class ServerConfig:
     def simulation(self, value: bool) -> None: ...
 
 class ServerRuntime:
-    def __init__(self, config: ServerConfig, host: _ServerHost) -> None: ...
+    def __init__(self, config: ServerConfig, host: _ServerCallbacks) -> None: ...
     @property
     def worker_id(self) -> str: ...
     @property

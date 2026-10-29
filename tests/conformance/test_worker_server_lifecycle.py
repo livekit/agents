@@ -6,7 +6,7 @@ import pytest
 
 from livekit.agents import _core
 from livekit.agents._generated.worker_options import ServerOptions
-from livekit.agents.http import AgentHttp, AsgiApplication
+from livekit.agents.http import AgentRoutes, AsgiApplication
 
 pytestmark = pytest.mark.unit
 
@@ -40,7 +40,7 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
     config = _core.ServerConfig(ServerOptions())
     config.simulation = True
     runtime = _core.ServerRuntime(config, host)
-    http = AgentHttp()
+    http = AgentRoutes()
     running = asyncio.ensure_future(
         runtime.run(
             devmode=True,

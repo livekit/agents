@@ -176,10 +176,10 @@ pub enum ToolTemplate {
 }
 
 /// The application callbacks of one agent definition, run by the host object of
-/// `livekit.agents.voice.agent_host.AgentHost` (its methods carry these names). Every call carries
-/// its [`Invocation`] and runs in a copy of the host context it captured; the caller's context is
-/// never entered or changed.
-#[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentHost"))]
+/// `livekit.agents.voice.agent_host.AgentCallbacks` (its methods carry these names). Every call
+/// carries its [`Invocation`] and runs in a copy of the host context it captured; the caller's
+/// context is never entered or changed.
+#[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentCallbacks"))]
 pub trait AgentHost: Send + Sync {
     /// The surrounding managed turn's verdict; true yields before a model call or delivery.
     #[host(await)]

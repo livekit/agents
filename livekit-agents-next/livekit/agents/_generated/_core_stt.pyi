@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from livekit.agents import VAD
-from livekit.agents._core_view import AvailabilityObserver
+from livekit.agents._core_view import FallbackListener
 from livekit.agents.stt import STT
 from livekit.agents.types import APIConnectOptions
 from livekit.rtc import AudioFrame
@@ -25,7 +25,7 @@ class FallbackStt:
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5.0,
-        on_availability: AvailabilityObserver | None = None,
+        on_availability: FallbackListener | None = None,
     ) -> None:
         """`stts` in order, each already streaming (the host wraps a recognize-only entry in its
         `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.

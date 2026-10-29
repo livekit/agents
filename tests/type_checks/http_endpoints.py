@@ -4,10 +4,10 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.websockets import WebSocket
 
-from livekit.agents.http import AgentHttp
+from livekit.agents.http import AgentRoutes
 
 
-async def endpoint_signatures(http: AgentHttp, request: Request, socket: WebSocket) -> None:
+async def endpoint_signatures(http: AgentRoutes, request: Request, socket: WebSocket) -> None:
     @http.get("/hello", name="hello")
     async def hello(request: Request) -> PlainTextResponse:
         return PlainTextResponse(request.url.path)

@@ -231,7 +231,7 @@ def _chat_ctx(items: list[_core.ChatItem] | None) -> NotGivenOr[llm.ChatContext]
     return NOT_GIVEN if items is None else llm.ChatContext([from_core_item(i) for i in items])
 
 
-class AvailabilityObserver(Protocol):
+class FallbackListener(Protocol):
     """A fallback adapter as its chain reports to it: an entry, by its index in the adapter's
     list, went unavailable or recovered; every entry is unavailable."""
 

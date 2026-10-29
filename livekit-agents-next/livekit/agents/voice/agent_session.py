@@ -111,7 +111,7 @@ from .events import (
     UserState,
     UserTurnExceededEvent,
 )
-from .remote_session import ConsoleCall, SessionPort
+from .remote_session import ConsoleCall, RemoteSessionAccess
 from .room_io import (
     AudioInputOptions,
     Room as _RtcRoom,
@@ -578,7 +578,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
                 keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
                 **{node: frame[node] for node in _NODES if node in frame},
-                remote_session=SessionPort(self) if hosting else None,
+                remote_session=RemoteSessionAccess(self) if hosting else None,
                 console=console,
                 # the core connects the job's room beside its opening
                 job=job_ctx if in_job and console is None else None,
@@ -959,7 +959,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _voice_agent(self, agent: Agent, *, task: bool = False) -> _core.VoiceAgent:
         """``agent`` as its callbacks run on this session: its definition over its tools and the
-        session's it lacks, its ``AgentHost`` and the context they run in, whose binding is this
+        session's it lacks, its ``AgentCallbacks`` and the context they run in, whose binding is this
         session's."""
         from .agent_host import _voice_tools
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from livekit.agents._core_view import AvailabilityObserver, Duplex
+from livekit.agents._core_view import Duplex, FallbackListener
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.llm.realtime import RealtimeModel
@@ -114,7 +114,7 @@ class FallbackLlm:
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         sticky: bool = False,
-        on_availability: AvailabilityObserver | None = None,
+        on_availability: FallbackListener | None = None,
     ) -> None: ...
     @property
     def active_index(self) -> int: ...
@@ -143,7 +143,7 @@ class FallbackTts:
         *,
         max_retry_per_tts: int = 2,
         sample_rate: int | None = None,
-        on_availability: AvailabilityObserver | None = None,
+        on_availability: FallbackListener | None = None,
     ) -> None: ...
     @property
     def active_index(self) -> int: ...

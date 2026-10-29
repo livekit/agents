@@ -47,7 +47,7 @@ pub(super) const RECOGNIZE: &str = r#"
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
-        self._core_attempts = _bindings.Attempts("stt_stream", conn_options, self._emit_error)
+        self._core_attempts = _bindings.AttemptLoop("stt_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -230,7 +230,7 @@ pub(super) const CHUNKED: &str = r#"
         self._event_ch = aio.Chan[{Audio}]()
         self._emitter: _core.AudioEmitter | None = None
         self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(False)
-        self._core_attempts = _bindings.Attempts("tts_batch", conn_options, self._emit_error)
+        self._core_attempts = _bindings.AttemptLoop("tts_batch", conn_options, self._emit_error)
         self._synthesize_task = asyncio.create_task(
             self._core_attempts.run(self._attempt, produced=self._produced),
             name="TTS._synthesize_task",
@@ -308,7 +308,7 @@ pub(super) const SYNTHESIZE: &str = r#"
         self._emitter: _core.AudioEmitter | None = None
         self._metrics = _core.TtsMetricState(True)
         self._segment_text = ""
-        self._core_attempts = _bindings.Attempts("tts_stream", conn_options, self._emit_error)
+        self._core_attempts = _bindings.AttemptLoop("tts_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(
             self._core_attempts.run(self._attempt, produced=self._produced, again=self._replay),
             name="TTS._main_task",
@@ -445,7 +445,7 @@ pub(super) const CHAT: &str = r#"
         self._conn_options = conn_options
         self._event_ch = _{Provider}EventChannel()
         self._metrics = _core.LlmMetricState(time.perf_counter())
-        self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
+        self._core_attempts = _bindings.AttemptLoop("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 

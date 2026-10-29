@@ -64,7 +64,7 @@ from .events import Context_T, UserTurnExceededEvent
 if TYPE_CHECKING:
     from .._generated.agent_run import RunSettled
     from ..inference import LLMModels, RealtimeModels
-    from .agent_host import AgentHost
+    from .agent_host import AgentCallbacks
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
     from .events import RunContext
@@ -264,7 +264,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._output_type_explicit = output_type is not None
         self._output_spec: Any = output_type if output_type is not None else str
         self._output_type: type[Any] = _output_type_of(self._output_spec)
-        self._host_instance: AgentHost | None = None
+        self._host_instance: AgentCallbacks | None = None
 
         if isinstance(llm, str):
             llm = inference.llm_from_model_string(llm)
@@ -455,13 +455,13 @@ class Agent(Generic[Context_T, Output_T]):
         return f
 
     @property
-    def _host(self) -> AgentHost:
+    def _host(self) -> AgentCallbacks:
         """The host side of this agent's invocations, built once its registrations froze."""
         if self._host_instance is None:
-            from .agent_host import AgentHost
+            from .agent_host import AgentCallbacks
 
             self._frozen = True
-            self._host_instance = AgentHost(self)
+            self._host_instance = AgentCallbacks(self)
         return self._host_instance
 
     def _definition(

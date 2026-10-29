@@ -129,7 +129,7 @@ class _ResponsesWebsocket:
         self,
         msg: Mapping[str, object],
         *,
-        attempts: _bindings.Attempts,
+        attempts: _bindings.AttemptLoop,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> AsyncGenerator[dict[str, JsonValue], None]:
         """Send ``msg`` and yield its events; ``attempts`` runs the read deadline."""

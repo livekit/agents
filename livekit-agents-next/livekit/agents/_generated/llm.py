@@ -313,7 +313,7 @@ class LLMStream(ABC):
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
         self._metrics = _core.LlmMetricState(time.perf_counter())
-        self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
+        self._core_attempts = _bindings.AttemptLoop("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 

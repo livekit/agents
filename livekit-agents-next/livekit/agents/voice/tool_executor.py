@@ -1,6 +1,6 @@
 """The tool handling options of an agent: the templates rendered around background tool calls
 (``ctx.update()``, duplicate handling, the deferred reply), set on the ``Agent`` and overridden by
-an ``AsyncToolset`` for its own tools. Calls themselves run through the agent's ``AgentHost``."""
+an ``AsyncToolset`` for its own tools. Calls themselves run through the agent's ``AgentCallbacks``."""
 
 from __future__ import annotations
 

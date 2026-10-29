@@ -1,5 +1,5 @@
 //! The agent server as the host drives it: its configuration, its runtime, and the host server
-//! (`worker._ServerHost`) that owns the job processes and the user's callbacks.
+//! (`worker._ServerCallbacks`) that owns the job processes and the user's callbacks.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -58,7 +58,7 @@ pub struct EndpointRoute {
 
 /// The job processes and the user's callbacks, which the server runtime calls on the host's
 /// loop. Which jobs to take, when, and whether job processes start at all are the runtime's.
-#[crate::host(proxy(host = "livekit.agents.worker._ServerHost"))]
+#[crate::host(proxy(host = "livekit.agents.worker._ServerCallbacks"))]
 pub trait ServerHost: Send + Sync {
     /// A job the runtime took, with the timeline it stamped; its LiveKit job id.
     #[host(await, name = "_core_launch_job")]

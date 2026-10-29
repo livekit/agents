@@ -12,7 +12,7 @@ import pytest
 from livekit.agents import AgentServer, JobContext, _core, cli
 from livekit.agents._generated.worker_cli import CliArgsConsole, CliArgsStart
 from livekit.agents.job import RunningJobInfo
-from livekit.agents.worker import _ServerHost
+from livekit.agents.worker import _ServerCallbacks
 
 pytestmark = pytest.mark.unit
 
@@ -93,10 +93,10 @@ async def test_native_simulated_job_reaches_python_launch_adapter(
 ) -> None:
     launched: list[RunningJobInfo] = []
 
-    async def launch(host: _ServerHost, info: RunningJobInfo) -> None:
+    async def launch(host: _ServerCallbacks, info: RunningJobInfo) -> None:
         launched.append(info)
 
-    monkeypatch.setattr(_ServerHost, "launch", launch)
+    monkeypatch.setattr(_ServerCallbacks, "launch", launch)
     server = AgentServer(num_idle_processes=0)
 
     @server.rtc_session()

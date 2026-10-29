@@ -73,7 +73,7 @@ def _new_stream(
     stream._speaking = False
     stream._last_partial_text = ""
     stream._start_time_offset = 0.0
-    stream._core_attempts = _bindings.Attempts(
+    stream._core_attempts = _bindings.AttemptLoop(
         "stt_stream", DEFAULT_API_CONNECT_OPTIONS, stream._emit_error
     )
     stream._event_ch = _EventSink()

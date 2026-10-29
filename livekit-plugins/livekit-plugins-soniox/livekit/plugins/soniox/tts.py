@@ -572,7 +572,7 @@ class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
     opts: _TTSOptions
-    read_deadline: _bindings.Attempts
+    read_deadline: _bindings.AttemptLoop
     audio_ended: bool = False
     # Client cancel and server abort produce identical `terminated` messages.
     # This flag is how recv loop tells them apart.
@@ -670,7 +670,7 @@ class _Connection:
         waiter: asyncio.Future[None],
         *,
         opts: _TTSOptions,
-        read_deadline: _bindings.Attempts,
+        read_deadline: _bindings.AttemptLoop,
     ) -> None:
         """Register a new stream and queue its config message."""
         if self._closed or self._error is not None:

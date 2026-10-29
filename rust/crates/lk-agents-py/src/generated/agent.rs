@@ -206,7 +206,7 @@ impl AgentRunUpdates {
 
 // Declared in rust/crates/lk-agents-abi/src/agent.rs.
 
-/// [`::lk_agents_abi::agent::AgentHost`] over a host `livekit.agents.voice.agent_host.AgentHost`.
+/// [`::lk_agents_abi::agent::AgentHost`] over a host `livekit.agents.voice.agent_host.AgentCallbacks`.
 #[derive(Clone)]
 pub struct AgentHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

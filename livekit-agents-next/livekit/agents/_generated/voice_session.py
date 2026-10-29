@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from livekit.agents.tts import TTS
     from livekit.agents.voice.agent_session import VoiceSession, _AgentHooks, _DynamicInstructions
     from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
-    from livekit.agents.voice.remote_session import SessionPort
+    from livekit.agents.voice.remote_session import RemoteSessionAccess
 
     from .._core import ChatItem
     from ..types import NotGivenOr
@@ -151,7 +151,7 @@ class VoiceSessionArgs:
     """The first agent's own `expressive`; `NOT_GIVEN` defers to the session's."""
     session_id: str | None = None
     """Prefixes the ids the session mints for chat items; `None` mints a random one."""
-    remote_session: SessionPort | None = None
+    remote_session: RemoteSessionAccess | None = None
     """Serve the remote session protocol (`lk agent simulate`, the dashboard, `lk agent
     console`) on the room's byte streams, or on `console`.
     """

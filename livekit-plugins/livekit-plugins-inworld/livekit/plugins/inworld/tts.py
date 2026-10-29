@@ -130,7 +130,7 @@ class _ContextState(Enum):
 class _ContextInfo:
     context_id: str
     state: _ContextState
-    read_deadline: _bindings.Attempts
+    read_deadline: _bindings.AttemptLoop
     emitter: tts.AudioEmitter | None = None
     waiter: asyncio.Future[None] | None = None
     input_sent: bool = False
@@ -291,7 +291,7 @@ class _InworldConnection:
         timeout: float | None,
         *,
         conn_options: APIConnectOptions,
-        read_deadline: _bindings.Attempts,
+        read_deadline: _bindings.AttemptLoop,
     ) -> tuple[str, asyncio.Future[None]]:
         """Acquire a new context for TTS synthesis.
 
@@ -711,7 +711,7 @@ class _ConnectionPool:
         timeout: float | None,
         *,
         conn_options: APIConnectOptions,
-        read_deadline: _bindings.Attempts,
+        read_deadline: _bindings.AttemptLoop,
     ) -> tuple[str, asyncio.Future[None], _InworldConnection]:
         """Acquire a context from the pool, creating new connections as needed.
 

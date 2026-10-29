@@ -1372,7 +1372,7 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/worker/remote_session.rs.
 
-/// [`::lk_agents_abi::worker::remote_session::SessionPort`] over a host `livekit.agents.voice.remote_session.SessionPort`.
+/// [`::lk_agents_abi::worker::remote_session::SessionPort`] over a host `livekit.agents.voice.remote_session.RemoteSessionAccess`.
 #[derive(Clone)]
 pub struct SessionPortProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -2611,7 +2611,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 
-/// [`::lk_agents_abi::worker::server_host::ServerHost`] over a host `livekit.agents.worker._ServerHost`.
+/// [`::lk_agents_abi::worker::server_host::ServerHost`] over a host `livekit.agents.worker._ServerCallbacks`.
 #[derive(Clone)]
 pub struct ServerHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

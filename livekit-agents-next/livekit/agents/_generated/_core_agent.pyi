@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from livekit.agents.llm import LLM
-from livekit.agents.voice.agent_host import AgentHost
+from livekit.agents.voice.agent_host import AgentCallbacks
 
 from .._core import ChatItem
 from .agent_run import AgentDefinition, EventExpectation, RunRequest, RunUpdate
@@ -21,7 +21,7 @@ class VoiceAgent:
     def __init__(
         self,
         definition: AgentDefinition,
-        host: AgentHost,
+        host: AgentCallbacks,
         host_context: object,
     ) -> None: ...
 
@@ -49,7 +49,7 @@ class AgentRunner:
     """Runs invocations of one agent definition: each `run` streams its updates, then its settled
     result; closing the stream cancels the invocation, whose work still settles.
     """
-    def __init__(self, definition: AgentDefinition, llm: LLM[Any], host: AgentHost) -> None:
+    def __init__(self, definition: AgentDefinition, llm: LLM[Any], host: AgentCallbacks) -> None:
         """The runner of `definition` on `llm`, its callbacks run by `host`."""
     def run(self, request: RunRequest) -> AgentRunUpdates:
         """Starts one invocation; nothing runs until the first pull."""

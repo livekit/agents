@@ -75,7 +75,7 @@ async def test_websocket_authenticates_once_for_multiple_streams() -> None:
                     MagicMock(),
                     waiter,
                     opts=tts._opts,
-                    read_deadline=_bindings.Attempts(
+                    read_deadline=_bindings.AttemptLoop(
                         "tts_stream", APIConnectOptions(), lambda *_: None
                     ),
                 )
@@ -132,7 +132,7 @@ async def test_connection_error_reaches_all_streams(
             MagicMock(),
             waiter,
             opts=tts._opts,
-            read_deadline=_bindings.Attempts("tts_stream", APIConnectOptions(), lambda *_: None),
+            read_deadline=_bindings.AttemptLoop("tts_stream", APIConnectOptions(), lambda *_: None),
         )
 
     try:
@@ -196,7 +196,7 @@ class _FakeConnection:
         waiter: asyncio.Future[None],
         *,
         opts: Any,
-        read_deadline: _bindings.Attempts,
+        read_deadline: _bindings.AttemptLoop,
     ) -> None:
         self.registered_ids.append(stream_id)
         self._streams[stream_id] = _StreamSlot(emitter, waiter)

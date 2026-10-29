@@ -38,8 +38,8 @@ class ConsoleCall:
         return _core.ConsoleIo(addr)
 
 
-class SessionPort:
-    """What a remote client asks of ``session`` that needs its objects (``_core.SessionPort``)."""
+class RemoteSessionAccess:
+    """What a remote client asks of ``session`` that needs its objects."""
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session

@@ -367,7 +367,7 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
-        self._core_attempts = _bindings.Attempts("stt_stream", conn_options, self._emit_error)
+        self._core_attempts = _bindings.AttemptLoop("stt_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 

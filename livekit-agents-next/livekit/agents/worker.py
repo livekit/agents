@@ -23,7 +23,7 @@ from ._generated.worker_server import (
     ProcessStartOptions,
     RunningJobInfo as CoreRunningJobInfo,
 )
-from .http import AgentHttp, AsgiApplication
+from .http import AgentRoutes, AsgiApplication
 from .ipc.launch import preload_module_names, validate_setup_fnc
 from .job import (
     JobAcceptArguments,
@@ -61,7 +61,7 @@ class RtcSessionOptions(TypedDict, total=False):
 
 
 @dataclass(frozen=True)
-class RtcDoor:
+class RtcSession:
     """The voice door: what ``rtc_session`` returns and ``AgentServer.add`` serves."""
 
     entrypoint: Entrypoint
@@ -70,10 +70,10 @@ class RtcDoor:
     on_simulation_end: Callable[[SimulationContext], Any] | None = None
 
 
-def rtc_session(**options: Unpack[RtcSessionOptions]) -> Callable[[Entrypoint], RtcDoor]:
+def rtc_session(**options: Unpack[RtcSessionOptions]) -> Callable[[Entrypoint], RtcSession]:
     """The voice door as a decorator with no handler: the entrypoint a job runs, as an
-    ``RtcDoor`` that ``AgentServer.add()`` serves."""
-    return lambda entrypoint: RtcDoor(entrypoint, **options)
+    ``RtcSession`` that ``AgentServer.add()`` serves."""
+    return lambda entrypoint: RtcSession(entrypoint, **options)
 
 
 class AgentHandler:
@@ -93,11 +93,11 @@ class AgentHandler:
 
     def __init__(self, *, lane: str | None = None) -> None:
         self.lane = lane
-        self.doors: list[RtcDoor | A2AEndpoint] = []
+        self.doors: list[RtcSession | A2AEndpoint] = []
 
     def add(
-        self, *doors: AgentHandler | RtcDoor | A2AEndpoint
-    ) -> tuple[AgentHandler | RtcDoor | A2AEndpoint, ...]:
+        self, *doors: AgentHandler | RtcSession | A2AEndpoint
+    ) -> tuple[AgentHandler | RtcSession | A2AEndpoint, ...]:
         for door in doors:
             self.doors.extend(door.doors if isinstance(door, AgentHandler) else [door])
         return doors
@@ -116,7 +116,7 @@ class AgentHandler:
             )
 
         def decorator(entrypoint: _EntrypointT) -> _EntrypointT:
-            self.add(RtcDoor(entrypoint, **options))
+            self.add(RtcSession(entrypoint, **options))
             return entrypoint
 
         return decorator
@@ -183,13 +183,13 @@ class AgentServer(AgentHandler):
         self._setup_fnc = validate_setup_fnc(setup_fnc)
         self._load_fnc = _load_fnc
         self._on_started: list[Callable[[], Any]] = []
-        self._rtc: RtcDoor | None = None
+        self._rtc: RtcSession | None = None
         # HTTP routes served alongside the agent through the LiveKit server at
         # /agents/{agent_name}/{deployment}/{path}; the text doors are mounted on it
-        self._http = AgentHttp()
+        self._http = AgentRoutes()
         self._a2a_endpoints: dict[str, A2AEndpoint] = {}
         self._runtime: _core.ServerRuntime | None = None
-        self._jobs: _ServerHost | None = None
+        self._jobs: _ServerCallbacks | None = None
 
     @property
     def storage(self) -> Storage | None:
@@ -197,8 +197,8 @@ class AgentServer(AgentHandler):
         return self._storage
 
     def add(
-        self, *doors: AgentHandler | RtcDoor | A2AEndpoint
-    ) -> tuple[AgentHandler | RtcDoor | A2AEndpoint, ...]:
+        self, *doors: AgentHandler | RtcSession | A2AEndpoint
+    ) -> tuple[AgentHandler | RtcSession | A2AEndpoint, ...]:
         """Serve what a module defined: ``AgentHandler``s and the doors of ``rtc_session`` and
         ``a2a_session``, the one voice door of the worker and text doors under ``/<endpoint>``.
         Returns them."""
@@ -207,7 +207,7 @@ class AgentServer(AgentHandler):
         served = len(self.doors)
         super().add(*doors)
         for door in self.doors[served:]:
-            if isinstance(door, RtcDoor):
+            if isinstance(door, RtcSession):
                 if self._rtc is not None:
                     raise RuntimeError("an AgentServer has one rtc_session")
                 self._rtc = door
@@ -231,7 +231,7 @@ class AgentServer(AgentHandler):
             unregistered: Run without registering, invisible to the dispatcher (the console).
         """
         _core.init(_core.Role.Worker)
-        self._jobs = _ServerHost(self)
+        self._jobs = _ServerCallbacks(self)
         self._runtime = _core.ServerRuntime(self._config, self._jobs)
         await self._runtime.run(
             devmode=devmode,
@@ -291,7 +291,7 @@ class AgentServer(AgentHandler):
             await self._runtime.aclose()
 
 
-class _ServerHost:
+class _ServerCallbacks:
     """What the core's server runtime calls on the host: the job processes and the user's
     callbacks. Which jobs to take, when they were taken and whether job processes start at all
     are the core's decisions."""

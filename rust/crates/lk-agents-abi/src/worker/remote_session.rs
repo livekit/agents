@@ -144,10 +144,10 @@ pub enum WireEvent {
 }
 
 /// What `SessionHost` asks of the session it hosts: the port the reference's reach-ins into
-/// `AgentSession` become (`voice/remote_session.py`'s `SessionPort`). An `Err` is a host failure
-/// (answered `"internal error"`); a `(value, error)` row's error becomes the response's `error`
-/// verbatim. The rows are the host's tuples, so each crosses as it is.
-#[crate::host(proxy(host = "livekit.agents.voice.remote_session.SessionPort"))]
+/// `AgentSession` become (`voice/remote_session.py`'s `RemoteSessionAccess`). An `Err` is a host
+/// failure (answered `"internal error"`); a `(value, error)` row's error becomes the response's
+/// `error` verbatim. The rows are the host's tuples, so each crosses as it is.
+#[crate::host(proxy(host = "livekit.agents.voice.remote_session.RemoteSessionAccess"))]
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
     #[host(await, name = "_core_chat_history")]

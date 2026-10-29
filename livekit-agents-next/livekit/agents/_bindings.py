@@ -123,7 +123,7 @@ def _now_ns() -> int:
     return int(asyncio.get_running_loop().time() * 1e9)
 
 
-class Attempts:
+class AttemptLoop:
     """Execute host callbacks as the shared supplied-time attempt machine authorizes them."""
 
     def __init__(
@@ -320,7 +320,7 @@ async def recognize(
 ) -> SpeechEvent:
     """``STT.recognize``: ``_recognize_impl`` in attempts, its metrics once it answers."""
     started = time.perf_counter()
-    attempts = Attempts("stt_batch", conn_options, stt._emit_error)
+    attempts = AttemptLoop("stt_batch", conn_options, stt._emit_error)
     event = await attempts.run(
         lambda: stt._recognize_impl(buffer, language=language, conn_options=conn_options)
     )

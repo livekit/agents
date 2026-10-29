@@ -1518,7 +1518,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
 
-/// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._core_view.AvailabilityObserver`.
+/// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._core_view.FallbackListener`.
 #[derive(Clone)]
 pub struct ChainObserverProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

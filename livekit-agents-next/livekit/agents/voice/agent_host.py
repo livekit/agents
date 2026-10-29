@@ -2,7 +2,7 @@
 (``_core.AgentRunner``) and a voice session's (``_core.VoiceAgent``).
 
 ``lk-agents-core``'s ``AgentRun`` decides what runs, when, and what an outcome means
-(continuation, approval, retries, phrasing); ``AgentHost`` only does host work: it binds and
+(continuation, approval, retries, phrasing); ``AgentCallbacks`` only does host work: it binds and
 validates tool arguments, runs tool bodies and classifies what they returned or raised, renders
 the dynamic instructions, read-backs and ``tool_handling`` templates, and validates output
 candidates. Each callback runs
@@ -93,7 +93,7 @@ if TYPE_CHECKING:
     from .agent import Agent
     from .agent_run import _TextRun
 
-__all__ = ["AgentHost", "ToolArgumentError", "prepare_arguments", "render_read_back"]
+__all__ = ["AgentCallbacks", "ToolArgumentError", "prepare_arguments", "render_read_back"]
 
 
 class ToolArgumentError(Exception):
@@ -157,7 +157,7 @@ async def render_read_back(prepared: _Prepared) -> ReadBackAnswer:
     return ReadBackAnswerQuestion(question=str(question))
 
 
-class AgentHost:
+class AgentCallbacks:
     """The host side of one ``Agent``'s invocations; shared by all of them."""
 
     def __init__(self, agent: Agent[Any, Any]) -> None:
@@ -545,7 +545,7 @@ def _current_run() -> _TextRun:
 
     run = _BindingContextVar.get(None)
     if not isinstance(run, _TextRun):
-        raise RuntimeError("an AgentHost callback ran outside its invocation's context")
+        raise RuntimeError("an agent callback ran outside its invocation's context")
     return run
 
 

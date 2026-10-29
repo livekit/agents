@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 if TYPE_CHECKING:
     from livekit.agents.llm import LLM
     from livekit.agents.types import APIConnectOptions
-    from livekit.agents.voice.agent_host import AgentHost
+    from livekit.agents.voice.agent_host import AgentCallbacks
 
     from .._core import ChatItem
     from .agent_run import AgentDefinition, RunError, RunResult, RunUsage, StreamEvent
@@ -191,7 +191,7 @@ class TextSessionAgent:
 
     definition: AgentDefinition
     llm: LLM
-    host: AgentHost
+    host: AgentCallbacks
     output_type_explicit: bool
     agent_tools: dict[str, LocalAgentTool]
     host_context: object

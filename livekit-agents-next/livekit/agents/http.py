@@ -48,7 +48,7 @@ _WebSocketEndpointT = TypeVar("_WebSocketEndpointT", bound=_WebSocketEndpoint)
 _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]
 
 
-class AgentHttp:
+class AgentRoutes:
     """The routes an agent serves, as a Starlette application: its text doors, mounted by
     ``AgentServer.add``, served through the LiveKit server at
     ``/agents/{agent_name}/{deployment}/{path}``; a handler reads the request's preamble as
@@ -186,7 +186,7 @@ async def serve_endpoint(
     stream: ExchangeStream,
     request: EndpointRequest,
     app: ASGIApp,
-    registry: AgentHttp | None = None,
+    registry: AgentRoutes | None = None,
 ) -> None:
     """Serve one exchange stream (an ``EndpointStream`` after its preamble, or any object with
     its five methods) with ``app``; ``registry`` keeps its WebSocket for draining."""
