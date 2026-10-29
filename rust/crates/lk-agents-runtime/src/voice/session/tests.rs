@@ -701,7 +701,7 @@ async fn options_view_changes_only_after_core_acceptance() {
 pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
     use lk_agents_abi::voice::session_options::{HostValue, SessionKwargs, TurnHandlingKwargs};
     SessionKwargs {
-        turn_handling: Some(TurnHandlingKwargs { turn_detection: None, ..Default::default() }),
+        turn_handling: Some(TurnHandlingKwargs::default()),
         stt_context_options: HostValue::NotGiven,
         max_tool_steps: 3,
         use_tts_aligned_transcript: Maybe::NotGiven,

@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NotRequired, TypedDict
+from typing import TYPE_CHECKING, NotRequired
+
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from livekit.agents.llm.tool_context import ToolFlag

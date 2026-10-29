@@ -570,6 +570,9 @@ pub enum HostForm {
     WireStrs,
     /// `#[host(handwritten(.., host = ".."))]`: the annotation the declaration gives.
     Annotation(String),
+    /// `#[host(handwritten(.., host = "..", py))]`: the annotation; its conversions are the
+    /// hand-written `crate::conversions::<type>_from_py` / `_to_py` of `lk-agents-py`.
+    Converted(String),
     /// A `#[host(record)]`: instances of the generated model (`_generated/<module>.py`), both ways.
     Record { module: String, name: String },
 }

@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict
+from typing import NotRequired
+
+from typing_extensions import TypedDict
 
 class FallbackModel(TypedDict):
     """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.

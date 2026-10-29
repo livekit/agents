@@ -499,7 +499,10 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
     let limit = setup.user_turn_max_words.is_some() || setup.user_turn_max_ms.is_some();
     SessionKwargs {
         turn_handling: Some(TurnHandlingKwargs {
-            turn_detection: turn_detection(setup.turn).map(TurnDetectionKwarg::Mode),
+            turn_detection: turn_detection(setup.turn)
+                .map_or(lk_agents_abi::Maybe::NotGiven, |m| {
+                    lk_agents_abi::Maybe::Given(TurnDetectionKwarg::Mode(m))
+                }),
             endpointing: Some(EndpointingKwargs {
                 mode: Some(if setup.dynamic_endpointing {
                     EndpointingMode::Dynamic

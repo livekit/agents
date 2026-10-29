@@ -13,6 +13,8 @@ use pyo3::prelude::*;
 
 /// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
 pub mod avatar_output;
+/// The conversions of the `handwritten(.., py)` types, which the generated code calls.
+pub mod conversions;
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
 /// Entering the host: a call in its operation's captured context, host streams and notices.

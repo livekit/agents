@@ -124,7 +124,7 @@ pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
     if let Some(u) = user_turn_limit {
         o.turn.user_turn_limit = user_turn_limit_options(&u);
     }
-    o.turn.detection = turn_detection.and_then(TurnDetectionKwarg::detection);
+    o.turn.detection = turn_detection.given().and_then(TurnDetectionKwarg::detection);
     o
 }
 

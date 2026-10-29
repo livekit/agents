@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         _core_VoiceStore,
     )
     from livekit.agents._core_view import TurnDetector
+    from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.job import JobContext
     from livekit.agents.llm import LLM
     from livekit.agents.stt import STT
@@ -74,7 +75,7 @@ class UpdateAgentArgs:
     """The agent's `min_consecutive_speech_delay` in seconds; `None` defers to the session's."""
     use_tts_aligned_transcript: bool | None = None
     """The agent's `use_tts_aligned_transcript`; `None` defers to the session's."""
-    expressive: NotGivenOr[bool | dict[str, object] | None] = NOT_GIVEN
+    expressive: NotGivenOr[bool | ExpressiveOptions | None] = NOT_GIVEN
     """The agent's `expressive`; `NOT_GIVEN` defers to the session's."""
     llm_node: AgentNodes | None = None
     tts_node: AgentNodes | None = None
@@ -146,7 +147,7 @@ class VoiceSessionArgs:
     stt_context: STTContextOptions | None = None
     keyterm_llm: LLM | None = None
     keyterm_tools: object | None = None
-    agent_expressive: NotGivenOr[bool | dict[str, object] | None] = NOT_GIVEN
+    agent_expressive: NotGivenOr[bool | ExpressiveOptions | None] = NOT_GIVEN
     """The first agent's own `expressive`; `NOT_GIVEN` defers to the session's."""
     session_id: str | None = None
     """Prefixes the ids the session mints for chat items; `None` mints a random one."""

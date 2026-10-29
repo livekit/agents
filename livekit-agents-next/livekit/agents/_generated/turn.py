@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/voice/session_options.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -8,15 +9,22 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NotRequired, TypeAlias
 
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
-    from ..voice.turn import TurnDetectionMode
+    from livekit.agents.voice.turn import TurnDetectionMode
+
+EndpointingMode: TypeAlias = Literal["fixed", "dynamic"]
+"""``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay."""
 
 
-class EndpointingOptions(TypedDict, total=False):
+InterruptionMode: TypeAlias = Literal["adaptive", "vad"]
+"""``"adaptive"`` for ML-based detection, ``"vad"`` for simple voice-activity detection."""
+
+
+class EndpointingOptions(TypedDict):
     """Configuration for endpointing.
 
     All keys are optional. Missing keys inherit from the session default
@@ -24,24 +32,24 @@ class EndpointingOptions(TypedDict, total=False):
     (at the ``AgentSession`` level).
     """
 
-    mode: Literal["fixed", "dynamic"]
+    mode: NotRequired[EndpointingMode]
     """Endpointing mode. ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay. Defaults to ``"fixed"``."""
-    min_delay: float
+    min_delay: NotRequired[float]
     """Minimum time (s) since last detected speech before declaring the
     user's turn complete. Defaults to ``0.5``.
     """
-    max_delay: float
+    max_delay: NotRequired[float]
     """Maximum time (s) the agent waits before terminating the turn.
     Defaults to ``3.0``.
     """
-    alpha: float
+    alpha: NotRequired[float]
     """Exponential moving average coefficient for dynamic endpointing.
     The higher the value, the more weight is given to the history.
     Defaults to ``0.9``. Only applies when mode is ``dynamic``.
     """
 
 
-class InterruptionOptions(TypedDict, total=False):
+class InterruptionOptions(TypedDict):
     """Configuration for interruption handling.
 
     All keys are optional. Missing keys inherit from the session default
@@ -51,34 +59,34 @@ class InterruptionOptions(TypedDict, total=False):
     ``mode`` absent means the session picks the best available strategy.
     """
 
-    enabled: bool
+    enabled: NotRequired[bool]
     """Whether interruptions are enabled. Defaults to ``True``."""
-    mode: Literal["adaptive", "vad"]
+    mode: NotRequired[InterruptionMode]
     """Interruption handling strategy. ``"adaptive"`` for ML-based
     detection, ``"vad"`` for simple voice-activity detection.
     Absent means auto-detect.
     """
-    discard_audio_if_uninterruptible: bool
+    discard_audio_if_uninterruptible: NotRequired[bool]
     """Drop buffered audio while the agent speaks and cannot be
     interrupted. Defaults to ``True``.
     """
-    min_duration: float
+    min_duration: NotRequired[float]
     """Minimum speech length (s) to register as an interruption.
     Defaults to ``0.5``.
     """
-    min_words: int
+    min_words: NotRequired[int]
     """Minimum word count to consider an interruption (STT only).
     Defaults to ``0``.
     """
-    resume_false_interruption: bool
+    resume_false_interruption: NotRequired[bool]
     """Resume the agent's speech after a false interruption.
     Defaults to ``True``.
     """
-    false_interruption_timeout: float | None
+    false_interruption_timeout: NotRequired[float | None]
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``.
     """
-    backchannel_boundary: float | tuple[float, float] | None
+    backchannel_boundary: NotRequired[float | tuple[float, float] | None]
     """Seconds near the start/end of each agent turn during which overlapping
     speech classified as a backchannel by the adaptive detector is suppressed
     (events flagged as interruptions still pass through). Use a tuple to apply
@@ -88,29 +96,29 @@ class InterruptionOptions(TypedDict, total=False):
     """
 
 
-class PreemptiveGenerationOptions(TypedDict, total=False):
+class PreemptiveGenerationOptions(TypedDict):
     """Configuration for preemptive generation."""
 
-    enabled: bool
+    enabled: NotRequired[bool]
     """Whether preemptive generation is enabled. Defaults to ``True``."""
-    preemptive_tts: bool
+    preemptive_tts: NotRequired[bool]
     """Whether to also run TTS preemptively before the turn is confirmed.
     When ``False`` (default), only LLM runs preemptively; TTS starts once the
     turn is confirmed and the speech is scheduled.
     """
-    max_speech_duration: float
+    max_speech_duration: NotRequired[float]
     """Maximum user speech duration (s) for which preemptive generation
     is attempted. Beyond this threshold, preemptive generation is skipped
     since long utterances are more likely to change and users may expect
     slower responses. Defaults to ``10.0``.
     """
-    max_retries: int
+    max_retries: NotRequired[int]
     """Maximum number of preemptive generation attempts per user turn.
     The counter resets when the turn completes. Defaults to ``3``.
     """
 
 
-class UserTurnLimitOptions(TypedDict, total=False):
+class UserTurnLimitOptions(TypedDict):
     """Configuration for detecting when a user has been speaking too long
     without the agent successfully responding.
 
@@ -122,19 +130,19 @@ class UserTurnLimitOptions(TypedDict, total=False):
     enable the feature.
     """
 
-    max_words: int | None
+    max_words: NotRequired[int | None]
     """Maximum accumulated word count before triggering. Uses the
     framework's WordTokenizer for counting. ``None`` disables word-based
     limiting. Defaults to ``None``.
     """
-    max_duration: float | None
+    max_duration: NotRequired[float | None]
     """Maximum wall-clock duration (seconds) since the user first started
     speaking in the current accumulation window. ``None`` disables
     duration-based limiting. Defaults to ``None``.
     """
 
 
-class TurnHandlingOptions(TypedDict, total=False):
+class TurnHandlingOptions(TypedDict):
     """Configuration for the turn handling system.
 
     Can be passed as a plain dict::
@@ -150,27 +158,20 @@ class TurnHandlingOptions(TypedDict, total=False):
     All keys are optional and default to sensible values.
     """
 
-    turn_detection: TurnDetectionMode | None
+    turn_detection: NotRequired[TurnDetectionMode | None]
     """Strategy for deciding when the user has finished speaking.
     Absent means the session auto-selects.
     """
-    endpointing: EndpointingOptions
+    endpointing: NotRequired[EndpointingOptions]
     """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``."""
-    interruption: InterruptionOptions
+    interruption: NotRequired[InterruptionOptions]
     """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
-    preemptive_generation: PreemptiveGenerationOptions
+    preemptive_generation: NotRequired[PreemptiveGenerationOptions]
     """Preemptive generation configuration. Use ``{"enabled": False}`` to disable."""
-    user_turn_limit: UserTurnLimitOptions
+    user_turn_limit: NotRequired[UserTurnLimitOptions]
     """User turn limit configuration. Use ``{"max_words": 50}`` to enable."""
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
 EndpointingOptions.__module__ = "livekit.agents.voice.turn"
 InterruptionOptions.__module__ = "livekit.agents.voice.turn"
 PreemptiveGenerationOptions.__module__ = "livekit.agents.voice.turn"

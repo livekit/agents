@@ -13,7 +13,7 @@ mod proxy;
 mod record;
 pub(crate) use proxy::boxed_future;
 use proxy::eager_future;
-use record::{record_entry, record_target, unit_enum};
+use record::{check_default, record_entry, record_target, unit_enum};
 
 /// Every `#[host(class)]` of the crate, in module order.
 pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
@@ -863,18 +863,22 @@ impl Resolver<'_> {
             }));
         }
         // Beside a derive (for another binding's record), `host` says Python crosses it by its own
-        // conversions all the same.
+        // conversions all the same; `py`: they are `lk-agents-py`'s `conversions` free functions.
         if let Some(own) = voc::find(&entries, "handwritten")
             && (!derives_host(attrs) || voc::find(&own.nested, "host").is_some())
         {
-            voc::only(at, &own.nested, &["extract", "emit", "host"])?;
+            voc::only(at, &own.nested, &["extract", "emit", "host", "py"])?;
             let host = voc::text(at, &own.nested, "host")?.ok_or_else(|| {
                 format!("{at}: handwritten(host = \"..\") is its host annotation")
             })?;
             let has = |w: &str| voc::find(&own.nested, w).is_some();
             return Ok(Ty::Record(Record {
                 rust,
-                host: HostForm::Annotation(host),
+                host: if has("py") {
+                    HostForm::Converted(host)
+                } else {
+                    HostForm::Annotation(host)
+                },
                 extract: has("extract"),
                 emit: has("emit"),
                 literal: false,
@@ -1117,28 +1121,6 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
             check_output(at, output)
         }
         _ => Ok(()),
-    }
-}
-
-fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Result<(), String> {
-    let Some(d) = default else { return Ok(()) };
-    let fits = match (ty, d) {
-        (Ty::Optional(_), Literal::None) => true,
-        // A transparent record crossing `None` (`records::check_none_defaults`).
-        (Ty::Record(Record { host: HostForm::Record { .. }, .. }), Literal::None) => true,
-        // A unit enum's string; the generated model's type check holds it to a member.
-        (Ty::Record(r), Literal::Str(_)) => r.literal && matches!(r.host, HostForm::Record { .. }),
-        (Ty::Optional(inner), d) => return check_default(at, inner, Some(d)),
-        (Ty::Bool, Literal::Bool(_))
-        | (Ty::Float, Literal::Float(_) | Literal::Int(_))
-        | (Ty::Str, Literal::Str(_)) => true,
-        (Ty::Int(i), Literal::Int(v)) => !i.rust().starts_with('u') || *v >= 0,
-        _ => false,
-    };
-    if fits {
-        Ok(())
-    } else {
-        Err(format!("{at}: default {d:?} is not a value of `{}`", ty.rust()))
     }
 }
 

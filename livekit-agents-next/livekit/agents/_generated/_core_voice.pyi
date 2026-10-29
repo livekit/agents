@@ -39,6 +39,7 @@ from .session_options import (
 )
 from .session_wire import StartPlan
 from .tool_report import ToolReport
+from .turn import InterruptionMode
 from .voice_session import UpdateAgentArgs, VoiceSessionArgs
 from .workflows import InstructionsArg
 
@@ -696,8 +697,8 @@ def resolve_interruption_detector(
     has_vad: bool,
     turn_detection: str | None,
     allow_interruptions: bool,
-    agent_mode: str | None,
-    session_mode: str | None,
+    agent_mode: InterruptionMode | None,
+    session_mode: InterruptionMode | None,
     hosted: bool,
     dev_mode: bool,
 ) -> InterruptionGateVerdict:

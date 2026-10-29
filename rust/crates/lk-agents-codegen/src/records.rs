@@ -117,6 +117,12 @@ pub(crate) fn conversion(module: &str, name: &str) -> String {
     format!("crate::generated::records::{module}::{}", cell(name).to_lowercase())
 }
 
+/// The hand-written conversions' path of a `handwritten(.., py)` type, without `_from_py`/`_to_py`.
+pub(crate) fn converted(r: &Record) -> String {
+    let name = r.rust.rsplit("::").next().expect("a path");
+    format!("crate::conversions::{}", crate::decl::resolve::snake(name))
+}
+
 fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
     if r.transparent {
         return transparent_rust(r, decls);
@@ -293,6 +299,9 @@ fn construct(class: &str, args: &str, kwargs: &str) -> String {
     format!("crate::host::construct({class}.as_any(), {args}, {kwargs})")
 }
 
+/// A typed_dict key holding a value: neither `None` nor `NOT_GIVEN`.
+const GIVEN: &str = "!v.is_none() && !::lk_agents_abi::python::is_not_given(&v)?";
+
 /// A `typed_dict` record's extract and emit bodies: keys of a plain dict. A `Maybe` key is absent
 /// when not given; an `Option` key with `default = None` is absent (or `None`) when it holds
 /// nothing; any other `Option` key is required and may be `None`.
@@ -315,14 +324,14 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
                 "match obj.get_item({key:?})? {{ Some(v) => ({})?, None => ::lk_agents_abi::Maybe::NotGiven }}",
                 read(&f.ty, "(&v)", &path)?
             ),
-            // `default = None`: absent and `None` alike hold nothing.
+            // `default = None`: absent, `None` and `NOT_GIVEN` alike hold nothing.
             Ty::Optional(inner) if omitted_none => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if !v.is_none() => Some(({})?), _ => None }}",
+                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => Some(({})?), _ => None }}",
                 read(inner, "(&v)", &path)?
             ),
-            // A defaulted key reads absent and `None` alike as its default.
+            // A defaulted key reads absent, `None` and `NOT_GIVEN` alike as its default.
             ty if let Some(default) = &f.default => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if !v.is_none() => ({})?, _ => {} }}",
+                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => ({})?, _ => {} }}",
                 read(ty, "(&v)", &path)?,
                 crate::adapter::rust_literal(default, ty)
             ),
@@ -493,6 +502,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         ),
         Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_from_py({v})", conversion(module, name))
+        }
+        Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
+            format!("{}_from_py({v})", converted(r))
         }
         Ty::Record(r) => {
             format!("{v}.extract::<{}>().map_err(::std::convert::Into::<PyErr>::into)", r.rust)

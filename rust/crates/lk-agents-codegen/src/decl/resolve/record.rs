@@ -454,3 +454,25 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
     }
     Ok(())
 }
+
+pub(super) fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Result<(), String> {
+    let Some(d) = default else { return Ok(()) };
+    let fits = match (ty, d) {
+        (Ty::Optional(_), Literal::None) => true,
+        // A transparent record crossing `None` (`records::check_none_defaults`).
+        (Ty::Record(Record { host: HostForm::Record { .. }, .. }), Literal::None) => true,
+        // A unit enum's string; the generated model's type check holds it to a member.
+        (Ty::Record(r), Literal::Str(_)) => r.literal && matches!(r.host, HostForm::Record { .. }),
+        (Ty::Optional(inner), d) => return check_default(at, inner, Some(d)),
+        (Ty::Bool, Literal::Bool(_))
+        | (Ty::Float, Literal::Float(_) | Literal::Int(_))
+        | (Ty::Str, Literal::Str(_)) => true,
+        (Ty::Int(i), Literal::Int(v)) => !i.rust().starts_with('u') || *v >= 0,
+        _ => false,
+    };
+    if fits {
+        Ok(())
+    } else {
+        Err(format!("{at}: default {d:?} is not a value of `{}`", ty.rust()))
+    }
+}

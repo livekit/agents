@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/voice/session_options.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -8,29 +9,61 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, NotRequired, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypeAlias
 
-from ..types import NotGivenOr
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ..voice.agent_session import SessionConnectOptions, TextTransforms
-    from ..voice.turn import (
-        EndpointingOptions,
-        InterruptionOptions,
-        TurnDetectionMode,
-        TurnHandlingOptions,
-    )
-    from .expressive import ExpressiveOptions
-    from .keyterms import STTContextOptions
+    from livekit.agents._generated.expressive import ExpressiveOptions
+    from livekit.agents._generated.keyterms import STTContextOptions
+    from livekit.agents.voice.agent_session import SessionConnectOptions, TextTransforms
+    from livekit.agents.voice.turn import TurnDetectionMode
 
-
-# The declared records.
-
+    from .turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 
 DetectorKind: TypeAlias = Literal["streaming"]
 """Picks the endpointing base and the turn machine's countdown arm."""
+
+
+class SessionKwargs(TypedDict):
+    """Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
+    (`stt`, `llm`, `tools`, ...) are legs, not options.
+    """
+
+    turn_handling: NotRequired[TurnHandlingOptions]
+    stt_context_options: STTContextOptions | None
+    max_tool_steps: int
+    use_tts_aligned_transcript: NotRequired[bool]
+    tts_text_transforms: NotRequired[Sequence[TextTransforms] | None]
+    """Unsaid, "none", or a set."""
+    min_consecutive_speech_delay: float
+    expressive: bool | ExpressiveOptions | None
+    aec_warmup_duration: NotRequired[float | None]
+    """Unsaid is the default warmup, `None` none at all (outbound SIP)."""
+    ivr_detection: bool
+    user_away_timeout: float | None
+    """`None` disables the away timer."""
+    transcription_timeout: float | None
+    """`None` disables the timeout, `0` arms it with nothing left to wait."""
+    session_close_transcript_timeout: float
+    conn_options: SessionConnectOptions
+
+
+class UpdateKwargs(TypedDict):
+    """`AgentSession.update_options(..)`'s option surface."""
+
+    endpointing_opts: NotRequired[EndpointingOptions]
+    turn_detection: NotRequired[TurnDetectionMode | None]
+    """`None` reverts to automatic selection (`Auto`)."""
+    expressive: NotRequired[bool | ExpressiveOptions | None]
+    keyterms: NotRequired[list[str]]
+    """The user-defined keyterms, replaced; the detected ones stay."""
+    interruption: NotRequired[InterruptionOptions]
+    """Merged over the session's interruption handling; its `mode` is set at construction."""
+    min_consecutive_speech_delay: NotRequired[float]
+    tts_text_transforms: NotRequired[Sequence[TextTransforms] | None]
 
 
 class SessionLegs(TypedDict):
@@ -132,43 +165,3 @@ class InterruptionGateVerdict(TypedDict):
     level: str | None
     """`"warning"` or `"info"`."""
     message: str | None
-
-
-class SessionKwargs(TypedDict):
-    """Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
-    (`stt`, `llm`, `tools`, ...) are legs, not options.
-    """
-
-    turn_handling: NotGivenOr[TurnHandlingOptions]
-    """`turn_handling=`, as written. `None` is `NOT_GIVEN`."""
-    stt_context_options: NotGivenOr[STTContextOptions]
-    max_tool_steps: int
-    use_tts_aligned_transcript: NotGivenOr[bool]
-    tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None]
-    """`NotGivenOr[Sequence[TextTransforms] | None]`: unsaid, "none", or a set."""
-    min_consecutive_speech_delay: float
-    expressive: bool | ExpressiveOptions
-    aec_warmup_duration: NotGivenOr[float | None]
-    """`NotGivenOr[float | None]`: unsaid is the default warmup, `None` none at all (outbound SIP)."""
-    ivr_detection: bool
-    user_away_timeout: float | None
-    """`float | None`: `None` disables the away timer."""
-    transcription_timeout: float | None
-    """`float | None`: `None` disables the timeout, `0` arms it with nothing left to wait."""
-    session_close_transcript_timeout: float
-    conn_options: NotGivenOr[SessionConnectOptions]
-
-
-class UpdateKwargs(TypedDict):
-    """`AgentSession.update_options(..)`'s option surface."""
-
-    endpointing_opts: NotGivenOr[EndpointingOptions]
-    turn_detection: NotGivenOr[TurnDetectionMode | None]
-    """`NotGivenOr[TurnDetectionMode | None]`: `None` reverts to automatic selection (`Auto`)."""
-    expressive: NotGivenOr[bool | ExpressiveOptions]
-    keyterms: NotGivenOr[list[str]]
-    """The user-defined keyterms, replaced; the detected ones stay."""
-    interruption: NotGivenOr[InterruptionOptions]
-    """Merged over the session's interruption handling; its `mode` is set at construction."""
-    min_consecutive_speech_delay: NotGivenOr[float]
-    tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None]

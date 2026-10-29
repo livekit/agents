@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Literal, TypedDict
 
+from typing_extensions import TypedDict
+
 # The declared records.
 
 

@@ -51,6 +51,11 @@ pub enum DetectorKind {
 }
 
 /// Which builtin transforms run between the segmenter and the TTS.
+#[crate::host(handwritten(
+    extract,
+    host = "collections.abc.Sequence[livekit.agents.voice.agent_session.TextTransforms]",
+    py
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -87,7 +92,8 @@ impl TextTransformSet {
     }
 }
 
-// An unknown literal is refused, never folded into a default.
+/// ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay.
+#[crate::host(record(module = "turn", extract))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
     what: "endpointing mode",
     value: s.to_owned(),
@@ -101,13 +107,13 @@ pub enum EndpointingMode {
     Dynamic,
 }
 
-// An unknown literal is refused, never folded into a default.
+/// ``"adaptive"`` for ML-based detection, ``"vad"`` for simple voice-activity detection.
+#[crate::host(record(module = "turn", extract))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
     what: "interruption mode",
     value: s.to_owned(),
     expected: "\"adaptive\" or \"vad\"",
 }))]
-#[crate::host(string)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -117,6 +123,7 @@ pub enum InterruptionMode {
 }
 
 /// `interruption["backchannel_boundary"]`: a scalar applies to both edges, a pair keeps them apart.
+#[crate::host(handwritten(extract, host = "float | tuple[float, float]", py))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackchannelBoundary {
     Both(f64),
@@ -141,6 +148,7 @@ impl BackchannelBoundary {
 
 /// `SessionConnectOptions`: each leg's retry budget and timeout; not given (`None`) is the
 /// provider's own policy, else the defaults.
+#[crate::host(handwritten(extract, host = "livekit.agents.voice.agent_session.SessionConnectOptions", py))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SessionConnOptions {
     pub stt: Option<crate::ApiConnectOptions>,
@@ -149,6 +157,7 @@ pub struct SessionConnOptions {
 }
 
 /// A kwarg whose value is a host object, or a dict that holds one: only presence crosses.
+#[crate::host(handwritten(extract, host = "livekit.agents._generated.keyterms.STTContextOptions | None", py))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostValue {
     #[default]
@@ -163,6 +172,7 @@ impl HostValue {
 }
 
 /// Of a detector object only whether it streams crosses.
+#[crate::host(handwritten(extract, host = "livekit.agents.voice.turn.TurnDetectionMode | None", py))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnDetectionKwarg {
     Mode(TurnDetection),
@@ -184,39 +194,38 @@ impl TurnDetectionKwarg {
 pub type LegSet = SessionLegs;
 
 // In these groups a `///` is the reference's `voice/turn.py` docstring verbatim; Rust notes are
-// `//`. The dicts are `total=False`: an outer `Option` is a key's absence.
+// `//`. Every key is optional: `Option` with `default = None` reads absent, `None` and
+// `NOT_GIVEN` alike as unset; `Maybe<Option<_>>` keeps an explicit `None` ("off") apart.
 
 /// Configuration for endpointing.
 ///
 /// All keys are optional. Missing keys inherit from the session default
 /// (at the ``Agent`` level) or use the documented defaults
 /// (at the ``AgentSession`` level).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
+#[crate::host(record(
     module = "turn",
+    name = "EndpointingOptions",
     path = "livekit.agents.voice.turn",
-    name = "EndpointingOptions"
-)]
-#[binding(extract, emit, from_items)]
+    typed_dict,
+    extract
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct EndpointingKwargs {
     /// Endpointing mode. ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay. Defaults to ``"fixed"``.
-    #[python(ty = "Literal[\"fixed\", \"dynamic\"]")]
-    #[binding(skip)]
+    #[host(default = None)]
     pub mode: Option<EndpointingMode>,
     /// Minimum time (s) since last detected speech before declaring the
     /// user's turn complete. Defaults to ``0.5``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub min_delay: Option<f64>,
     /// Maximum time (s) the agent waits before terminating the turn.
     /// Defaults to ``3.0``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub max_delay: Option<f64>,
     /// Exponential moving average coefficient for dynamic endpointing.
     /// The higher the value, the more weight is given to the history.
     /// Defaults to ``0.9``. Only applies when mode is ``dynamic``.
-    #[binding(skip)]
+    #[host(default = None)]
     pub alpha: Option<f64>,
 }
 
@@ -233,60 +242,49 @@ impl EndpointingKwargs {
 /// (at the ``AgentSession`` level).
 ///
 /// ``mode`` absent means the session picks the best available strategy.
-//
-// Nullable keys are `Maybe<Option<_>>`: absent, `None` ("off") and a value are three states. Field
-// order is the emitted dict's key order (`order` gives the `TypedDict`'s).
-#[derive(Clone, Copy, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
+#[crate::host(record(
     module = "turn",
-    path = "livekit.agents.voice.turn",
     name = "InterruptionOptions",
-    order = "enabled, mode, discard_audio_if_uninterruptible, min_duration, min_words, \
-             resume_false_interruption, false_interruption_timeout, backchannel_boundary"
-)]
-#[binding(extract, emit, from_items)]
+    path = "livekit.agents.voice.turn",
+    typed_dict,
+    extract
+))]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct InterruptionKwargs {
     /// Whether interruptions are enabled. Defaults to ``True``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub enabled: Option<bool>,
     /// Interruption handling strategy. ``"adaptive"`` for ML-based
     /// detection, ``"vad"`` for simple voice-activity detection.
     /// Absent means auto-detect.
-    #[python(ty = "Literal[\"adaptive\", \"vad\"]")]
-    #[binding(skip)]
+    #[host(default = None)]
     pub mode: Option<InterruptionMode>,
     /// Drop buffered audio while the agent speaks and cannot be
     /// interrupted. Defaults to ``True``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub discard_audio_if_uninterruptible: Option<bool>,
     /// Minimum speech length (s) to register as an interruption.
     /// Defaults to ``0.5``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub min_duration: Option<f64>,
     /// Minimum word count to consider an interruption (STT only).
     /// Defaults to ``0``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub min_words: Option<i64>,
-    /// Seconds of silence after an interruption before it is
-    /// classified as false. ``None`` disables. Defaults to ``2.0``.
-    #[python(ty = "float | None")]
-    #[binding(skip_if_none)]
-    pub false_interruption_timeout: lk_agents_abi::Maybe<Option<f64>>,
     /// Resume the agent's speech after a false interruption.
     /// Defaults to ``True``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub resume_false_interruption: Option<bool>,
+    /// Seconds of silence after an interruption before it is
+    /// classified as false. ``None`` disables. Defaults to ``2.0``.
+    pub false_interruption_timeout: Maybe<Option<f64>>,
     /// Seconds near the start/end of each agent turn during which overlapping
     /// speech classified as a backchannel by the adaptive detector is suppressed
     /// (events flagged as interruptions still pass through). Use a tuple to apply
     /// different values for start and end separately. ``None`` disables. Defaults
     /// to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
     /// inaccuracy.
-    #[python(ty = "float | tuple[float, float] | None")]
-    #[binding(skip)]
-    pub backchannel_boundary: lk_agents_abi::Maybe<Option<BackchannelBoundary>>,
+    pub backchannel_boundary: Maybe<Option<BackchannelBoundary>>,
 }
 
 impl InterruptionKwargs {
@@ -296,33 +294,32 @@ impl InterruptionKwargs {
 }
 
 /// Configuration for preemptive generation.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
+#[crate::host(record(
     module = "turn",
+    name = "PreemptiveGenerationOptions",
     path = "livekit.agents.voice.turn",
-    name = "PreemptiveGenerationOptions"
-)]
-#[binding(extract, emit, from_items)]
+    typed_dict,
+    extract
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PreemptiveKwargs {
     /// Whether preemptive generation is enabled. Defaults to ``True``.
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub enabled: Option<bool>,
     /// Whether to also run TTS preemptively before the turn is confirmed.
     /// When ``False`` (default), only LLM runs preemptively; TTS starts once the
     /// turn is confirmed and the speech is scheduled.
-    #[binding(skip)]
+    #[host(default = None)]
     pub preemptive_tts: Option<bool>,
     /// Maximum user speech duration (s) for which preemptive generation
     /// is attempted. Beyond this threshold, preemptive generation is skipped
     /// since long utterances are more likely to change and users may expect
     /// slower responses. Defaults to ``10.0``.
-    #[binding(skip)]
+    #[host(default = None)]
     pub max_speech_duration: Option<f64>,
     /// Maximum number of preemptive generation attempts per user turn.
     /// The counter resets when the turn completes. Defaults to ``3``.
-    #[binding(skip)]
+    #[host(default = None)]
     pub max_retries: Option<i64>,
 }
 
@@ -335,28 +332,23 @@ pub struct PreemptiveKwargs {
 ///
 /// Both thresholds default to ``None`` (disabled). Set at least one to
 /// enable the feature.
-//
-// Both keys nullable: `None` is "no limit".
-#[derive(Clone, Copy, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
+#[crate::host(record(
     module = "turn",
+    name = "UserTurnLimitOptions",
     path = "livekit.agents.voice.turn",
-    name = "UserTurnLimitOptions"
-)]
-#[binding(extract, from_items)]
+    typed_dict,
+    extract
+))]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct UserTurnLimitKwargs {
     /// Maximum accumulated word count before triggering. Uses the
     /// framework's WordTokenizer for counting. ``None`` disables word-based
     /// limiting. Defaults to ``None``.
-    #[python(ty = "int | None")]
-    pub max_words: lk_agents_abi::Maybe<Option<i64>>,
+    pub max_words: Maybe<Option<i64>>,
     /// Maximum wall-clock duration (seconds) since the user first started
     /// speaking in the current accumulation window. ``None`` disables
     /// duration-based limiting. Defaults to ``None``.
-    #[python(ty = "float | None")]
-    pub max_duration: lk_agents_abi::Maybe<Option<f64>>,
+    pub max_duration: Maybe<Option<f64>>,
 }
 
 /// Configuration for the turn handling system.
@@ -375,141 +367,79 @@ pub struct UserTurnLimitKwargs {
 ///
 /// All keys are optional and default to sensible values.
 //
-// Every group and key optional. `order` puts `turn_detection` first, as the reference does.
 // The `cfg_attr(doctest)` lines fence the Python sample for `cargo test --doc` only; the codegen
 // reads `///` alone, so the generated docstring is unchanged.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-// Read by hand (below): an explicit `turn_detection=None` is not an absent key.
-#[host(handwritten(extract))]
-#[python(
-    typed_dict,
-    total = "False",
+#[crate::host(record(
     module = "turn",
-    path = "livekit.agents.voice.turn",
     name = "TurnHandlingOptions",
-    order = "turn_detection, endpointing, interruption, preemptive_generation, user_turn_limit"
-)]
+    path = "livekit.agents.voice.turn",
+    typed_dict,
+    extract
+))]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct TurnHandlingKwargs {
-    /// Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``.
-    #[python(ty = "EndpointingOptions")]
-    #[binding(default)]
-    pub endpointing: Option<EndpointingKwargs>,
-    /// Interruption handling configuration. Use ``{"enabled": False}`` to disable.
-    #[python(ty = "InterruptionOptions")]
-    #[binding(default)]
-    pub interruption: Option<InterruptionKwargs>,
     /// Strategy for deciding when the user has finished speaking.
     /// Absent means the session auto-selects.
     //
     // An explicit `None` is [`TurnDetectionKwarg::Null`], not an absent key.
-    #[python(ty = "TurnDetectionMode | None", type_import = "..voice.turn:TurnDetectionMode")]
-    #[binding(default)]
-    pub turn_detection: Option<TurnDetectionKwarg>,
+    pub turn_detection: Maybe<TurnDetectionKwarg>,
+    /// Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``.
+    #[host(default = None)]
+    pub endpointing: Option<EndpointingKwargs>,
+    /// Interruption handling configuration. Use ``{"enabled": False}`` to disable.
+    #[host(default = None)]
+    pub interruption: Option<InterruptionKwargs>,
     /// Preemptive generation configuration. Use ``{"enabled": False}`` to disable.
-    #[python(ty = "PreemptiveGenerationOptions")]
-    #[binding(default)]
+    #[host(default = None)]
     pub preemptive_generation: Option<PreemptiveKwargs>,
     /// User turn limit configuration. Use ``{"max_words": 50}`` to enable.
-    #[python(ty = "UserTurnLimitOptions")]
-    #[binding(default)]
+    #[host(default = None)]
     pub user_turn_limit: Option<UserTurnLimitKwargs>,
 }
 
 /// Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
 /// (`stt`, `llm`, `tools`, ...) are legs, not options.
-#[derive(Clone, PartialEq, Host)]
-// Read by hand (below): each option as `AgentSession.__init__` takes it.
-#[host(handwritten(extract))]
-#[python(typed_dict, typed_dict_from = "typing", module = "session_options", name = "SessionKwargs")]
+#[crate::host(record(module = "session_options", typed_dict, extract))]
+#[derive(Clone, PartialEq)]
 pub struct SessionKwargs {
-    /// `turn_handling=`, as written. `None` is `NOT_GIVEN`.
-    #[python(
-        ty = "NotGivenOr[TurnHandlingOptions]",
-        import = "..types:NotGivenOr",
-        type_import = "..voice.turn:TurnHandlingOptions"
-    )]
-    #[binding(default)]
+    #[host(default = None)]
     pub turn_handling: Option<TurnHandlingKwargs>,
-    #[python(ty = "NotGivenOr[STTContextOptions]", type_import = ".keyterms:STTContextOptions")]
     pub stt_context_options: HostValue,
     pub max_tool_steps: i64,
-    #[python(ty = "NotGivenOr[bool]")]
-    pub use_tts_aligned_transcript: lk_agents_abi::Maybe<bool>,
-    /// `NotGivenOr[Sequence[TextTransforms] | None]`: unsaid, "none", or a set.
-    #[python(
-        ty = "NotGivenOr[Sequence[TextTransforms] | None]",
-        type_import = "collections.abc:Sequence",
-        type_import = "..voice.agent_session:TextTransforms"
-    )]
-    pub tts_text_transforms:
-        lk_agents_abi::Maybe<Option<lk_agents_abi::voice::session_options::TextTransformSet>>,
+    pub use_tts_aligned_transcript: Maybe<bool>,
+    /// Unsaid, "none", or a set.
+    pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
     pub min_consecutive_speech_delay: f64,
-    #[python(ty = "bool | ExpressiveOptions", type_import = ".expressive:ExpressiveOptions")]
     pub expressive: Expressive,
-    /// `NotGivenOr[float | None]`: unsaid is the default warmup, `None` none at all (outbound SIP).
-    #[python(ty = "NotGivenOr[float | None]")]
-    pub aec_warmup_duration: lk_agents_abi::Maybe<Option<f64>>,
+    /// Unsaid is the default warmup, `None` none at all (outbound SIP).
+    pub aec_warmup_duration: Maybe<Option<f64>>,
     pub ivr_detection: bool,
-    /// `float | None`: `None` disables the away timer.
+    /// `None` disables the away timer.
     pub user_away_timeout: Option<f64>,
-    /// `float | None`: `None` disables the timeout, `0` arms it with nothing left to wait.
+    /// `None` disables the timeout, `0` arms it with nothing left to wait.
     pub transcription_timeout: Option<f64>,
     pub session_close_transcript_timeout: f64,
-    #[python(
-        ty = "NotGivenOr[SessionConnectOptions]",
-        type_import = "..voice.agent_session:SessionConnectOptions"
-    )]
     pub conn_options: SessionConnOptions,
 }
 
 /// `AgentSession.update_options(..)`'s option surface.
-#[derive(Clone, Default, PartialEq, Host)]
-// Read by hand (below): an option this session cannot change is refused.
-#[host(handwritten(extract))]
-#[python(typed_dict, typed_dict_from = "typing", module = "session_options", name = "UpdateKwargs")]
+#[crate::host(record(module = "session_options", typed_dict, extract))]
+#[derive(Clone, Default, PartialEq)]
 pub struct UpdateKwargs {
-    #[python(
-        ty = "NotGivenOr[EndpointingOptions]",
-        import = "..types:NotGivenOr",
-        type_import = "..voice.turn:EndpointingOptions"
-    )]
-    #[binding(default)]
+    #[host(default = None)]
     pub endpointing_opts: Option<EndpointingKwargs>,
-    /// `NotGivenOr[TurnDetectionMode | None]`: `None` reverts to automatic selection (`Auto`).
-    #[python(
-        ty = "NotGivenOr[TurnDetectionMode | None]",
-        type_import = "..voice.turn:TurnDetectionMode"
-    )]
-    #[binding(default)]
-    pub turn_detection: lk_agents_abi::Maybe<TurnDetectionKwarg>,
-    #[python(
-        ty = "NotGivenOr[bool | ExpressiveOptions]",
-        type_import = ".expressive:ExpressiveOptions"
-    )]
-    #[binding(default)]
-    pub expressive: lk_agents_abi::Maybe<Expressive>,
+    /// `None` reverts to automatic selection (`Auto`).
+    pub turn_detection: Maybe<TurnDetectionKwarg>,
+    pub expressive: Maybe<Expressive>,
     /// The user-defined keyterms, replaced; the detected ones stay.
-    #[python(ty = "NotGivenOr[list[str]]")]
-    #[binding(default)]
+    #[host(default = None)]
     pub keyterms: Option<Vec<String>>,
     /// Merged over the session's interruption handling; its `mode` is set at construction.
-    #[python(
-        ty = "NotGivenOr[InterruptionOptions]",
-        type_import = "..voice.turn:InterruptionOptions"
-    )]
-    #[binding(default)]
+    #[host(default = None)]
     pub interruption: Option<InterruptionKwargs>,
-    #[python(ty = "NotGivenOr[float]")]
-    #[binding(default)]
+    #[host(default = None)]
     pub min_consecutive_speech_delay: Option<f64>,
-    #[python(
-        ty = "NotGivenOr[Sequence[TextTransforms] | None]",
-        type_import = "collections.abc:Sequence",
-        type_import = "..voice.agent_session:TextTransforms"
-    )]
-    #[binding(default)]
-    pub tts_text_transforms:
-        lk_agents_abi::Maybe<Option<lk_agents_abi::voice::session_options::TextTransformSet>>,
+    pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
 }
 
 // `Maybe<T>` has `Debug` only for `Maybe<Option<T>>`, so these impls are written out.
@@ -539,6 +469,10 @@ debug_record!(InterruptionKwargs {
 });
 
 debug_record!(UserTurnLimitKwargs { ; max_words, max_duration });
+
+debug_record!(TurnHandlingKwargs {
+    endpointing, interruption, preemptive_generation, user_turn_limit; turn_detection
+});
 
 debug_record!(SessionKwargs {
     turn_handling, stt_context_options, max_tool_steps, min_consecutive_speech_delay,
@@ -790,258 +724,6 @@ pub struct ExpressiveConfig {
 /// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)`, `Agent(expressive=)` and
 /// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
 /// (even an empty one) on with those options.
-#[crate::host(handwritten(extract, host = "bool | dict[str, object] | None"))]
+#[crate::host(handwritten(extract, host = "bool | livekit.agents._generated.expressive.ExpressiveOptions | None", py))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expressive(pub Option<ExpressiveConfig>);
-
-#[cfg(feature = "python")]
-mod host {
-    use pyo3::exceptions::PyValueError;
-    use pyo3::prelude::*;
-    use pyo3::types::{PyDict, PyString};
-
-    use super::*;
-    use crate::python::{MaybeNull, item, item_with};
-
-    crate::python::from_host_str!(EndpointingMode);
-    crate::python::from_host_str!(TurnDetection);
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for Instructions {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            Ok(Instructions::plain(obj.extract::<String>()?))
-        }
-    }
-
-    /// `NOT_GIVEN` and `None` are the defaults; a `SessionConnectOptions` is read by attribute.
-    impl<'a, 'py> FromPyObject<'a, 'py> for SessionConnOptions {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let MaybeNull::Given(options) = obj.extract::<MaybeNull<Bound<'py, PyAny>>>()? else {
-                return Ok(SessionConnOptions::default());
-            };
-            let leg = |name: &str| -> PyResult<Option<crate::ApiConnectOptions>> {
-                let conn: Option<crate::ApiConnectOptions> = options.getattr(name)?.extract()?;
-                if let Some(conn) = &conn {
-                    conn.validate()
-                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-                }
-                Ok(conn)
-            };
-            Ok(SessionConnOptions {
-                stt: leg("stt_conn_options")?,
-                llm: leg("llm_conn_options")?,
-                tts: leg("tts_conn_options")?,
-            })
-        }
-    }
-
-    /// `NOT_GIVEN` and `None` are "not given", anything else is "given".
-    impl<'a, 'py> FromPyObject<'a, 'py> for HostValue {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            Ok(match obj.extract::<MaybeNull<Bound<'py, PyAny>>>()? {
-                MaybeNull::NotGiven | MaybeNull::Null => HostValue::NotGiven,
-                MaybeNull::Given(_) => HostValue::Given,
-            })
-        }
-    }
-
-    /// A scalar applies to both edges.
-    impl<'a, 'py> FromPyObject<'a, 'py> for BackchannelBoundary {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            Ok(match obj.extract::<(f64, f64)>() {
-                Ok((start, end)) => BackchannelBoundary::Split(start, end),
-                Err(_) => BackchannelBoundary::Both(obj.extract()?),
-            })
-        }
-    }
-
-    /// `Sequence[TextTransforms]`: an unknown name raises rather than silently not running.
-    impl<'a, 'py> FromPyObject<'a, 'py> for TextTransformSet {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            TextTransformSet::from_names(&obj.extract::<Vec<String>>()?)
-                .map_err(|e| PyValueError::new_err(e.to_string()))
-        }
-    }
-
-    /// Of a detector object only whether it streams crosses; the check mirrors
-    /// `runtime_checkable`: `model`, `provider` and `stream`.
-    impl<'a, 'py> FromPyObject<'a, 'py> for TurnDetectionKwarg {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            if obj.is_none() {
-                return Ok(TurnDetectionKwarg::Null);
-            }
-            if obj.is_instance_of::<PyString>() {
-                return Ok(TurnDetectionKwarg::Mode(
-                    obj.extract::<String>()?
-                        .parse()
-                        .map_err(|e: UnknownLiteral| PyValueError::new_err(e.to_string()))?,
-                ));
-            }
-            let streaming =
-                obj.hasattr("model")? && obj.hasattr("provider")? && obj.hasattr("stream")?;
-            Ok(TurnDetectionKwarg::Detector { streaming })
-        }
-    }
-
-    /// `NOT_GIVEN` and `None` read as absent: a group or kwarg the caller left unsaid.
-    fn unsaid(v: &Bound<'_, PyAny>) -> PyResult<bool> {
-        Ok(matches!(
-            v.extract::<MaybeNull<Bound<'_, PyAny>>>()?,
-            MaybeNull::NotGiven | MaybeNull::Null
-        ))
-    }
-
-    /// An explicit `turn_detection=None` is [`TurnDetectionKwarg::Null`], not an absent key.
-    impl<'a, 'py> FromPyObject<'a, 'py> for TurnHandlingKwargs {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let d = obj.cast::<PyDict>()?;
-            Ok(TurnHandlingKwargs {
-                endpointing: match d.get_item("endpointing")? {
-                    Some(v) => v.extract()?,
-                    None => None,
-                },
-                interruption: match d.get_item("interruption")? {
-                    Some(v) => v.extract()?,
-                    None => None,
-                },
-                turn_detection: match d.get_item("turn_detection")? {
-                    Some(v) => Some(v.extract()?),
-                    None => None,
-                },
-                preemptive_generation: match d.get_item("preemptive_generation")? {
-                    Some(v) => v.extract()?,
-                    None => None,
-                },
-                user_turn_limit: match d.get_item("user_turn_limit")? {
-                    Some(v) => v.extract()?,
-                    None => None,
-                },
-            })
-        }
-    }
-
-    /// `update_options(..)`: `endpointing_opts` unsaid (`NOT_GIVEN`, `None`) is no group.
-    impl<'a, 'py> FromPyObject<'a, 'py> for UpdateKwargs {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let d = obj.cast::<PyDict>()?;
-            // An option this session cannot change is refused, not dropped.
-            const KNOWN: [&str; 7] = [
-                "endpointing_opts",
-                "turn_detection",
-                "expressive",
-                "keyterms",
-                "interruption",
-                "min_consecutive_speech_delay",
-                "tts_text_transforms",
-            ];
-            for key in d.keys() {
-                let key: String = key.extract()?;
-                if !KNOWN.contains(&key.as_str()) {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "update_options() got an unexpected keyword argument {key:?}"
-                    )));
-                }
-            }
-            Ok(UpdateKwargs {
-                endpointing_opts: match d.get_item("endpointing_opts")? {
-                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
-                    _ => None,
-                },
-                turn_detection: match d.get_item("turn_detection")? {
-                    Some(v) => v.extract()?,
-                    None => Maybe::NotGiven,
-                },
-                expressive: match d.get_item("expressive")? {
-                    Some(v) => v.extract()?,
-                    None => Maybe::NotGiven,
-                },
-                keyterms: match d.get_item("keyterms")? {
-                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
-                    _ => None,
-                },
-                interruption: match d.get_item("interruption")? {
-                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
-                    _ => None,
-                },
-                min_consecutive_speech_delay: match d.get_item("min_consecutive_speech_delay")? {
-                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
-                    _ => None,
-                },
-                tts_text_transforms: match d.get_item("tts_text_transforms")? {
-                    Some(v) => v.extract()?,
-                    None => Maybe::NotGiven,
-                },
-            })
-        }
-    }
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for Expressive {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let Ok(d) = obj.cast::<PyDict>() else {
-                return Ok(Expressive(obj.is_truthy()?.then(ExpressiveConfig::default)));
-            };
-            let get = |key: &str| -> PyResult<Option<Bound<'py, PyAny>>> {
-                Ok(d.get_item(key)?.filter(|v| !v.is_none()))
-            };
-            Ok(Expressive(Some(ExpressiveConfig {
-                speech_steering: get("speech_steering")?.map(|v| v.extract()).transpose()?,
-                tts_instructions_template: get("tts_instructions_template")?
-                    .map(|v| v.extract())
-                    .transpose()?,
-                tts_instructions_append: get("tts_instructions_append")?
-                    .map(|v| v.extract())
-                    .transpose()?,
-            })))
-        }
-    }
-
-    impl<'a, 'py> FromPyObject<'a, 'py> for SessionKwargs {
-        type Error = PyErr;
-
-        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            const OWNER: &str = "SessionKwargsFromPy";
-            let obj = &*obj;
-            Ok(SessionKwargs {
-                turn_handling: match obj.get_item("turn_handling") {
-                    Ok(v) => item_with(obj, OWNER, "turn_handling", |_| {
-                        if unsaid(&v)? { Ok(None) } else { v.extract().map(Some) }
-                    })?,
-                    Err(_) => None,
-                },
-                stt_context_options: item(obj, OWNER, "stt_context_options")?,
-                max_tool_steps: item(obj, OWNER, "max_tool_steps")?,
-                use_tts_aligned_transcript: item(obj, OWNER, "use_tts_aligned_transcript")?,
-                tts_text_transforms: item(obj, OWNER, "tts_text_transforms")?,
-                min_consecutive_speech_delay: item(obj, OWNER, "min_consecutive_speech_delay")?,
-                expressive: item(obj, OWNER, "expressive")?,
-                aec_warmup_duration: item(obj, OWNER, "aec_warmup_duration")?,
-                ivr_detection: item(obj, OWNER, "ivr_detection")?,
-                user_away_timeout: item(obj, OWNER, "user_away_timeout")?,
-                transcription_timeout: item(obj, OWNER, "transcription_timeout")?,
-                session_close_transcript_timeout: item(
-                    obj,
-                    OWNER,
-                    "session_close_transcript_timeout",
-                )?,
-                conn_options: item(obj, OWNER, "conn_options")?,
-            })
-        }
-    }
-}

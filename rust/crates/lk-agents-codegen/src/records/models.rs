@@ -343,7 +343,7 @@ fn model(
             .collect(),
         RecordBody::Literals(_) => Vec::new(),
     };
-    if all.iter().any(|f| matches!(f.ty, Ty::Maybe(_))) {
+    if !r.typed_dict && all.iter().any(|f| matches!(f.ty, Ty::Maybe(_))) {
         runtime.add("..types", "NOT_GIVEN");
     }
     for factory in all.iter().filter_map(|f| f.factory.as_deref()) {
@@ -396,7 +396,7 @@ fn model(
     };
     match &r.body {
         RecordBody::Struct(fields) if r.typed_dict => {
-            runtime.add("typing", "TypedDict");
+            runtime.add("typing_extensions", "TypedDict");
             let mut s = format!("\n\nclass {}(TypedDict):\n", r.name);
             s.push_str(&docstring(&r.doc, "    "));
             if !r.doc.is_empty() {
@@ -625,7 +625,9 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
             }
             HostForm::Dict => "dict[str, object]".into(),
             HostForm::WireStrs => "str".into(),
-            HostForm::Annotation(text) => typing.annotation(text, &r.rust),
+            HostForm::Annotation(text) | HostForm::Converted(text) => {
+                typing.annotation(text, &r.rust)
+            }
         },
         // Refused by the resolver (`check_record_field`).
         other => unreachable!("`{}` is not a record field", other.rust()),

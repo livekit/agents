@@ -13,6 +13,9 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_to_py(py, {x})?", conversion(module, name))
         }
+        Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
+            format!("{}_to_py(py, {x})?", super::converted(r))
+        }
         Ty::Tuple(ts) => {
             let names: Vec<String> = (0..ts.len()).map(|i| format!("x{i}")).collect();
             let items =

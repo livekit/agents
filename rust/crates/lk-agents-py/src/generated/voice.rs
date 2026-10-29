@@ -1149,16 +1149,18 @@ pub struct SessionOptions(pub(crate) ::std::sync::Arc<SessionOptionsImpl>);
 impl SessionOptions {
     #[new]
     #[pyo3(signature = (kwargs))]
-    fn new(kwargs: ::lk_agents_abi::voice::session_options::SessionKwargs) -> PyResult<SessionOptions> {
+    fn new(kwargs: Bound<'_, PyAny>) -> PyResult<SessionOptions> {
         crate::host::check_pid()?;
+        let kwargs = crate::generated::records::session_options::session_kwargs_from_py(&kwargs)?;
         let out = <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::new(kwargs);
         Ok(SessionOptions(::std::sync::Arc::new(out)))
     }
 
     /// `update_options(..)` before the session runs, on the same `merge` the driver uses.
     #[pyo3(signature = (update))]
-    fn update(&self, update: ::lk_agents_abi::voice::session_options::UpdateKwargs) -> PyResult<()> {
+    fn update(&self, update: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let update = crate::generated::records::session_options::update_kwargs_from_py(&update)?;
         <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::update(&self.0, update);
         Ok(())
     }
@@ -1379,8 +1381,9 @@ impl VoiceSession {
     /// re-resolved; `expressive` reaches the next reply, `keyterms` replace the user's list. A turn
     /// detector object is refused: swapping the detector of a running session is not ported.
     #[pyo3(signature = (update))]
-    fn update_turn_options(&self, update: ::lk_agents_abi::voice::session_options::UpdateKwargs) -> PyResult<()> {
+    fn update_turn_options(&self, update: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
+        let update = crate::generated::records::session_options::update_kwargs_from_py(&update)?;
         <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_turn_options(&self.0, update).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -1726,8 +1729,10 @@ pub fn rt_server_turn_detection(caps_turn_detection: bool, can_disable_turn_dete
 /// why. Constructing it stays the host's.
 #[pyfunction]
 #[pyo3(signature = (*, stt_aligned_transcript, stt_streaming, realtime, rt_server_turn_detection, has_vad, turn_detection, allow_interruptions, agent_mode, session_mode, hosted, dev_mode))]
-pub fn resolve_interruption_detector<'py>(py: Python<'py>, stt_aligned_transcript: ::std::option::Option<bool>, stt_streaming: ::std::option::Option<bool>, realtime: bool, rt_server_turn_detection: bool, has_vad: bool, turn_detection: ::std::option::Option<::std::string::String>, allow_interruptions: bool, agent_mode: ::std::option::Option<::lk_agents_abi::voice::session_options::InterruptionMode>, session_mode: ::std::option::Option<::lk_agents_abi::voice::session_options::InterruptionMode>, hosted: bool, dev_mode: bool) -> PyResult<Bound<'py, PyAny>> {
+pub fn resolve_interruption_detector<'py>(py: Python<'py>, stt_aligned_transcript: ::std::option::Option<bool>, stt_streaming: ::std::option::Option<bool>, realtime: bool, rt_server_turn_detection: bool, has_vad: bool, turn_detection: ::std::option::Option<::std::string::String>, allow_interruptions: bool, agent_mode: Option<Bound<'_, PyAny>>, session_mode: Option<Bound<'_, PyAny>>, hosted: bool, dev_mode: bool) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
+    let agent_mode = agent_mode.map(|v| crate::generated::records::turn::interruption_mode_from_py(&v)).transpose()?;
+    let session_mode = session_mode.map(|v| crate::generated::records::turn::interruption_mode_from_py(&v)).transpose()?;
     let out = <InterruptionGateFunctionsImpl as ::lk_agents_abi::voice::session_options::InterruptionGateFunctions>::resolve_interruption_detector(stt_aligned_transcript, stt_streaming, realtime, rt_server_turn_detection, has_vad, turn_detection, allow_interruptions, agent_mode, session_mode, hosted, dev_mode);
     Ok(crate::generated::records::session_options::interruption_gate_verdict_to_py(py, out)?)
 }
