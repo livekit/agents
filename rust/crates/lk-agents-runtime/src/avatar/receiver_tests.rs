@@ -4,7 +4,9 @@ use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::voice::rtc::ParticipantIdentity;
 use lk_agents_abi::{AudioFrame, Closed, SpawnerExt, TokioSpawner, VirtualClock};
 use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind, TrackSource};
-use lk_agents_voice::avatar::{playback_method, stream_name, stream_segment};
+use lk_agents_voice::avatar::{
+    RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, playback_method, stream_name, stream_segment,
+};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

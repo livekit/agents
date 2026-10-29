@@ -2,12 +2,16 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::StreamInfo;
 use lk_agents_abi::{AudioByteStream, AudioFrame};
 
-use super::{Received, ReceiverEnd, stream_segment};
+use super::{
+    FinishedPayload, LOG, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received, ReceiverEnd,
+    playback_method, stream_segment,
+};
 
 pub type Receipt = (u64, bool, Option<AvatarPlaybackSegment>, Option<Received>);
 
@@ -15,6 +19,93 @@ pub type Receipt = (u64, bool, Option<AvatarPlaybackSegment>, Option<Received>);
 pub fn frame_size(frame_size_ms: u32) -> Result<NonZeroU32, ReceiverEnd> {
     NonZeroU32::new(frame_size_ms)
         .ok_or_else(|| ReceiverEnd::Failed("frame_size_ms must be positive".into()))
+}
+
+/// The SDK's `RpcError` code for a method the remote never registered.
+const RPC_UNSUPPORTED_METHOD: u32 = 1400;
+/// The pause before a failed report is sent again.
+const REPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+/// A playback report to the agent (`lk.playback_started`/`lk.playback_finished`), addressed to
+/// its segment's route.
+#[derive(Debug, Clone)]
+pub struct PlaybackReport {
+    pub method: String,
+    pub payload: String,
+}
+
+impl PlaybackReport {
+    pub fn started(segment: &AvatarPlaybackSegment) -> Result<Self, ReceiverEnd> {
+        Ok(Self { method: playback_method(RPC_PLAYBACK_STARTED, segment)?, payload: String::new() })
+    }
+
+    pub fn finished(
+        segment: &AvatarPlaybackSegment,
+        playback_position: f64,
+        interrupted: bool,
+    ) -> Result<Self, ReceiverEnd> {
+        let payload =
+            FinishedPayload { playback_position, interrupted, synchronized_transcript: None };
+        Ok(Self {
+            method: playback_method(RPC_PLAYBACK_FINISHED, segment)?,
+            payload: serde_json::to_string(&payload).expect("a playback report serializes"),
+        })
+    }
+
+    /// The attempts at sending it: at most `max_retries`, none when that is zero.
+    pub fn attempts(&self, max_retries: u32) -> ReportAttempts {
+        ReportAttempts {
+            started: self.method.starts_with(RPC_PLAYBACK_STARTED),
+            tried: 0,
+            max_retries,
+        }
+    }
+}
+
+/// What follows the agent's reply to one attempt.
+#[derive(Debug, PartialEq)]
+pub enum ReportStep {
+    /// Done with this report: delivered, or the agent never asked for `lk.playback_started`.
+    Sent,
+    RetryAfter(Duration),
+    /// The report failed, and with it the receiver.
+    Failed(ReceiverEnd),
+}
+
+/// `_send_task`'s retry policy for one report.
+#[derive(Debug)]
+pub struct ReportAttempts {
+    started: bool,
+    tried: u32,
+    max_retries: u32,
+}
+
+impl ReportAttempts {
+    /// Whether another attempt is allowed.
+    pub fn pending(&self) -> bool {
+        self.tried < self.max_retries
+    }
+
+    /// The agent's reply to the attempt just made, `(0, _)` on success.
+    pub fn reply(&mut self, method: &str, code: u32, message: &str) -> ReportStep {
+        if message.starts_with("reject:") {
+            return ReportStep::Failed(ReceiverEnd::Failed(message.to_owned()));
+        }
+        if code == 0 {
+            return ReportStep::Sent;
+        }
+        if code == RPC_UNSUPPORTED_METHOD && self.started {
+            log::error!(target: LOG, "remote participant didn't register lk.playback_started RPC");
+            return ReportStep::Sent;
+        }
+        self.tried += 1;
+        if !self.pending() {
+            log::error!(target: LOG, "failed to call {method} after {} retries", self.tried);
+            return ReportStep::Failed(ReceiverEnd::Failed(format!("RpcError {code}: {message}")));
+        }
+        log::warn!(target: LOG, "failed to call {method}, retrying...");
+        ReportStep::RetryAfter(REPORT_RETRY_DELAY)
+    }
 }
 
 #[derive(Default)]

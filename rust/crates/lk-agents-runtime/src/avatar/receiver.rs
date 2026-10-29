@@ -7,22 +7,13 @@ use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListene
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
 use lk_agents_abi::{AbortHandle, BoxFuture, Clock, Spawner, SpawnerExt, TokioSpawner};
-use lk_agents_voice::avatar::receiver::{ReceiverState, frame_size};
+use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportStep, frame_size};
 use lk_agents_voice::avatar::{
-    AUDIO_STREAM_TOPIC, FinishedPayload, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED,
-    RPC_PLAYBACK_STARTED, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT, playback_method,
+    AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
 };
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::Duration;
-
-const LOG: &str = "livekit.agents";
-const RPC_UNSUPPORTED_METHOD: u32 = 1400;
-enum RpcEvent {
-    Finished { segment: AvatarPlaybackSegment, playback_position: f64, interrupted: bool },
-    Started(AvatarPlaybackSegment),
-}
 
 struct RxInner {
     room: Arc<dyn RtcRoom>,
@@ -37,8 +28,8 @@ struct RxInner {
     streams: Mutex<std::collections::VecDeque<lk_agents_abi::voice::rtc::ByteStream>>,
     streams_ready: tokio::sync::Notify,
     superseded_wake: tokio::sync::Notify,
-    rpc: tokio::sync::mpsc::UnboundedSender<RpcEvent>,
-    rpc_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<RpcEvent>>>,
+    rpc: tokio::sync::mpsc::UnboundedSender<PlaybackReport>,
+    rpc_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PlaybackReport>>>,
 }
 
 impl RxInner {
@@ -135,60 +126,34 @@ impl RxInner {
         }
     }
 
-    /// `_send_task`: the playback reports, retried as the reference does.
+    /// `_send_task`: the playback reports, in order, each retried by its attempt policy.
     async fn send(self: Arc<Self>) -> std::result::Result<(), ReceiverEnd> {
         let Some(mut rx) = self.rpc_rx.lock().unwrap_or_else(|p| p.into_inner()).take() else {
             return Ok(());
         };
         let remote =
             self.remote.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_default();
-        while let Some(ev) = rx.recv().await {
-            let (method, payload) = match ev {
-                RpcEvent::Finished { segment, playback_position, interrupted } => (
-                    playback_method(RPC_PLAYBACK_FINISHED, &segment)?,
-                    serde_json::to_string(&FinishedPayload {
-                        playback_position,
-                        interrupted,
-                        synchronized_transcript: None,
-                    })
-                    .expect("a playback report serializes"),
-                ),
-                RpcEvent::Started(segment) => {
-                    (playback_method(RPC_PLAYBACK_STARTED, &segment)?, String::new())
-                }
-            };
-            let mut retry = 0u32;
-            while retry < self.rpc_max_retries {
-                log::debug!(target: LOG, payload = payload.as_str(); "notifying {method}");
-                let reply = self
+        while let Some(report) = rx.recv().await {
+            let mut attempts = report.attempts(self.rpc_max_retries);
+            while attempts.pending() {
+                log::debug!(target: LOG, payload = report.payload.as_str(); "notifying {}", report.method);
+                let (code, message) = self
                     .room
                     .local()
                     .perform_rpc(
                         ParticipantIdentity(remote.clone()),
-                        method.clone(),
-                        payload.clone(),
+                        report.method.clone(),
+                        report.payload.clone(),
                     )
                     .await
                     .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
-                let (code, message) = reply;
-                if message.starts_with("reject:") {
-                    return Err(ReceiverEnd::Failed(message));
+                match attempts.reply(&report.method, code, &message) {
+                    ReportStep::Sent => break,
+                    ReportStep::Failed(end) => return Err(end),
+                    ReportStep::RetryAfter(delay) => {
+                        self.clock.wait_until(self.clock.now().saturating_add(delay)).await;
+                    }
                 }
-                if code == 0 {
-                    break;
-                }
-                if code == RPC_UNSUPPORTED_METHOD && method.starts_with(RPC_PLAYBACK_STARTED) {
-                    log::error!(target: LOG, "remote participant didn't register lk.playback_started RPC");
-                    break;
-                }
-                if retry == self.rpc_max_retries - 1 {
-                    log::error!(target: LOG, "failed to call {method} after {} retries", retry + 1);
-                    return Err(ReceiverEnd::Failed(format!("RpcError {code}: {message}")));
-                }
-                retry += 1;
-                log::warn!(target: LOG, "failed to call {method}, retrying...");
-                let at = self.clock.now().saturating_add(Duration::from_millis(100));
-                self.clock.wait_until(at).await;
             }
         }
         Ok(())
@@ -364,19 +329,16 @@ impl DataStreamAudioReceiver {
         playback_position: f64,
         interrupted: bool,
     ) -> std::result::Result<(), ReceiverEnd> {
-        playback_method(RPC_PLAYBACK_FINISHED, &segment)?;
-        self.inner
-            .rpc
-            .send(RpcEvent::Finished { segment, playback_position, interrupted })
-            .map_err(|_| ReceiverEnd::Closed)
+        let report = PlaybackReport::finished(&segment, playback_position, interrupted)?;
+        self.inner.rpc.send(report).map_err(|_| ReceiverEnd::Closed)
     }
 
     pub fn notify_playback_started(
         &self,
         segment: AvatarPlaybackSegment,
     ) -> std::result::Result<(), ReceiverEnd> {
-        playback_method(RPC_PLAYBACK_STARTED, &segment)?;
-        self.inner.rpc.send(RpcEvent::Started(segment)).map_err(|_| ReceiverEnd::Closed)
+        let report = PlaybackReport::started(&segment)?;
+        self.inner.rpc.send(report).map_err(|_| ReceiverEnd::Closed)
     }
 
     /// The next frame or segment end; the end once closed or failed.
