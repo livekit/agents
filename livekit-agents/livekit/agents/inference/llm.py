@@ -660,30 +660,36 @@ class LLMStream(llm.LLMStream):
                     continue
 
                 if self._tool_call_id and tool.id and tool.index != self._tool_index:
-                    completed.append(
-                        llm.FunctionToolCall(
-                            arguments=self._fnc_raw_arguments or "",
-                            name=self._fnc_name or "",
-                            call_id=self._tool_call_id or "",
-                            extra=self._tool_extra,
+                    if self._fnc_name:
+                        completed.append(
+                            llm.FunctionToolCall(
+                                arguments=self._fnc_raw_arguments or "",
+                                name=self._fnc_name or "",
+                                call_id=self._tool_call_id or "",
+                                extra=self._tool_extra,
+                            )
                         )
-                    )
                     self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
                     self._tool_extra = None
 
                 if tool.function.name:
+                    if self._fnc_name or tool.index != self._tool_index:
+                        self._tool_call_id = self._fnc_raw_arguments = None
                     self._tool_index = tool.index
-                    self._tool_call_id = tool.id
+                    self._tool_call_id = tool.id or self._tool_call_id
                     self._fnc_name = tool.function.name
-                    self._fnc_raw_arguments = tool.function.arguments or ""
+                    self._fnc_raw_arguments = self._fnc_raw_arguments or ""
+                    self._fnc_raw_arguments += tool.function.arguments or ""
                     # Extract extra from tool call (e.g., Google thought signatures)
                     self._tool_extra = getattr(tool, "extra_content", None)
                 elif tool.function.arguments:
-                    self._fnc_raw_arguments = (
-                        self._fnc_raw_arguments or ""
-                    ) + tool.function.arguments
+                    if self._fnc_raw_arguments is None:
+                        self._tool_index = tool.index
+                        self._tool_call_id = tool.id
+                        self._fnc_raw_arguments = ""
+                    self._fnc_raw_arguments += tool.function.arguments
 
-        if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
+        if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id and self._fnc_name:
             completed.append(
                 llm.FunctionToolCall(
                     arguments=self._fnc_raw_arguments or "",

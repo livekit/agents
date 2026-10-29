@@ -117,3 +117,48 @@ def test_arguments_before_name_do_not_raise() -> None:
     chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
 
     assert _cities(chunks) == ["Paris"]
+
+
+def test_arguments_before_name_are_kept() -> None:
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        id="call-0",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(arguments='{"city":'),
+                    )
+                ]
+            ),
+        ),
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments='"Paris"}'
+                        ),
+                    )
+                ]
+            ),
+        ),
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta()),
+    ]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    calls = [
+        call
+        for chunk in chunks
+        if chunk is not None and chunk.delta is not None
+        for call in chunk.delta.tool_calls
+    ]
+    assert [(call.call_id, call.name, call.arguments) for call in calls] == [
+        ("call-0", "get_weather", '{"city":"Paris"}')
+    ]
