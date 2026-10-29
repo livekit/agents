@@ -292,6 +292,15 @@ fn expand_host(
             Err(err) => return err.to_compile_error(),
         }
     }
+    if let (I::Struct(st), Some("record")) = (&parsed, head.as_deref())
+        && let Ok(m) = lk_agents_bindgen::Metas::parse(attr.clone())
+        && m.flag("record.model_dump")
+    {
+        match declared_model_dump(st, &m) {
+            Ok(tokens) => extra.extend(tokens),
+            Err(err) => return err.to_compile_error(),
+        }
+    }
     // Record properties, string classes, object wrappers and export forwarding metadata are
     // read by `lk-agents-codegen` only.
     match (&mut parsed, head.as_deref()) {
@@ -381,6 +390,69 @@ fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStrea
     Ok(quote::quote! {
         impl #imp ::core::default::Default for #name #ty #wh {
             fn default() -> Self { #name { #(#inits),* } }
+        }
+    })
+}
+
+/// `record(.., model_dump)`: `ModelDump` (`model_dump(mode="json", exclude_none=True)`), the
+/// model's fields in its order: constants first or after `constants_after`, private and skipped
+/// fields left out, a field's `dump_with = path` dumping it as `path(self, cx)`.
+fn declared_model_dump(
+    st: &syn::ItemStruct,
+    m: &lk_agents_bindgen::Metas,
+) -> syn::Result<proc_macro2::TokenStream> {
+    use lk_agents_bindgen::Value;
+    let text = |key: &str| {
+        m.0.iter().find(|x| x.key == key).and_then(|x| match &x.value {
+            Value::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+    };
+    let name = text("record.name").unwrap_or_else(|| st.ident.to_string());
+    let constants: Vec<proc_macro2::TokenStream> = m
+        .0
+        .iter()
+        .filter_map(|x| match (x.key.strip_prefix("record.constant."), &x.value) {
+            (Some(key), Value::Text(v)) => Some(quote::quote!(
+                cx.insert(&mut d, #key, ::std::option::Option::Some(::std::convert::From::from(#v)));
+            )),
+            _ => None,
+        })
+        .collect();
+    let after = text("record.constants_after");
+    let mut sets = Vec::new();
+    if after.is_none() {
+        sets.extend(constants.iter().cloned());
+    }
+    let syn::Fields::Named(named) = &st.fields else { return Ok(proc_macro2::TokenStream::new()) };
+    for f in &named.named {
+        let fm = lk_agents_bindgen::Metas::of(&f.attrs)?;
+        let ident = f.ident.as_ref().expect("named");
+        let key = ident.to_string();
+        if !fm.has("private") && !fm.has("skip") {
+            let at = format!("{name}.{key}");
+            sets.push(match fm.0.iter().find(|x| x.key == "dump_with").map(|x| &x.value) {
+                Some(Value::Rust(path)) => {
+                    let path = path.parse::<proc_macro2::TokenStream>()?;
+                    quote::quote!(cx.insert(&mut d, #key, #path(self, cx)?);)
+                }
+                _ => quote::quote!(
+                    cx.insert(&mut d, #key, ::lk_agents_abi::ModelDump::model_dump(&self.#ident, cx, #at)?);
+                ),
+            });
+        }
+        if after.as_deref() == Some(key.as_str()) {
+            sets.extend(constants.iter().cloned());
+        }
+    }
+    let ident = &st.ident;
+    Ok(quote::quote! {
+        impl ::lk_agents_abi::ModelDump for #ident {
+            fn model_dump(&self, cx: &::lk_agents_abi::DumpCx<'_>, _at: &'static str) -> ::lk_agents_abi::Dumped {
+                let mut d = ::lk_agents_abi::DumpMap::new();
+                #(#sets)*
+                ::std::result::Result::Ok(::std::option::Option::Some(::lk_agents_abi::DumpValue::Object(d)))
+            }
         }
     })
 }

@@ -36,8 +36,33 @@ impl Resolver<'_> {
                 base: voc::text(at, &record.nested, "base")?,
                 repr: voc::text(at, &record.nested, "repr")?,
                 validator: voc::text(at, &record.nested, "validator")?,
+                constants_after: voc::text(at, &record.nested, "constants_after")?,
+                private: match voc::find(&record.nested, "private") {
+                    None => Vec::new(),
+                    Some(p) => p
+                        .nested
+                        .iter()
+                        .map(|e| match &e.value {
+                            Some(Value::Text(ann)) if e.key.starts_with('_') => {
+                                Ok((e.key.clone(), ann.clone()))
+                            }
+                            _ => Err(format!(
+                                "{at}: private(_name = \"annotation\", ..) names host-only attributes"
+                            )),
+                        })
+                        .collect::<Result<_, _>>()?,
+                },
             }),
         };
+        if pydantic.is_none()
+            && ["constants_after", "private"].iter().any(|w| voc::find(&record.nested, w).is_some())
+        {
+            return Err(format!("{at}: `constants_after` and `private` shape a pydantic model"));
+        }
+        let discriminator = voc::text(at, &record.nested, "discriminator")?;
+        if discriminator.is_some() && !transparent {
+            return Err(format!("{at}: a discriminated union is a transparent record"));
+        }
         let dispatch = voc::text(at, &record.nested, "dispatch")?;
         if dispatch.is_some() && !transparent {
             return Err(format!(
@@ -186,6 +211,7 @@ impl Resolver<'_> {
             persisted,
             members,
             dispatch,
+            discriminator,
             body,
         })
     }
@@ -259,6 +285,8 @@ impl Resolver<'_> {
                         omitted: None,
                         factory: None,
                         host_type: None,
+                        private: false,
+                        annotation: None,
                         doc: Vec::new(),
                     }))
                 }
@@ -297,7 +325,17 @@ impl Resolver<'_> {
             voc::only(
                 &at,
                 &entries,
-                &["default", "skip", "omitted", "default_factory", "host_type"],
+                &[
+                    "default",
+                    "skip",
+                    "omitted",
+                    "default_factory",
+                    "host_type",
+                    "private",
+                    "annotation",
+                    // Rust's own: `record(.., model_dump)` dumps the field through this function.
+                    "dump_with",
+                ],
             )?;
             let host_type = voc::text(&at, &entries, "host_type")?
                 .map(|path| {
@@ -308,11 +346,16 @@ impl Resolver<'_> {
                 .transpose()?;
             let skip = voc::find(&entries, "skip").is_some();
             let factory = voc::text(&at, &entries, "default_factory")?;
-            if factory.as_ref().is_some_and(|f| !f.contains('.') && !["list", "dict"].contains(&f.as_str())) {
+            if factory.as_ref().is_some_and(|f| !f.contains(['.', '(']) && !["list", "dict"].contains(&f.as_str())) {
                 return Err(format!(
-                    "{at}: default_factory names a host callable by `module.name`, or `list`/`dict`"
+                    "{at}: default_factory names a host callable by `module.name` (a call with its arguments, `..utils.shortuuid(\"item_\")`), or `list`/`dict`"
                 ));
             }
+            let private = voc::find(&entries, "private").is_some();
+            if private && factory.is_none() {
+                return Err(format!("{at}: a private attribute defaults by its default_factory"));
+            }
+            let annotation = voc::text(&at, &entries, "annotation")?;
             let omitted = voc::rust(&at, &entries, "omitted")?.map(|path| {
                 let path = quote::quote!(#path).to_string().replace(' ', "");
                 match path.strip_prefix("crate::") {
@@ -353,6 +396,8 @@ impl Resolver<'_> {
                 omitted,
                 factory,
                 host_type,
+                private,
+                annotation,
                 doc: doc(&f.attrs),
             });
         }
@@ -422,6 +467,11 @@ pub(super) fn record_target(
             "base",
             "repr",
             "validator",
+            "constants_after",
+            "private",
+            "discriminator",
+            // Rust's own: the record marker expands `ModelDump` (`model_dump(mode="json")`).
+            "model_dump",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?

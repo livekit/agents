@@ -93,7 +93,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 let ty = match f.ty {
                     Ty::Bool => "bool",
                     Ty::Int(_) => "int",
-                    Ty::Float | Ty::Duration => "float",
+                    Ty::Float | Ty::Duration | Ty::Timestamp => "float",
                     _ => "str",
                 };
                 body.push_str(&format!("\ndef {function}(record: {}) -> {ty}: ...\n", r.name));
@@ -219,8 +219,9 @@ impl Imports {
     /// sorted, plain imports first, and separated by a blank line.
     pub(crate) fn render(&self, own: &[&str]) -> String {
         let block = |m: &str| match m {
-            _ if m.starts_with('.') => 2,
+            _ if m.starts_with('.') => 3,
             "typing" | "collections.abc" | "enum" | "asyncio" | "dataclasses" | "time" => 0,
+            _ if m == "livekit" || m.starts_with("livekit.") => 2,
             _ => 1,
         };
         let mut statements: Vec<(u8, bool, &str)> =
@@ -470,7 +471,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::CallContext | Ty::Env => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
-        Ty::Float | Ty::Duration => "float".into(),
+        Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),
         Ty::Str => "str".into(),
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),

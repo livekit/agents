@@ -661,6 +661,7 @@ impl Resolver<'_> {
                     (["bool"], []) => Ty::Bool,
                     (["f64"], []) => Ty::Float,
                     (["std" | "core", "time", "Duration"], []) => Ty::Duration,
+                    (["std", "time", "SystemTime"], []) => Ty::Timestamp,
                     (["isize"], []) => Ty::Int(Int::Isize),
                     (["u8"], []) => Ty::Int(Int::U8),
                     (["u16"], []) => Ty::Int(Int::U16),

@@ -176,9 +176,29 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             // An extract-only record may hold what never returns to the host (a proxy).
             let emit = if r.emit {
                 let (pattern, sets) = struct_emits(fields)?;
+                let built = construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)");
+                // A private attribute is set on the built model; `None` keeps its default.
+                let private: String = fields
+                    .iter()
+                    .filter(|f| f.private)
+                    .map(|f| {
+                        let Ty::Optional(inner) = &f.ty else {
+                            return Err(format!("{}.{}: a private field is an `Option`", r.name, f.rust_name));
+                        };
+                        Ok(format!(
+                            "        if let Some(x) = {} {{\n            obj.setattr({:?}, {})?;\n        }}\n",
+                            f.rust_name,
+                            f.host_name(),
+                            emit(inner, "x")?
+                        ))
+                    })
+                    .collect::<Result<_, String>>()?;
+                let built = match private.is_empty() {
+                    true => built,
+                    false => format!("let obj = {built}?;\n{private}        Ok(obj)"),
+                };
                 format!(
-                    "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {}\n",
-                    construct(&class_ref(&module, &r.name), "()", "Some(&kwargs)")
+                    "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {built}\n"
                 )
             } else {
                 String::new()
@@ -419,7 +439,9 @@ fn struct_emits(fields: &[Field]) -> Result<(String, String), String> {
             continue;
         }
         pattern.push(f.rust_name.clone());
-        sets.push_str(&set(f, &f.rust_name, "        ")?);
+        if !f.private {
+            sets.push_str(&set(f, &f.rust_name, "        ")?);
+        }
     }
     Ok((pattern.join(", "), sets))
 }
@@ -473,6 +495,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::Float => format!("::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?})"),
         Ty::Duration => format!(
             "::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
+        ),
+        Ty::Timestamp => format!(
+            "::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::lk_agents_abi::python::wall_from_py(s, {path:?}))"
         ),
         Ty::Str => format!("{v}.extract::<::std::string::String>()"),
         Ty::Json => format!("::lk_agents_abi::python::value_from_py({v}, {path:?})"),
@@ -625,7 +650,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
             Ty::Int(_) => ("number", "(obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
-            Ty::Float | Ty::Duration => ("number", "(obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()))".into()),
+            Ty::Float | Ty::Duration | Ty::Timestamp => ("number", "(obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()))".into()),
             Ty::Map(..)
             | Ty::OrderedMap(..)
             | Ty::JsonObject

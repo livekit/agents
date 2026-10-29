@@ -112,6 +112,7 @@ const STDLIB: &[&str] = &[
     "functools",
     "json",
     "time",
+    "types",
     "typing",
 ];
 

@@ -94,7 +94,6 @@ const EXPORT_SOURCES: &[&str] = &[
     // declared in when they were one file.
     "rust/crates/lk-agents-abi/src/worker/job.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/mood.rs",
-    "rust/crates/lk-agents-abi/src/llm/chat_context.rs",
     "rust/crates/lk-agents-abi/src/voice/io.rs",
     "rust/crates/lk-agents-abi/src/vad/vad.rs",
     "rust/crates/lk-agents-abi/src/voice/rtc.rs",

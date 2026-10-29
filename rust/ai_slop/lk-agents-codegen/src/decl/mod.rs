@@ -68,6 +68,9 @@ pub struct RecordDecl {
     /// `record(.., transparent, dispatch = "session_dispatch")`: the host routes its members by
     /// class through `_generated/<dispatch>.py` (each variant's [`Route`]).
     pub dispatch: Option<String>,
+    /// `record(.., transparent, discriminator = "type")`: the union alias is pydantic's
+    /// `Annotated[.., Field(discriminator=..)]` over its model members.
+    pub discriminator: Option<String>,
     pub body: RecordBody,
 }
 
@@ -80,6 +83,11 @@ pub struct Pydantic {
     pub base: Option<String>,
     pub repr: Option<String>,
     pub validator: Option<String>,
+    /// `constants_after = "id"`: the constants follow that field instead of leading.
+    pub constants_after: Option<String>,
+    /// `private(_cache = "dict[object, object]")`: host-only private attributes no Rust field
+    /// holds, each defaulting to an empty value of its annotation's container.
+    pub private: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +151,12 @@ pub struct Field {
     /// `host_type = "module.Name"`: the class the host holds, when the type's own model is not it
     /// (a legacy model beside its handwritten public class).
     pub host_type: Option<(String, String)>,
+    /// `private`: a pydantic `PrivateAttr` named `_<field>`, read by attribute and set after the
+    /// model is built; `None` leaves its default.
+    pub private: bool,
+    /// `annotation = ".."`: the model's annotation, when the type's own is not the one the host
+    /// declares (one side-table key standing for `list[rtc.AudioFrame]`).
+    pub annotation: Option<String>,
     pub doc: Vec<String>,
 }
 
@@ -153,8 +167,12 @@ impl Field {
     }
 
     /// The Python attribute: the Rust name without a raw identifier's `r#` (`r#type` is `type`).
-    pub fn host_name(&self) -> &str {
-        self.rust_name.trim_start_matches("r#")
+    pub fn host_name(&self) -> std::borrow::Cow<'_, str> {
+        let name = self.rust_name.trim_start_matches("r#");
+        match self.private {
+            true => format!("_{name}").into(),
+            false => name.into(),
+        }
     }
 }
 
@@ -460,6 +478,8 @@ pub enum Ty {
     Float,
     /// `std::time::Duration`: seconds, as a float on the host.
     Duration,
+    /// `std::time::SystemTime`: a wall clock, as the host's float of Unix seconds.
+    Timestamp,
     Str,
     /// `serde_json::Value`: any JSON value.
     Json,
@@ -644,6 +664,7 @@ impl Ty {
             Ty::Int(i) => i.rust().into(),
             Ty::Float => "f64".into(),
             Ty::Duration => "::std::time::Duration".into(),
+            Ty::Timestamp => "::std::time::SystemTime".into(),
             Ty::Str => "::std::string::String".into(),
             Ty::Json => "::serde_json::Value".into(),
             Ty::JsonObject => {

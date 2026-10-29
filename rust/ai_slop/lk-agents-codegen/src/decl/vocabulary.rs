@@ -60,7 +60,13 @@
 //! | record field, tuple variant | `skip` | does not cross: an extracted record's field reads as its Rust `Default` |
 //! | record field | `host_type = "module.Name"` | the class the host holds, when the type's own model is not it (a legacy model beside its handwritten public class) |
 //! | record enum variant | `native` | only native code produces or takes it: no model, never read, emitting it raises |
-//! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`); with `skip`, Rust never sends it and the host stamps it, read back on extract |
+//! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`; a call with its arguments, `..utils.shortuuid("item_")`, `..` a module of the package); with `skip`, Rust never sends it and the host stamps it, read back on extract |
+//! | record struct | `record(.., pydantic, constants_after = "id")` | the constants follow that field instead of leading the model's fields |
+//! | record struct | `record(.., pydantic, private(_name = "annotation"))` | a host-only `PrivateAttr` no Rust field holds, defaulting to an empty value of its container |
+//! | record struct | `record(.., model_dump)` | the record marker expands `ModelDump` (`model_dump(mode="json")`) in the model's field order; a field's `dump_with = path` dumps it as `path(self, cx)` |
+//! | record enum | `record(.., transparent, discriminator = "type")` | the union alias is `Annotated[A \| B, Field(discriminator="type")]` |
+//! | record field | `private` | a pydantic `PrivateAttr` named `_<field>` with its `default_factory`: read by attribute, set after the model is built (`None` keeps the default) |
+//! | record field | `annotation = ".."` | the model's annotation when the type's own is not the host's (`list[rtc.AudioFrame]` for one side-table key) |
 //! | record enum | `record(.., enum)` | a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`, `.value` its string), not a `Literal` |
 //! | record struct field | `omitted = path` | an extracted scalar the host may leave out: `path(&record)` computes it from the record read (the model's `__post_init__` asks `_core` for it), an explicit value stays |
 //! | tuple variant | `field = "x"` | the name its one value crosses under |

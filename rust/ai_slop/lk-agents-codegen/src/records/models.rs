@@ -172,10 +172,16 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
                 _ => vec![r.name.clone()],
             })
             .collect();
-        // A union alias is evaluated where it stands: after every class (annotations are lazy).
+        // A union alias is evaluated where it stands: after every class (a dataclass's annotations
+        // are lazy). A pydantic model resolves its annotations as it is built, so a module holding
+        // one keeps the declaration order: an alias before the models naming it.
         let (aliases, classes): (Vec<&&RecordDecl>, Vec<&&RecordDecl>) =
             records.iter().filter(|r| !r.name.contains('.')).partition(|r| r.transparent);
-        for r in classes.into_iter().chain(aliases) {
+        let order: Vec<&&RecordDecl> = match records.iter().any(|r| r.pydantic.is_some()) {
+            true => records.iter().filter(|r| !r.name.contains('.')).collect(),
+            false => classes.into_iter().chain(aliases).collect(),
+        };
+        for r in order {
             body.push_str(&model_tree(r, &records, module, &own, &mut runtime, &mut typing));
         }
         for r in records.iter().filter(|r| r.name.contains('.')) {
@@ -368,10 +374,19 @@ fn model(
             Some(_) => runtime.add("pydantic", "Field"),
             None => runtime.add("dataclasses", "field"),
         }
-        if let Some((m, _)) = factory.rsplit_once('.') {
-            runtime.add_module(m);
+        let callable = factory.split('(').next().unwrap_or(factory);
+        match callable.rsplit_once('.') {
+            // A module of the package (`..utils.shortuuid`): `from .. import utils`.
+            Some((m, _)) if m.starts_with("..") => runtime.add("..", &m[2..]),
+            Some((m, _)) => runtime.add_module(m),
+            None => {}
         }
     }
+    // `..utils.shortuuid("item_")`: a call is a lambda; the package prefix is imported above.
+    let factory = |f: &str| {
+        let f = f.strip_prefix("..").unwrap_or(f);
+        if f.contains('(') { format!("lambda: {f}") } else { f.to_owned() }
+    };
     // A pydantic model's discriminator constants lead its fields, as pydantic declares them.
     let constants: String = r
         .constants
@@ -396,8 +411,9 @@ fn model(
             }
             s.push_str(nested);
         }
-        let fields: Vec<&&Field> = fields.iter().filter(|f| f.modeled()).collect();
-        let lead = if pydantic.is_some() { constants.as_str() } else { "" };
+        let fields: Vec<&&Field> = fields.iter().filter(|f| f.modeled() && !f.private).collect();
+        let after = pydantic.and_then(|p| p.constants_after.as_deref());
+        let lead = if pydantic.is_some() && after.is_none() { constants.as_str() } else { "" };
         if fields.is_empty() && lead.is_empty() {
             if doc.is_empty() && nested.is_empty() && pydantic.is_none() {
                 s.push_str("    pass\n");
@@ -410,9 +426,9 @@ fn model(
         s.push_str(lead);
         for f in fields {
             let default = match (&f.default, &f.omitted) {
-                _ if let Some(factory) = &f.factory => match pydantic {
-                    Some(_) => format!(" = Field(default_factory={factory})"),
-                    None => format!(" = field(default_factory={factory})"),
+                _ if let Some(f) = &f.factory => match pydantic {
+                    Some(_) => format!(" = Field(default_factory={})", factory(f)),
+                    None => format!(" = field(default_factory={})", factory(f)),
                 },
                 (Some(d), _) => format!(" = {}", py_literal(d)),
                 // Computed in `__post_init__` when left out: the field is never `None` after.
@@ -421,6 +437,7 @@ fn model(
                 (None, None) => String::new(),
             };
             let ann = match &f.host_type {
+                _ if let Some(text) = &f.annotation => imports.annotation(text, &r.rust),
                 Some((m, name)) => {
                     imports.add(m, name);
                     match f.ty {
@@ -432,6 +449,9 @@ fn model(
             };
             s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
+            if after == Some(&*f.host_name()) {
+                s.push_str(&constants);
+            }
         }
         s
     };
@@ -473,6 +493,29 @@ fn model(
             }
             let fields = fields.iter().collect::<Vec<_>>();
             let mut s = class(&r.name, &r.doc, &fields, nested, runtime);
+            // Private attributes trail the fields; their annotations are never evaluated.
+            let mut private = String::new();
+            for f in fields.iter().filter(|f| f.private) {
+                let ann = match &f.annotation {
+                    Some(text) => typing.annotation(text, &r.rust),
+                    None => annotation(&f.ty, module, own, out, true, typing),
+                };
+                private.push_str(&format!(
+                    "    {}: {ann} = PrivateAttr(default_factory={})\n{}",
+                    f.host_name(),
+                    factory(f.factory.as_deref().expect("a private field has a factory")),
+                    docstring(&f.doc, "    ")
+                ));
+            }
+            for (name, ann) in &p.private {
+                let container = ann.split('[').next().unwrap_or(ann);
+                let ann = typing.annotation(ann, &r.rust);
+                private.push_str(&format!("    {name}: {ann} = PrivateAttr(default_factory={container})\n"));
+            }
+            if !private.is_empty() {
+                runtime.add("pydantic", "PrivateAttr");
+                s.push_str(&private);
+            }
             if let Some(validator) = &p.validator {
                 runtime.add("pydantic", "model_validator");
                 runtime.add("typing_extensions", "Self");
@@ -546,7 +589,19 @@ fn model(
                 )
                 .collect();
             let members: Vec<&str> = members.iter().map(String::as_str).collect();
-            let mut s = format!("\n\n{}\n", union_alias(&r.name, &members));
+            let alias = match &r.discriminator {
+                Some(key) => {
+                    runtime.add("typing", "Annotated");
+                    runtime.add("pydantic", "Field");
+                    format!(
+                        "{}: TypeAlias = Annotated[\n    {},\n    Field(discriminator={key:?}),\n]",
+                        r.name,
+                        members.join(" | ")
+                    )
+                }
+                None => union_alias(&r.name, &members),
+            };
+            let mut s = format!("\n\n{alias}\n");
             s.push_str(&docstring(&r.doc, ""));
             s
         }
@@ -654,7 +709,7 @@ fn annotation(
     match ty {
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
-        Ty::Float | Ty::Duration => "float".into(),
+        Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),
         Ty::Str => "str".into(),
         Ty::Json | Ty::JsonObject if any => {
             typing.add("typing", "Any");
