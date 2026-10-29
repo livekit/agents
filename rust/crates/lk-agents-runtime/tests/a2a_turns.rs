@@ -1022,25 +1022,29 @@ lk_agents_storage::contract!(
 // -- I-7: commit outcomes reach the caller as they are (SQLite, injected faults) --
 
 /// A refused save fails the original task `storage-unavailable`, its staged changes absent: no
-/// new task, no answer in the history.
+/// new task, no answer in the history. A save refused as too large does too (review10 on
+/// d47805ad2: the client got the raw `TooLarge` and the task stayed `working`).
 #[tokio::test]
 async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
-    let fx = Backend::Sqlite.fixture(None).await;
-    let (s, faults) = fx.faulty_thread("worker-a").await;
-    faults.fail_next_commit(lk_agents_storage::testing::CommitFault::Refuse);
-    let host = Fake::new(Behavior::Echo);
-    let r = turn(&s, host, Some(Policy::Queue))
-        .run(a2a("hello", "m1", None, None), Some("AST_1".into()))
-        .await
-        .unwrap();
-    assert_eq!((r.task.task_id.as_str(), r.task.status), ("AST_1", TaskState::Failed));
-    assert_eq!(
-        json_of(&r.task.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
-        json!("storage-unavailable")
-    );
-    assert!(history_texts(&s).await.is_empty(), "the staged turn was not committed");
-    assert_eq!(s.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
-    fx.cleanup(&[&s]).await;
+    use lk_agents_storage::testing::CommitFault;
+    for fault in [CommitFault::Refuse, CommitFault::RefuseTooLarge] {
+        let fx = Backend::Sqlite.fixture(None).await;
+        let (s, faults) = fx.faulty_thread("worker-a").await;
+        faults.fail_next_commit(fault);
+        let host = Fake::new(Behavior::Echo);
+        let r = turn(&s, host, Some(Policy::Queue))
+            .run(a2a("hello", "m1", None, None), Some("AST_1".into()))
+            .await
+            .unwrap();
+        assert_eq!((r.task.task_id.as_str(), r.task.status), ("AST_1", TaskState::Failed));
+        assert_eq!(
+            json_of(&r.task.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
+            json!("storage-unavailable")
+        );
+        assert!(history_texts(&s).await.is_empty(), "the staged turn was not committed");
+        assert_eq!(s.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
+        fx.cleanup(&[&s]).await;
+    }
 }
 
 /// Decision 39: an acknowledgment lost with the database unreachable through the whole wait

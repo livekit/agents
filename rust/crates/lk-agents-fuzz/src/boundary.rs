@@ -74,7 +74,8 @@ pub const A2A: Boundary = Boundary {
     fakes: &[
         "lk_agents_storage::testing: the thread database in memory on the run's clock \
          (MemoryConnection) behind the fault connection (Faulty): Uncertain before and after the \
-         commit applied, a refused commit, an unreachable database; each request a little late",
+         commit applied, a commit refused unavailable or too large, an unreachable database; each \
+         request a little late",
         "a2a::handler (the TurnHost port): checkpoints, a yield, a text answer, a tool's \
          question, a raise, a lost lane, a cancellation, a lost database",
         "the clients: out-of-order arrivals on three channels under door options mixing the \

@@ -395,12 +395,17 @@ fn row_of(status: TaskState) -> TaskRow {
 /// A2A_SEED=154 239 (message_executes_once, Continuation): a continuation whose commit was
 /// rejected was answered by the task it continued while its own receipt stayed `working`, later
 /// failing worker-lost on its own. The rejected save fails the message's own task, the answer
-/// names it, and the question it tried to answer stays pending.
+/// names it, and the question it tried to answer stays pending. Any refusal does (review10 on
+/// d47805ad2): a commit refused `TooLarge`, `Invalid` or `Unauthorized` left the run open, the
+/// task `working` and the client with the raw error.
 #[test]
 fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() {
     for error in [
         StorageError::VersionConflict { lane: "lane".into(), expected: 1 },
         StorageError::Unavailable("sqlite: disk I/O error".into()),
+        StorageError::TooLarge { what: "the lane state".into(), limit: 1 },
+        StorageError::Invalid("sqlite: constraint failed".into()),
+        StorageError::Unauthorized("token expired".into()),
     ] {
         let mut m = continuing(Policy::Queue, Some("waiting"));
         let commit = turn(&mut m, Some(question()), answered("Tuesday"));

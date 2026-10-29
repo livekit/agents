@@ -1046,16 +1046,12 @@ impl TaskMachine {
                     // a lost acknowledgment is not a failure: the message's task stays as it is
                     // while the resolver finds the run; once applied, it names its answer
                     StorageError::Uncertain(_) => self.resolve_later(),
-                    // the database refused the save: the message's own task fails; its staged
-                    // changes are absent, so a question it answered still waits
-                    StorageError::Unavailable(_)
-                    | StorageError::LeaseLost(_)
-                    | StorageError::VersionConflict { .. } => {
+                    // the save was refused, whatever the reason: the message's own task fails;
+                    // its staged changes are absent, so a question it answered still waits
+                    _ => {
                         let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
                         self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
                     }
-                    // what the run asked wrongly is not the database's failure
-                    error => return Err(Finish::Error(error)),
                 }
             }
             _ => return Err(Finish::Error(error)),

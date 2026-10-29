@@ -1,8 +1,9 @@
 //! The fake handler: an application's `a2a_session` handler at the turn's host port
 //! (`TurnHost`). It works a while before each step, reaches a few checkpoints, yields once told
 //! to, and ends with a text answer, a conversation tool's question (its call and placeholder
-//! output in the new items, as an agent run records them) or a raise; while faults are on it may
-//! lose the lane, be cancelled by its host, or lose the database. Its output carries a marker
+//! output in the new items, as an agent run records them), a transport `Rejected` transition or
+//! a raise; while faults are on it may lose the lane, be cancelled by its host, or lose the
+//! database. Its output carries a marker
 //! item naming the invocation, so the history shows which invocations' commits applied.
 
 use std::collections::BTreeSet;
@@ -12,6 +13,7 @@ use lk_agents_abi::a2a::turn::{TurnContext, TurnEvent, TurnHost, Verdict};
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCall, FunctionCallOutput};
+use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::{BoxFuture, Closed, StreamSink, StreamSource, Ts};
 use lk_agents_core::a2a::{HandlerOutput, PendingCall, chat_message};
@@ -27,6 +29,8 @@ enum Ending {
     Text,
     Ask,
     Raise,
+    /// The transport transition `Rejected`.
+    Reject,
 }
 
 /// The handlers of every request: which run now, and what each invocation handled.
@@ -70,9 +74,10 @@ impl TurnHost for Host {
             handlers.open.lock().unwrap().insert(self.request);
             let verdict = Arc::new(Mutex::new(None));
             let world = &handlers.world;
-            let ending = match world.draw(|r| r.u8(0..10)) {
-                0..=5 => Ending::Text,
-                6..=8 => Ending::Ask,
+            let ending = match world.draw(|r| r.u8(0..20)) {
+                0..=10 => Ending::Text,
+                11..=16 => Ending::Ask,
+                17..=18 => Ending::Reject,
                 _ => Ending::Raise,
             };
             let handler = Handler {
@@ -158,8 +163,13 @@ impl StreamSource<TurnEvent> for Handler {
                 return Ok(None);
             }
             let output = self.output(world.wall_secs());
-            if output.input_required.is_some() {
-                *world.ledger.lock().unwrap().injected.entry("Question").or_default() += 1;
+            let reached = match (&output.input_required, output.status) {
+                (Some(_), _) => Some("Question"),
+                (None, Some(_)) => Some("HandlerRejected"),
+                _ => None,
+            };
+            if let Some(kind) = reached {
+                *world.ledger.lock().unwrap().injected.entry(kind).or_default() += 1;
             }
             Ok(Some(TurnEvent::Output { output: output.into() }))
         })
@@ -188,6 +198,10 @@ impl Handler {
         match self.ending {
             Ending::Text => out.output = Some(format!("answer for {}", self.task_id).into()),
             Ending::Raise => out.error = Some("RuntimeError: the tool failed".into()),
+            Ending::Reject => {
+                out.output = Some(format!("not for me: {}", self.task_id).into());
+                out.status = Some(TaskState::Rejected);
+            }
             Ending::Ask => {
                 let call_id = format!("call_{}", self.invocation);
                 let item = |kind| ChatItem { item: Some(kind) };

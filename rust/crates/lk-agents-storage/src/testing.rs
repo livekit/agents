@@ -134,16 +134,18 @@ macro_rules! contract {
 }
 
 /// How the next commit batch fails: its acknowledgment lost before or after it applied, or
-/// refused outright by a disk I/O error.
+/// refused outright, by a disk I/O error or as too large for the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitFault {
     LoseAckBefore,
     LoseAckAfter,
     Refuse,
+    RefuseTooLarge,
 }
 
 /// A thread database connection with faults a real connection shows: a commit's answer lost
-/// (`Uncertain`, applied or not), a refused commit, and an unreachable database for a while.
+/// (`Uncertain`, applied or not), a refused commit (`Unavailable`, or `TooLarge` as an AgentDB
+/// frame over its limit is), and an unreachable database for a while.
 pub struct Faulty {
     inner: Box<dyn SqliteConnection>,
     commit: std::sync::Mutex<Option<CommitFault>>,
@@ -211,6 +213,9 @@ impl SqliteConnection for Faulty {
             Some(CommitFault::Refuse) => {
                 let io = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR);
                 Err(crate::sqlite::sqlite_error(rusqlite::Error::SqliteFailure(io, None)))
+            }
+            Some(CommitFault::RefuseTooLarge) => {
+                Err(StorageError::TooLarge { what: "the commit".into(), limit: 0 })
             }
         }
     }

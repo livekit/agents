@@ -3,8 +3,9 @@
 //! `lk_agents_core::a2a::task::TaskMachine`'s) over lk-agents-storage, on an in-memory database
 //! that reads the run's virtual clock (`testing::MemoryConnection`) behind storage's
 //! fault-injecting connection (`testing::Faulty`): a commit's acknowledgment lost before or after
-//! it applied, a refused commit, the database unreachable for a while. The handler, at its host
-//! port, loses the lane, is cancelled or loses the database now and then.
+//! it applied, a commit refused (a disk I/O error, or too large), the database unreachable for a
+//! while. The handler, at its host port, loses the lane, is cancelled or loses the database now
+//! and then.
 //!
 //! Requests arrive out of order on three channels under door options the seed draws (the
 //! default map, one policy for every channel, or a map mixing them), workers die mid-turn (their
@@ -317,6 +318,7 @@ fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) -> bool
         (f.lost_ack, CommitFault::LoseAckBefore, "UncertainBefore"),
         (f.lost_ack, CommitFault::LoseAckAfter, "UncertainAfter"),
         (f.refused_commit, CommitFault::Refuse, "Refused"),
+        (f.refused_commit, CommitFault::RefuseTooLarge, "RefusedTooLarge"),
     ] {
         if fire(pct, kind) {
             database.faults.fail_next_commit(fault);
