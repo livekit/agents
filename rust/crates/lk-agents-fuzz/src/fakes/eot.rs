@@ -40,9 +40,9 @@ impl EotDetector for FakeEot {
         self.registry.record_forwarded(self.slot, tags_of(&frame));
     }
 
-    fn cancel(&self, _timed_out: bool) {}
+    fn cancel_inference(&self, _timed_out: bool) {}
 
-    fn flush(&self, _reason: &str) {}
+    fn flush(&self, _reason: Option<String>) {}
 
     fn thresholds(&self) -> Option<ThresholdOptions> {
         Some(ThresholdOptions::new(

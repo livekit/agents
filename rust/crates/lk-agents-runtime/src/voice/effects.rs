@@ -258,7 +258,7 @@ impl Runtime {
             // A session without a turn detector asks for no flush.
             E::EotFlush(reason) => {
                 if let Some(d) = self.eot.as_ref() {
-                    d.flush(reason.as_str());
+                    d.flush(Some(reason.as_str().to_owned()));
                 }
             }
             E::EotPredict { req, timeout } => {
@@ -274,7 +274,7 @@ impl Runtime {
             // asks for none.
             E::EotCancel { req: _, timed_out } => {
                 if let Some(d) = self.eot.as_ref() {
-                    d.cancel(timed_out);
+                    d.cancel_inference(timed_out);
                 }
             }
             // Not awaited, like the reference's `send_nowait` on `_interruption_ch`. A session

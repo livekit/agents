@@ -268,7 +268,7 @@ class TurnDetector:
     def _core_cancel(self, timed_out: bool) -> None:
         self._stream.cancel_inference(timed_out=timed_out)
 
-    def _core_flush(self, reason: str) -> None:
+    def _core_flush(self, reason: str | None) -> None:
         self._stream.flush(reason)
 
     async def _core_predict(self, timeout: float | None) -> EotPrediction:

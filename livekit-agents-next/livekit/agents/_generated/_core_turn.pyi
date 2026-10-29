@@ -62,7 +62,7 @@ class InferenceEot:
 
 class EotStream:
     """`TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
-    session's own detector when handed to it.
+    session's own detector when handed to it, which implements its stream operations.
     """
     @property
     def model(self) -> TurnDetectorModel:

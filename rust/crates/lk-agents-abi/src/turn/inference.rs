@@ -108,9 +108,9 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
 }
 
 /// `TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
-/// session's own detector when handed to it.
+/// session's own detector when handed to it, which implements its stream operations.
 #[crate::host(class(name = "EotStream", native = crate::EotDetector))]
-pub trait EotStream: Send + Sync + Sized + 'static {
+pub trait EotStream: crate::EotDetector + Sized + 'static {
     /// The active model, which changes under the caller after a fallback.
     #[host(getter)]
     fn model(&self) -> TurnDetectorModel;
@@ -127,14 +127,20 @@ pub trait EotStream: Send + Sync + Sized + 'static {
     async fn predict(&self) -> Result<EotPrediction, ProviderError>;
 
     #[host(call)]
-    fn cancel_inference(&self, #[host(kw, default = false)] timed_out: bool);
+    fn cancel_inference(&self, #[host(kw, default = false)] timed_out: bool) {
+        crate::EotDetector::cancel_inference(self, timed_out);
+    }
 
     /// A segment boundary, not a close.
     #[host(call)]
-    fn flush(&self, #[host(default = None)] reason: Option<String>);
+    fn flush(&self, #[host(default = None)] reason: Option<String>) {
+        crate::EotDetector::flush(self, reason);
+    }
 
     #[host(call)]
-    fn push_audio(&self, frame: AudioFrame);
+    fn push_audio(&self, frame: AudioFrame) {
+        crate::EotDetector::push_audio(self, frame);
+    }
 
     #[host(call)]
     fn end_input(&self);

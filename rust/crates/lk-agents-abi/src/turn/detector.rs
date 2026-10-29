@@ -36,11 +36,11 @@ pub trait EotDetector: Send + Sync + 'static {
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
     /// timeout and a superseding speech differently.
     #[host(notify, name = "_core_cancel")]
-    fn cancel(&self, timed_out: bool);
+    fn cancel_inference(&self, timed_out: bool);
 
     /// `flush(reason)`: a segment boundary, not a close.
     #[host(notify, name = "_core_flush")]
-    fn flush(&self, reason: &str);
+    fn flush(&self, reason: Option<String>);
     /// Ask for a prediction (`stream.predict()`).
     ///
     /// The countdown already bounds `timeout` itself, so ignoring it cannot hang a turn. An `Err`

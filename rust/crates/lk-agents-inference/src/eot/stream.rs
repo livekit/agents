@@ -376,53 +376,30 @@ impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
         self.0.lock().session.is_degraded()
     }
 
-    /// Ask for a prediction over the audio so far; supersedes any in flight. The request is
-    /// registered when called, so a later cancel or flush settles it.
     fn predict(&self) -> impl Future<Output = Result<EotPrediction, ProviderError>> {
-        let rx = {
-            let mut inner = self.0.lock();
-            let prefix = match inner.shell.as_ref().and_then(|s| s.transport.session_id()) {
-                Some(sid) => format!("{sid}_eot_"),
-                None => "turn_request_".to_owned(),
-            };
-            let request_id = crate::ids::shortuuid(&prefix);
-            let (tx, rx) = oneshot::channel();
-            inner.waiters.insert(request_id.clone(), tx);
-            let actions = inner.session.start(now(), EotRequestId::from_string(request_id));
-            let warnings = self.0.apply(&mut inner, actions);
-            if inner.shell.is_none() && !inner.session.is_closed() {
-                self.0.swaps.send_modify(|n| *n += 1);
-            }
-            drop(inner);
-            EotStream::warn(warnings);
-            rx
-        };
-        async { rx.await.map_err(|_| ApiError::new("turn detector stream closed").into()) }
+        lk_agents_abi::EotDetector::predict(self, None)
     }
 
-    fn cancel_inference(&self, timed_out: bool) {
-        let reason = if timed_out { CancelReason::TimedOut } else { CancelReason::Superseded };
+    fn end_input(&self) {
         let mut inner = self.0.lock();
-        let actions = inner.session.cancel(now(), None, reason);
+        let actions = inner.session.end_input(now());
         let warnings = self.0.apply(&mut inner, actions);
-        drop(inner);
-        EotStream::warn(warnings);
-    }
-
-    fn flush(&self, _reason: Option<String>) {
-        let mut inner = self.0.lock();
-        if let Some(mut r) = inner.resampler.take() {
-            let tail = r.flush().map(<[i16]>::to_vec).unwrap_or_default();
-            if !tail.is_empty() {
-                let ch = inner.input_format.map_or(1, |(_, c)| c);
-                EotStream::push(&mut inner, pcm_frame(tail, self.0.rate, ch));
-            }
+        if let Some(shell) = &inner.shell {
+            shell.transport.end_input();
         }
-        inner.input_format = None;
-        let actions = inner.session.flush(now());
-        let warnings = self.0.apply(&mut inner, actions);
+        self.0.swaps.send_modify(|n| *n += 1);
         drop(inner);
         EotStream::warn(warnings);
+    }
+
+    fn aclose(&self) -> impl Future<Output = ()> {
+        lk_agents_abi::EotDetector::aclose(self)
+    }
+}
+
+impl lk_agents_abi::EotDetector for DetectorStream {
+    fn id(&self) -> ProviderId {
+        ProviderId { model: self.model().as_str().into(), ..self.0.id.clone() }
     }
 
     fn push_audio(&self, frame: AudioFrame) {
@@ -462,62 +439,75 @@ impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
         }
     }
 
-    fn end_input(&self) {
+    fn cancel_inference(&self, timed_out: bool) {
+        let reason = if timed_out { CancelReason::TimedOut } else { CancelReason::Superseded };
         let mut inner = self.0.lock();
-        let actions = inner.session.end_input(now());
+        let actions = inner.session.cancel(now(), None, reason);
         let warnings = self.0.apply(&mut inner, actions);
-        if let Some(shell) = &inner.shell {
-            shell.transport.end_input();
-        }
-        self.0.swaps.send_modify(|n| *n += 1);
         drop(inner);
         EotStream::warn(warnings);
     }
 
-    /// Closes when called; the future waits for the run loop to settle.
-    fn aclose(&self) -> impl Future<Output = ()> {
-        self.end_input();
-        let shell = self.0.lock().shell.clone();
-        if let Some(shell) = shell {
-            shell.detach();
+    fn flush(&self, _reason: Option<String>) {
+        let mut inner = self.0.lock();
+        if let Some(mut r) = inner.resampler.take() {
+            let tail = r.flush().map(<[i16]>::to_vec).unwrap_or_default();
+            if !tail.is_empty() {
+                let ch = inner.input_format.map_or(1, |(_, c)| c);
+                EotStream::push(&mut inner, pcm_frame(tail, self.0.rate, ch));
+            }
         }
-        self.cancel_inference(false);
-        let mut settled = self.0.settled.subscribe();
-        async move {
-            let _ = settled.wait_for(|done| *done).await;
-        }
-    }
-}
-
-impl lk_agents_abi::EotDetector for DetectorStream {
-    fn id(&self) -> ProviderId {
-        ProviderId { model: self.model().as_str().into(), ..self.0.id.clone() }
-    }
-
-    fn push_audio(&self, frame: AudioFrame) {
-        AbiEotStream::push_audio(self, frame);
-    }
-
-    fn cancel(&self, timed_out: bool) {
-        self.cancel_inference(timed_out);
-    }
-
-    fn flush(&self, _reason: &str) {
-        AbiEotStream::flush(self, None);
+        inner.input_format = None;
+        let actions = inner.session.flush(now());
+        let warnings = self.0.apply(&mut inner, actions);
+        drop(inner);
+        EotStream::warn(warnings);
     }
 
     fn thresholds(&self) -> Option<ThresholdOptions> {
         Some(self.0.lock().session.thresholds())
     }
 
+    /// Ask for a prediction over the audio so far; supersedes any in flight. The request is
+    /// registered when called, so a later cancel or flush settles it.
     fn predict(
         &self,
         _timeout: Option<std::time::Duration>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
-        Box::pin(AbiEotStream::predict(self))
+        let rx = {
+            let mut inner = self.0.lock();
+            let prefix = match inner.shell.as_ref().and_then(|s| s.transport.session_id()) {
+                Some(sid) => format!("{sid}_eot_"),
+                None => "turn_request_".to_owned(),
+            };
+            let request_id = crate::ids::shortuuid(&prefix);
+            let (tx, rx) = oneshot::channel();
+            inner.waiters.insert(request_id.clone(), tx);
+            let actions = inner.session.start(now(), EotRequestId::from_string(request_id));
+            let warnings = self.0.apply(&mut inner, actions);
+            if inner.shell.is_none() && !inner.session.is_closed() {
+                self.0.swaps.send_modify(|n| *n += 1);
+            }
+            drop(inner);
+            EotStream::warn(warnings);
+            rx
+        };
+        Box::pin(async {
+            rx.await.map_err(|_| ApiError::new("turn detector stream closed").into())
+        })
     }
 
+    /// Closes when called; the future waits for the run loop to settle.
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(AbiEotStream::aclose(self))
+        self.end_input();
+        let shell = self.0.lock().shell.clone();
+        if let Some(shell) = shell {
+            shell.detach();
+        }
+        lk_agents_abi::EotDetector::cancel_inference(self, false);
+        let mut settled = self.0.settled.subscribe();
+        Box::pin(async move {
+            let _ = settled.wait_for(|done| *done).await;
+        })
     }
 }

@@ -117,7 +117,7 @@ impl InferenceEot {
 type EotStreamImpl = <crate::Selected as super::Implementations>::EotStream;
 
 /// `TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
-/// session's own detector when handed to it.
+/// session's own detector when handed to it, which implements its stream operations.
 #[pyclass(frozen, name = "EotStream", module = "livekit.agents._core")]
 pub struct EotStream(::std::sync::Arc<EotStreamImpl>);
 
@@ -363,7 +363,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
             }));
     }
 
-    fn cancel(&self, timed_out: bool) {
+    fn cancel_inference(&self, timed_out: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let timed_out_arg = timed_out;
         ::lk_agents_runtime::host::notify(&self.notifier, "EotDetector._core_cancel", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
@@ -372,9 +372,9 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
             }));
     }
 
-    fn flush(&self, reason: &str) {
+    fn flush(&self, reason: ::std::option::Option<::std::string::String>) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let reason_arg = reason.to_owned();
+        let reason_arg = reason;
         ::lk_agents_runtime::host::notify(&self.notifier, "EotDetector._core_flush", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?];
                 Ok((host.bind(py).getattr("_core_flush")?, ::pyo3::types::PyTuple::new(py, args)?))
