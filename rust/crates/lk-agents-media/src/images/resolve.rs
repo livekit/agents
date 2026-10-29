@@ -1,5 +1,5 @@
-//! Images prepared for a provider: host frames read through the host's [`FrameReader`]
-//! (decision 94). Synchronous: the caller runs it on an image worker.
+//! Images prepared for a provider: host frames read through the host's [`FrameReader`].
+//! Synchronous: the caller runs it on an image worker.
 
 use std::sync::Arc;
 

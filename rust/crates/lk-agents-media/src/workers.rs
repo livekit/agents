@@ -1,4 +1,4 @@
-//! Admitted native workers for codec, recording, image and model work (decision 84): a bounded pool
+//! Admitted native workers for codec, recording, image and model work: a bounded pool
 //! of plain threads, no async runtime. Callers that must not block their loop hand work here and
 //! await its [`MediaWorker`]. Admission refuses overload synchronously; a running job keeps its
 //! capacity until it settles, so a caller dropping its receipt never frees capacity early.
