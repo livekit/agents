@@ -1,0 +1,24 @@
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/stt.py
+  s_bcd3e70328118e::t_ac75091f9c9ef6 251,428-429,457-461,473-481
+tests/test_stt.py
+  s_bcd3e70328118e::t_ac75091f9c9ef6 28,106-109
+tests/test_plugin_inworld_stt.py
+  s_bcd3e70328118e::t_915c9cc97b8552 3,73,75-81
+  s_bcd3e70328118e::t_ac75091f9c9ef6 4-5,8-10,14-48,61-72,74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "410e939a72bf6af88e9b1a6d815b8b5f37824559",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
