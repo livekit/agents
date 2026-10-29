@@ -9,7 +9,7 @@ from .traces import (
     RedactingSpanExporter,
     _upload_session_report as _upload_session_report,
     capture_content_enabled as capture_content_enabled,
-    set_capture_content as set_capture_content,
+    set_capture_content,
     set_tracer_provider,
     tracer as tracer,
 )
@@ -20,6 +20,7 @@ __all__ = [
     "RedactingSpanExporter",
     "RedactingLogExporter",
     "set_tracer_provider",
+    "set_capture_content",
 ]
 
 # Cleanup docs of unexported modules
