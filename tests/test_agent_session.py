@@ -4,11 +4,22 @@ from collections.abc import AsyncIterable
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, APIConnectOptions, ModelSettings, RunContext, VoiceSession, utils
-from livekit.agents.llm import ChatContext
+from livekit.agents import (
+    Agent,
+    APIConnectOptions,
+    ModelSettings,
+    RunContext,
+    StopResponse,
+    VoiceSession,
+    utils,
+)
+from livekit.agents.llm import ChatContext, ChatMessage
 
-from .fake_io import FakeAudioOutput
+from .fake_io import FakeAudioInput, FakeAudioOutput
+from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_tts import FakeTTS
+from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.unit
 
@@ -215,3 +226,37 @@ async def test_a_session_tts_node_runs_for_each_agent_holding_the_call() -> None
             session.tts_node(voice)
     assert spoken_for == ["reception", "bookings"]
     assert _synthesized(tts) == 2
+
+
+async def test_stop_response_from_the_turn_hook_skips_the_reply() -> None:
+    speech = [FakeUserSpeech(start_time=0.1, end_time=0.4, transcript="hold on", stt_delay=0.05)]
+    model = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="hold on", content="Sure.", ttft=0, duration=0)]
+    )
+    session = VoiceSession(
+        vad=FakeVAD(fake_user_speeches=speech, min_silence_duration=0.1),
+        stt=FakeSTT(fake_user_speeches=speech),
+        llm=model,
+        tts=FakeTTS(fake_audio_duration=0.1),
+        turn_handling={"turn_detection": None, "endpointing": {"min_delay": 0.1}},
+        aec_warmup_duration=None,
+    )
+    audio_input = FakeAudioInput()
+    session.input.audio = audio_input
+    session.output.audio = FakeAudioOutput()
+    heard = asyncio.Event()
+
+    @session.on_user_turn_completed
+    async def hold_on(ctx: RunContext, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        assert new_message.text_content == "hold on"
+        heard.set()
+        raise StopResponse()
+
+    async with session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        audio_input.push(0.1)
+        await asyncio.wait_for(heard.wait(), timeout=5)
+        await asyncio.sleep(0.5)
+        replies = [i for i in session.history.items if i.type == "message" and i.role != "user"]
+    assert replies == [], replies
+    assert _synthesized(session.tts) == 0  # type: ignore[arg-type]
