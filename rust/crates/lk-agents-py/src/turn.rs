@@ -11,7 +11,6 @@ use std::sync::Arc;
 use lk_agents_abi::a2a::options::TurnOptions;
 use lk_agents_abi::python::{check_pid, value_from_py, value_to_py};
 use lk_agents_abi::storage as host;
-use lk_agents_abi::{Clock, RealClock};
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::db::TaskOrder;
 use lk_agents_runtime::storage::namespace::thread_item_page;
@@ -431,7 +430,7 @@ impl PyTurn {
             .map(crate::generated::records::storage_options::turn_options_from_py)
             .transpose()?
             .unwrap_or_default();
-        let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+        let clock = lk_agents_runtime::process::host_clock();
         let host = crate::generated::a2a::TurnHostProxy::from_host(host)?;
         Ok(Self { inner: Arc::new(Turn::new(thread.inner.clone(), lane, host, clock, opts)) })
     }
