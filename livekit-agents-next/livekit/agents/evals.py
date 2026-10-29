@@ -31,7 +31,6 @@ __all__ = [
     "JudgeGroup",
     "Judge",
     "JudgmentResult",
-    "Verdict",
     "accuracy_judge",
     "coherence_judge",
     "conciseness_judge",
@@ -43,15 +42,12 @@ __all__ = [
 ]
 
 
-Verdict = Literal["pass", "fail", "maybe"]
-
-
-"""The verdict of a judgment: pass, fail, or maybe (uncertain)."""
+_Verdict = Literal["pass", "fail", "maybe"]
 
 
 @dataclass
 class JudgmentResult:
-    verdict: Verdict
+    verdict: _Verdict
     """The judgment verdict: 'pass', 'fail', or 'maybe' (uncertain)."""
     reasoning: str
     """Chain-of-thought reasoning for the judgment."""
@@ -135,9 +131,8 @@ class Judge:
 class _BuiltInJudge:
     """A built-in judge: the core frames the conversation and asks the model for a verdict."""
 
-    def __init__(self, name: str, llm: LLM | None) -> None:
+    def __init__(self, name: str) -> None:
         self._name = name
-        self._llm = llm
 
     @property
     def name(self) -> str:
@@ -150,13 +145,13 @@ class _BuiltInJudge:
         reference: ChatContext | None = None,
         llm: LLM | None = None,
     ) -> JudgmentResult:
-        (outcome,) = await _evaluate([self], chat_ctx, reference, llm or self._llm)
+        (outcome,) = await _evaluate([self], chat_ctx, reference, llm)
         if isinstance(outcome, JudgeOutcomeFailed):
             raise ValueError(outcome.error)
         return _result(outcome.judgment)
 
 
-def task_completion_judge(llm: LLM | None = None) -> Evaluator:
+def task_completion_judge() -> Evaluator:
     """Judge that evaluates if the agent completed its goal based on its instructions.
 
     Extracts the agent's instructions from AgentConfigUpdate items in the chat context
@@ -166,10 +161,10 @@ def task_completion_judge(llm: LLM | None = None) -> Evaluator:
     Based on First Call Resolution (FCR), the key metric in call centers.
     Useful for: customer service, appointment booking, order management.
     """
-    return _BuiltInJudge("task_completion", llm)
+    return _BuiltInJudge("task_completion")
 
 
-def handoff_judge(llm: LLM | None = None) -> Evaluator:
+def handoff_judge() -> Evaluator:
     """Judge that evaluates context preservation across agent handoffs.
 
     Handoffs can be silent (seamless) or explicit ("transferring you to...").
@@ -179,10 +174,10 @@ def handoff_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: multi-agent systems, transfers to specialists, escalations.
     """
-    return _BuiltInJudge("handoff", llm)
+    return _BuiltInJudge("handoff")
 
 
-def accuracy_judge(llm: LLM | None = None) -> Evaluator:
+def accuracy_judge() -> Evaluator:
     """Judge that evaluates factual accuracy of information provided.
 
     Focuses on grounding - responses must be supported by function call outputs.
@@ -190,10 +185,10 @@ def accuracy_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: healthcare, insurance, finance - where wrong information has consequences.
     """
-    return _BuiltInJudge("accuracy", llm)
+    return _BuiltInJudge("accuracy")
 
 
-def tool_use_judge(llm: LLM | None = None) -> Evaluator:
+def tool_use_judge() -> Evaluator:
     """Judge that evaluates if the agent used tools correctly.
 
     Checks tool selection, parameter accuracy, output interpretation, and error handling.
@@ -201,10 +196,10 @@ def tool_use_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: any agent with tools - appointment systems, order lookups, CRM integrations.
     """
-    return _BuiltInJudge("tool_use", llm)
+    return _BuiltInJudge("tool_use")
 
 
-def safety_judge(llm: LLM | None = None) -> Evaluator:
+def safety_judge() -> Evaluator:
     """Judge that evaluates if responses are safe, compliant, and appropriate.
 
     Checks for unauthorized advice, improper disclosure, failure to escalate,
@@ -212,10 +207,10 @@ def safety_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: regulated industries, user-facing agents where compliance and tone matter.
     """
-    return _BuiltInJudge("safety", llm)
+    return _BuiltInJudge("safety")
 
 
-def relevancy_judge(llm: LLM | None = None) -> Evaluator:
+def relevancy_judge() -> Evaluator:
     """Judge that evaluates if responses are relevant and on-topic.
 
     Checks if the agent directly addresses what the user asked, stays focused
@@ -223,10 +218,10 @@ def relevancy_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: any conversational agent, scoped agents, customer service.
     """
-    return _BuiltInJudge("relevancy", llm)
+    return _BuiltInJudge("relevancy")
 
 
-def coherence_judge(llm: LLM | None = None) -> Evaluator:
+def coherence_judge() -> Evaluator:
     """Judge that evaluates if responses are coherent and logical.
 
     Checks if the agent presents ideas in an organized manner without
@@ -234,10 +229,10 @@ def coherence_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: complex explanations, multi-turn conversations, technical support.
     """
-    return _BuiltInJudge("coherence", llm)
+    return _BuiltInJudge("coherence")
 
 
-def conciseness_judge(llm: LLM | None = None) -> Evaluator:
+def conciseness_judge() -> Evaluator:
     """Judge that evaluates if responses are appropriately concise.
 
     Critical for voice AI where brevity matters. Checks for unnecessary
@@ -245,7 +240,7 @@ def conciseness_judge(llm: LLM | None = None) -> Evaluator:
 
     Useful for: voice agents, chat interfaces, any context where user time matters.
     """
-    return _BuiltInJudge("conciseness", llm)
+    return _BuiltInJudge("conciseness")
 
 
 _evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
@@ -340,16 +335,6 @@ class JudgeGroup:
             self._llm = llm
 
         self._judges = judges or []
-
-    @property
-    def llm(self) -> LLM:
-        """The LLM used for evaluation."""
-        return self._llm
-
-    @property
-    def judges(self) -> list[Evaluator]:
-        """The judges to run during evaluation."""
-        return self._judges
 
     async def evaluate(
         self,
@@ -478,7 +463,7 @@ def _judge_tools() -> list[Tool]:
 def _result(judgment: Judgment) -> JudgmentResult:
     # the core refuses any other verdict
     return JudgmentResult(
-        verdict=cast(Verdict, judgment.verdict),
+        verdict=cast(_Verdict, judgment.verdict),
         reasoning=judgment.reasoning,
         instructions=judgment.instructions,
     )

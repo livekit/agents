@@ -9,12 +9,10 @@ from livekit.protocol import agent_simulation as proto
 if TYPE_CHECKING:
     from .job import JobContext
 
-SimulationMode = proto.SimulationMode
-
 ScenarioUserdata: TypeAlias = dict[str, Union["ScenarioUserdata", Any]]
 """A scenario's ``userdata``, decoded from its JSON string."""
 
-__all__ = ["SimulationContext", "SimulationMode", "SimulationVerdict"]
+__all__ = ["SimulationContext", "SimulationVerdict"]
 
 
 @dataclass

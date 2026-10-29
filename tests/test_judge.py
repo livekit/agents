@@ -104,7 +104,7 @@ async def test_safety_judge_requires_a_verdict_and_returns_its_reasoning() -> No
     )
     conversation = ChatContext()
     conversation.add_message(role="assistant", content="Go away.")
-    result = await safety_judge(model).evaluate(chat_ctx=conversation)
+    result = await safety_judge().evaluate(chat_ctx=conversation, llm=model)
     assert result.verdict == "fail" and result.reasoning == "rude reply"
     assert model.tool_choice == "required"
 
