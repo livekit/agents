@@ -13,22 +13,23 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/inference/mod.rs.
 type InferenceCredentialsImpl = <crate::Selected as super::Implementations>::InferenceCredentials;
 
-/// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server` (the running job's server
-/// key), else `LIVEKIT_API_KEY`; a set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the rest.
+/// `explicit`, else `inference` (`LIVEKIT_INFERENCE_API_KEY`), else `server` (the server's
+/// `LIVEKIT_API_KEY`); a set but empty `inference` shadows `server`. The host reads the
+/// environment.
 #[pyfunction]
-#[pyo3(signature = (explicit = None, server = None))]
-pub fn inference_resolve_api_key(explicit: ::std::option::Option<::std::string::String>, server: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+#[pyo3(signature = (explicit = None, inference = None, server = None))]
+pub fn inference_resolve_api_key(explicit: ::std::option::Option<::std::string::String>, inference: ::std::option::Option<::std::string::String>, server: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
-    let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_key(explicit, server);
+    let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_key(explicit, inference, server);
     Ok(out)
 }
 
 /// The same ladder for the secret.
 #[pyfunction]
-#[pyo3(signature = (explicit = None, server = None))]
-pub fn inference_resolve_api_secret(explicit: ::std::option::Option<::std::string::String>, server: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+#[pyo3(signature = (explicit = None, inference = None, server = None))]
+pub fn inference_resolve_api_secret(explicit: ::std::option::Option<::std::string::String>, inference: ::std::option::Option<::std::string::String>, server: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
-    let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_secret(explicit, server);
+    let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_secret(explicit, inference, server);
     Ok(out)
 }
 
@@ -44,12 +45,12 @@ pub fn inference_quota_usage(headers: ::std::vec::Vec<(::std::string::String, ::
     Ok(out)
 }
 
-/// `LIVEKIT_INFERENCE_URL`, then staging if the server URL names the staging cloud, then
-/// production. `server_url` is the running job's (`AgentServer(ws_url=)`), else `LIVEKIT_URL`.
+/// `inference_url` (`LIVEKIT_INFERENCE_URL`), then staging if the server's `LIVEKIT_URL` names
+/// the staging cloud, then production. The host reads the environment.
 #[pyfunction]
-#[pyo3(signature = (server_url = None))]
-pub fn inference_default_url(server_url: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
-    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::inference_default_url(server_url);
+#[pyo3(signature = (inference_url = None, server_url = None))]
+pub fn inference_default_url(inference_url: ::std::option::Option<::std::string::String>, server_url: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::inference_default_url(inference_url, server_url);
     Ok(out)
 }
 

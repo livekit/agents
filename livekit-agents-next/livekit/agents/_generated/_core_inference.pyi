@@ -18,12 +18,21 @@ from .stt import STTCapabilities
 from .tts import TTSCapabilities
 from .turn_events import TurnDetectorModel
 
-def inference_resolve_api_key(explicit: str | None = None, server: str | None = None) -> str:
-    """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server` (the running job's server
-    key), else `LIVEKIT_API_KEY`; a set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the rest.
+def inference_resolve_api_key(
+    explicit: str | None = None,
+    inference: str | None = None,
+    server: str | None = None,
+) -> str:
+    """`explicit`, else `inference` (`LIVEKIT_INFERENCE_API_KEY`), else `server` (the server's
+    `LIVEKIT_API_KEY`); a set but empty `inference` shadows `server`. The host reads the
+    environment.
     """
 
-def inference_resolve_api_secret(explicit: str | None = None, server: str | None = None) -> str:
+def inference_resolve_api_secret(
+    explicit: str | None = None,
+    inference: str | None = None,
+    server: str | None = None,
+) -> str:
     """The same ladder for the secret."""
 
 def inference_quota_usage(headers: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -31,9 +40,9 @@ def inference_quota_usage(headers: Sequence[tuple[str, str]]) -> list[tuple[str,
     an empty value is not reported.
     """
 
-def inference_default_url(server_url: str | None = None) -> str:
-    """`LIVEKIT_INFERENCE_URL`, then staging if the server URL names the staging cloud, then
-    production. `server_url` is the running job's (`AgentServer(ws_url=)`), else `LIVEKIT_URL`.
+def inference_default_url(inference_url: str | None = None, server_url: str | None = None) -> str:
+    """`inference_url` (`LIVEKIT_INFERENCE_URL`), then staging if the server's `LIVEKIT_URL` names
+    the staging cloud, then production. The host reads the environment.
     """
 
 def local_models_init(vad: bool, eot: bool) -> bool:

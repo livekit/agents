@@ -9,7 +9,7 @@ use lk_agents_abi::{ApiConnectOptions, WallAnchor};
 use lk_agents_net::credentials::resolve_credential;
 
 use super::{AdaptiveInterruptionDetector, ConnectionConfig, InterruptionLeg, InterruptionOptions};
-use crate::headers::default_inference_url_from_env;
+use crate::headers::default_inference_url;
 use lk_agents_net::env::ProcessEnv;
 
 /// The detector the session reads, its streams timed against the host's clock.
@@ -34,6 +34,7 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
         conn_options: Option<ApiConnectOptions>,
         token_ttl_secs: u64,
     ) -> Result<Self, InvalidOption> {
+        // The public constructor is this class's process boundary: it reads the environment once.
         // `base_url if base_url else ...`: an empty argument falls through to the environment.
         let given = |v: Option<String>| v.filter(|v| !v.is_empty());
         let var = |name: &str| std::env::var(name).ok();
@@ -49,7 +50,12 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
             audio_prefix_duration,
             detection_interval,
             inference_timeout,
-            given(base_url).unwrap_or_else(default_inference_url_from_env),
+            given(base_url).unwrap_or_else(|| {
+                default_inference_url(
+                    var("LIVEKIT_INFERENCE_URL").as_deref(),
+                    var("LIVEKIT_URL").as_deref(),
+                )
+            }),
             credential(api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY"),
             credential(api_secret, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET"),
         )

@@ -17,12 +17,14 @@ pub fn resolve_credential(
     inference_env.or(livekit_env).unwrap_or("").to_owned()
 }
 
-/// `server` is the running job's server key (`AgentServer(api_key=)`), in place of
-/// `LIVEKIT_API_KEY`.
-pub fn resolve_api_key(explicit: Option<&str>, server: Option<&str>) -> Result<String, ApiError> {
-    let inference = std::env::var("LIVEKIT_INFERENCE_API_KEY").ok();
-    let livekit = server.map(str::to_owned).or_else(|| std::env::var("LIVEKIT_API_KEY").ok());
-    let key = resolve_credential(explicit, inference.as_deref(), livekit.as_deref());
+/// `inference` is `LIVEKIT_INFERENCE_API_KEY` and `server` the server's `LIVEKIT_API_KEY`, as the
+/// caller read them.
+pub fn resolve_api_key(
+    explicit: Option<&str>,
+    inference: Option<&str>,
+    server: Option<&str>,
+) -> Result<String, ApiError> {
+    let key = resolve_credential(explicit, inference, server);
     if key.is_empty() {
         return Err(ApiError::new(
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable",
@@ -32,14 +34,13 @@ pub fn resolve_api_key(explicit: Option<&str>, server: Option<&str>) -> Result<S
     Ok(key)
 }
 
-/// The same ladder for the secret; `server` stands in for `LIVEKIT_API_SECRET`.
+/// The same ladder for the secret.
 pub fn resolve_api_secret(
     explicit: Option<&str>,
+    inference: Option<&str>,
     server: Option<&str>,
 ) -> Result<String, ApiError> {
-    let inference = std::env::var("LIVEKIT_INFERENCE_API_SECRET").ok();
-    let livekit = server.map(str::to_owned).or_else(|| std::env::var("LIVEKIT_API_SECRET").ok());
-    let secret = resolve_credential(explicit, inference.as_deref(), livekit.as_deref());
+    let secret = resolve_credential(explicit, inference, server);
     if secret.is_empty() {
         return Err(ApiError::new("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable").with_retryable(false));
     }
@@ -71,11 +72,19 @@ mod tests {
 pub struct Credentials;
 
 impl lk_agents_abi::inference::InferenceCredentials for Credentials {
-    fn inference_resolve_api_key(explicit: Option<String>, server: Option<String>) -> String {
-        resolve_api_key(explicit.as_deref(), server.as_deref()).unwrap_or_default()
+    fn inference_resolve_api_key(
+        explicit: Option<String>,
+        inference: Option<String>,
+        server: Option<String>,
+    ) -> String {
+        resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
     }
 
-    fn inference_resolve_api_secret(explicit: Option<String>, server: Option<String>) -> String {
-        resolve_api_secret(explicit.as_deref(), server.as_deref()).unwrap_or_default()
+    fn inference_resolve_api_secret(
+        explicit: Option<String>,
+        inference: Option<String>,
+        server: Option<String>,
+    ) -> String {
+        resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
     }
 }

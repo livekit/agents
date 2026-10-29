@@ -19,12 +19,25 @@ use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
 
 fn llm(model: &str) -> Option<GatewayLlm> {
-    let api_key = lk_agents_net::credentials::resolve_api_key(None, None).ok()?;
-    let api_secret = lk_agents_net::credentials::resolve_api_secret(None, None).ok()?;
+    let api_key = lk_agents_net::credentials::resolve_api_key(
+        None,
+        std::env::var("LIVEKIT_INFERENCE_API_KEY").ok().as_deref(),
+        std::env::var("LIVEKIT_API_KEY").ok().as_deref(),
+    )
+    .ok()?;
+    let api_secret = lk_agents_net::credentials::resolve_api_secret(
+        None,
+        std::env::var("LIVEKIT_INFERENCE_API_SECRET").ok().as_deref(),
+        std::env::var("LIVEKIT_API_SECRET").ok().as_deref(),
+    )
+    .ok()?;
     let opts = LlmOptions {
         model: model.to_owned(),
         provider: None,
-        base_url: lk_agents_inference::default_inference_url_from_env(),
+        base_url: lk_agents_inference::headers::default_inference_url(
+            std::env::var("LIVEKIT_INFERENCE_URL").ok().as_deref(),
+            std::env::var("LIVEKIT_URL").ok().as_deref(),
+        ),
         api_key,
         api_secret,
         inference_class: None,

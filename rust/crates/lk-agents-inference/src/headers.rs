@@ -85,13 +85,6 @@ pub fn default_inference_url(inference_url: Option<&str>, livekit_url: Option<&s
     DEFAULT_INFERENCE_URL.to_owned()
 }
 
-pub fn default_inference_url_from_env() -> String {
-    default_inference_url(
-        std::env::var("LIVEKIT_INFERENCE_URL").ok().as_deref(),
-        std::env::var("LIVEKIT_URL").ok().as_deref(),
-    )
-}
-
 /// The native identification: `User-Agent` and, for a nonempty class, the priority.
 fn native_headers(user_agent: &str, inference_class: Option<&str>) -> Headers {
     let mut headers = Headers::new();

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from livekit import rtc
 
 from .. import _core
-from ..job import get_job_context
+from ..job import _server_setting, get_job_context
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -182,7 +182,7 @@ class AvatarSession(BaseAvatarSession):
         sample_rate = await self._native.create(
             room_name=room.name,
             room_sid=room_sid,
-            livekit_url=livekit_url or None,
+            livekit_url=livekit_url or _server_setting("LIVEKIT_URL"),
             agent_identity=agent_identity,
             headers=list(get_inference_headers().items()),
         )

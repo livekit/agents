@@ -35,7 +35,9 @@ HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 def get_default_inference_url() -> str:
     """``LIVEKIT_INFERENCE_URL``, else the staging or production gateway by the server's URL."""
-    return _core.inference_default_url(_server_setting("LIVEKIT_URL"))
+    return _core.inference_default_url(
+        os.environ.get("LIVEKIT_INFERENCE_URL"), _server_setting("LIVEKIT_URL")
+    )
 
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
@@ -46,12 +48,18 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
 def default_api_key(explicit: str | None) -> str:
     """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the server's key; ``""`` when
     nothing resolves."""
-    return _core.inference_resolve_api_key(explicit, _server_setting("LIVEKIT_API_KEY"))
+    return _core.inference_resolve_api_key(
+        explicit, os.environ.get("LIVEKIT_INFERENCE_API_KEY"), _server_setting("LIVEKIT_API_KEY")
+    )
 
 
 def default_api_secret(explicit: str | None) -> str:
     """The same ladder for the secret."""
-    return _core.inference_resolve_api_secret(explicit, _server_setting("LIVEKIT_API_SECRET"))
+    return _core.inference_resolve_api_secret(
+        explicit,
+        os.environ.get("LIVEKIT_INFERENCE_API_SECRET"),
+        _server_setting("LIVEKIT_API_SECRET"),
+    )
 
 
 def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:

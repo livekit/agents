@@ -11,11 +11,13 @@ use serde_json::Value;
 /// (truthiness vs `is_given`) itself.
 #[crate::host(functions)]
 pub trait InferenceCredentials {
-    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server` (the running job's server
-    /// key), else `LIVEKIT_API_KEY`; a set but empty `LIVEKIT_INFERENCE_API_KEY` shadows the rest.
+    /// `explicit`, else `inference` (`LIVEKIT_INFERENCE_API_KEY`), else `server` (the server's
+    /// `LIVEKIT_API_KEY`); a set but empty `inference` shadows `server`. The host reads the
+    /// environment.
     #[host(function)]
     fn inference_resolve_api_key(
         #[host(default = None)] explicit: Option<String>,
+        #[host(default = None)] inference: Option<String>,
         #[host(default = None)] server: Option<String>,
     ) -> String;
 
@@ -23,6 +25,7 @@ pub trait InferenceCredentials {
     #[host(function)]
     fn inference_resolve_api_secret(
         #[host(default = None)] explicit: Option<String>,
+        #[host(default = None)] inference: Option<String>,
         #[host(default = None)] server: Option<String>,
     ) -> String;
 }
@@ -35,10 +38,13 @@ pub trait InferenceModels {
     #[host(function)]
     fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)>;
 
-    /// `LIVEKIT_INFERENCE_URL`, then staging if the server URL names the staging cloud, then
-    /// production. `server_url` is the running job's (`AgentServer(ws_url=)`), else `LIVEKIT_URL`.
+    /// `inference_url` (`LIVEKIT_INFERENCE_URL`), then staging if the server's `LIVEKIT_URL` names
+    /// the staging cloud, then production. The host reads the environment.
     #[host(function)]
-    fn inference_default_url(#[host(default = None)] server_url: Option<String>) -> String;
+    fn inference_default_url(
+        #[host(default = None)] inference_url: Option<String>,
+        #[host(default = None)] server_url: Option<String>,
+    ) -> String;
 
     /// Loads the native models' weights; `false` when no provider is linked.
     #[host(function)]

@@ -40,7 +40,6 @@ pub mod testkit;
 pub mod tts;
 pub mod vad;
 
-pub use headers::default_inference_url_from_env;
 pub use ids::{RequestKind, create_inference_request_id, shortuuid};
 pub use llm::models::{drop_unsupported_params, min_reasoning_effort};
 

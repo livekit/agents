@@ -222,10 +222,8 @@ impl InferenceAvatar for GatewayAvatar {
         agent_identity: String,
         headers: Vec<(String, String)>,
     ) -> Result<u32, AvatarError> {
-        let livekit_url = livekit_url
-            .filter(|url| !url.is_empty())
-            .or_else(|| std::env::var("LIVEKIT_URL").ok().filter(|url| !url.is_empty()))
-            .ok_or(AvatarError::MissingUrl)?;
+        let livekit_url =
+            livekit_url.filter(|url| !url.is_empty()).ok_or(AvatarError::MissingUrl)?;
         let room = AvatarRoom { livekit_url, room_name, room_sid, agent_identity };
         GatewayAvatar::create(self, room, headers.into_iter().collect()).await
     }
