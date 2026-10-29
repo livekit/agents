@@ -94,3 +94,25 @@ async def test_first_turn_announced_after_user_speech_like_later_turns():
 
     assert turns[0][0] == "input_speech_started"
     assert turns[0] == turns[1]
+
+
+async def test_restarts_before_first_generation_hit_the_retry_cap():
+    from unittest.mock import AsyncMock, patch
+
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+    from livekit.plugins.aws.experimental.realtime.realtime_model import (
+        DEFAULT_MAX_SESSION_RESTART_ATTEMPTS,
+        RealtimeModel,
+    )
+
+    session = RealtimeModel(model="amazon.nova-2-5-sonic", modalities="mixed").session()
+    session.initialize_streams = AsyncMock()
+    errors = []
+    session.on("error", errors.append)
+
+    with patch.object(realtime_model.asyncio, "sleep", AsyncMock()):
+        for _ in range(DEFAULT_MAX_SESSION_RESTART_ATTEMPTS + 1):
+            await session._restart_session(RuntimeError("stream reset"))
+
+    assert session.initialize_streams.await_count == DEFAULT_MAX_SESSION_RESTART_ATTEMPTS
+    assert len(errors) == 1 and not errors[0].recoverable

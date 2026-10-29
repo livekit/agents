@@ -593,6 +593,8 @@ class RealtimeSession(  # noqa: F811
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
         self._current_generation: _ResponseGeneration | None = None
+        # Restart attempts while no generation exists yet (e.g. before the first reply).
+        self._restart_attempts = 0
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
@@ -1190,6 +1192,7 @@ class RealtimeSession(  # noqa: F811
                 _done_fut=asyncio.get_running_loop().create_future(),
             )
             generation_created = True
+            self._restart_attempts = 0
         else:
             logger.debug(
                 f"[GEN] Generation already exists: response_id={self._current_generation.response_id}, emitted={self._current_generation._emitted}"
@@ -1749,9 +1752,10 @@ class RealtimeSession(  # noqa: F811
                 self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
-        # Get restart attempts from current generation, or 0 if no generation
         restart_attempts = (
-            self._current_generation._restart_attempts if self._current_generation else 0
+            self._current_generation._restart_attempts
+            if self._current_generation
+            else self._restart_attempts
         )
 
         if restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
@@ -1785,7 +1789,8 @@ class RealtimeSession(  # noqa: F811
             self._current_generation._restart_attempts += 1
             restart_attempts = self._current_generation._restart_attempts
         else:
-            restart_attempts = 1
+            self._restart_attempts += 1
+            restart_attempts = self._restart_attempts
 
         self._is_sess_active.clear()
         delay = 2 ** (restart_attempts - 1) - 1
