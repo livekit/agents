@@ -62,7 +62,7 @@ pub fn chat_ctx_merge_plan(#[pyo3(from_py_with = _extract_chat_context_plans_mer
 #[pyfunction]
 #[pyo3(signature = (item_ids))]
 pub fn remove_instructions(item_ids: ::std::vec::Vec<::std::string::String>) -> PyResult<::std::vec::Vec<usize>> {
-    let out = <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::instructions_plan(item_ids);
+    let out = <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::remove_instructions(item_ids);
     Ok(out)
 }
 

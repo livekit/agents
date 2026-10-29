@@ -65,7 +65,7 @@ impl ChatContextPlans for ChatPlans {
         Ok(merge_plan(&item_facts(&mine)?, &item_facts(&theirs)?, &opts))
     }
 
-    fn instructions_plan(item_ids: Vec<String>) -> Vec<usize> {
+    fn remove_instructions(item_ids: Vec<String>) -> Vec<usize> {
         let id = crate::request::INSTRUCTIONS_MESSAGE_ID;
         item_ids.iter().enumerate().filter(|(_, item)| *item == id).map(|(i, _)| i).collect()
     }

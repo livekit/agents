@@ -44,6 +44,6 @@ pub trait ChatContextPlans {
 
     /// `remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
     /// ascending, given the items' ids.
-    #[host(function, name = "remove_instructions")]
-    fn instructions_plan(item_ids: Vec<String>) -> Vec<usize>;
+    #[host(function)]
+    fn remove_instructions(item_ids: Vec<String>) -> Vec<usize>;
 }
