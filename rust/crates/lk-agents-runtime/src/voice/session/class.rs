@@ -196,9 +196,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.llm = llm;
         builder.realtime = args.realtime;
         builder.tts = args.tts;
-        builder.tts_node = args.tts_node;
         builder.stt = args.stt;
-        builder.stt_node = args.stt_node;
         builder.forward_chat_context =
             args.stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
         builder.keyterms = keyterms;
@@ -220,6 +218,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(VoiceSession {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
                 builder,
+                nodes: Nodes { llm: None, tts: args.tts_node, stt: args.stt_node },
                 interruption,
                 #[cfg(feature = "dst")]
                 probe: None,

@@ -30,7 +30,8 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::lifecycle::{
     CloseAction, OpenAction, RecorderTarget, SessionLifecycle,
 };
-use lk_agents_voice::agent_session::nodes::{Nodes, OutputNodes};
+use crate::voice::nodes::Nodes;
+use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::agent_session::{
     AgentUpdate, Answer, Awaited, Call, Close, Command, DriverBuilder, DriverError, HookCall,
     HostEvent, HostRecorder, Origin, PeerHandle, RecorderCommand, ReplyTo, RequestId, SayText,
@@ -120,8 +121,43 @@ impl Stage {
     }
 }
 
+/// The opening STT and TTS as the session runs them: one attempt per call within the session's
+/// budgets, adapted by the executor and under the agent's nodes. A session advertising a tool with
+/// nothing to run it is refused here, not at the first call.
+fn open_legs(
+    builder: &mut DriverBuilder,
+    nodes: &Nodes,
+    tts_adapter: &TtsAdapter,
+    stt_adapter: &SttAdapter,
+) -> Result<(), DriverError> {
+    if !builder.toolset.specs.is_empty() && builder.toolset.agent.is_none() {
+        return Err(DriverError::Missing("voice_agent"));
+    }
+    if let Some(llm) = &builder.llm {
+        llm.prewarm();
+    }
+    let clock = builder.time.clock();
+    let (vad, conn) = (builder.vad.clone(), builder.conn.stt);
+    builder.stt =
+        builder.stt.take().map(|stt| nodes.stt(stt_leg(stt, stt_adapter, vad, clock.clone(), conn)));
+    if let Some(stt) = &builder.stt {
+        stt.prewarm();
+    }
+    // The engine's TTS budget: the session's, else the TTS's own policy (models.md).
+    builder.conn.tts =
+        builder.conn.tts.or_else(|| builder.tts.as_ref().and_then(|t| t.conn_options()));
+    let conn = builder.conn.tts;
+    builder.tts = builder.tts.take().map(|tts| nodes.tts(tts_leg(tts, tts_adapter, clock, conn)));
+    if let Some(tts) = &builder.tts {
+        tts.prewarm();
+    }
+    Ok(())
+}
+
 struct Ready {
     builder: DriverBuilder,
+    /// The opening agent's `tts_node` and `stt_node`, run over the opening legs.
+    nodes: Nodes,
     interruption: Option<InterruptionPortFactory>,
     #[cfg(feature = "dst")]
     probe: Option<HostEventProbe>,
@@ -273,9 +309,9 @@ impl VoiceSession {
         let time = self.time.clone();
         Ok(async move {
             #[cfg(feature = "dst")]
-            let Ready { mut builder, interruption, probe } = ready;
+            let Ready { mut builder, nodes, interruption, probe } = ready;
             #[cfg(not(feature = "dst"))]
-            let Ready { mut builder, interruption } = ready;
+            let Ready { mut builder, nodes, interruption } = ready;
             if let Some(open_port) = interruption {
                 builder.interruption = Some(open_port(anchor));
             }
@@ -286,6 +322,7 @@ impl VoiceSession {
 
             let tts_adapter = executor.tts_adapter();
             let stt_adapter = executor.stt_adapter();
+            open_legs(&mut builder, &nodes, &tts_adapter, &stt_adapter)?;
             let (cores, handle) = builder.start(&mut *executor).await?;
             let SessionHandle {
                 api,

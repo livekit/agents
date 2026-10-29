@@ -141,12 +141,10 @@ pub struct DriverBuilder {
     /// Where the providers below are registered, and every one handed over later.
     pub resources: lk_agents_abi::resources::Resources,
     pub llm: Option<Arc<dyn Llm>>,
-    /// Adapted at start by the executor's [`TtsAdapter`], under `tts_node`.
+    /// The runtime hands it over as the session runs it: adapted, under the agent's `tts_node`.
     pub tts: Option<Arc<dyn Tts>>,
-    pub tts_node: Option<Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>>,
-    /// Adapted at start by the executor's [`SttAdapter`] over `vad`, under `stt_node`.
+    /// The runtime hands it over as the session runs it: adapted over `vad`, under `stt_node`.
     pub stt: Option<Arc<dyn Stt>>,
-    pub stt_node: Option<Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>>,
     /// `None`: nothing is pushed.
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
     /// `stt_context_options["forward_chat_context"]`: conversation turns reach an STT with the
@@ -211,9 +209,7 @@ impl DriverBuilder {
             resources: Default::default(),
             llm: None,
             tts: None,
-            tts_node: None,
             stt: None,
-            stt_node: None,
             keyterms: None,
             forward_chat_context: true,
             vad: None,
@@ -249,33 +245,6 @@ impl DriverBuilder {
             (setup, llm)
         });
         let forward_chat_context = self.forward_chat_context;
-        // An advertised tool with nothing to run it is refused here, not at the first call.
-        if !self.toolset.specs.is_empty() && self.toolset.agent.is_none() {
-            return Err(DriverError::Missing("voice_agent"));
-        }
-        if let Some(llm) = &self.llm {
-            llm.prewarm();
-        }
-        let nodes =
-            super::nodes::Nodes { llm: None, tts: self.tts_node.take(), stt: self.stt_node.take() };
-        let adapter = executor.stt_adapter();
-        self.stt = self.stt.take().map(|stt| {
-            let vad = self.vad.clone();
-            nodes.stt(stt_leg(stt, &adapter, vad, self.time.clock(), self.conn.stt))
-        });
-        if let Some(stt) = &self.stt {
-            stt.prewarm();
-        }
-        let adapter = executor.tts_adapter();
-        // The engine's TTS budget: the session's, else the TTS's own policy (models.md).
-        self.conn.tts = self.conn.tts.or_else(|| self.tts.as_ref().and_then(|t| t.conn_options()));
-        self.tts = self
-            .tts
-            .take()
-            .map(|tts| nodes.tts(tts_leg(tts, &adapter, self.time.clock(), self.conn.tts)));
-        if let Some(tts) = &self.tts {
-            tts.prewarm();
-        }
         let (queue_tx, queue_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
         let queue = Tx::new(queue_tx);
         let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
