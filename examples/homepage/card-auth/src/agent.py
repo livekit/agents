@@ -30,6 +30,7 @@ from card_services import (
     outbound_greeting,
 )
 from phone import outbound_line, ring
+from playout_hold import hold_playout
 from simulation import on_simulation_end
 from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
 
@@ -45,6 +46,7 @@ SILENT_GOODBYE = (
 )
 
 server = AgentServer()
+hold_playout()
 
 
 @server.rtc_session(agent_name=AGENT_NAME, on_simulation_end=on_simulation_end)
