@@ -5,6 +5,7 @@ use crate::agent_session::commands::HookId;
 use crate::events::{ErrorEvent, SessionEvent};
 use crate::filler_scheduler::FillerId;
 use lk_agents_abi::voice::events::HostWire;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookKind {
@@ -104,11 +105,12 @@ pub enum HostEvent {
 }
 
 impl HostEvent {
-    /// `anchor` turns monotonic stamps into epoch seconds. A hook call has no wire: the host's
-    /// hooks answer it (`SessionHooks`).
-    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> Option<HostWire> {
+    /// `anchor` turns monotonic stamps into epoch seconds; `speeches` hands back the host's object
+    /// for a speech an event names. A hook call has no wire: the host's hooks answer it
+    /// (`SessionHooks`).
+    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> Option<HostWire> {
         Some(match self {
-            HostEvent::Session(ev) => ev.wire(anchor),
+            HostEvent::Session(ev) => ev.wire(anchor, speeches),
             HostEvent::Room(ev) => match ev {
                 crate::room_io::RoomIoEvent::ParticipantLinked(e) => {
                     HostWire::ParticipantLinked(e.clone())
@@ -127,8 +129,12 @@ impl HostEvent {
     }
 }
 
+/// The host's object for a speech the runtime holds.
+pub type Speeches<'a> =
+    &'a dyn Fn(SpeechId) -> Arc<dyn lk_agents_abi::voice::speech_handle::Speech>;
+
 impl SessionEvent {
-    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> HostWire {
+    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> HostWire {
         use crate::events::{RunFailure, RunOutcome};
         use lk_agents_abi::metrics::base::AgentMetrics;
         use lk_agents_abi::voice::events as w;
@@ -159,7 +165,7 @@ impl SessionEvent {
                 HostWire::SpeechCreated(w::SpeechCreated {
                     user_initiated: *user_initiated,
                     source: kind.as_source_str().to_owned(),
-                    speech_handle: speech.object(),
+                    speech_handle: speeches(*speech),
                 })
             }
             SessionEvent::Diagnostic(d) => HostWire::Diagnostic(d.wire()),
@@ -276,7 +282,7 @@ impl SessionEvent {
                     final_output,
                     question,
                     run_error,
-                    speech_handle: speech.as_ref().map(crate::speech_handle::SpeechHandle::object),
+                    speech_handle: speech.map(speeches),
                 })
             }
             SessionEvent::SpeechDone { speech, outcome } => {
@@ -351,7 +357,7 @@ mod tests {
         ev.alternatives = vec![alt];
         let t = UserTranscriptEvent { ev, is_final: true, speaking: None, item_id: None };
         let HostWire::UserTranscript(w) =
-            SessionEvent::UserInputTranscribed(Box::new(t)).wire(anchor())
+            SessionEvent::UserInputTranscribed(Box::new(t)).wire(anchor(), &|_| unreachable!())
         else {
             panic!("not a transcript")
         };
@@ -370,7 +376,7 @@ mod tests {
             speech: None,
         };
         let close = SessionEvent::Close { reason: CloseReason::Error, error: Some(error) };
-        let HostWire::Close(w) = close.wire(anchor()) else { panic!("not a close") };
+        let HostWire::Close(w) = close.wire(anchor(), &|_| unreachable!()) else { panic!("not a close") };
         let e = w.error.expect("the close's error");
         assert_eq!((e.source.as_str(), e.recoverable), ("llm_error", false));
     }

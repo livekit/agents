@@ -16,29 +16,30 @@ pub mod nodes;
 mod recorder;
 pub mod remote_session;
 pub mod session;
+pub mod speech_handle;
 mod storage;
 pub mod workflows;
 
 pub use legs::Executor;
 
+use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{
-    Driver, Event, Now, PeerHandle, QueueOwner, SessionCores, Tx,
-};
+use lk_agents_voice::agent_session::{Driver, Event, Now};
 use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::trace::ChannelEndCause;
+use session::{Calls, PeerHandle, QueueOwner, SessionCores, SessionShared};
 use std::sync::Arc;
 
 pub use lk_agents_voice::agent_activity::options::InterruptionGateRules;
 pub use lk_agents_voice::agent_session::lifecycle::SessionStartPlans;
 pub use lk_agents_voice::amd::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
-pub use lk_agents_voice::speech_handle::SpeechHandle;
+pub use speech_handle::SpeechHandle;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 pub use lk_agents_voice::workflows::WorkflowRules;
 pub use session::{SessionOptions, VoiceSession};
@@ -46,7 +47,7 @@ pub use session::{SessionOptions, VoiceSession};
 pub struct Runtime {
     driver: Driver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
-    shared: Arc<lk_agents_voice::agent_session::SessionShared>,
+    shared: Arc<SessionShared>,
     /// Where host events and taps go.
     peer: PeerHandle,
     forwarder: AudioForwarder,
@@ -67,10 +68,7 @@ pub struct Runtime {
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, TaskId)>,
     /// Where each awaited call's answer goes, until the core answers it.
-    calls: std::collections::BTreeMap<
-        lk_agents_voice::agent_session::RequestId,
-        lk_agents_voice::agent_session::ReplyTo,
-    >,
+    calls: Arc<Calls>,
     /// The keyterm detection pass in flight, by request.
     keyterms: Option<(u64, TaskId)>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
@@ -152,6 +150,7 @@ impl Runtime {
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
         let tasks = Arc::<TaskSet>::default();
         let shared_spawner = Arc::clone(&shared.spawner);
+        let calls = Arc::clone(&shared.calls);
         let mut runtime = Runtime {
             driver,
             storage,
@@ -166,7 +165,7 @@ impl Runtime {
             frames_tx,
             source: None,
             pending_legs: Default::default(),
-            calls: Default::default(),
+            calls,
             keyterms: None,
             realtime_players: Default::default(),
             video_parts,
@@ -283,10 +282,7 @@ impl Runtime {
                 let effects = self.driver.handle(Some(input), now);
                 self.perform_voice(effects);
             }
-            Event::Awaited(input, call) => {
-                self.calls.insert(call.id, call.reply_to);
-                self.handle(Event::Input(input), now);
-            }
+            Event::Awaited(input, _) => self.handle(Event::Input(input), now),
             Event::Wake => {
                 let effects = self.driver.handle(None, now);
                 self.perform_voice(effects);
@@ -318,11 +314,8 @@ impl Runtime {
         for event in undelivered {
             match event {
                 Event::Input(input) => inputs.push(input),
-                // Kept, so the core's refusal reaches it.
-                Event::Awaited(input, call) => {
-                    self.calls.insert(call.id, call.reply_to);
-                    inputs.push(input);
-                }
+                // Its reply is kept, so the core's refusal reaches it.
+                Event::Awaited(input, _) => inputs.push(input),
                 Event::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
                 // A microphone attached too late to be read is let go, not left in the table.
                 Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
@@ -341,6 +334,7 @@ impl Runtime {
         }
         let effects = self.driver.finish(inputs);
         self.perform_voice(effects);
+        self.calls.clear();
         self.release();
     }
 
@@ -468,6 +462,7 @@ impl Drop for Runtime {
         self.driver.release_all_providers();
         let effects = self.driver.take_outbox();
         self.perform_voice(effects);
+        self.calls.clear();
     }
 }
 

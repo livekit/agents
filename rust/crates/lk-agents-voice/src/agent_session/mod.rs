@@ -1,28 +1,24 @@
-//! `voice/agent_session.py`: the session's state, one struct per concern (`AgentSession`), and the
-//! [`SessionShared`] state its tasks read, with the commands, the host events, the driver and the
-//! clock beside it.
+//! `voice/agent_session.py`: the session's state, one struct per concern (`AgentSession`), with the
+//! commands, the host events, the driver and the step clock beside it.
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Effect, Effects, Out, Timer};
-use crate::generation::GenEvent;
 use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::voice::io::{AudioOutput, AudioOutputCapabilities, TextOutput};
-use lk_agents_abi::{Maybe, Spawner, Ts};
+use lk_agents_abi::voice::io::AudioOutputCapabilities;
+use lk_agents_abi::{Maybe, Ts};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) mod agent_user_state;
-pub mod builder;
-pub mod calls;
 pub(crate) mod closing;
 pub mod commands;
 pub mod driver;
 pub mod effects;
 pub mod host_events;
-mod initial;
+pub mod initial;
 pub mod lifecycle;
 pub mod nodes;
 pub mod output;
@@ -31,12 +27,11 @@ pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
 pub(crate) use agent_user_state::AgentUserState;
-pub use builder::*;
-pub use calls::*;
 pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
 pub use host_events::*;
+pub use initial::InitialSession;
 pub use time::*;
 
 /// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
@@ -91,25 +86,25 @@ pub(crate) struct VoiceSession {
 /// What the builder hands the session besides its options: the providers, the opening agent and
 /// what `start()` asked for.
 #[derive(Default)]
-pub(crate) struct SessionParts {
-    pub(crate) llm: Option<lk_agents_abi::resources::LlmRef>,
-    pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
-    pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
-    pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
-    pub(crate) outputs: Outputs,
-    pub(crate) max_unrecoverable_errors: u32,
-    pub(crate) start_recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
-    pub(crate) room_link: Option<crate::room_io::RoomLinkConfig>,
+pub struct SessionParts {
+    pub llm: Option<lk_agents_abi::resources::LlmRef>,
+    pub tts: Option<lk_agents_abi::resources::TtsRef>,
+    pub stt: Option<lk_agents_abi::resources::SttRef>,
+    pub vad: Option<lk_agents_abi::resources::VadRef>,
+    pub outputs: Outputs,
+    pub max_unrecoverable_errors: u32,
+    pub start_recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
+    pub room_link: Option<crate::room_io::RoomLinkConfig>,
     /// The opening agent, whose view the constructor context becomes (not announced: the host
     /// has it).
-    pub(crate) agent: String,
-    pub(crate) chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
-    pub(crate) session_id: String,
-    pub(crate) storage_enabled: bool,
+    pub agent: String,
+    pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
+    pub session_id: String,
+    pub storage_enabled: bool,
 }
 
 impl VoiceSession {
-    pub(crate) fn new(config: DriverConfig, parts: SessionParts) -> Self {
+    pub(crate) fn new(config: DriverConfig, parts: SessionParts, next_id: NextId) -> Self {
         let SessionParts {
             llm,
             tts,
@@ -134,7 +129,7 @@ impl VoiceSession {
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
-            ids: IdMint { session: session_id, next: Arc::new(1.into()), user_item: None },
+            ids: IdMint { session: session_id, next: next_id, user_item: None },
             config,
             chat_ctx,
             llm,
@@ -347,18 +342,20 @@ impl ErrorCounts {
 
 #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `AS_` and twelve random hex digits, as `utils.shortuuid("AS_")`.
-pub(crate) fn mint_session_id() -> String {
+pub fn mint_session_id() -> String {
     use std::hash::BuildHasher;
     let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
     format!("AS_{:012x}", n & 0xffff_ffff_ffff)
 }
 
-/// The session's own ids: speeches and items share one counter, items carry the session's id. The
-/// host's `say()` / `generate_reply()` take their speech's id from it as they return the handle.
-pub(crate) struct IdMint {
+/// The session's id sequence: the runtime owns it (the host's `say()` / `generate_reply()` take
+/// their speech's id from it as they return the handle) and supplies the core its next value.
+pub type NextId = Box<dyn FnMut() -> u64 + Send>;
+
+/// The session's own ids: speeches and items share one sequence, items carry the session's id.
+pub struct IdMint {
     session: String,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    next: Arc<std::sync::atomic::AtomicU64>,
+    next: NextId,
     /// The user item an interim transcript opened, reused until its final.
     user_item: Option<String>,
 }
@@ -374,13 +371,7 @@ impl IdMint {
     }
 
     pub(crate) fn next_speech_id(&mut self) -> SpeechId {
-        SpeechId(self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
-    }
-
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// The counter, for the host's speech calls.
-    pub(crate) fn speech_ids(&self) -> Arc<std::sync::atomic::AtomicU64> {
-        Arc::clone(&self.next)
+        SpeechId((self.next)())
     }
 
     pub(crate) fn user_transcript_item(&mut self, is_final: bool) -> String {
@@ -405,101 +396,6 @@ pub struct SessionView {
     pub dtmf_reply_running: bool,
 }
 
-pub struct SessionShared {
-    pub time: Timebase,
-    pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
-    /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
-    pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
-    /// `session.output` as the core last published it.
-    pub output: tokio::sync::watch::Sender<Outputs>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
-    /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
-    pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
-    /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
-    /// receives. Unbounded: a task must never block on the loop draining it.
-    pub queue: crate::agent_session::Tx,
-    /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
-    /// reader selects on it, or one parked on an idle source would outlive the session.
-    pub closing: tokio::sync::watch::Sender<bool>,
-    /// The host runs hooks (`hook_bound`): a step waits for `function_tools_executed`'s handlers.
-    pub hook_host: bool,
-    /// Never `tokio::spawn`.
-    pub spawner: Arc<dyn Spawner>,
-    /// The task enters its own frame; it never reads the driver's `current`.
-    pub frames: Arc<lk_agents_abi::utils::frame::FrameTable>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
-    pub gen_ids: std::sync::atomic::AtomicU64,
-    pub session_id: String,
-    pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
-    /// The providers by id.
-    pub resources: lk_agents_abi::resources::Resources,
-    /// `session.keyterms`: the last list pushed to the recogniser.
-    pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
-    /// A task's steps reach the loop's journal only when one is observed.
-    pub journal: crate::trace::Journal,
-}
-
-impl SessionShared {
-    pub fn mint_item_id(&self) -> String {
-        let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{}_item_g{n:04}", self.session_id)
-    }
-
-    /// A closed channel means the session is ending; not an error.
-    pub fn report(&self, ev: GenEvent) {
-        let _ = self.queue.send(ev);
-    }
-
-    /// A call a task awaits, answered with what `pick` takes.
-    pub fn open_call<T>(
-        &self,
-        pick: fn(crate::agent_session::Answer) -> Option<T>,
-    ) -> (crate::agent_session::calls::Call, crate::agent_session::calls::Awaited<T>) {
-        let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        crate::agent_session::calls::open(crate::agent_session::RequestId::task(n), pick)
-    }
-
-    /// `ev`, naming `call`, with its reply.
-    pub fn report_awaited(&self, ev: GenEvent, call: crate::agent_session::calls::Call) {
-        let _ = self.queue.send(Event::Awaited(Input::Gen(ev), call));
-    }
-
-    /// Through the queue, so the step is journalled in the loop's order.
-    pub fn trace(&self, step: impl Into<crate::trace::Step>) {
-        if self.journal.is_on() {
-            self.report(GenEvent::Trace(step.into()));
-        }
-    }
-
-    pub fn recorder_tap(&self) -> Option<crate::recorder_io::RecorderTap> {
-        self.recorder.read().unwrap_or_else(|p| p.into_inner()).clone()
-    }
-
-    /// The audio sink the core installed, switched on or not.
-    pub fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
-        let id = self.output.borrow().audio.as_ref()?.id;
-        self.resources.audio_output(id)
-    }
-
-    /// The transcription sink the core installed, switched on or not.
-    pub fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
-        let id = self.output.borrow().transcription.as_ref()?.id;
-        self.resources.text_output(id)
-    }
-
-    /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
-    pub fn audio_enabled(&self) -> bool {
-        self.output.borrow().audio_enabled
-    }
-
-    /// `output.transcription_enabled`.
-    pub fn transcription_enabled(&self) -> bool {
-        self.output.borrow().transcription_enabled
-    }
-}
-
 /// `session.output`: the outputs by id and their switches, decided by the core alone and published
 /// to the data plane, which reads its sinks from the core's word.
 #[derive(Debug, Clone, PartialEq)]
@@ -520,7 +416,7 @@ impl Default for Outputs {
 }
 
 impl Outputs {
-    pub(crate) fn new(audio: Option<AudioOutputRef>, transcription: Option<TextOutputRef>) -> Self {
+    pub fn new(audio: Option<AudioOutputRef>, transcription: Option<TextOutputRef>) -> Self {
         Outputs { audio, audio_enabled: true, transcription, transcription_enabled: true }
     }
 
@@ -726,7 +622,7 @@ mod label_tests {
         let legs = crate::agent_activity::options::LegSet::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
-        VoiceSession::new(config, SessionParts::default())
+        VoiceSession::new(config, SessionParts::default(), Box::new(|| 1))
     }
 
     fn arms(eff: &Effects) -> Vec<Ts> {

@@ -1,11 +1,11 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
+use crate::voice::session::SessionShared;
 use lk_agents_abi::FunctionCall;
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_voice::agent_session::Answer;
-use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
     HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, ToolReport, answer,
 };
@@ -42,7 +42,7 @@ impl ToolStep {
         ctx: &ReplyContext,
         call: FunctionCall,
     ) {
-        let (speech, step) = (handle.id(), handle.num_steps());
+        let (speech, step) = (handle.id(), ctx.step);
         let made = MadeCall {
             call: call.clone(),
             spec: ctx.request.tools.iter().find(|t| t.name == call.name).cloned(),
@@ -63,6 +63,11 @@ impl ToolStep {
                 let _ = tx.send(None);
                 return;
             };
+            // The callbacks run with the host's object for the speech.
+            let host = host.map(|mut host| {
+                host.invocation.speech = Some(handle.object());
+                host
+            });
             let call = HostedCall { shared: &shared, speech, host };
             let (execution, outcome) = call.run(*item, *first, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
@@ -165,7 +170,7 @@ impl HostedCall<'_> {
     async fn ask(
         &self,
         event: impl FnOnce(lk_agents_voice::agent_session::RequestId) -> GenEvent,
-    ) -> Result<ToolGo, lk_agents_voice::agent_session::Unanswered> {
+    ) -> Result<ToolGo, crate::voice::session::Unanswered> {
         let (call, next) = self.shared.open_call(Answer::tool_go);
         self.shared.report_awaited(event(call.id), call);
         next.await
@@ -258,7 +263,7 @@ pub(crate) async fn run_tools(
         max_tool_steps: ctx.speech.max_tool_steps(),
         user_metrics: ctx.user_metrics.clone(),
     });
-    let (speech, step) = (handle.id(), handle.num_steps());
+    let (speech, step) = (handle.id(), ctx.step);
     if !continues {
         shared.report(GenEvent::ToolsFinished { speech, step, end, answer: None });
         return None;

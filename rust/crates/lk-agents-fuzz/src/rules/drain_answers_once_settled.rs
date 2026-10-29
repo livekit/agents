@@ -9,9 +9,8 @@
 //! such step behind it is an call the driver never decided.
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
-    agent_session::{HookId, HookKind, Tx},
+    agent_session::{HookId, HookKind},
     events::SessionEvent,
-    speech_handle::SpeechHandle,
     trace::{HandoffStep, HookEnd, SpeechStep, Step},
 };
 
@@ -92,7 +91,7 @@ impl Rule for DrainAnswersOnceSettled {
                 let Step::Emitted(SessionEvent::SpeechCreated { speech, .. }) = step else {
                     continue;
                 };
-                let id = speech.id();
+                let id = *speech;
                 // Refused by the paused scheduler: it never takes the floor, and the reference's
                 // drain, already past its wait, does not wait for it either (seed 82527).
                 let done = before.iter().any(|(_, s)| {
@@ -173,9 +172,8 @@ fn answered_without_step() -> Recording {
 
 /// A speech announced and never announced done, yet the drain says the frame is quiet.
 fn answered_while_speaking() -> Recording {
-    let handle = SpeechHandle::new(SpeechId(7), true, Tx::disconnected());
     let announced = Step::Emitted(SessionEvent::SpeechCreated {
-        speech: std::sync::Arc::new(handle),
+        speech: SpeechId(7),
         kind: SpeechKind::Say,
         user_initiated: true,
     });

@@ -12,8 +12,8 @@ use lk_agents_abi::agent::{
 };
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
-use lk_agents_voice::speech_handle::SpeechHandle;
-use lk_agents_voice::tool_executor::{HostedTool, ToolOutcome, ToolReport, VoiceAgentFrame};
+use lk_agents_runtime::voice::speech_handle::SpeechHandle;
+use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport, VoiceAgentFrame};
 use tokio::sync::oneshot;
 
 use super::{Control, Registry, Slot};
@@ -410,10 +410,10 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
 mod tests {
     use super::*;
     use lk_agents_runtime::net::task::TokioSpawner;
-    use lk_agents_voice::{
-        agent_activity::scheduling::SpeechId,
-        agent_session::{Timebase, Tx},
-    };
+    use lk_agents_runtime::voice::session::Timebase;
+    use lk_agents_runtime::voice::session::Tx;
+    use lk_agents_voice::tool_executor::HostedTool;
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
 
     #[tokio::test]
     async fn dropping_started_preparation_does_not_release_a_later_call() {
@@ -432,8 +432,11 @@ mod tests {
             group_id: None,
         };
         let frame = frame(&registry, "agent", &[]);
-        let invocation =
-            |call: &FunctionCall| HostedTool::of(&frame, "s", &speech, 0, Some(call)).invocation;
+        let invocation = |call: &FunctionCall| {
+            let mut hosted = HostedTool::of(&frame, "s", SpeechId(1), 0, Some(call));
+            hosted.invocation.speech = Some(speech.object());
+            hosted.invocation
+        };
         let first_invocation = invocation(&call);
         let first =
             tools.prepare_tool(&first_invocation, Default::default()).await.unwrap().unwrap();

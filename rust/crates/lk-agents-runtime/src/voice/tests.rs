@@ -1,6 +1,7 @@
 //! Voice execution contracts: core effects, correlated failures, queue priority and accepted views.
 
 use super::*;
+use crate::voice::session::{DriverBuilder, SessionExecutor, SessionHandle, Timebase};
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::trace::{Journal, Step};
 use std::future::Future as _;
@@ -114,6 +115,7 @@ async fn accepted_views_are_published_before_receipts() {
     let waker = std::task::Waker::from(Arc::new(ReadsView(view.clone())));
     let polled = std::pin::Pin::new(&mut receipt).poll(&mut std::task::Context::from_waker(&waker));
     assert!(polled.is_pending());
+    let call = runtime.calls.register(call);
     runtime.handle(
         lk_agents_voice::agent_session::Event::Awaited(
             lk_agents_voice::agent_session::Input::Host(lk_agents_voice::agent_session::Sent {

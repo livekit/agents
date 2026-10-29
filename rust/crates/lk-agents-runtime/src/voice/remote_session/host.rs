@@ -1,9 +1,9 @@
 //! Request execution and session-clock reply encoding.
 
 use super::reply;
+use crate::voice::session::Timebase;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::remote_session::SessionPort;
-use lk_agents_voice::agent_session::Timebase;
 use lk_agents_voice::remote_session::{encode_session_reply, proto};
 use std::sync::Arc;
 

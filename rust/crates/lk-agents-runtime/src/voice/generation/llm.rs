@@ -1,18 +1,18 @@
 //! `perform_llm_inference`: the words half of a step, streamed as segments, with its retries.
 
 use super::tools::ToolStep;
+use crate::voice::session::SessionShared;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_core::telemetry::provider::Context;
 use lk_agents_voice::agent_session::DriverError;
-use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Attempt;
 pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
 use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read, retry_after};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
@@ -69,11 +69,10 @@ pub(super) async fn produce_segments(
             let _ = tx.send(SegEvent::Chunk(Visible::of(text)));
             let _ = tx.send(SegEvent::End);
         }
-        // Taken, not borrowed: no lock across an await, and a second read finds `None`. Read until
+        // Taken off the host's handle: a second read finds `None`. Read until
         // the voice gives up or the speech is interrupted (`_tts_task` cancels its forwarding).
-        ReplySource::TextStream(rx) => {
-            let rx = rx.lock().expect("say stream poisoned").take();
-            if let Some(mut rx) = rx {
+        ReplySource::TextStream => {
+            if let Some(mut rx) = handle.take_text_stream() {
                 loop {
                     let stopped = async {
                         tokio::select! {
@@ -127,7 +126,7 @@ async fn perform_llm_inference(
         conn_options: shared.conn.llm.unwrap_or_default(),
         ..ChatRequest::default()
     };
-    let (speech, step) = (handle.id(), handle.num_steps());
+    let (speech, step) = (handle.id(), ctx.step);
     // The engine owns the budget; the request carries the same options.
     let mut attempt = Attempt::new(req.conn_options.clone());
     loop {

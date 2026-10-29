@@ -1,9 +1,13 @@
 //! An awaited input's call: its id goes in the input, its answer comes back to the caller that
 //! holds the [`Awaited`] half; a `say()` / `generate_reply()` is answered on its speech handle.
+//! [`Calls`] keeps each reply until the core answers its call.
 
-use crate::agent_session::commands::{Answer, RequestId};
-use crate::speech_handle::SpeechHandle;
-use std::sync::Arc;
+use crate::voice::session::Tx;
+use lk_agents_abi::lock;
+use lk_agents_voice::agent_session::{Answer, Command, Event, Input, Origin, QueueClosed, RequestId, Sent};
+use crate::voice::speech_handle::SpeechHandle;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 /// Where an awaited input's answer goes. It travels with the input that names its call; the
@@ -82,12 +86,46 @@ pub fn open<T>(id: RequestId, pick: fn(Answer) -> Option<T>) -> (Call, Awaited<T
     (Call { id, reply_to: ReplyTo::Answer(tx) }, Awaited { rx, pick })
 }
 
-impl RequestId {
-    /// The calls a session's own tasks await take ids with this bit set, apart from the host's.
-    const TASK: u64 = 1 << 63;
+/// The replies of the calls sent to the loop and not answered yet. A sender registers its reply
+/// before the input naming the call is queued; the queue owner takes it to answer; the session's
+/// end drops the rest unanswered.
+#[derive(Default)]
+pub struct Calls(Mutex<BTreeMap<RequestId, ReplyTo>>);
 
-    /// The id of the `n`th call the session's tasks await.
-    pub(crate) fn task(n: u64) -> Self {
-        RequestId(n | Self::TASK)
+impl Calls {
+    /// `input`, naming `call`, queued with its reply kept; refused, the reply is dropped.
+    pub fn send(&self, queue: &Tx, input: Input, call: Call) -> Result<(), QueueClosed> {
+        let id = self.register(call);
+        queue.send(Event::Awaited(input, id)).inspect_err(|_| drop(self.take(id)))
+    }
+
+    /// Kept until the core answers `call` or the session ends.
+    pub fn register(&self, call: Call) -> RequestId {
+        lock(&self.0).insert(call.id, call.reply_to);
+        call.id
+    }
+
+    /// `command` from `origin`, with the reply of the call it names when it is awaited.
+    pub fn send_command(
+        &self,
+        queue: &Tx,
+        origin: Origin,
+        command: Command,
+        call: Option<Call>,
+    ) -> Result<(), QueueClosed> {
+        let input = Input::Host(Sent { origin, command });
+        match call {
+            Some(call) => self.send(queue, input, call),
+            None => queue.send(input),
+        }
+    }
+
+    pub fn take(&self, id: RequestId) -> Option<ReplyTo> {
+        lock(&self.0).remove(&id)
+    }
+
+    /// The session ended: every call still waiting is dropped unanswered, outside the lock.
+    pub fn clear(&self) {
+        drop(std::mem::take(&mut *lock(&self.0)));
     }
 }

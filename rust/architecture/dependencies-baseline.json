@@ -21,8 +21,5 @@
   "dependency:lk-agents-voice:futures-macro",
   "dependency:lk-agents-voice:futures-sink",
   "dependency:lk-agents-voice:futures-task",
-  "dependency:lk-agents-voice:futures-util",
-  "dependency:lk-agents-voice:mio",
-  "dependency:lk-agents-voice:tokio",
-  "dependency:lk-agents-voice:tokio-macros"
+  "dependency:lk-agents-voice:futures-util"
 ]

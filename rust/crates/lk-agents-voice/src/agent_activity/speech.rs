@@ -13,7 +13,6 @@ use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
 use crate::generation::{EndOfSpeech, TurnOutcome as GenTurnOutcome, end_of_speech};
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
-use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{
     CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep, ToolStep,
@@ -59,8 +58,8 @@ pub(crate) struct SpeechSpec {
     /// The decided turn this speech replies to: its `EOUMetrics` go out between the speech's
     /// announcement and the user item, as the reference's `on_end_of_turn` emits them.
     pub(crate) end_of_turn: Option<EndOfTurnInfo>,
-    /// The handle a host's `say()` / `generate_reply()` answered: the speech is created over it.
-    pub(crate) host_handle: Option<Arc<SpeechHandle>>,
+    /// The id a host's `say()` / `generate_reply()` answered with: the speech is created under it.
+    pub(crate) host_speech: Option<SpeechId>,
     /// The turn's reply answers an `InputRequired(tool=)`.
     pub(crate) answering: Option<crate::tool_executor::Answering>,
 }
@@ -83,7 +82,7 @@ impl SpeechSpec {
             on_enter: false,
             host_asked: false,
             end_of_turn: None,
-            host_handle: None,
+            host_speech: None,
             answering: None,
         }
     }
@@ -221,17 +220,13 @@ impl Driver {
                     now,
                     SpeechSpec {
                         add_to_chat_ctx,
-                        host_handle: call.as_ref().map(|c| Arc::clone(&c.speech)),
+                        host_speech: call.as_ref().map(|c| c.speech),
                         ..SpeechSpec::new(
                             SpeechKind::Say,
                             match text {
                                 SayText::Text(text) => ReplySource::Text(text),
-                                SayText::Stream(rx) => {
-                                    ReplySource::TextStream(std::sync::Mutex::new(Some(rx)))
-                                }
-                                SayText::Audio { text, rx } => {
-                                    ReplySource::Audio { text, rx: std::sync::Mutex::new(Some(rx)) }
-                                }
+                                SayText::Stream => ReplySource::TextStream,
+                                SayText::Audio { text } => ReplySource::Audio { text },
                             },
                             allow_interruptions.unwrap_or(interruptible),
                         )
@@ -259,7 +254,7 @@ impl Driver {
                     chat_ctx,
                     toolset,
                     on_enter,
-                    call.as_ref().map(|c| Arc::clone(&c.speech)),
+                    call.as_ref().map(|c| c.speech),
                     out,
                 );
                 self.answer_speech(call);
@@ -308,8 +303,8 @@ impl Driver {
                     // Disallowed by the time it landed: the handle drops the request.
                     Err(_) => {
                         out.trace(InterruptStep::HostInterruptRefused { speech: id });
-                        if let Some(h) = self.activity.speech_scheduler.handle(id) {
-                            h.interrupt_refused();
+                        if let Some(state) = self.activity.speech_scheduler.speech_mut(id) {
+                            state.interrupt_refused();
                         }
                         return;
                     }
@@ -324,24 +319,24 @@ impl Driver {
             // `disallow_interruptions()` and its release: read live by interruption, so no scheduling
             // step. A done handle refuses quietly; an unknown id is a no-op.
             SpeechCommand::HoldInterruptions { speech, hold } => {
-                if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
+                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
                     if hold {
-                        let _ = handle.hold_interruptions();
+                        let _ = state.hold_interruptions();
                     } else {
-                        handle.release_interruptions();
+                        state.release_interruptions();
                     }
                     out.trace(InterruptStep::InterruptionsToggled {
                         speech,
-                        allow: handle.allow_interruptions(),
+                        allow: state.allow_interruptions(),
                     });
                 }
             }
             SpeechCommand::SetAllowInterruptions { speech, allow } => {
-                if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-                    let _ = h.set_allow_interruptions(allow);
+                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+                    let _ = state.set_allow_interruptions(allow);
                     out.trace(InterruptStep::InterruptionsToggled {
                         speech,
-                        allow: h.allow_interruptions(),
+                        allow: state.allow_interruptions(),
                     });
                 }
             }
@@ -377,9 +372,9 @@ impl Driver {
         chat_ctx: Option<ChatContext>,
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
-        host_handle: Option<Arc<SpeechHandle>>,
+        host_speech: Option<SpeechId>,
         out: &mut Out,
-    ) -> Arc<SpeechHandle> {
+    ) -> SpeechId {
         let wall = self.step.wall();
         let new_message = user_input
             .map(|text| ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall));
@@ -393,7 +388,7 @@ impl Driver {
                 tool_choice,
                 chat_ctx,
                 toolset,
-                host_handle,
+                host_speech,
                 ..SpeechSpec::new(
                     SpeechKind::GenerateReply,
                     ReplySource::Llm,
@@ -456,8 +451,8 @@ impl Driver {
             said: user.text_content().unwrap_or_default(),
         });
         if let Some(preemptive) = adopted {
-            if let Some(handle) = self.activity.speech_scheduler.handle(preemptive) {
-                handle.set_user_metrics(user.metrics.clone());
+            if let Some(state) = self.activity.speech_scheduler.speech_mut(preemptive) {
+                state.set_user_metrics(user.metrics.clone());
             }
             self.commit_item(
                 ChatItem::Message(user),
@@ -562,7 +557,7 @@ impl Driver {
         now: Ts,
         spec: SpeechSpec,
         out: &mut Out,
-    ) -> Arc<SpeechHandle> {
+    ) -> SpeechId {
         let wall = self.step.wall();
         let user_metrics = spec.new_message.as_ref().map(|m| m.metrics.clone());
         let is_reply = matches!(spec.source, ReplySource::Llm);
@@ -602,9 +597,9 @@ impl Driver {
         // the record (the cut settles within the interruption watchdog). One created while a
         // speech plays is requested now, on the record as it stands, as the reference's reply
         // task copies the context at creation: the playing speech's item may be seconds away.
-        let after = self.current_handle().filter(|h| !h.done() && h.interrupted()).map(|h| h.id());
+        let after = self.current_speech().filter(|(_, s)| !s.done() && s.interrupted()).map(|(id, _)| id);
 
-        let (id, handle) = self.new_speech(spec.host_handle.as_ref(), spec.allow_interruptions);
+        let (id, state) = self.new_speech(spec.host_speech, spec.allow_interruptions);
 
         self.activity.note_speech_agent(id, kind);
 
@@ -613,7 +608,7 @@ impl Driver {
         let realtime = matches!(spec.source, ReplySource::Realtime);
         let opened = if is_reply || realtime {
             let budgets = self.activity.retries();
-            let invocation_id = handle.speech_id().to_owned();
+            let invocation_id = id.to_string();
             let kind = (realtime, self.activity.voice_tasks.running());
             self.open_reply_run(id, invocation_id, &turn_toolset, budgets, &plan, kind, out)
         } else {
@@ -629,7 +624,7 @@ impl Driver {
         let request = match &spec.source {
             ReplySource::Llm
             | ReplySource::Text(_)
-            | ReplySource::TextStream(_)
+            | ReplySource::TextStream
             | ReplySource::Audio { .. } => plan.plan(&record, &instructions, wall),
             // No plan: the server decides what to say. The step needs the record and tools; there
             // is no TTS leg, but the words still go on the text stream.
@@ -650,7 +645,7 @@ impl Driver {
             (
                 Some(_),
                 ReplySource::Text(_)
-                | ReplySource::TextStream(_)
+                | ReplySource::TextStream
                 | ReplySource::Audio { .. }
                 | ReplySource::Realtime,
             )
@@ -679,17 +674,23 @@ impl Driver {
             speech: self.session.config.effective.speech,
             answering: spec.answering,
             task: self.activity.voice_tasks.running(),
+            step: 1,
         };
 
         // Past the close's hard edge no generation is started.
         let past_edge = self.session.closing_past_edge();
         // Announced, recorded and scheduled in `request`, the one place every speech passes.
         let admitted =
-            self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, out);
+            self.schedule_speech(now, id, state, kind, spec.add_to_chat_ctx, spec.host_asked, out);
+        if admitted && kind.scheduled() {
+            if let Some(state) = self.activity.speech_scheduler.speech_mut(id) {
+                state.mark_scheduled();
+            }
+        }
         if admitted && !past_edge && !self.session.storage.lost {
             self.storage_started(id);
             out.machine().push(crate::agent_session::effects::Effect::SpeechStart {
-                handle: Arc::clone(&handle),
+                speech: id,
                 context: Box::new(ctx),
                 llm: self.session.llm.as_ref().map(|l| l.id),
                 tts: self.session.tts.as_ref().map(|t| t.id),
@@ -697,9 +698,6 @@ impl Driver {
         }
         if (!admitted || self.session.storage.lost) && self.activity.speech_scheduler.contains(id) {
             self.release_speech(now, id, out);
-        }
-        if admitted && kind.scheduled() {
-            handle.mark_scheduled();
         }
         if let Some(info) = &spec.end_of_turn {
             self.emit_eou_metrics(info, Some(id), out);
@@ -724,7 +722,7 @@ impl Driver {
         if kind.user_initiated() {
             self.run_own(crate::run_result::Owned::Speech(id), out);
         }
-        handle
+        id
     }
 
     pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent, out: &mut Out) {
@@ -797,6 +795,11 @@ impl Driver {
 
             // The reply's tools are done and it has a next step: behind whatever was queued.
             GenEvent::ToolStep { speech, step } => {
+                // `speech_handle._num_steps += 1`: the reply counts its own steps and reports each.
+                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+                    let advanced = state.advance_step();
+                    debug_assert_eq!(advanced, step, "the reply and the core disagree on its step");
+                }
                 out.trace(ToolStep::StepStarted { speech, step });
                 self.requeue_speech(now, speech, out);
             }
@@ -823,8 +826,8 @@ impl Driver {
                 let cause = match self
                     .activity
                     .speech_scheduler
-                    .handle(speech)
-                    .map(|h| h.allow_interruptions())
+                    .speech(speech)
+                    .map(|s| s.allow_interruptions())
                 {
                     Some(true) | None => GateCause::Launch,
                     Some(false) => GateCause::Cancelled,
@@ -871,11 +874,10 @@ impl Driver {
                 || self
                     .activity
                     .speech_scheduler
-                    .handle(plan.speech)
-                    .is_none_or(|handle| handle.interrupted() || handle.done());
+                    .speech(plan.speech)
+                    .is_none_or(|s| s.interrupted() || s.done());
             let committed = self.activity.finished.contains(&plan.after)
-                || (self.activity.speech_scheduler.handle(plan.after))
-                    .is_none_or(|handle| handle.done())
+                || (self.activity.speech_scheduler.speech(plan.after)).is_none_or(|s| s.done())
                 || self.activity.tools_committed.contains(&plan.after);
             if !cancelled && !committed {
                 waiting.push_back((call, plan));
@@ -930,9 +932,9 @@ impl Driver {
             speech,
             class: crate::trace::FailureClass::of(&error),
         });
-        if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
+        if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             // Moved, not formatted: the binding releases a `ProviderError::Host`'s entry.
-            handle.mark_done(Some(*error));
+            state.mark_done(Some(*error));
         }
         self.release_speech(now, speech, out);
     }
@@ -951,8 +953,8 @@ impl Driver {
         item: Option<Box<ChatMessage>>,
         out: &mut Out,
     ) {
-        if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
-            let _ = handle.mark_generation_done();
+        if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+            let _ = state.mark_generation_done();
         }
         out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
         // The step's edge is spent: the next step's first frame is a new one.
@@ -986,7 +988,7 @@ impl Driver {
         // The state moves on the speech's interruption, not the step's; a filler ending inside
         // another speech's tool span goes back to `thinking` (listening would arm the away timer).
         let speech_interrupted =
-            self.activity.speech_scheduler.handle(speech).is_some_and(|h| h.interrupted());
+            self.activity.speech_scheduler.speech(speech).is_some_and(|s| s.interrupted());
         let eos = end_of_speech(
             speech_interrupted,
             has_tool_output,
@@ -1003,8 +1005,8 @@ impl Driver {
         let Some((item, source)) = item else { return };
         if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
             self.commit_item(item, source, Visibility::Both, out);
-        } else if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-            h.item_added(&item);
+        } else if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+            state.item_added(&item);
         }
     }
 
@@ -1040,11 +1042,8 @@ impl Driver {
             text: outcome.forwarded_text.clone(),
             interrupted,
         });
-        if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-            out.trace(SpeechStep::ItemsRecorded {
-                speech,
-                ids: h.chat_items().iter().map(|it| it.id().to_owned()).collect(),
-            });
+        if let Some(state) = self.activity.speech_scheduler.speech(speech) {
+            out.trace(SpeechStep::ItemsRecorded { speech, ids: state.item_ids().to_vec() });
         }
         // **`speaking` belongs to the current speech**: releasing a refused `Say` or a discarded
         // preemptive generation must not drop the agent out of `speaking` while another speech
@@ -1082,25 +1081,20 @@ impl Driver {
             && self.session.close_phase() != Some(ClosePhase::Closed)
         {
             self.end_live_tools(now, speech, out);
-            if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-                out.machine()
-                    .push(crate::agent_session::effects::Effect::CancelSpeech(Arc::clone(h)));
+            if self.activity.speech_scheduler.contains(speech) {
+                out.machine().push(crate::agent_session::effects::Effect::CancelSpeech(speech));
             }
         }
-        if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-            // The host learns of the end only here, with the handle already `done()` (idempotent).
-            if !h.done() {
-                h.mark_done(None);
-            }
-            // A host `interrupt()` still on its way when the speech ended landed on the handle.
-            if h.take_interrupted_at_done() {
-                let cause = InterruptCause::Host;
-                out.trace(InterruptStep::Interrupted { speech, cause, force: false });
-            }
-            out.machine().emit(SessionEvent::SpeechDone { speech, outcome: h.outcome() });
+        if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+            // The host learns of the end only here, with the speech already `done()` (idempotent).
+            // A host `interrupt()` queued after the input that ended it arrives too late.
+            state.mark_done(None);
+            let view = state.view();
+            let (outcome, failed) = (view.outcome(), view.error.is_some());
+            self.session.trace.speech_ended(speech, view);
+            out.machine().emit(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
-            let h = Arc::clone(h);
-            self.run_speech_ended(&h, out);
+            self.run_speech_ended(speech, failed, out);
         }
         // The deferred tool reply's fate is read off the handle; the tools' fillers go with it.
         self.tool_reply_done(now, speech, out);

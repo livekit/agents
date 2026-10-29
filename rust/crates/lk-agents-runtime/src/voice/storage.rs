@@ -1,11 +1,12 @@
 //! Typed storage commands and receipts, over the session's existing event queue.
 
+use crate::voice::session::Tx;
 use super::Runtime;
 use lk_agents_abi::StreamSink;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{Input, Tx};
+use lk_agents_voice::agent_session::{Input};
 use std::sync::Arc;
 
 pub(super) struct StorageReporter(pub Tx);

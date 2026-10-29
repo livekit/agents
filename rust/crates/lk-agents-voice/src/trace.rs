@@ -847,7 +847,7 @@ impl Step {
         use crate::events::{SessionEvent as E, ToolLifecycle};
         match self {
             Step::Emitted(event) => match event {
-                E::SpeechCreated { speech, .. } => Some(speech.id()),
+                E::SpeechCreated { speech, .. } => Some(*speech),
                 E::SpeechDone { speech, .. } => Some(*speech),
                 E::FloorChanged { holder } => *holder,
                 E::ToolExecutionUpdated(ToolLifecycle::Reply { speech, .. }) => Some(*speech),

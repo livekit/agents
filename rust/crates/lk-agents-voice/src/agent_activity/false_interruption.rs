@@ -266,10 +266,10 @@ impl Driver {
         force: bool,
         out: &mut Out,
     ) -> Result<InterruptOutcome, SpeechError> {
-        let Some(handle) = self.activity.speech_scheduler.handle(speech).cloned() else {
+        let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
             return Ok(InterruptOutcome::Already);
         };
-        let landed = handle.interrupt(force)?;
+        let landed = state.interrupt(force)?;
         // A close's cut: the task reports its end during the drain; the hard edge releases what
         // is still open.
         if !landed {
@@ -328,8 +328,8 @@ impl Driver {
     /// Interrupt a paused speech the way `_cancel_speech_pause(interrupt=True)` does: refused for a
     /// handle already interrupted or never interruptible, and a hold taken since is kept.
     fn interrupt_paused(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        let Some(h) = self.activity.speech_scheduler.handle(speech) else { return };
-        if !h.interruptible() {
+        let Some(state) = self.activity.speech_scheduler.speech(speech) else { return };
+        if !state.interruptible() {
             return;
         }
         if self.interrupt_speech(now, speech, InterruptCause::UserTurn, false, out).is_err() {
@@ -551,14 +551,14 @@ impl Driver {
             return Err(R::TooFewWords);
         }
         // Guard 5, three refusals with names.
-        let Some(current) = self.current_handle() else { return Err(R::NoCurrentSpeech) };
+        let Some((id, current)) = self.current_speech() else { return Err(R::NoCurrentSpeech) };
         if current.interrupted() {
             return Err(R::AlreadyInterrupted);
         }
         if !current.allow_interruptions() {
             return Err(R::NotAllowed);
         }
-        Ok(current.id())
+        Ok(id)
     }
 
     /// `_cancel_false_interruption_timer`: cancels the timer and clears the pending flag, leaving
@@ -579,8 +579,7 @@ impl Driver {
         {
             return;
         }
-        let Some(current) = self.current_handle() else { return };
-        let id = current.id();
+        let Some((id, current)) = self.current_speech() else { return };
         if !current.interruptible() || self.activity.paused_speech.paused_handle() == Some(id) {
             return;
         }
@@ -633,7 +632,7 @@ impl Driver {
             return;
         }
         // The one predicate (the reference drops `audio_enabled` here; this port does not).
-        let done = self.activity.speech_scheduler.handle(paused.handle).is_none_or(|h| h.done());
+        let done = self.activity.speech_scheduler.speech(paused.handle).is_none_or(|s| s.done());
         let resumed = held && !done;
         if held && done {
             self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);

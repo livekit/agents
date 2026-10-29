@@ -2,14 +2,23 @@
 //! commanded and closed. It owns what runs beside the session's loop (the host event drain, hook
 //! answers, handoffs, a streamed `say`'s feed); the decisions behind each command are voice's.
 
+pub mod builder;
+pub mod calls;
 mod class;
 mod options;
+pub mod shared;
 #[cfg(test)]
 mod tests;
+pub mod time;
 pub mod transcript_sync;
 
+pub use builder::*;
+pub use calls::*;
 pub use options::SessionOptions;
+pub use shared::*;
+pub use time::Timebase;
 
+use crate::voice::nodes::Nodes;
 use crate::voice::session::transcript_sync::TranscriptSynchronizer;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::resources::Resources;
@@ -30,17 +39,11 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::lifecycle::{
     CloseAction, OpenAction, RecorderTarget, SessionLifecycle,
 };
-use crate::voice::nodes::Nodes;
 use lk_agents_voice::agent_session::nodes::OutputNodes;
-use lk_agents_voice::agent_session::{
-    AgentUpdate, Answer, Awaited, Call, Close, Command, DriverBuilder, DriverError, HookCall,
-    HostEvent, HostRecorder, Origin, PeerHandle, RecorderCommand, ReplyTo, RequestId, SayText,
-    SessionExecutor, SessionHandle, SessionView, SpeechCall, SpeechCommand, SpeechReply,
-    SttAdapter, Timebase, TtsAdapter, Tx, llm_leg, open, stt_leg, tts_leg,
-};
+use lk_agents_voice::agent_session::{AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, HostRecorder, Origin, RecorderCommand, RequestId, SayText, SessionView, SpeechCall, SpeechCommand};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_voice::tool_executor::Toolset;
 use lk_agents_voice::trace::{CoreStep, Step};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +56,8 @@ pub struct VoiceSession {
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,
     view: tokio::sync::watch::Receiver<Arc<SessionView>>,
+    /// Every speech's live handle, from its host call or creation to the session's end.
+    speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
     /// The transcript synchroniser, held only so `close_io` can close it.
     synchronizer: Option<Arc<TranscriptSynchronizer>>,
@@ -121,39 +126,6 @@ impl Stage {
     }
 }
 
-/// The opening STT and TTS as the session runs them: one attempt per call within the session's
-/// budgets, adapted by the executor and under the agent's nodes. A session advertising a tool with
-/// nothing to run it is refused here, not at the first call.
-fn open_legs(
-    builder: &mut DriverBuilder,
-    nodes: &Nodes,
-    tts_adapter: &TtsAdapter,
-    stt_adapter: &SttAdapter,
-) -> Result<(), DriverError> {
-    if !builder.toolset.specs.is_empty() && builder.toolset.agent.is_none() {
-        return Err(DriverError::Missing("voice_agent"));
-    }
-    if let Some(llm) = &builder.llm {
-        llm.prewarm();
-    }
-    let clock = builder.time.clock();
-    let (vad, conn) = (builder.vad.clone(), builder.conn.stt);
-    builder.stt =
-        builder.stt.take().map(|stt| nodes.stt(stt_leg(stt, stt_adapter, vad, clock.clone(), conn)));
-    if let Some(stt) = &builder.stt {
-        stt.prewarm();
-    }
-    // The engine's TTS budget: the session's, else the TTS's own policy (models.md).
-    builder.conn.tts =
-        builder.conn.tts.or_else(|| builder.tts.as_ref().and_then(|t| t.conn_options()));
-    let conn = builder.conn.tts;
-    builder.tts = builder.tts.take().map(|tts| nodes.tts(tts_leg(tts, tts_adapter, clock, conn)));
-    if let Some(tts) = &builder.tts {
-        tts.prewarm();
-    }
-    Ok(())
-}
-
 struct Ready {
     builder: DriverBuilder,
     /// The opening agent's `tts_node` and `stt_node`, run over the opening legs.
@@ -166,6 +138,8 @@ struct Ready {
 struct Running {
     remote: Option<Arc<dyn SessionHosting>>,
     api: Tx,
+    /// The replies of the calls the host awaits, until the core answers them.
+    calls: Arc<Calls>,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
@@ -307,6 +281,7 @@ impl VoiceSession {
         let stage = Arc::clone(&self.stage);
         let anchor = self.anchor;
         let time = self.time.clone();
+        let speeches = Arc::clone(&self.speeches);
         Ok(async move {
             #[cfg(feature = "dst")]
             let Ready { mut builder, nodes, interruption, probe } = ready;
@@ -322,7 +297,7 @@ impl VoiceSession {
 
             let tts_adapter = executor.tts_adapter();
             let stt_adapter = executor.stt_adapter();
-            open_legs(&mut builder, &nodes, &tts_adapter, &stt_adapter)?;
+            prepare_opening_legs(&mut builder, &nodes, &tts_adapter, &stt_adapter)?;
             let (cores, handle) = builder.start(&mut *executor).await?;
             let SessionHandle {
                 api,
@@ -332,6 +307,7 @@ impl VoiceSession {
                 peer,
                 ivr_detection: _,
                 speech_ids,
+                calls,
             } = handle;
             let mut owner = executor.own(cores);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
@@ -348,6 +324,7 @@ impl VoiceSession {
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
             let runner = SessionRunner {
                 events,
+                speeches,
                 room_io: Arc::clone(&room_io),
                 api: api.clone(),
                 drained: Some(drained_tx),
@@ -363,6 +340,7 @@ impl VoiceSession {
                     OpenAction::InstallRunning => {
                         *stage = Stage::Running(Running {
                             api,
+                            calls,
                             keyterms,
                             chat_ctx,
                             peer,
@@ -470,6 +448,11 @@ impl VoiceSession {
         }
     }
 
+    /// The live handle of speech `id`, whenever the session held it.
+    pub fn speech(&self, id: SpeechId) -> Option<Arc<SpeechHandle>> {
+        self.speeches.get(id)
+    }
+
     pub fn api(&self) -> Result<Tx, SessionRefused> {
         self.running(|r| Ok(r.api.clone()))
     }
@@ -495,9 +478,10 @@ impl VoiceSession {
         self.running(|r| {
             let id = SpeechId(r.speech_ids.fetch_add(1, Ordering::Relaxed));
             let speech = SpeechHandle::pending(r.api.clone(), id, allow);
+            self.speeches.register(Arc::clone(&speech));
             let reply_to = ReplyTo::Speech(SpeechReply(Arc::clone(&speech)));
             let call = Call { id: r.next_call(), reply_to };
-            Ok((Arc::clone(&speech), SpeechCall { id: call.id, speech }, call))
+            Ok((speech, SpeechCall { id: call.id, speech: id }, call))
         })
     }
 
@@ -541,7 +525,7 @@ impl VoiceSession {
     ) -> Result<(), SessionRefused> {
         let handed = cmd.resources();
         let sent = self.running(|r| {
-            r.api.send_command(origin, cmd, call).map_err(|_| SessionRefused::LoopEnded)
+            r.calls.send_command(&r.api, origin, cmd, call).map_err(|_| SessionRefused::LoopEnded)
         });
         if sent.is_err() {
             handed.into_iter().for_each(|id| self.resources.release(id));
@@ -752,7 +736,7 @@ impl VoiceSession {
         else {
             return self.send_awaited(origin, wrap(update), call);
         };
-        let api = self.api()?;
+        let (api, calls) = self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls))))?;
         let resources = self.resources.clone();
         // The turn is queued for now, in call order: the lock's waiter list is entered by this
         // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
@@ -773,7 +757,7 @@ impl VoiceSession {
             update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);
             let handed = cmd.resources();
-            if api.send_command(origin, cmd, Some(call)).is_err() {
+            if calls.send_command(&api, origin, cmd, Some(call)).is_err() {
                 handed.into_iter().for_each(|id| resources.release(id));
             }
         };
@@ -783,13 +767,17 @@ impl VoiceSession {
 
     fn speak(
         &self,
-        text: SayText,
+        (text, stream): (SayText, Option<SayStream>),
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<String>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
         let (speech, call, reply) = self.speech_call(allow_interruptions)?;
+        // The handle holds what `say()` streams until its speech's task takes it.
+        if let Some(stream) = stream {
+            speech.hold_say(stream);
+        }
         let call = Some(call);
         self.send_awaited(
             origin,
@@ -808,8 +796,8 @@ impl VoiceSession {
     ) -> Result<(Arc<SpeechHandle>, Pusher<String>), CommandRefused> {
         // Backpressure against a runaway producer, not a buffer.
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        let speech =
-            self.speak(SayText::Stream(rx), allow_interruptions, add_to_chat_ctx, origin)?;
+        let said = (SayText::Stream, Some(SayStream::Text(rx)));
+        let speech = self.speak(said, allow_interruptions, add_to_chat_ctx, origin)?;
         Ok((speech, Pusher(Mutex::new(Some(tx)))))
     }
 
@@ -823,8 +811,8 @@ impl VoiceSession {
     ) -> Result<(Arc<SpeechHandle>, Pusher<lk_agents_abi::AudioFrame>), CommandRefused> {
         // Deeper than the text channel: at 20 ms a frame, 64 would be 1.3 s of audio.
         let (tx, rx) = tokio::sync::mpsc::channel(512);
-        let speech =
-            self.speak(SayText::Audio { text, rx }, allow_interruptions, add_to_chat_ctx, origin)?;
+        let said = (SayText::Audio { text }, Some(SayStream::Audio(rx)));
+        let speech = self.speak(said, allow_interruptions, add_to_chat_ctx, origin)?;
         Ok((speech, Pusher(Mutex::new(Some(tx)))))
     }
 
@@ -938,6 +926,8 @@ fn session_usage_updated(
 /// barrier. Dropping the runner releases a waiting [`close`](VoiceSession::close).
 pub struct SessionRunner {
     events: tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
+    /// The host's objects for the speeches the events name.
+    speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
     api: Tx,
     drained: Option<tokio::sync::oneshot::Sender<()>>,
@@ -1042,7 +1032,10 @@ impl HostDrain {
                     }
                 }
                 ev => {
-                    let Some(wire) = ev.wire(self.anchor) else { continue };
+                    let speeches = Arc::clone(&runner.speeches);
+                    let Some(wire) = ev.wire(self.anchor, &|id| speeches.object(id)) else {
+                        continue;
+                    };
                     // `_on_metrics_collected`: a record is folded into the session's usage, then
                     // `session_usage_updated` follows it.
                     let updated = session_usage_updated(&mut lock(&self.usage), &wire);

@@ -3,10 +3,10 @@
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
 use super::llm::{Retried, SegEvent, report_metrics, retry};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
+use crate::voice::session::SessionShared;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
-use lk_agents_voice::agent_session::SessionShared;
 pub(super) use lk_agents_voice::generation::tts::Lost;
 use lk_agents_voice::generation::tts::{
     AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics, TextEffect,
@@ -14,7 +14,7 @@ use lk_agents_voice::generation::tts::{
 };
 use lk_agents_voice::generation::tts::{AttemptFailure, RetryOutcome, SynthesisAttempt};
 use lk_agents_voice::generation::{GenEvent, TurnAccumulator};
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;

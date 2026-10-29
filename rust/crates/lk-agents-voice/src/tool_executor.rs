@@ -502,6 +502,15 @@ pub struct Toolset {
 }
 
 impl Toolset {
+    /// A session advertising a tool with nothing to run it is refused at its start, not at the
+    /// first call.
+    pub fn refuse_unrunnable(&self) -> Result<(), crate::agent_session::DriverError> {
+        if !self.specs.is_empty() && self.agent.is_none() {
+            return Err(crate::agent_session::DriverError::Missing("voice_agent"));
+        }
+        Ok(())
+    }
+
     /// The tools as the host's setup reported them, every toolset's listed: the agent's frame
     /// takes their policies (approval, duplicates, retries, expert identity), so its definition
     /// is the one built after setup.
@@ -569,10 +578,11 @@ impl lk_agents_abi::agent::VoiceAgent for VoiceAgentFrame {
 }
 
 /// A hosted call: the host running its callbacks and the invocation they run in, which its cancel
-/// names.
+/// names. The invocation's `speech` is the runtime's to fill: it holds the host's objects.
 #[derive(Clone)]
 pub struct HostedTool {
     pub host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+    pub speech: SpeechId,
     pub invocation: lk_agents_abi::agent::Invocation,
 }
 
@@ -583,13 +593,13 @@ impl HostedTool {
     pub fn of(
         agent: &Arc<dyn AgentFrame>,
         session: &str,
-        speech: &Arc<crate::speech_handle::SpeechHandle>,
+        speech: SpeechId,
         operation: u64,
         call: Option<&FunctionCall>,
     ) -> HostedTool {
         let invocation = lk_agents_abi::agent::Invocation {
             operation,
-            invocation_id: format!("{session}/{}", speech.speech_id()),
+            invocation_id: format!("{session}/{speech}"),
             agent_name: agent.definition().name.clone(),
             execution_id: None,
             frame_id: None,
@@ -598,10 +608,10 @@ impl HostedTool {
             history: Vec::new(),
             function_call: call.cloned(),
             approval: call.and_then(lk_agents_core::approval::mark),
-            speech: Some(speech.object()),
+            speech: None,
             host_context: Some(agent.host_context().clone()),
         };
-        HostedTool { host: Arc::clone(agent.host()), invocation }
+        HostedTool { host: Arc::clone(agent.host()), speech, invocation }
     }
 
     /// Cancels the body running under this invocation.
@@ -1015,10 +1025,10 @@ impl Driver {
             // A call the request never advertised is answered by the driver and reaches the
             // handle only here. Once, by id.
             if let ChatItem::FunctionCall(_) = &item
-                && let Some(h) = self.activity.speech_scheduler.handle(speech)
-                && !h.chat_items().iter().any(|i| i.id() == item.id())
+                && let Some(state) = self.activity.speech_scheduler.speech_mut(speech)
+                && !state.item_ids().iter().any(|id| id == item.id())
             {
-                h.item_added(&item);
+                state.item_added(&item);
             }
             self.commit_item(item, source, Visibility::Both, out);
         }

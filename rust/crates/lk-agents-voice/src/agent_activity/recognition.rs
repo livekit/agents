@@ -306,7 +306,7 @@ impl Driver {
             self.hold_user_turn(now, info, None, out);
             return;
         }
-        let guard = self.current_handle().map(|h| CommitSpeech {
+        let guard = self.current_speech().map(|(_, h)| CommitSpeech {
             allow_interruptions: h.allow_interruptions(),
             interrupted: h.interrupted(),
         });
@@ -404,7 +404,7 @@ impl Driver {
     fn begin_turn(&mut self, now: Ts, info: EndOfTurnInfo, out: &mut Out) {
         // A turn that asks for a reply while the current speech cannot be interrupted is dropped,
         // before the hook and with no user item.
-        if !info.skip_reply && self.current_handle().is_some_and(|h| !h.allow_interruptions()) {
+        if !info.skip_reply && self.current_speech().is_some_and(|(_, h)| !h.allow_interruptions()) {
             out.machine().emit(crate::events::SessionEvent::Diagnostic(
                 crate::events::DiagnosticEvent::warning(
                     crate::events::diagnostics::UNINTERRUPTIBLE_SPEECH,
@@ -512,8 +512,10 @@ impl Driver {
 
     /// Stops the current speech if it allows it; otherwise the reply queues behind it.
     pub(crate) fn interrupt_for_user_turn(&mut self, now: Ts, out: &mut Out) {
-        let Some(current) = self.current_handle().filter(|h| h.interruptible()) else { return };
-        match self.interrupt_speech(now, current.id(), InterruptCause::UserTurn, false, out) {
+        let Some((current, _)) = self.current_speech().filter(|(_, h)| h.interruptible()) else {
+            return;
+        };
+        match self.interrupt_speech(now, current, InterruptCause::UserTurn, false, out) {
             Ok(InterruptOutcome::Now | InterruptOutcome::Already) => {}
             // A hold taken since the guard was read: the handle's to keep, said by name.
             Err(_) => {
@@ -528,7 +530,7 @@ impl Driver {
         let paused = self.activity.paused_speech.paused_handle();
         let speaking = self.session.states.agent_state() == AgentState::Speaking;
         // The newest reply first: it is the one the turn being re-committed created.
-        let unheard = self.activity.speech_scheduler.handles().rev().find_map(|(id, handle)| {
+        let unheard = self.activity.speech_scheduler.speeches().rev().find_map(|(id, handle)| {
             if handle.interrupted() || handle.done() {
                 return None;
             }

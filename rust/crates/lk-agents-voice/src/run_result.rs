@@ -8,12 +8,10 @@ use crate::agent_session::{Driver, HoldId, HookId, Origin};
 use crate::events::{
     DiagnosticEvent, RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent,
 };
-use crate::speech_handle::SpeechHandle;
 use crate::trace::HandoffStep;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::{HostRef, Ts};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 /// `session._run(user_input=)`: the remote session's typed input and the voice test harness.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,15 +49,15 @@ pub enum Owned {
 struct OpenRun {
     run: RunRef,
     owned: BTreeSet<Owned>,
-    /// `__last_speech_handle`: its error and output decide the verdict.
-    last: Option<Arc<SpeechHandle>>,
+    /// `__last_speech_handle`, and whether it failed: its error and output decide the verdict.
+    last: Option<(SpeechId, bool)>,
 }
 
 pub(super) enum Decided {
     /// Still owed something, or nothing was released since the last check.
     Open,
     /// Nothing is owned: the run is over.
-    Settled { run: RunRef, outcome: RunOutcome, speech: Option<Arc<SpeechHandle>> },
+    Settled { run: RunRef, outcome: RunOutcome, speech: Option<SpeechId> },
 }
 
 /// The driver's run state: at most one open run and the recorded tool outputs.
@@ -107,18 +105,14 @@ impl Runs {
         r.owned.insert(what).then_some(r.run.id)
     }
 
-    /// Release `what`; a speech's handle (`ended`) becomes the verdict speech.
-    pub(super) fn release(
-        &mut self,
-        what: Owned,
-        ended: Option<&Arc<SpeechHandle>>,
-    ) -> Option<RunId> {
+    /// Release `what`; an ended speech (and whether it failed) becomes the verdict speech.
+    pub(super) fn release(&mut self, what: Owned, ended: Option<(SpeechId, bool)>) -> Option<RunId> {
         let r = self.open.as_mut()?;
         if !r.owned.remove(&what) {
             return None;
         }
-        if let Some(h) = ended {
-            r.last = Some(Arc::clone(h));
+        if ended.is_some() {
+            r.last = ended;
         }
         self.dirty = true;
         Some(r.run.id)
@@ -134,9 +128,9 @@ impl Runs {
         if !r.owned.is_empty() {
             return Decided::Open;
         }
-        let speech = r.last.clone();
-        let output = speech.as_ref().and_then(|h| self.outputs.remove(&h.id()));
-        let failed = speech.as_ref().is_some_and(|h| matches!(h.exception(), Ok(Some(_))));
+        let speech = r.last.map(|(speech, _)| speech);
+        let output = speech.and_then(|speech| self.outputs.remove(&speech));
+        let failed = r.last.is_some_and(|(_, failed)| failed);
         let outcome = match (failed, output) {
             // `__last_speech_handle._error` (`run_result.RunResult._mark_done`).
             (true, _) => RunOutcome::Failed(RunFailure::Speech),
@@ -153,9 +147,9 @@ impl Runs {
         Decided::Settled { run, outcome, speech }
     }
 
-    pub(super) fn close(&mut self) -> Option<(RunRef, Option<Arc<SpeechHandle>>)> {
+    pub(super) fn close(&mut self) -> Option<(RunRef, Option<SpeechId>)> {
         self.dirty = false;
-        self.open.take().map(|r| (r.run, r.last))
+        self.open.take().map(|r| (r.run, r.last.map(|(speech, _)| speech)))
     }
 }
 
@@ -201,13 +195,13 @@ impl Driver {
     }
 
     /// A speech left the loop (`release_speech`): the run's verdict moves to it.
-    pub(crate) fn run_speech_ended(&mut self, handle: &Arc<SpeechHandle>, out: &mut Out) {
-        let what = Owned::Speech(handle.id());
-        match self.session.runs.release(what, Some(handle)) {
+    pub(crate) fn run_speech_ended(&mut self, speech: SpeechId, failed: bool, out: &mut Out) {
+        let what = Owned::Speech(speech);
+        match self.session.runs.release(what, Some((speech, failed))) {
             Some(run) => out.trace(HandoffStep::RunReleased { run, what }),
             // Outside any run: its recorded output goes with it.
             None => {
-                self.session.runs.outputs.remove(&handle.id());
+                self.session.runs.outputs.remove(&speech);
             }
         }
     }

@@ -170,6 +170,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         );
         let view = builder.view.subscribe();
         let resources = builder.resources.clone();
+        let speeches = Arc::clone(&builder.speeches);
         if let Some(session_id) = args.session_id {
             builder.session_id = session_id;
         }
@@ -224,6 +225,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 probe: None,
             })))),
             view,
+            speeches,
             room_io,
             synchronizer,
             tasks: Arc::default(),
@@ -715,7 +717,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         add_to_chat_ctx: bool,
         origin: Option<String>,
     ) -> Result<Speech, CommandRefused> {
-        self.speak(SayText::Text(text), allow_interruptions, add_to_chat_ctx, origin)
+        self.speak((SayText::Text(text), None), allow_interruptions, add_to_chat_ctx, origin)
     }
 
     fn say_stream(

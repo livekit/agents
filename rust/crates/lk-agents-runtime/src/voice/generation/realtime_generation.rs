@@ -1,24 +1,26 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
 //! segments, through the realtime audio node when the agent has one.
 
+use crate::voice::session::Tx;
 use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::voice::generation::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding,
 };
 use crate::voice::generation::tools::{ToolStep, run_tools};
+use crate::voice::session::SessionShared;
 use lk_agents_abi::llm::realtime::Event;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
+use lk_agents_abi::voice::nodes::RealtimeAudioNode;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, llm::realtime as rt};
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
-use lk_agents_voice::agent_session::{DriverError, SessionShared, Tx};
+use lk_agents_voice::agent_session::{DriverError};
 use lk_agents_voice::generation::realtime::{
     RealtimeControl, RealtimeEffect, RealtimeObservation, RealtimePlayout, unheard_messages,
 };
 use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
-use lk_agents_abi::voice::nodes::RealtimeAudioNode;
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::StepNext;
 use lk_agents_voice::trace::GenerationStep;
 use std::sync::Arc;
@@ -46,7 +48,7 @@ pub(crate) async fn realtime_generation_task(
     let authorized = tokio::select! {
         biased;
         () = handle.wait_for_interrupted() => false,
-        _ = handle.wait_for_authorization() => true,
+        () = handle.wait_for_step_authorized(ctx.step) => true,
     };
     if !authorized {
         // Interrupted while parked. Nothing of it was heard: what the server already said of it is deleted.
@@ -56,8 +58,7 @@ pub(crate) async fn realtime_generation_task(
         }
         return Ok(StepOutcome::Released);
     }
-    // Consumed: the follow-up step waits for its own grant.
-    handle.clear_authorization();
+    // The follow-up step waits for its own grant.
 
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     // The calls run as they arrive, alongside the playout.
@@ -184,7 +185,7 @@ pub(crate) async fn realtime_generation_task(
         message_id,
     } = state.into_transcript();
     // An empty follow-up round: the reply ends on the step already spoken.
-    if !received && handle.num_steps() > 0 {
+    if !received {
         return Ok(StepOutcome::Released);
     }
     // The transcript *is* the provider's: the words committed are the ones the voice said, or,
@@ -210,6 +211,7 @@ pub(crate) async fn realtime_generation_task(
     let finished = finish_step_with(
         shared,
         handle,
+        ctx.step,
         message_id,
         acc,
         interrupted,
@@ -220,7 +222,7 @@ pub(crate) async fn realtime_generation_task(
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
     let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty, true).await;
-    Ok(deliver_realtime(shared, handle, wake, next, has_calls, finished))
+    Ok(deliver_realtime(handle, ctx.step, wake, next, has_calls, finished))
 }
 
 /// The step failed: the server keeps only what the person heard of it before the failure.
@@ -238,8 +240,8 @@ fn heard_until(
 
 /// The run's next step is the server's to generate: asked once the commit pushed what it reads.
 fn deliver_realtime(
-    shared: &Arc<SessionShared>,
-    handle: &Arc<SpeechHandle>,
+    handle: &SpeechHandle,
+    step: u32,
     wake: &Tx,
     next: Option<StepNext>,
     has_calls: bool,
@@ -255,11 +257,10 @@ fn deliver_realtime(
     if !ask && !has_calls {
         return StepOutcome::Done(finished);
     }
+    let step = if ask { step + 1 } else { step };
     if ask {
-        handle.step();
-        shared.report(GenEvent::ToolStep { speech, step: handle.num_steps() });
+        let _ = wake.send(GenEvent::ToolStep { speech, step });
     }
-    let step = handle.num_steps();
     let sent = wake.send(RealtimeWake::ToolsDone { speech, step, ask, tool_choice }).is_ok();
     if ask && sent { StepOutcome::Next(finished) } else { StepOutcome::Done(finished) }
 }

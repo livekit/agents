@@ -27,18 +27,12 @@ base64.workspace = true
 # `replace_words`' ordered replacement table, as the host passes it.
 indexmap.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 # `remote_session` (`voice/remote_session.py`): the `livekit.agent` package's
 # `AgentSessionEvent`/`SessionRequest`, its prost, and the well-known types as that crate spells
 # them.
 livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
-
-[dev-dependencies]
-lk-agents-test-support = { path = "../lk-agents-test-support" }
-# Paused time (`start_paused`) for the unit tests only.
-tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 # libsoxr behind the driver's, the input leg's and the pre-connect buffer's rate conversions

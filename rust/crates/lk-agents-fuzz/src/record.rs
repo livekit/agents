@@ -10,6 +10,7 @@
 //!
 //! One log holds every resource the run opened, and [`Live`] is the part still open, because
 //! "what can an input point at" and "what is open" are one question asked twice.
+use lk_agents_runtime::voice::session::Timebase;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -21,7 +22,7 @@ use std::{
 use lk_agents_abi::{Ts, resources::ResourceId};
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
-    agent_session::{HoldId, HookCall, HookId, IdleRefused, Timebase},
+    agent_session::{HoldId, HookCall, HookId, IdleRefused},
     events::{SessionEvent, ToolLifecycle},
     filler_scheduler::FillerId,
     room_io::RoomIoEvent,
@@ -894,7 +895,7 @@ impl Recording {
         if let Host::Session(event) = &event {
             match event {
                 SessionEvent::SpeechCreated { speech, .. } => {
-                    self.index.host_by_speech.entry(speech.id().0).or_default().push(position)
+                    self.index.host_by_speech.entry(speech.0).or_default().push(position)
                 }
                 SessionEvent::SpeechDone { speech, .. } => {
                     self.index.host_by_speech.entry(speech.0).or_default().push(position)

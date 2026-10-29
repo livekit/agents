@@ -335,7 +335,9 @@ required resource cleanup.
 
 Synchronous host properties, including speech state and resolved options, are
 runtime-maintained views updated by core effects. `interrupt()` may immediately
-record its monotone request flag; the core determines the speech outcome.
+record its request flag; the core determines the speech outcome, and a done
+speech's view reads that outcome. The voice core owns each speech's state; the
+host's requests and a reply's step reach it as queued inputs.
 Other option changes become visible after the core accepts them. Tests compare
 host views with settled core state.
 

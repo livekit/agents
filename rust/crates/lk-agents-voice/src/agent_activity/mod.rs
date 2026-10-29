@@ -585,8 +585,9 @@ impl Driver {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));
-        if let Some(h) = tell_speech.and_then(|id| self.activity.speech_scheduler.handle(id)) {
-            h.item_added(&entry.item);
+        if let Some(state) = tell_speech.and_then(|id| self.activity.speech_scheduler.speech_mut(id))
+        {
+            state.item_added(&entry.item);
         }
         match outcome {
             // An item only in the agent's view is the model's: the host's history never sees it.

@@ -6,11 +6,11 @@ use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
 use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
+use crate::voice::session::SessionShared;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
-use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::forward::{
@@ -20,7 +20,7 @@ use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind}
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
 use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::PlayoutStep;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
@@ -44,7 +44,7 @@ pub(super) async fn voice_leg(
     voice: Voice,
     rx: mpsc::UnboundedReceiver<SegEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
-    let mut gate = PlaybackGate::default();
+    let mut gate = PlaybackGate { state: Default::default(), step: ctx.step };
     // `tts_node` sets it just before `stream()` snapshots it, for this synthesis only.
     if let Voice::Tts(tts) = &voice {
         tts.set_expressive(ctx.request.expressive.is_some());
@@ -56,7 +56,7 @@ pub(super) async fn voice_leg(
         has_audio_output: shared.audio_output().is_some(),
         llm_reply: matches!(ctx.source, ReplySource::Llm),
         preemptive_tts: ctx.preemptive_tts,
-        authorized: handle.authorized(),
+        authorized: gate.authorized(handle),
     });
     loop {
         effect = match effect {
@@ -65,17 +65,15 @@ pub(super) async fn voice_leg(
                     biased;
                     () = handle.wait_for_interrupted() => false,
                     () = handle.wait_for_scheduled() => true,
-                    _ = handle.wait_for_authorization() => true,
+                    () = handle.wait_for_step_authorized(gate.step) => true,
                 };
-                preparation
-                    .handle(PreparationEvent::Ready { ready, authorized: handle.authorized() })
+                let authorized = gate.authorized(handle);
+                preparation.handle(PreparationEvent::Ready { ready, authorized })
             }
             PreparationEffect::WaitPlayback => {
                 let accepted = gate.wait(shared, handle).await;
-                preparation.handle(PreparationEvent::Playback {
-                    accepted,
-                    authorized: handle.authorized(),
-                })
+                let authorized = gate.authorized(handle);
+                preparation.handle(PreparationEvent::Playback { accepted, authorized })
             }
             PreparationEffect::Start => break,
             PreparationEffect::Refuse => return Ok(None),
@@ -107,13 +105,19 @@ pub(super) struct Spoken {
     pub(super) interrupted: bool,
 }
 
-/// Waits for the authorization effect without owning the generation's playback policy.
-#[derive(Default)]
+/// Waits for the step's authorization without owning the generation's playback policy. The
+/// authorization is consumed once this gate has played on it.
 pub(super) struct PlaybackGate {
     pub(super) state: lk_agents_voice::generation::forward::PlaybackGate,
+    pub(super) step: u32,
 }
 
 impl PlaybackGate {
+    /// The step may play and this gate has not yet consumed its authorization.
+    fn authorized(&self, handle: &SpeechHandle) -> bool {
+        self.state.at.is_none() && handle.step_authorized(self.step)
+    }
+
     pub(super) async fn wait(&mut self, shared: &SessionShared, handle: &SpeechHandle) -> bool {
         use lk_agents_voice::generation::forward::{PlaybackEffect, PlaybackEvent};
         let mut effect =
@@ -122,19 +126,14 @@ impl PlaybackGate {
             let event = tokio::select! {
                 biased;
                 () = handle.wait_for_interrupted() => PlaybackEvent::Interrupted,
-                _ = handle.wait_for_authorization() => {
+                () = handle.wait_for_step_authorized(self.step) => {
                     PlaybackEvent::Authorized { at: shared.time.wall() }
                 }
             };
             effect = self.state.handle(event);
         }
         match effect {
-            PlaybackEffect::Play { consume_authorization } => {
-                if consume_authorization {
-                    handle.clear_authorization();
-                }
-                true
-            }
+            PlaybackEffect::Play => true,
             PlaybackEffect::Refuse => false,
             PlaybackEffect::Wait => unreachable!("a playback observation has arrived"),
         }

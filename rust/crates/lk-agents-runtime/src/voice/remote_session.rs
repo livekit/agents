@@ -13,7 +13,7 @@ pub use lk_agents_voice::remote_session::*;
 /// Opens the production remote host on the session's selected transport.
 pub fn hosting(
     config: crate::voice::session::RemoteSessionConfig,
-    time: lk_agents_voice::agent_session::Timebase,
+    time: crate::voice::session::Timebase,
     spawner: std::sync::Arc<dyn lk_agents_abi::Spawner>,
 ) -> std::sync::Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting> {
     use std::sync::Arc;

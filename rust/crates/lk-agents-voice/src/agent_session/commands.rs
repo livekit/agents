@@ -5,7 +5,6 @@ use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
-use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
@@ -122,12 +121,22 @@ pub use lk_agents_abi::voice::session::{CommitSuperseded, IdleRefused};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub u64);
 
-/// A `say()` / `generate_reply()` the host awaits: its call, and the handle it already holds, which
-/// the loop creates the speech over.
+impl RequestId {
+    /// The calls a session's own tasks await take ids with this bit set, apart from the host's.
+    const TASK: u64 = 1 << 63;
+
+    /// The id of the `n`th call the session's tasks await.
+    pub fn task(n: u64) -> Self {
+        RequestId(n | Self::TASK)
+    }
+}
+
+/// A `say()` / `generate_reply()` the host awaits: its call, and the id its handle already has,
+/// which the loop creates the speech under.
 #[derive(Debug)]
 pub struct SpeechCall {
     pub id: RequestId,
-    pub speech: Arc<SpeechHandle>,
+    pub speech: SpeechId,
 }
 
 /// What an awaited command is answered with, once, on the session's answer stream.
@@ -463,12 +472,10 @@ pub struct HoldId(pub u64);
 #[derive(Debug)]
 pub enum SayText {
     Text(String),
-    Audio {
-        text: String,
-        rx: tokio::sync::mpsc::Receiver<lk_agents_abi::AudioFrame>,
-    },
-    /// Closing the sender ends the speech.
-    Stream(tokio::sync::mpsc::Receiver<String>),
+    /// Pre-synthesised frames, which the host's handle holds for the speech.
+    Audio { text: String },
+    /// Text chunks the host's handle holds for the speech; closing the sender ends it.
+    Stream,
 }
 
 pub struct HostAudio(pub Arc<dyn AudioInput>);

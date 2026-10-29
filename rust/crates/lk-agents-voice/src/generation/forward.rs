@@ -53,7 +53,8 @@ pub enum PlaybackEvent {
 
 pub enum PlaybackEffect {
     Wait,
-    Play { consume_authorization: bool },
+    /// The step's authorization is held: this gate consumed it, here or before.
+    Play,
     Refuse,
 }
 
@@ -65,14 +66,14 @@ impl PlaybackGate {
             }
             PlaybackEvent::Observe { interrupted: false } => {
                 if self.at.is_some() {
-                    PlaybackEffect::Play { consume_authorization: false }
+                    PlaybackEffect::Play
                 } else {
                     PlaybackEffect::Wait
                 }
             }
             PlaybackEvent::Authorized { at } => {
                 self.at = Some(at);
-                PlaybackEffect::Play { consume_authorization: true }
+                PlaybackEffect::Play
             }
         }
     }

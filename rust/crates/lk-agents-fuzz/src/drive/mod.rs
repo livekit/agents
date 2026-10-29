@@ -23,6 +23,8 @@
 //! turns one input into what the product sees, [`collect`] writes down what became true, and
 //! [`finish`] releases what a run owes and reports what it found. This file holds what they
 //! share: the setup, the simulation, and the run itself.
+use lk_agents_runtime::voice::SpeechHandle;
+use lk_agents_runtime::voice::session::Timebase;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
@@ -62,12 +64,11 @@ use lk_agents_voice::{
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        HoldId, HookId, HostEvent, IoKind, Origin, SpeechCommand, Timebase, TurnCommand,
-        effects::Decision,
+        HoldId, HookId, HostEvent, IoKind, Origin, SpeechCommand, TurnCommand, effects::Decision,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
-    speech_handle::SpeechHandle,
+
     tool_executor::ToolOutcome,
     trace::{
         CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,

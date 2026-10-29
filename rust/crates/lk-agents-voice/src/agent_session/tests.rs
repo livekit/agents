@@ -1,68 +1,22 @@
-//! Session decisions over cores no executor runs.
-
-mod recorder;
+//! Session decisions over a decision core no executor runs.
 
 use super::*;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::lifecycle::SessionStartPlans;
-use crate::agent_session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor};
 use crate::events::SessionEvent;
 use crate::tts::markup::ChatMessageExt;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::session_effects::SessionStart as _;
 
-/// Builds the cores of a session with no STT or VAD; nothing here runs them.
-struct NoLegs;
-
-impl SessionExecutor for NoLegs {
-    fn tts_adapter(&self) -> crate::agent_session::TtsAdapter {
-        Arc::new(|tts, _, _| tts)
-    }
-
-    fn stt_adapter(&self) -> crate::agent_session::SttAdapter {
-        Arc::new(|stt, _, _| stt)
-    }
-
-    fn open_legs<'a>(
-        &'a mut self,
-        _: &'a lk_agents_abi::resources::Resources,
-        stt: Option<Arc<dyn lk_agents_abi::Stt>>,
-        vad: Option<Arc<dyn lk_agents_abi::Vad>>,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
-        assert!(stt.is_none() && vad.is_none(), "these sessions open no streams");
-        Box::pin(async { Ok(OpeningLegs::default()) })
-    }
-
-    fn open_realtime<'a>(
-        &'a mut self,
-        _: &'a lk_agents_abi::resources::Resources,
-        _: Arc<dyn lk_agents_abi::Realtime>,
-        _: bool,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            (Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::resources::ResourceId),
-            DriverError,
-        >,
-    > {
-        unreachable!("these sessions open no realtime session")
-    }
-
-    fn own(self: Box<Self>, _: SessionCores) -> Box<dyn QueueOwner> {
-        unreachable!("the tests step the cores themselves")
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
+#[test]
+fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
     use crate::agent_activity::realtime::RealtimeWake;
     use crate::agent_session::effects::Effect;
     use lk_agents_abi::Ts;
     use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
     use lk_agents_abi::llm::realtime as rt;
 
-    let mut cores = cores().await;
-    let driver = &mut cores.driver;
+    let driver = &mut driver();
     let mut out = driver.out();
     let mut timeout = ApiError::timed_out(TimeoutPhase::Connect);
     timeout.request_id = Some("handshake-7".into());
@@ -95,15 +49,14 @@ async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_sess
     assert_eq!(error.request_id.as_deref(), Some("handshake-7"));
 }
 
-#[tokio::test(start_paused = true)]
-async fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
+#[test]
+fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
     use crate::agent_activity::realtime::RealtimeWake;
     use crate::agent_session::effects::{Effect, Planned};
     use lk_agents_abi::llm::realtime as rt;
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
-    let mut cores = cores().await;
-    let driver = &mut cores.driver;
+    let driver = &mut driver();
     let mut out = driver.out();
     let source =
         ChatMessage::text("old-response", Role::Assistant, "Already heard", std::time::UNIX_EPOCH);
@@ -177,15 +130,14 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
 // Catches (voice-session.md "releases the lane within 30 seconds"): a speech whose tasks were
 // aborted (the interruption watchdog, `cancel_tasks`) reports neither done nor failed, so its
 // lane was never released and the store renewed its lease until the call closed.
-#[tokio::test(start_paused = true)]
-async fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
+#[test]
+fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
     use crate::agent_session::effects::Effect;
     use crate::agent_session::storage::LANE_RELEASE_BOUND;
     use crate::agent_session::time::Now;
     use lk_agents_abi::Ts;
 
-    let mut cores = cores().await;
-    let driver = &mut cores.driver;
+    let driver = &mut driver();
     driver.session.storage.enabled = true;
     let speech = SpeechId(7);
     driver.storage_started(speech);
@@ -206,8 +158,8 @@ async fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
 // Catches: a `say` whose step reported spoken after the close's hard edge released it read its
 // kind off the scheduler's entry, gone with the release, so its item was committed as a reply's,
 // naming no voice (`items_carry_their_payload`, survey seed 114526; fixed in b1936ecfe).
-#[tokio::test(start_paused = true)]
-async fn a_say_released_before_its_step_reports_keeps_its_source() {
+#[test]
+fn a_say_released_before_its_step_reports_keeps_its_source() {
     use crate::agent::Source;
     use crate::agent_activity::scheduling::SpeechKind;
     use crate::agent_activity::speech::SpeechSpec;
@@ -215,11 +167,10 @@ async fn a_say_released_before_its_step_reports_keeps_its_source() {
     use crate::generation::{GenEvent, ReplySource};
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
-    let mut cores = cores().await;
-    let driver = &mut cores.driver;
+    let driver = &mut driver();
     let mut out = driver.out();
     let spec = SpeechSpec::new(SpeechKind::Say, ReplySource::Text("One moment.".into()), true);
-    let speech = driver.start_speech(Ts::ZERO, spec, &mut out).id();
+    let speech = driver.start_speech(Ts::ZERO, spec, &mut out);
     driver.release_speech(Ts::ZERO, speech, &mut out);
     let said = ChatMessage::text("said", Role::Assistant, "One moment.", std::time::UNIX_EPOCH);
     let spoken = GenEvent::StepSpoken {
@@ -249,14 +200,53 @@ async fn a_say_released_before_its_step_reports_keeps_its_source() {
     );
 }
 
-/// The cores of a session with no provider or leg, on a virtual clock, never run.
-async fn cores() -> SessionCores {
-    let time = Timebase::from_virtual(Arc::new(lk_agents_abi::VirtualClock::new()));
-    let spawner =
-        Arc::new(lk_agents_test_support::TokioSpawner::new(tokio::runtime::Handle::current()));
+/// A session's decision core with no provider or leg, at the zero instant; nothing runs it.
+fn driver() -> Driver {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
     let config = crate::agent_activity::DriverConfig::new(Default::default(), legs.into());
-    DriverBuilder::new("agent".into(), time, spawner, config).start(&mut NoLegs).await.unwrap().0
+    let view = Arc::new(SessionView {
+        launch_holds: Default::default(),
+        config: config.clone(),
+        agent: "agent".into(),
+        vad: None,
+        dtmf_reply_running: false,
+    });
+    Driver::new(InitialSession {
+        rt_resolved: config.effective.turn.owner(),
+        config,
+        parts: SessionParts {
+            agent: "agent".into(),
+            max_unrecoverable_errors: 3,
+            ..Default::default()
+        },
+        instructions: Default::default(),
+        dynamic_instructions: None,
+        output_nodes: Default::default(),
+        toolset: Default::default(),
+        hook_bound: None,
+        expressive: Default::default(),
+        sinks: Default::default(),
+        video_instance: None,
+        video_sampler: None,
+        eot_thresholds: None,
+        eot_provider: None,
+        rt_session: None,
+        rt_caps: Default::default(),
+        rt_disabled: false,
+        view,
+        next_id: Box::new({
+            let mut next = 0;
+            move || {
+                next += 1;
+                next
+            }
+        }),
+        now: Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH },
+        built_at: 0.0,
+        journalled: false,
+        forward_chat_context: true,
+        keyterms: None,
+    })
 }
 
 // Catches: a second session in one job recording, or hosting the remote session.
@@ -271,16 +261,15 @@ fn only_the_primary_session_records_or_hosts() {
 
 // Catches: interruption metrics never reaching `metrics_collected`. The detector's verdict carries
 // them; the session reported only the overlap event.
-#[tokio::test(start_paused = true)]
-async fn an_overlap_verdict_reports_its_interruption_metrics() {
+#[test]
+fn an_overlap_verdict_reports_its_interruption_metrics() {
     use crate::agent_session::effects::Effect;
     use lk_agents_abi::Ts;
     use lk_agents_abi::metrics::base::{AgentMetrics, InterruptionMetrics};
     use lk_agents_abi::turn::detector::LegEvent;
     use lk_agents_abi::turn::interruption::OverlapVerdict;
 
-    let mut cores = cores().await;
-    let driver = &mut cores.driver;
+    let driver = &mut driver();
     let mut out = driver.out();
     let metrics = InterruptionMetrics {
         timestamp: 1.0,

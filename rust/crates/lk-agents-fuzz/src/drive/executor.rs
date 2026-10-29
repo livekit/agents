@@ -5,10 +5,11 @@
 
 use lk_agents_abi::resources::Resources;
 use lk_agents_abi::{AudioFrame, BoxFuture, Spawner, Stt, Vad};
-use lk_agents_runtime::voice::{Executor, Runtime};
-use lk_agents_voice::agent_session::{
-    DriverError, Event, Now, OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
+use lk_agents_runtime::voice::session::{
+    OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
 };
+use lk_agents_runtime::voice::{Executor, Runtime};
+use lk_agents_voice::agent_session::{DriverError, Event, Now};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
@@ -30,10 +31,10 @@ impl Handover {
 }
 
 impl SessionExecutor for Handover {
-    fn stt_adapter(&self) -> lk_agents_voice::agent_session::SttAdapter {
+    fn stt_adapter(&self) -> lk_agents_runtime::voice::session::SttAdapter {
         self.factory.stt_adapter()
     }
-    fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
+    fn tts_adapter(&self) -> lk_agents_runtime::voice::session::TtsAdapter {
         self.factory.tts_adapter()
     }
     fn open_legs<'a>(

@@ -38,9 +38,10 @@ impl Runtime {
         let mut operations = Vec::with_capacity(effects.len());
         for effect in effects {
             match effect {
-                Effect::SessionView(_) | Effect::ChatContext(_) | Effect::Outputs(_) => {
-                    self.perform_voice_effect(effect)
-                }
+                Effect::SessionView(_)
+                | Effect::ChatContext(_)
+                | Effect::Outputs(_)
+                | Effect::Speech(..) => self.perform_voice_effect(effect),
                 effect => operations.push(effect),
             }
         }
@@ -76,10 +77,9 @@ impl Runtime {
                 self.realtime_players.remove(&speech);
             }
             E::CloseRealtimePlayers => self.realtime_players.clear(),
-            E::CancelSpeech(handle) => {
-                if let Some(speech) = handle.created() {
-                    self.speeches.cancel(speech);
-                }
+            E::CancelSpeech(speech) => self.speeches.cancel(speech),
+            E::Speech(speech, update) => {
+                self.shared.speeches.apply(speech, update, &self.reports);
             }
             E::AttachRecorder { recorder, output: _ } => {
                 self.recorder_observers.detach(&self.shared, None);
@@ -163,7 +163,7 @@ impl Runtime {
             E::Journal(step) => self.shared.journal.record(*step),
             // A late or unknown call's answer is dropped.
             E::Answer(call, answer) => {
-                if let Some(reply_to) = self.calls.remove(&call) {
+                if let Some(reply_to) = self.calls.take(call) {
                     reply_to.settle(answer);
                 }
             }
@@ -209,7 +209,8 @@ impl Runtime {
                     }
                 }
             }
-            E::SpeechStart { handle, mut context, llm, tts } => {
+            E::SpeechStart { speech, mut context, llm, tts } => {
+                let Some(handle) = self.shared.speeches.get(speech) else { return };
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
                     let capacity = crate::voice::generation::realtime_generation::PLAYER_CAPACITY;
@@ -403,15 +404,17 @@ impl Runtime {
                     session.send(command);
                 }
             }
-            E::CancelTool { hosted, .. } => hosted.cancel(),
+            E::CancelTool { hosted, .. } => {
+                hosted.host.cancel(&self.shared.speeches.invocation(&hosted));
+            }
             E::AnswerExpert { hosted, answer } => {
-                hosted.host.answer_expert(&hosted.invocation, answer)
+                hosted.host.answer_expert(&self.shared.speeches.invocation(&hosted), answer)
             }
             E::ValidateOutput { speech, validation, candidate, hosted } => {
                 let shared = Arc::clone(&self.shared);
+                let invocation = shared.speeches.invocation(&hosted);
                 self.spawn("output validation", async move {
-                    let validated =
-                        hosted.host.validate_output(&hosted.invocation, candidate).await;
+                    let validated = hosted.host.validate_output(&invocation, candidate).await;
                     let (verdict, value) = match validated {
                         Ok(ValidatedOutput::Accepted { text, value, .. }) => {
                             (OutputVerdict::Accepted { text }, value)
@@ -425,8 +428,9 @@ impl Runtime {
             }
             E::RenderTemplate { rendering, template, hosted } => {
                 let shared = Arc::clone(&self.shared);
+                let invocation = shared.speeches.invocation(&hosted);
                 self.spawn("template rendering", async move {
-                    let rendered = hosted.host.render_template(&hosted.invocation, template).await;
+                    let rendered = hosted.host.render_template(&invocation, template).await;
                     let text = rendered.unwrap_or_else(|e| {
                         log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
                         None

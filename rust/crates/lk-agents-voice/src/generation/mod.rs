@@ -601,22 +601,17 @@ impl Attempt {
 
 /// `say()` and `generate_reply()` share one pipeline, which keeps `say()` interruptible, scheduled
 /// and metered like every speech.
-// Not `Clone`: the streamed variant owns a receiver.
 #[derive(Debug)]
 pub enum ReplySource {
     Llm,
     /// Not re-segmented.
     Text(String),
-    /// **One segment per chunk**, so the caller's chunk boundaries set the prosody. Taken once
-    /// (`say` has no follow-up step).
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    TextStream(std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<String>>>),
+    /// **One segment per chunk**, so the caller's chunk boundaries set the prosody. The chunks are
+    /// the host handle's, taken once (`say` has no follow-up step).
+    TextStream,
     /// **Pre-synthesised** audio, played instead of asking the TTS; `text` is still committed.
-    Audio {
-        text: String,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        rx: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<lk_agents_abi::AudioFrame>>>,
-    },
+    /// The frames are the host handle's.
+    Audio { text: String },
     /// Runtime installs this speech's player after admission.
     Realtime,
 }
@@ -648,6 +643,9 @@ pub struct ReplyContext {
     pub speech: crate::agent_activity::options::SpeechOptions,
     /// This reply answers an `InputRequired(tool=)`: its call of that tool takes the person's words.
     pub answering: Option<crate::tool_executor::Answering>,
+    /// The step this context plays, as `num_steps` counts it: the reply counts its own steps and
+    /// reports each back edge to the core.
+    pub step: u32,
     /// Made while a `VoiceTask`'s agent held the floor: a `Completed` from its tools ends the task.
     pub task: bool,
 }

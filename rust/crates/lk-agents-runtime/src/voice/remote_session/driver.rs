@@ -6,10 +6,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::voice::session::Timebase;
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::HostError;
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::agent_session::Timebase;
 use tokio::sync::mpsc;
 
 use super::{

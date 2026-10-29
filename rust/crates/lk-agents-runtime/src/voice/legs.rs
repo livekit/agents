@@ -2,6 +2,7 @@
 //! predictions and the tasks that forward the room's and the interruption detector's events.
 
 use super::Runtime;
+use crate::voice::session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::{PushAudio, RealtimeCommand};
 use lk_agents_abi::resources::{ResourceId, Resources};
@@ -10,9 +11,7 @@ use lk_agents_abi::{
     AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamSink, Stt, Vad,
 };
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
-use lk_agents_voice::agent_session::{
-    DriverError, Event, Input, OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
-};
+use lk_agents_voice::agent_session::{DriverError, Event, Input};
 use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,11 +90,11 @@ impl Executor {
 }
 
 impl SessionExecutor for Executor {
-    fn stt_adapter(&self) -> lk_agents_voice::agent_session::SttAdapter {
+    fn stt_adapter(&self) -> crate::voice::session::SttAdapter {
         Arc::new(lk_agents_inference::stt::stream_adapter::StreamAdapter::adapted)
     }
 
-    fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
+    fn tts_adapter(&self) -> crate::voice::session::TtsAdapter {
         Arc::new(|tts, clock, budget| {
             lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
                 tts,

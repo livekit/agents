@@ -194,7 +194,7 @@ impl Driver {
             && self
                 .activity
                 .speech_scheduler
-                .handle(speech)
+                .speech(speech)
                 .is_some_and(|h| !h.interrupted() && !h.done());
         let binding = if live {
             self.session.output_bindings.bind(call, speech, &self.session.outputs).map(Some)
@@ -222,7 +222,7 @@ impl Driver {
             && self
                 .activity
                 .speech_scheduler
-                .handle(speech)
+                .speech(speech)
                 .is_some_and(|h| !h.interrupted() && !h.done());
         let activated = live
             .then(|| {

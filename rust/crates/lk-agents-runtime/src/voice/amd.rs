@@ -1,4 +1,5 @@
 use crate::rtc::wait;
+use crate::voice::session::PeerHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{
     SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
@@ -10,7 +11,7 @@ use lk_agents_abi::{
 };
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{
-    Command, IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
+    Command, IvrCommand, Origin, SpeechCommand, SystemTap, TurnCommand,
 };
 pub use lk_agents_voice::amd::AmdSetup;
 use lk_agents_voice::amd::classifier::{
@@ -510,7 +511,7 @@ impl AmdSystem {
 async fn await_callee(
     room: Option<Arc<dyn RtcRoom>>,
     participant: Option<String>,
-    time: lk_agents_voice::agent_session::Timebase,
+    time: crate::voice::session::Timebase,
 ) -> Callee {
     let Some(room) = room else {
         log::warn!(target: LOG,
@@ -586,7 +587,7 @@ fn spawn_tap_drain(
 /// The classification task. A cancelled run reports nothing. A native source may be abandoned
 /// mid-poll; a host stream may not, so the cancel waits for the chunk.
 async fn classify(
-    time: lk_agents_voice::agent_session::Timebase,
+    time: crate::voice::session::Timebase,
 
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     llm: Arc<dyn Llm>,

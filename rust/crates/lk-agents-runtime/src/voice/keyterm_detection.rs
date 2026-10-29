@@ -1,7 +1,7 @@
 //! A keyterm pass's provider operations, reported to the voice extraction state.
 
+use crate::voice::session::SessionShared;
 use lk_agents_abi::{ChatRequest, Llm};
-use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::keyterm_detection::{DetectionPass, DetectionPassEvent};
 use std::sync::Arc;
 

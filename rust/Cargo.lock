@@ -1637,7 +1637,6 @@ dependencies = [
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-media",
- "lk-agents-test-support",
  "log",
  "pbjson-types",
  "prost",
@@ -1645,7 +1644,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "tokio",
 ]
 
 [[package]]

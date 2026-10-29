@@ -37,7 +37,7 @@ async fn started() -> (BackgroundAudio, Arc<lk_agents_test_support::rtc::FakeRoo
     let room = rtc.room("background");
     let fixed = FixedRoom {
         rtc: Some(room.clone()),
-        time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
+        time: crate::voice::session::Timebase::from_virtual(clock),
         pool: None,
     };
     let player = BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
@@ -176,7 +176,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         1,
         4_800,
         200,
-        lk_agents_voice::agent_session::Timebase::from_virtual(clock.clone()).clock(),
+        crate::voice::session::Timebase::from_virtual(clock.clone()).clock(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         crate::process::env().media_pool,
     )));
@@ -192,7 +192,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         .start(
             Arc::new(FixedRoom {
                 rtc: Some(room.clone()),
-                time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
+                time: crate::voice::session::Timebase::from_virtual(clock),
                 pool: None,
             }),
             0.5,

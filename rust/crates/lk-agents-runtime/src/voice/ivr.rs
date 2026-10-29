@@ -1,7 +1,8 @@
 //! Runs the IVR navigator over the session's event feed and supplied clock.
 
+use crate::voice::session::PeerHandle;
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::agent_session::{Origin, PeerHandle};
+use lk_agents_voice::agent_session::Origin;
 use lk_agents_voice::ivr::{IvrEffect, IvrSystem};
 use std::sync::Arc;
 

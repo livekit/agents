@@ -22,7 +22,7 @@ pub use owner::RoomIo;
 /// `_core_RoomSession`: the session's room, or none for a session without RTC.
 pub struct FixedRoom {
     pub rtc: Option<Arc<dyn RtcRoom>>,
-    pub time: lk_agents_voice::agent_session::Timebase,
+    pub time: crate::voice::session::Timebase,
     /// Where the room's CPU work (a pre-connect head's decode) runs; `None` runs it on the
     /// executor's own task.
     pub pool: Option<lk_agents_media::pool::MediaPool>,
@@ -104,7 +104,7 @@ impl room_owner::RoomRuntime for RoomFactory {
     }
 
     fn create_room_session(env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
-        let time = lk_agents_voice::agent_session::Timebase::of_clock(Arc::new(RealClock::new()));
+        let time = crate::voice::session::Timebase::of_clock(Arc::new(RealClock::new()));
         let pool = room
             .as_ref()
             .and_then(|_| (env.media_pool)().ok())

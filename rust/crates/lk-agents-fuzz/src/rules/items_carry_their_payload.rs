@@ -57,14 +57,14 @@ impl Rule for ItemsCarryTheirPayload {
         let wall = |at: &Observed| epoch + Duration::from_millis(at.at_ms) + SLACK;
         // How each step of each speech ended: (speech, step) -> interrupted.
         let mut spoken: BTreeMap<(u64, u32), bool> = BTreeMap::new();
-        let mut speech_ids: BTreeMap<u64, &str> = BTreeMap::new();
+        let mut speech_ids: BTreeMap<u64, String> = BTreeMap::new();
         let mut realtime: std::collections::BTreeSet<u64> = Default::default();
         for (at, step) in journal {
             match step {
                 Step::Emitted(SessionEvent::SpeechCreated { speech, kind, .. }) => {
-                    speech_ids.insert(speech.id().0, speech.speech_id());
+                    speech_ids.insert(speech.0, speech.to_string());
                     if *kind == SpeechKind::Realtime {
-                        realtime.insert(speech.id().0);
+                        realtime.insert(speech.0);
                     }
                 }
                 Step::Speech(SpeechStep::StepSpoken { speech, step, interrupted }) => {
@@ -97,7 +97,7 @@ impl Rule for ItemsCarryTheirPayload {
                     }
                 }
                 Step::Emitted(SessionEvent::MetricsCollected { metrics, speech }) => {
-                    let id = speech.and_then(|s| speech_ids.get(&s.0).copied());
+                    let id = speech.and_then(|s| speech_ids.get(&s.0).map(String::as_str));
                     metrics_are_whole(check, metrics, id, epoch, wall(at));
                 }
                 _ => {}

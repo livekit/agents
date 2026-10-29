@@ -1,7 +1,7 @@
 //! The session and opening activity's synchronous initialization.
 
 use super::commands::Origin;
-use super::{Driver, Now, SessionParts, SessionView, Tx, VoiceSession};
+use super::{Driver, NextId, Now, SessionParts, SessionView, VoiceSession};
 use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{AgentActivity, DriverConfig};
@@ -15,40 +15,42 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub(crate) struct InitialSession {
-    pub(crate) config: DriverConfig,
-    pub(crate) parts: SessionParts,
-    pub(crate) instructions: Instructions,
-    pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
-    pub(crate) output_nodes: super::nodes::OutputNodes,
-    pub(crate) toolset: crate::tool_executor::Toolset,
-    pub(crate) hook_bound: Option<Duration>,
-    pub(crate) expressive: ExpressiveLayers,
-    pub(crate) sinks: BTreeMap<AudioChannel, ResourceId>,
-    pub(crate) video_instance: Option<usize>,
-    pub(crate) video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
-    pub(crate) eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
-    pub(crate) eot_provider: Option<lk_agents_abi::ProviderId>,
-    pub(crate) rt_session: Option<RealtimeRef>,
-    pub(crate) rt_caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
-    pub(crate) rt_disabled: bool,
-    pub(crate) rt_resolved: TurnDetectionMode,
-    pub(crate) view: Arc<SessionView>,
-    pub(crate) queue: Tx,
-    pub(crate) now: Now,
-    pub(crate) built_at: f64,
-    pub(crate) journalled: bool,
-    pub(crate) forward_chat_context: bool,
-    pub(crate) keyterms: Option<(crate::keyterm_detection::KeytermSetup, Option<ResourceId>)>,
+/// What the core is built from: its options, the providers by id, the opening agent and the
+/// sinks the microphone feeds.
+pub struct InitialSession {
+    pub config: DriverConfig,
+    pub parts: SessionParts,
+    pub instructions: Instructions,
+    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    pub output_nodes: super::nodes::OutputNodes,
+    pub toolset: crate::tool_executor::Toolset,
+    pub hook_bound: Option<Duration>,
+    pub expressive: ExpressiveLayers,
+    pub sinks: BTreeMap<AudioChannel, ResourceId>,
+    pub video_instance: Option<usize>,
+    pub video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
+    pub eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
+    pub eot_provider: Option<lk_agents_abi::ProviderId>,
+    pub rt_session: Option<RealtimeRef>,
+    pub rt_caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
+    pub rt_disabled: bool,
+    pub rt_resolved: TurnDetectionMode,
+    pub view: Arc<SessionView>,
+    pub next_id: NextId,
+    pub now: Now,
+    pub built_at: f64,
+    pub journalled: bool,
+    pub forward_chat_context: bool,
+    pub keyterms: Option<(crate::keyterm_detection::KeytermSetup, Option<ResourceId>)>,
 }
 
 impl Driver {
-    pub(crate) fn new(mut initial: InitialSession) -> Self {
+    pub fn new(mut initial: InitialSession) -> Self {
         let (sink, audio_enabled) = initial.parts.outputs.pause_facts();
         let paused_speech = PausedSpeech::new(&initial.config.effective, sink, audio_enabled);
         let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
         let activity = initial.activity(paused_speech);
-        let mut session = VoiceSession::new(initial.config.clone(), initial.parts);
+        let mut session = VoiceSession::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
         let input = crate::agent_activity::io::AgentInput::new(
             initial.sinks,
@@ -85,7 +87,6 @@ impl Driver {
             current: FrameId::ROOT,
             timers: TimerSet::new(),
             journalled: initial.journalled,
-            queue: initial.queue,
             command_origin: Origin::Host,
             step: super::time::StepClock::new(),
             stopped: false,

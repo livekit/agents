@@ -2,6 +2,7 @@
 
 mod hooks;
 mod playback;
+mod recorder;
 
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
@@ -19,7 +20,7 @@ use lk_agents_voice::agent_session::host_events::{HookCall, HookKind};
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::Step;
 use std::future::Future as _;
 use std::sync::Mutex;
@@ -166,11 +167,11 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
 struct Observing(Executor, Arc<Mutex<Option<lk_agents_voice::trace::Journal>>>);
 
 impl SessionExecutor for Observing {
-    fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
+    fn tts_adapter(&self) -> crate::voice::session::TtsAdapter {
         self.0.tts_adapter()
     }
 
-    fn stt_adapter(&self) -> lk_agents_voice::agent_session::SttAdapter {
+    fn stt_adapter(&self) -> crate::voice::session::SttAdapter {
         self.0.stt_adapter()
     }
 
@@ -397,7 +398,8 @@ fn say_from(
 ) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Arc<SpeechHandle>) {
     let (words, rx) = tokio::sync::mpsc::channel(4);
     let (handle, call, reply) = api.speech_call(None).expect("the loop runs");
-    let text = SayText::Audio { text: "Hello there.".into(), rx };
+    handle.hold_say(crate::voice::speech_handle::SayStream::Audio(rx));
+    let text = SayText::Audio { text: "Hello there.".into() };
     let say = SpeechCommand::Say {
         text,
         allow_interruptions: None,
@@ -737,7 +739,6 @@ impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::errors::HostError>> {
         Box::pin(async { Ok(()) })
     }
-
 
     fn recv(
         &self,

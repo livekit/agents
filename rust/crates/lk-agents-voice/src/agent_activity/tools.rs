@@ -12,7 +12,6 @@ use crate::agent_session::{Driver, FillerSource, HookCall, HookId, ToolUpdate};
 use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
-use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{
     Batch, CallId, Deferred, Delivery, FillerRun, HostedTool, MadeCall, Pending, Rendering,
     Running, ToolEnd, ToolExecution, ToolGo, ToolOutcome, ToolReply, answer,
@@ -53,14 +52,14 @@ impl Driver {
         let admission = admit(&mut call, spec.as_slice(), forbidden, answering);
         let advertised = admission.offered();
         out.trace(TraceToolStep::Calls { speech, names: vec![call.name.clone()] });
-        let Some(handle) = self.activity.speech_scheduler.handle(speech).cloned() else {
+        let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
             return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         };
         if let Admission::Forbidden { .. } = admission {
             if advertised {
-                handle.item_added(&ChatItem::FunctionCall(call.clone()));
+                state.item_added(&ChatItem::FunctionCall(call.clone()));
             }
-            if handle.scheduled() {
+            if state.scheduled() {
                 self.on_tool_started(now, (speech, step), call.clone(), None, out);
             }
             self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name);
@@ -89,9 +88,9 @@ impl Driver {
             // while queued, drops the call unrun. A start already authorized runs, interrupted or
             // not, as the reference's executor starts the body right after
             // `tool_execution_started_cb`.
-            let handle = self.activity.speech_scheduler.handle(d.speech).cloned();
-            match handle {
-                Some(h) if h.step_authorized(d.step) => {
+            let state = self.activity.speech_scheduler.speech(d.speech);
+            match state.map(|s| (s.step_authorized(d.step), s.interrupted() || s.done())) {
+                Some((true, _)) => {
                     // `_tool_execution_started_cb`: stamped with its start (history is ordered by
                     // `created_at`, and it was made before the step was authorized).
                     if d.id.is_none() {
@@ -103,11 +102,11 @@ impl Driver {
                             waiting.push(d);
                             continue;
                         }
-                        Some(id) => self.start_call(now, d, id, &h, out),
+                        Some(id) => self.start_call(now, d, id, out),
                         None => out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
                     }
                 }
-                Some(h) if !h.interrupted() && !h.done() => {
+                Some((false, false)) => {
                     waiting.push(d);
                     continue;
                 }
@@ -120,10 +119,10 @@ impl Driver {
     }
 
     /// The call is told to the speech and started with its first move.
-    fn start_call(&mut self, now: Ts, d: Deferred, id: CallId, h: &SpeechHandle, out: &mut Out) {
+    fn start_call(&mut self, now: Ts, d: Deferred, id: CallId, out: &mut Out) {
         let Deferred { speech, step, call, advertised, agent, go, .. } = d;
-        if advertised {
-            h.item_added(&ChatItem::FunctionCall(call.clone()));
+        if advertised && let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+            state.item_added(&ChatItem::FunctionCall(call.clone()));
         }
         let first = Box::new(self.reply_call_start(speech, id));
         let host = self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), out);
@@ -143,10 +142,10 @@ impl Driver {
         agent: Option<&std::sync::Arc<dyn crate::tool_executor::AgentFrame>>,
         out: &mut Out,
     ) -> Option<HostedTool> {
-        let handle = self.activity.speech_scheduler.handle(speech);
-        let hosted = agent.zip(handle).map(|(agent, handle)| {
+        let held = self.activity.speech_scheduler.contains(speech);
+        let hosted = agent.filter(|_| held).map(|agent| {
             let operation = self.activity.tools.mint_operation();
-            HostedTool::of(agent, self.session.ids.session(), handle, operation, Some(&call))
+            HostedTool::of(agent, self.session.ids.session(), speech, operation, Some(&call))
         });
         out.trace(TraceToolStep::CallStarted {
             speech,
@@ -538,7 +537,7 @@ impl Driver {
         }
         let interruptible = self.session.config.effective.turn.interruption.enabled();
         let spec = SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), interruptible);
-        Some(self.start_speech(now, spec, out).id())
+        Some(self.start_speech(now, spec, out))
     }
 
     /// `generate_reply(instructions=, tool_choice="none")` from inside the driver, on `chat_ctx`
@@ -554,7 +553,7 @@ impl Driver {
             let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
             return self.realtime_reply(now, None, Some(text), None, tool_choice, None, false, out);
         }
-        let handle = self.start_speech(
+        let speech = self.start_speech(
             now,
             SpeechSpec {
                 turn_instructions: Some(text),
@@ -568,7 +567,7 @@ impl Driver {
             },
             out,
         );
-        Some(handle.id())
+        Some(speech)
     }
 
     // ------------------------------------------------------------------ the deferred reply
@@ -684,10 +683,10 @@ impl Driver {
         else {
             return;
         };
-        let status = match self.activity.speech_scheduler.handle(speech) {
-            Some(h) if h.interrupted() => ToolReplyStatus::Interrupted,
+        let status = match self.activity.speech_scheduler.speech(speech) {
+            Some(s) if s.interrupted() => ToolReplyStatus::Interrupted,
             // The instruction permits an empty response when the agent already covered the result.
-            Some(h) if h.chat_items().is_empty() => ToolReplyStatus::Skipped,
+            Some(s) if s.item_ids().is_empty() => ToolReplyStatus::Skipped,
             Some(_) | None => ToolReplyStatus::Completed,
         };
         out.trace(TraceToolStep::ReplyDone { speech, status });
@@ -828,7 +827,7 @@ impl Driver {
                 (self.realtime_request(now, request, None, None, out), false)
             }
             Some(text) => {
-                let handle = self.start_speech(
+                let speech = self.start_speech(
                     now,
                     SpeechSpec::new(
                         SpeechKind::Say,
@@ -837,7 +836,9 @@ impl Driver {
                     ),
                     out,
                 );
-                (Some(handle.id()), handle.interrupted())
+                // Released at birth (refused) reads as interrupted: it will never play.
+                let state = self.activity.speech_scheduler.speech(speech);
+                (Some(speech), state.is_none_or(|s| s.interrupted()))
             }
             None => (None, false),
         };

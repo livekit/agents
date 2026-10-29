@@ -50,7 +50,7 @@ impl Driver {
             }
             (EndCall::AwaitingReply, SessionEvent::SpeechCreated { speech, .. }) => {
                 out.machine().cancel(Timer::EndCallReply);
-                self.activity.end_call = Some(EndCall::AfterReply(speech.id()));
+                self.activity.end_call = Some(EndCall::AfterReply(*speech));
             }
             (EndCall::AfterReply(id), SessionEvent::SpeechDone { speech, .. }) if *speech == id => {
                 self.close_ended_call(now, out);

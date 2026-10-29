@@ -546,8 +546,8 @@ impl Driver {
         tools_forbidden: bool,
         out: &mut Out,
     ) {
-        let cut = (self.activity.speech_scheduler.handle(speech))
-            .is_none_or(|h| h.interrupted() || h.done());
+        let cut = (self.activity.speech_scheduler.speech(speech))
+            .is_none_or(|s| s.interrupted() || s.done());
         let record = self.session.chat_ctx.agent_chat_ctx();
         let instructions = self.activity.instructions.render(Some(Modality::Audio));
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
@@ -670,15 +670,15 @@ impl Driver {
         out: &mut Out,
     ) {
         let agent = self.activity.tools.replies.get(&speech).and_then(|r| r.agent.clone());
-        let handle = self.activity.speech_scheduler.handle(speech).cloned();
-        let (Some(agent), Some(handle)) = (agent, handle) else {
+        let held = self.activity.speech_scheduler.contains(speech);
+        let Some(agent) = agent.filter(|_| held) else {
             // No agent to validate it: refused as the host would refuse it.
             let verdict =
                 OutputVerdict::Failed("the reply has no agent to validate its output".into());
             return self.reply_event(speech, Event::OutputValidated { validation, verdict }, out);
         };
         let operation = self.activity.tools.mint_operation();
-        let hosted = HostedTool::of(&agent, self.session.ids.session(), &handle, operation, None);
+        let hosted = HostedTool::of(&agent, self.session.ids.session(), speech, operation, None);
         out.machine().push(Effect::ValidateOutput { speech, validation, candidate, hosted });
     }
 
@@ -712,13 +712,13 @@ impl Driver {
         let reply = self.activity.tools.replies.get(&speech);
         let agent = reply.and_then(|r| r.agent.clone());
         let item = reply.and_then(|r| r.run.step_call(call)).map(|(item, _)| item.clone());
-        let handle = self.activity.speech_scheduler.handle(speech).cloned();
-        let (Some(agent), Some(handle)) = (agent, handle) else {
+        let held = self.activity.speech_scheduler.contains(speech);
+        let Some(agent) = agent.filter(|_| held) else {
             return self.reply_event(speech, Event::TemplateRendered { call, text: None }, out);
         };
         let operation = self.activity.tools.mint_operation();
         let session = self.session.ids.session();
-        let hosted = HostedTool::of(&agent, session, &handle, operation, item.as_ref());
+        let hosted = HostedTool::of(&agent, session, speech, operation, item.as_ref());
         let rendering = Rendering::Refusal { speech, call };
         out.machine().push(Effect::RenderTemplate { rendering, template, hosted });
     }

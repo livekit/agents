@@ -28,8 +28,10 @@ impl Run {
         let host = std::mem::take(&mut *self.host.lock().unwrap());
         for (at, seen) in host {
             // The handle is kept, not just recorded: `AwaitSpeech` needs the real object.
-            if let Host::Session(SessionEvent::SpeechCreated { speech, .. }) = &seen {
-                self.handles.entry(speech.id().0).or_insert_with(|| speech.clone());
+            if let Host::Session(SessionEvent::SpeechCreated { speech, .. }) = &seen
+                && let Some(handle) = self.api.speech(*speech)
+            {
+                self.handles.entry(speech.0).or_insert(handle);
             }
             // `_agent_state_changed`: the thinking sound plays while the agent thinks.
             if let (Some(player), Host::Session(SessionEvent::AgentStateChanged { new, .. })) =
@@ -233,7 +235,7 @@ impl Run {
             match &step {
                 Step::Emitted(SessionEvent::SpeechCreated { speech, kind, user_initiated }) => {
                     let detail = Detail::Speech { kind: *kind, user_initiated: *user_initiated };
-                    self.open_once(at, Kind::Speech, Id::Speech(speech.id()), detail);
+                    self.open_once(at, Kind::Speech, Id::Speech(*speech), detail);
                 }
                 Step::Emitted(SessionEvent::SpeechDone { speech, .. }) => {
                     self.close_by_id(at, Kind::Speech, Id::Speech(*speech));

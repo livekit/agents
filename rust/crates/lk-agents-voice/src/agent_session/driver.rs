@@ -6,22 +6,18 @@ use crate::agent_session::commands::{
     Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent, SpeechCall,
 };
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Now;
 use crate::audio::ChannelEnd;
 use crate::events::SessionEvent;
 use crate::generation::GenEvent;
 use crate::room_io::StreamOpened;
-use crate::speech_handle::SpeechHandle;
-use crate::trace::{
-    CloseAct, CloseStep, CoreStep, Journal, PlayoutStep, RoomStep, SpeechStep, Step,
-};
+use crate::speech_handle::{SpeechState, SpeechUpdate};
+use crate::trace::{CloseAct, CloseStep, CoreStep, PlayoutStep, RoomStep, SpeechStep, Step};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{FrameId, SpeechEvent, TimerSet, Ts, VadEvent};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Only what a host could read, in loop order; never machine state.
 #[derive(Debug, Clone)]
@@ -31,198 +27,6 @@ pub enum SystemTap {
     Stt(lk_agents_abi::SpeechEvent),
     Ivr(IvrCommand),
     CloseRequested,
-}
-
-/// One unbounded channel per subscriber; a departed one is forgotten on publish.
-#[derive(Clone, Default)]
-pub struct WatchHub {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    taps: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<SystemTap>>>>,
-}
-
-impl WatchHub {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.taps.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
-        rx
-    }
-
-    /// Cheap with none: the common session runs no system.
-    pub fn publish(&self, item: SystemTap) {
-        let mut taps = self.taps.lock().unwrap_or_else(|p| p.into_inner());
-        taps.retain(|tap| tap.send(item.clone()).is_ok());
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.taps.lock().unwrap_or_else(|p| p.into_inner()).is_empty()
-    }
-}
-
-impl std::fmt::Debug for WatchHub {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WatchHub")
-            .field("taps", &self.taps.lock().map(|t| t.len()).unwrap_or(0))
-            .finish()
-    }
-}
-
-/// Everything a peer of the host may touch, and nothing else.
-#[derive(Clone)]
-pub struct PeerHandle {
-    /// The loop's queue: commands, and the audio taps' installs.
-    pub queue: Tx,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    pub(super) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
-    pub journal: Journal,
-    pub time: crate::agent_session::Timebase,
-    pub spawner: Arc<dyn lk_agents_abi::Spawner>,
-    pub(super) watch: WatchHub,
-    pub(super) resources: lk_agents_abi::resources::Resources,
-    /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
-    pub closing: tokio::sync::watch::Receiver<bool>,
-}
-
-impl PeerHandle {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
-        self.watch.subscribe()
-    }
-
-    pub fn send(&self, origin: Origin, cmd: impl Into<Command>) -> Result<(), QueueClosed> {
-        self.queue.send_from(origin, cmd.into())
-    }
-
-    pub fn journal(&self, step: Step) {
-        self.journal.record(step);
-    }
-
-    /// A host event to the host's drain; handed back when the drain has gone.
-    pub fn deliver(&self, event: HostEvent) -> Result<(), HostEvent> {
-        self.events.send(event).map_err(|refused| refused.0)
-    }
-
-    /// A tap to every watcher.
-    pub fn publish(&self, tap: SystemTap) {
-        self.watch.publish(tap);
-    }
-
-    pub fn emit(&self, ev: SessionEvent) {
-        if self.journal.is_on() {
-            self.journal(Step::Emitted(ev.journal_form()));
-        }
-        let _ = self.events.send(HostEvent::Session(ev));
-    }
-
-    /// The microphone's own frames, never the gate's silence. A second tap replaces the first.
-    pub fn install_audio_tap(
-        &self,
-        sink: Arc<dyn lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame>>,
-    ) -> lk_agents_abi::resources::ResourceId {
-        let sink = self.resources.register_audio_sink(sink);
-        let channel = crate::audio::AudioChannel::Amd;
-        let _ = self.queue.send(crate::data_plane::ForwarderCommand::Install { channel, sink });
-        sink
-    }
-
-    /// Only if this tap is still the one in place.
-    pub fn remove_audio_tap(&self, tap: lk_agents_abi::resources::ResourceId) {
-        let _ = self.queue.send(crate::data_plane::ForwarderCommand::Remove(tap));
-    }
-}
-
-impl std::fmt::Debug for PeerHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PeerHandle").field("time", &self.time).field("watch", &self.watch).finish()
-    }
-}
-
-pub struct SessionHandle {
-    pub api: Tx,
-    /// Every event, in the order the driver emitted it.
-    pub events: Rx<HostEvent>,
-    /// The last keyterm list pushed to the recogniser; `None` before any push.
-    pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
-    /// The driving agent's context and state, as last published.
-    pub chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
-    /// What a system runs on; the host starts the systems it configures on this after `start()`.
-    pub peer: PeerHandle,
-    pub ivr_detection: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// The session's id counter: a host speech call takes its speech's id from it.
-    pub speech_ids: Arc<std::sync::atomic::AtomicU64>,
-}
-
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-pub(super) type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
-
-/// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
-/// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
-/// event sequence. What each source sends becomes an event by its `From` impl below.
-#[derive(Clone)]
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-pub struct Tx(tokio::sync::mpsc::UnboundedSender<Event>);
-
-impl Tx {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    pub(super) fn new(inner: tokio::sync::mpsc::UnboundedSender<Event>) -> Self {
-        Tx(inner)
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    /// A queue nobody reads: what a handle made outside a session sends on.
-    pub fn disconnected() -> Self {
-        Tx(tokio::sync::mpsc::unbounded_channel().0)
-    }
-
-    pub fn send(&self, event: impl Into<Event>) -> Result<(), QueueClosed> {
-        self.0.send(event.into()).map_err(|_| QueueClosed)
-    }
-
-    pub fn send_opened(&self, opened: StreamOpened) -> Result<(), StreamOpened> {
-        self.0.send(Event::LegOpened(opened)).map_err(|error| {
-            let Event::LegOpened(opened) = error.0 else { unreachable!() };
-            opened
-        })
-    }
-
-    pub fn send_from(&self, origin: Origin, command: Command) -> Result<(), QueueClosed> {
-        self.send(Input::Host(Sent { origin, command }))
-    }
-
-    /// `command`, with the reply of the call it names when it is awaited.
-    pub fn send_command(
-        &self,
-        origin: Origin,
-        command: Command,
-        call: Option<crate::agent_session::calls::Call>,
-    ) -> Result<(), QueueClosed> {
-        let input = Input::Host(Sent { origin, command });
-        match call {
-            Some(call) => self.send(Event::Awaited(input, call)),
-            None => self.send(input),
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.0.is_closed()
-    }
-
-    /// Resolves when the loop has dropped its receiver.
-    pub async fn closed(&self) {
-        self.0.closed().await
-    }
-}
-
-impl std::fmt::Debug for Tx {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Tx")
-    }
 }
 
 /// What each source sends, as the loop receives it.
@@ -301,7 +105,7 @@ pub enum Event {
     Input(Input),
     /// For the decision core, from a sender awaiting the answer to the call it names: the
     /// runtime keeps the call's reply until the core answers it.
-    Awaited(Input, crate::agent_session::calls::Call),
+    Awaited(Input, RequestId),
     /// A provider completion, adopted into runtime resources before entering the core.
     LegOpened(StreamOpened),
     /// For the data plane, from the decision core.
@@ -322,8 +126,6 @@ pub struct Driver {
     pub(crate) current: FrameId,
     pub(crate) timers: TimerSet<Timer>,
     pub(crate) journalled: bool,
-    /// Where the spawned work reports back, and the data plane's commands go, in one order.
-    pub(crate) queue: Tx,
     /// Decides ownership (a tool's hold is its run's).
     pub(crate) command_origin: Origin,
     /// The time of the step being handled, or of the last one.
@@ -409,6 +211,11 @@ impl Driver {
         self.current
     }
 
+    /// `ivr_detection=True`: the IVR system is the host's to start; the core starts no system.
+    pub fn ivr_detection(&self) -> bool {
+        self.session.config.effective.turn.ivr_detection()
+    }
+
     /// The session's STT, whose provider identity a recognition input is stamped with.
     pub fn stt(&self) -> Option<lk_agents_abi::resources::ResourceId> {
         self.session.stt.as_ref().map(|stt| stt.id)
@@ -421,25 +228,15 @@ impl Driver {
         }
     }
 
-    /// The speech the loop creates now: the handle the host already holds for its `say()` /
-    /// `generate_reply()`, under the id it was given, else a new one.
+    /// The speech the loop creates now: under the id the host's `say()` / `generate_reply()`
+    /// answered with, else a new one.
     pub(crate) fn new_speech(
         &mut self,
-        host: Option<&Arc<SpeechHandle>>,
+        host: Option<SpeechId>,
         allow_interruptions: bool,
-    ) -> (SpeechId, Arc<SpeechHandle>) {
-        match host {
-            Some(handle) => {
-                let id = handle.reserved().unwrap_or_else(|| self.session.ids.next_speech_id());
-                handle.create(id, allow_interruptions);
-                (id, Arc::clone(handle))
-            }
-            None => {
-                let id = self.session.ids.next_speech_id();
-                let api = self.queue.clone();
-                (id, Arc::new(SpeechHandle::new(id, allow_interruptions, api)))
-            }
-        }
+    ) -> (SpeechId, SpeechState) {
+        let id = host.unwrap_or_else(|| self.session.ids.next_speech_id());
+        (id, SpeechState::new(allow_interruptions))
     }
 
     /// The host's call is answered once its speech exists, in the cycle that announces it.
@@ -615,20 +412,21 @@ impl Driver {
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
     pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<SpeechCall>) {
         let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
-        let (id, handle) = self.new_speech(call.as_ref().map(|c| &c.speech), allow_interruptions);
-        handle.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
+        let (id, mut state) = self.new_speech(call.as_ref().map(|c| c.speech), allow_interruptions);
+        state.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
                 "the session loop ended before {what}() ran"
             )),
         )));
+        self.session.trace.speech_ended(id, state.view());
+        self.outbox.extend(unqueued_speech(id, state));
         // The host stream still exists, so the speech is announced and ended on it like every other.
         let kind = if what == "say" {
             crate::agent_activity::scheduling::SpeechKind::Say
         } else {
             crate::agent_activity::scheduling::SpeechKind::GenerateReply
         };
-        let announce =
-            SessionEvent::SpeechCreated { speech: Arc::clone(&handle), kind, user_initiated: true };
+        let announce = SessionEvent::SpeechCreated { speech: id, kind, user_initiated: true };
         self.emit_now(announce);
         // Born past the close's edge: the scheduling task's refusal and the close's release.
         self.journal(Step::Speech(SpeechStep::ReplyCreated { speech: id }));
@@ -793,8 +591,8 @@ impl Driver {
             aec_warmup_remaining: session.aec.remaining(),
             aec_warmup_armed: session.aec.armed(),
             uninterruptible_speech_active: self
-                .current_handle()
-                .is_some_and(|h| !h.done() && !h.interrupted() && !h.allow_interruptions()),
+                .current_speech()
+                .is_some_and(|(_, h)| !h.done() && !h.interrupted() && !h.allow_interruptions()),
             discard_audio_if_uninterruptible: session
                 .config
                 .effective
@@ -828,7 +626,7 @@ impl Driver {
             .iter()
             .copied()
             .filter(|speech| {
-                self.activity.speech_scheduler.handle(*speech).is_some_and(|h| h.interruptible())
+                self.activity.speech_scheduler.speech(*speech).is_some_and(|h| h.interruptible())
             })
             .collect()
     }
@@ -854,4 +652,14 @@ pub enum DriverError {
 
     #[error("the session has no {0}")]
     Missing(&'static str),
+}
+
+/// A speech the loop creates and ends in the same step, never queued: what it published, then its
+/// release.
+pub(crate) fn unqueued_speech(
+    id: SpeechId,
+    mut state: SpeechState,
+) -> impl Iterator<Item = crate::agent_session::effects::Effect> {
+    let updates = state.take_updates().into_iter().chain([SpeechUpdate::Released]);
+    updates.map(move |update| crate::agent_session::effects::Effect::Speech(id, update))
 }

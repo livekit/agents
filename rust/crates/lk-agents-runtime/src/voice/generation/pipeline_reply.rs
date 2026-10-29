@@ -6,17 +6,17 @@ use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
 use crate::voice::SpeechTasks;
 use crate::voice::generation::realtime_generation::realtime_generation_task;
+use crate::voice::session::SessionShared;
 use lk_agents_abi::ChatMessage;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_voice::agent_session::DriverError;
-use lk_agents_voice::agent_session::SessionShared;
 pub(crate) use lk_agents_voice::generation::pipeline::Finished;
 use lk_agents_voice::generation::pipeline::{
     CompletionObservation, Execution, StartEffect, StartEvent,
 };
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
-use lk_agents_voice::speech_handle::SpeechHandle;
+use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{NextReply, StepNext};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -55,6 +55,7 @@ pub(crate) async fn pipeline_reply_task(
 fn step_spoken(
     shared: &SessionShared,
     handle: &SpeechHandle,
+    step: u32,
     interrupted: bool,
     has_tool_output: bool,
     tools_running: bool,
@@ -62,7 +63,7 @@ fn step_spoken(
 ) {
     shared.report(GenEvent::StepSpoken {
         speech: handle.id(),
-        step: handle.num_steps(),
+        step,
         interrupted,
         has_tool_output,
         tools_running,
@@ -106,11 +107,14 @@ async fn run(
         match outcome {
             StepOutcome::Done(finished) => return Ok(finished),
             StepOutcome::Again(next) => {
-                handle.step();
-                shared.report(GenEvent::ToolStep { speech: handle.id(), step: handle.num_steps() });
                 ctx = follow_up(&ctx, *next);
+                shared.report(GenEvent::ToolStep { speech: handle.id(), step: ctx.step });
             }
-            StepOutcome::Next(finished) => last = Some(finished),
+            // The realtime step asked the server for its follow-up and reported the back edge.
+            StepOutcome::Next(finished) => {
+                ctx.step += 1;
+                last = Some(finished);
+            }
             StepOutcome::Released => {
                 let outcome = || empty_outcome(shared, &ctx, true);
                 return Ok(
@@ -147,6 +151,7 @@ fn finish_step(
     finish_step_with(
         shared,
         handle,
+        ctx.step,
         ctx.message_id.clone(),
         acc,
         interrupted,
@@ -162,6 +167,7 @@ fn finish_step(
 pub(crate) fn finish_step_with(
     shared: &SessionShared,
     handle: &SpeechHandle,
+    step: u32,
     message_id: String,
     acc: TurnAccumulator,
     interrupted: bool,
@@ -178,7 +184,7 @@ pub(crate) fn finish_step_with(
     };
     let observed = CompletionObservation {
         speech: handle.id(),
-        step: handle.num_steps(),
+        step,
         adopted_user_metrics: handle.user_metrics(),
         provider_request_ids,
         has_tool_output,
@@ -200,9 +206,7 @@ async fn pipeline_reply_task_impl(
 ) -> Result<StepOutcome, DriverError> {
     // Taken, not borrowed: no lock across an await, and a second read finds `None`.
     let voice = match &ctx.source {
-        ReplySource::Audio { rx, .. } => {
-            rx.lock().expect("say audio poisoned").take().map_or(Voice::Silent, Voice::Frames)
-        }
+        ReplySource::Audio { .. } => handle.take_audio().map_or(Voice::Silent, Voice::Frames),
         _ => ctx.providers.tts.clone().map_or(Voice::Silent, Voice::Tts),
     };
     // The words start now (preemptive generation). `join!`, not `try_join!`: the voice's host TTS
@@ -223,7 +227,8 @@ async fn pipeline_reply_task_impl(
             if matches!(spoken, Ok(Some(_))) {
                 let has_tools = !tools.is_empty();
                 let tools_running = has_tools && !handle.interrupted();
-                step_spoken(shared, handle, handle.interrupted(), has_tools, tools_running, None);
+                let interrupted = handle.interrupted();
+                step_spoken(shared, handle, ctx.step, interrupted, has_tools, tools_running, None);
             }
             let _ = run_tools(shared, handle, ctx, tools, true, false).await;
             return Err(e);
@@ -233,9 +238,8 @@ async fn pipeline_reply_task_impl(
         // Interrupted before its authorization: started tools answered as interrupted. An
         // authorization granted in that instant marks the step spoken first, so a tool awaiting its
         // own playout does not deadlock.
-        if handle.authorized() {
-            handle.clear_authorization();
-            step_spoken(shared, handle, true, !tools.is_empty(), false, None);
+        if handle.step_authorized(ctx.step) {
+            step_spoken(shared, handle, ctx.step, true, !tools.is_empty(), false, None);
         }
         let _ = run_tools(shared, handle, ctx, tools, true, false).await;
         let outcome = empty_outcome(shared, ctx, true);
@@ -292,6 +296,7 @@ fn follow_up(prev: &ReplyContext, next: NextReply) -> ReplyContext {
         speech: prev.speech,
         answering: None,
         task: prev.task,
+        step: prev.step + 1,
     }
 }
 

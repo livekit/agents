@@ -219,6 +219,7 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         | Effect::CloseRealtimePlayer(_)
         | Effect::CloseRealtimePlayers
         | Effect::CancelSpeech(_)
+        | Effect::Speech(..)
         | Effect::FlushStream(_)
         | Effect::InterruptionSignal { .. } => return None,
         // Journalled through the data plane's reports.
@@ -289,7 +290,7 @@ pub enum Effect {
         text: String,
     },
     SpeechStart {
-        handle: Arc<crate::speech_handle::SpeechHandle>,
+        speech: SpeechId,
         context: Box<crate::generation::ReplyContext>,
         llm: Option<ResourceId>,
         tts: Option<ResourceId>,
@@ -325,7 +326,9 @@ pub enum Effect {
     },
     CloseRealtimePlayer(SpeechId),
     CloseRealtimePlayers,
-    CancelSpeech(Arc<crate::speech_handle::SpeechHandle>),
+    CancelSpeech(SpeechId),
+    /// What the core published about a speech, for its live handle.
+    Speech(SpeechId, crate::speech_handle::SpeechUpdate),
     AttachRecorder {
         recorder: crate::agent_session::commands::HostRecorder,
         output: Option<ResourceId>,
@@ -718,6 +721,8 @@ impl Driver {
             }
         }
         self.flush_activity();
+        let speeches = self.activity.speech_scheduler.take_updates();
+        effects.extend(speeches.into_iter().map(|(id, update)| Effect::Speech(id, update)));
         let launch_holds = self.launch_hold();
         let view = &self.view;
         if view.launch_holds != launch_holds

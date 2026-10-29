@@ -18,7 +18,6 @@ use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities, RealtimeCommand,
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatMessage, Role, ToolChoice, Ts, llm::realtime as rt};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::time::Duration;
 
 pub use realtime_state::response_id_of;
@@ -464,7 +463,7 @@ impl Driver {
     fn settle_all(&mut self, how: Settled, cancel: bool, out: &mut Out) {
         for (req_id, pending) in std::mem::take(&mut self.activity.realtime_state.pending) {
             let playing_on = pending.speech.is_some_and(|s| {
-                self.activity.speech_scheduler.handle(s).is_some_and(|h| !h.interrupted())
+                self.activity.speech_scheduler.speech(s).is_some_and(|h| !h.interrupted())
             });
             if playing_on && matches!(how, Settled::Interrupted(_)) {
                 self.activity.realtime_state.pending.insert(req_id, pending);
@@ -659,17 +658,17 @@ impl Driver {
         let spec = SpeechSpec {
             add_to_chat_ctx,
             host_asked: asked.is_some() || turn,
-            host_handle: asked.as_ref().and_then(Option::as_ref).map(|c| Arc::clone(&c.speech)),
+            host_speech: asked.as_ref().and_then(Option::as_ref).map(|c| c.speech),
             ..SpeechSpec::new(SpeechKind::Realtime, source, allow)
         };
-        let handle = self.start_speech(now, spec, out);
-        self.activity.realtime_players.insert(handle.id());
+        let speech = self.start_speech(now, spec, out);
+        self.activity.realtime_players.insert(speech);
         if let Some(call) = asked {
             // Asked for by the host, so an open run owns it.
-            self.run_own(crate::run_result::Owned::Speech(handle.id()), out);
+            self.run_own(crate::run_result::Owned::Speech(speech), out);
             self.answer_speech(call);
         }
-        handle.id()
+        speech
     }
 
     /// Route a generation's event to its speech. With a `response_id` the routing is exact and a
@@ -865,21 +864,25 @@ impl Driver {
             return;
         }
         let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
-        let (id, handle) = self.new_speech(call.as_ref().map(|c| &c.speech), allow_interruptions);
+        let (id, mut state) = self.new_speech(call.as_ref().map(|c| c.speech), allow_interruptions);
         match how {
             Settled::Failed(err) | Settled::TimedOut(err) => {
-                handle.mark_done(Some(fatal(err.message)))
+                state.mark_done(Some(fatal(err.message)))
             }
-            Settled::Ended => handle.mark_done(Some(fatal(REALTIME_SESSION_ENDED.to_owned()))),
+            Settled::Ended => state.mark_done(Some(fatal(REALTIME_SESSION_ENDED.to_owned()))),
             Settled::Interrupted(cause) => {
                 out.trace(InterruptStep::Interrupted { speech: id, cause, force: true });
-                let _ = handle.interrupt(true);
-                handle.mark_done(None);
+                let _ = state.interrupt(true);
+                state.mark_done(None);
             }
         }
-        let speech = Arc::clone(&handle);
-        out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated: true });
-        out.machine().emit(SessionEvent::SpeechDone { speech: id, outcome: handle.outcome() });
+        out.machine().emit(SessionEvent::SpeechCreated { speech: id, kind, user_initiated: true });
+        self.session.trace.speech_ended(id, state.view());
+        let outcome = state.outcome();
+        out.machine().emit(SessionEvent::SpeechDone { speech: id, outcome });
+        for update in crate::agent_session::unqueued_speech(id, state) {
+            out.machine().push(update);
+        }
         self.answer_speech(call);
     }
 
@@ -1034,7 +1037,7 @@ impl Driver {
             let tasks = &self.activity.speech_scheduler;
             let open = self.activity.realtime_state.open_speeches();
             open.into_iter()
-                .filter(|s| tasks.handle(*s).is_some_and(|h| !h.interrupted()))
+                .filter(|s| tasks.speech(*s).is_some_and(|h| !h.interrupted()))
                 .collect()
         };
         let interrupts = self

@@ -4,12 +4,11 @@
 use crate::agent_session::Driver;
 use crate::agent_session::effects::{Out, PauseResult, Signal, Timer};
 use crate::events::SessionEvent;
-use crate::speech_handle::SpeechHandle;
+use crate::speech_handle::{SpeechState, SpeechUpdate};
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::Arc;
 use std::time::Duration;
 
 const HANDOFF: &str = "a handoff resumed scheduling before the drain completed";
@@ -68,9 +67,9 @@ mod speech_scheduler {
 
     #[derive(Debug, Clone)]
     struct Entry {
-        /// The speech's handle, from scheduling until release: the queue is where the loop holds
+        /// The speech's state, from scheduling until release: the queue is where the loop holds
         /// it.
-        handle: Arc<SpeechHandle>,
+        state: SpeechState,
         /// What it was created as. Provenance: an adopted preemptive generation stays a `Preemptive`
         /// here.
         kind: SpeechKind,
@@ -79,7 +78,7 @@ mod speech_scheduler {
     }
 
     /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
-    /// `_authorization_paused`, `_preemptive_generation`), and every live speech's handle. Part of
+    /// `_authorization_paused`, `_preemptive_generation`), and every live speech's state. Part of
     /// the [`AgentActivity`](crate::agent_activity::AgentActivity).
     #[derive(Debug)]
     pub struct SpeechScheduler {
@@ -101,6 +100,8 @@ mod speech_scheduler {
         /// that creates it.
         pub(crate) preflight: Option<String>,
         preemptive_generation_count: u32,
+        /// What released speeches published last, then their release, until taken.
+        released: Vec<(SpeechId, SpeechUpdate)>,
     }
 
     impl Default for SpeechScheduler {
@@ -121,6 +122,7 @@ mod speech_scheduler {
                 preemptive_generation: None,
                 preflight: None,
                 preemptive_generation_count: 0,
+                released: Vec::new(),
             }
         }
 
@@ -149,9 +151,22 @@ mod speech_scheduler {
             self.entry(speech).map(|e| e.status)
         }
 
-        /// The handle of a speech the queue holds (from scheduling until its release).
-        pub fn handle(&self, speech: SpeechId) -> Option<&Arc<SpeechHandle>> {
-            self.speeches.get(&speech).map(|e| &e.handle)
+        /// The state of a speech the queue holds (from scheduling until its release).
+        pub fn speech(&self, speech: SpeechId) -> Option<&SpeechState> {
+            self.speeches.get(&speech).map(|e| &e.state)
+        }
+
+        pub fn speech_mut(&mut self, speech: SpeechId) -> Option<&mut SpeechState> {
+            self.speeches.get_mut(&speech).map(|e| &mut e.state)
+        }
+
+        /// What every speech published since the last call, released ones first.
+        pub fn take_updates(&mut self) -> Vec<(SpeechId, SpeechUpdate)> {
+            let mut updates = std::mem::take(&mut self.released);
+            for (id, entry) in &mut self.speeches {
+                updates.extend(entry.state.take_updates().into_iter().map(|u| (*id, u)));
+            }
+            updates
         }
 
         pub fn contains(&self, speech: SpeechId) -> bool {
@@ -168,9 +183,9 @@ mod speech_scheduler {
             self.speeches.keys().copied()
         }
 
-        /// Every speech held with its handle, oldest first.
-        pub fn handles(&self) -> impl DoubleEndedIterator<Item = (SpeechId, &Arc<SpeechHandle>)> {
-            self.speeches.iter().map(|(id, e)| (*id, &e.handle))
+        /// Every speech held with its state, oldest first.
+        pub fn speeches(&self) -> impl DoubleEndedIterator<Item = (SpeechId, &SpeechState)> {
+            self.speeches.iter().map(|(id, e)| (*id, &e.state))
         }
 
         pub fn preemptive_generation(&self) -> Option<SpeechId> {
@@ -202,7 +217,7 @@ mod speech_scheduler {
         /// The current speech has not been interrupted.
         pub fn current_speech_uninterrupted(&self) -> bool {
             let current = self.current_speech().and_then(|c| self.entry(c));
-            current.is_some_and(|e| !e.handle.interrupted())
+            current.is_some_and(|e| !e.state.interrupted())
         }
 
         /// No current speech and none chosen next: at most the gap is owed.
@@ -231,16 +246,16 @@ mod speech_scheduler {
             &self.speech_q
         }
 
-        /// The speech's entry, holding its handle from here to its release.
+        /// The speech's entry, holding its state from here to its release.
         pub(super) fn admit(
             &mut self,
-            handle: Arc<SpeechHandle>,
+            speech: SpeechId,
+            state: SpeechState,
             kind: SpeechKind,
             add_to_chat_ctx: bool,
             status: Status,
         ) {
-            let speech = handle.id();
-            let entry = Entry { handle, kind, add_to_chat_ctx, status };
+            let entry = Entry { state, kind, add_to_chat_ctx, status };
             self.speeches.insert(speech, entry);
         }
 
@@ -290,7 +305,7 @@ mod speech_scheduler {
                     }
                 };
                 let live = self.speeches.get(&candidate);
-                if live.is_some_and(|e| !e.handle.interrupted() && e.status == Status::Queued) {
+                if live.is_some_and(|e| !e.state.interrupted() && e.status == Status::Queued) {
                     break candidate;
                 }
                 // Gone, interrupted or discarded while it waited: forget it and look again.
@@ -327,10 +342,12 @@ mod speech_scheduler {
             Requeue::Requeued
         }
 
-        /// The speech is over: its entry (and handle) go, the current speech and its gap move.
+        /// The speech is over: its entry (and state) go, the current speech and its gap move.
         /// `Some(quiet)`: no current speech and nothing in its tools (`listening`).
         pub(super) fn finish(&mut self, speech: SpeechId, now: Ts) -> Option<bool> {
-            self.speeches.remove(&speech)?;
+            let mut entry = self.speeches.remove(&speech)?;
+            let last = entry.state.take_updates().into_iter().chain([SpeechUpdate::Released]);
+            self.released.extend(last.map(|u| (speech, u)));
             // A preemptive generation that wound down on its own before the turn committed.
             if self.preemptive_generation.as_ref().is_some_and(|(held, _)| *held == speech) {
                 self.preemptive_generation = None;
@@ -426,7 +443,7 @@ mod speech_scheduler {
         ) -> Option<(SpeechId, PreemptiveVerdict)> {
             (self.preemptive_generation_count, self.preflight) = (0, None);
             let (speech, preflight) = self.preemptive_generation.take()?;
-            let interrupted = self.entry(speech)?.handle.interrupted();
+            let interrupted = self.entry(speech)?.state.interrupted();
             let verdict = reconcile_preemptive_generation(&preflight, committed, interrupted);
             match verdict {
                 PreemptiveVerdict::Reuse => {
@@ -667,21 +684,18 @@ impl Driver {
     pub(crate) fn schedule_speech(
         &mut self,
         now: Ts,
-        handle: &Arc<SpeechHandle>,
+        speech: SpeechId,
+        state: SpeechState,
         kind: SpeechKind,
         add_to_chat_ctx: bool,
         host_asked: bool,
         out: &mut Out,
     ) -> bool {
-        let speech = handle.id();
-        {
-            // The reference announces every `say` and `_generate_reply` speech (turn replies and
-            // preemptive generations included) as user-initiated; only a generation the realtime
-            // server started on its own is not.
-            let user_initiated = kind != SpeechKind::Realtime || host_asked;
-            let speech = Arc::clone(handle);
-            out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated });
-        }
+        // The reference announces every `say` and `_generate_reply` speech (turn replies and
+        // preemptive generations included) as user-initiated; only a generation the realtime
+        // server started on its own is not.
+        let user_initiated = kind != SpeechKind::Realtime || host_asked;
+        out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated });
         out.trace(SpeechStep::ReplyCreated { speech });
         // A preemptive generation's preflight is taken before the previous preemptive generation is
         // discarded, which clears it.
@@ -709,7 +723,7 @@ impl Driver {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::Superseded, out);
         }
         let s = &mut self.activity.speech_scheduler;
-        s.admit(Arc::clone(handle), kind, add_to_chat_ctx, status);
+        s.admit(speech, state, kind, add_to_chat_ctx, status);
         match rejected {
             Some(reason) => self.reject_speech(now, speech, reason, out),
             None if status == Status::Preemptive => {
@@ -756,16 +770,11 @@ impl Driver {
             out.trace(SpeechStep::WatchdogCleared { speech });
             // `SpeechHandle._cancel`: cancel, mark done and release, since the aborted task will
             // never report `Done`.
-            if let Some(handle) = self
-                .activity
-                .speech_scheduler
-                .handle(speech)
-                .cloned()
-                .filter(|h| h.take_interruption_timeout())
+            if let Some(state) = self.activity.speech_scheduler.speech_mut(speech)
+                && state.take_interruption_timeout()
             {
-                out.machine()
-                    .push(crate::agent_session::effects::Effect::CancelSpeech(Arc::clone(&handle)));
-                handle.mark_done(None);
+                state.mark_done(None);
+                out.machine().push(crate::agent_session::effects::Effect::CancelSpeech(speech));
                 out.trace(InterruptStep::InterruptionTimedOut { speech });
                 if self.session.closing.is_none() {
                     self.end_live_tools(now, speech, out);
@@ -791,10 +800,10 @@ impl Driver {
             }
             NextSpeech::Authorized(candidate) => candidate,
         };
-        let Some(handle) = self.activity.speech_scheduler.handle(candidate).cloned() else {
+        let Some(state) = self.activity.speech_scheduler.speech_mut(candidate) else {
             return;
         };
-        handle.authorize_generation();
+        state.authorize_generation();
         // Whoever was paused has lost the floor to this speech, or is this speech: either way the
         // sink plays again. A pause left on a speech that ended under it would hold every later
         // speech's audio until the close.
@@ -917,8 +926,8 @@ impl Driver {
             // Adopted by construction: a pause and `Closing` discard the preemptive generation
             // first.
             PreemptiveVerdict::Reuse => {
-                if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
-                    handle.mark_scheduled();
+                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+                    state.mark_scheduled();
                 }
                 out.trace(TurnStep::PreemptiveReconciled { speech, verdict });
                 Some(speech)
@@ -944,10 +953,10 @@ impl Driver {
         let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true, out);
     }
 
-    /// `_current_speech`'s handle.
-    pub(crate) fn current_handle(&self) -> Option<Arc<SpeechHandle>> {
+    /// `_current_speech` and its state.
+    pub(crate) fn current_speech(&self) -> Option<(SpeechId, &SpeechState)> {
         let scheduling = &self.activity.speech_scheduler;
-        scheduling.current_speech().and_then(|id| scheduling.handle(id).cloned())
+        scheduling.current_speech().and_then(|id| Some((id, scheduling.speech(id)?)))
     }
 
     pub(crate) fn is_realtime_speech(&self, speech: SpeechId) -> bool {

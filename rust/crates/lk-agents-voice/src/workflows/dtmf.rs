@@ -514,7 +514,7 @@ impl Driver {
             self.realtime_reply(now, Some(user_input), None, None, None, None, true, out);
             return;
         }
-        let h = self.generate_reply_speech(
+        let speech = self.generate_reply_speech(
             now,
             Some(user_input),
             None,
@@ -526,8 +526,8 @@ impl Driver {
             None,
             out,
         );
-        let queued = self.activity.speech_scheduler.contains(h.id());
-        self.dtmf_step(DtmfTaskEvent::ReadBack(queued.then(|| h.id())), out);
+        let queued = self.activity.speech_scheduler.contains(speech);
+        self.dtmf_step(DtmfTaskEvent::ReadBack(queued.then_some(speech)), out);
     }
 }
 

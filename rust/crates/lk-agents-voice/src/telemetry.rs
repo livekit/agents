@@ -32,7 +32,7 @@
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::{HookId, HookKind};
 use crate::events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle};
-use crate::speech_handle::SpeechHandle;
+use crate::speech_handle::SpeechView;
 use lk_agents_abi::metrics::base::{AgentMetrics, LlmMetrics, Metadata};
 use lk_agents_abi::telemetry::attrs;
 use lk_agents_core::telemetry::gen_ai::provider_name;
@@ -42,7 +42,6 @@ use lk_agents_abi::voice::events::{
 use lk_agents_abi::{Extra, Ts};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 /// The root's id.
 pub const ROOT_SPAN: &str = "agent_session";
@@ -111,7 +110,9 @@ struct Open {
 
 struct AgentTurn {
     open: Open,
-    handle: Arc<SpeechHandle>,
+    speech: SpeechId,
+    /// The speech's steps and error as it ended.
+    ended: Option<(u32, Option<lk_agents_abi::errors::ProviderError>)>,
     agent: String,
     /// The speech is done but a tool it started still runs: the turn ends with the last one.
     done: Option<SpeechOutcome>,
@@ -458,6 +459,13 @@ impl SessionTrace {
         }
     }
 
+    /// The speech ends now: its turn's span reports its steps and error.
+    pub(crate) fn speech_ended(&mut self, speech: SpeechId, view: &SpeechView) {
+        if let Some(turn) = self.turns.get_mut(&speech) {
+            turn.ended = Some((view.num_steps, view.error.clone()));
+        }
+    }
+
     /// What `ev` opens or closes. `wall` dates a session instant; `now` is the step's wall time.
     pub(crate) fn observe(
         &mut self,
@@ -540,16 +548,17 @@ impl SessionTrace {
                 }
             }
             SessionEvent::SpeechCreated { speech, .. } => {
-                let Some(id) = speech.created() else { return };
+                let id = *speech;
                 let attrs = Attrs::new()
-                    .set("lk.speech_id", speech.speech_id())
+                    .set("lk.speech_id", id.to_string())
                     .set("gen_ai.operation.name", "invoke_agent")
                     .set("gen_ai.agent.name", agent);
                 let parent = self.root();
                 let open = self.start("agent_turn", parent, now, attrs, out);
                 let turn = AgentTurn {
                     open,
-                    handle: Arc::clone(speech),
+                    speech: id,
+                    ended: None,
                     agent: agent.to_owned(),
                     done: None,
                 };
@@ -666,8 +675,8 @@ impl SessionTrace {
             return;
         }
         let Some(turn) = self.turns.remove(&speech) else { return };
-        let speech_id = turn.handle.speech_id().to_owned();
-        let steps = turn.handle.num_steps();
+        let speech_id = turn.speech.to_string();
+        let (steps, error) = turn.ended.unwrap_or((1, None));
         let generation = |n: u32| format!("{speech_id}_{n}");
         let events = (1..=steps)
             .map(|n| SpanEvent {
@@ -683,9 +692,9 @@ impl SessionTrace {
             .opt("lk.generation_id", (steps > 0).then(|| generation(steps)))
             .set("lk.generation_count", steps)
             .set("lk.interrupted", outcome == SpeechOutcome::Interrupted);
-        let error = (outcome == SpeechOutcome::Failed).then(|| match turn.handle.exception() {
-            Ok(Some(e)) => e.to_string(),
-            _ => "the speech failed".to_owned(),
+        let error = (outcome == SpeechOutcome::Failed).then(|| match error {
+            Some(e) => e.to_string(),
+            None => "the speech failed".to_owned(),
         });
         let metric = SpanMetric {
             instrument: "gen_ai.invoke_agent.duration".to_owned(),
@@ -779,6 +788,7 @@ fn model_attrs(metadata: Option<&Metadata>) -> Attrs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn ends(out: &[SessionEvent]) -> Vec<String> {
         out.iter()

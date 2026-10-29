@@ -2,21 +2,21 @@
 //! its providers, legs and options. The [`SessionExecutor`] opens the streams and runs the tasks
 //! that feed them.
 
-use super::driver::*;
-use super::initial::InitialSession;
-use crate::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
-use crate::agent_session::SessionShared;
-use crate::agent_session::host_events::HostEvent;
-use crate::agent_session::time::{Now, Timebase};
-use crate::audio::AudioChannel;
-use crate::data_plane::{AudioForwarder, ForwarderCommand};
-use crate::generation::Instructions;
-use crate::trace::Journal;
+use crate::voice::session::Tx;
+use super::calls::Calls;
+use super::shared::{PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
+use super::time::Timebase;
 use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamSink, Stt, Tts, Vad};
+use lk_agents_voice::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
+use lk_agents_voice::agent_session::{Driver, DriverError, Event, HostEvent, InitialSession, Now, SessionParts};
+use lk_agents_voice::audio::AudioChannel;
+use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand};
+use lk_agents_voice::generation::Instructions;
+use lk_agents_voice::trace::Journal;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,7 +33,8 @@ pub struct SessionCores {
     /// The turn detector, asked for predictions by the driver's effects.
     pub eot: Option<Arc<dyn EotDetector>>,
     /// The interruption detector, whose verdicts the executor pumps into the queue.
-    pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
+    pub interruption:
+        Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
     /// The opened realtime session whose events are read after the executor adopts the cores.
     pub realtime_events: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
     /// The room's events and the room IO's, forwarded into the queue until `Closing`.
@@ -117,15 +118,17 @@ pub trait QueueOwner: Send {
 }
 
 pub struct DriverBuilder {
-    pub view: tokio::sync::watch::Sender<Arc<crate::agent_session::SessionView>>,
+    /// Every speech's live handle, for the session's whole life.
+    pub speeches: Arc<crate::voice::speech_handle::Speeches>,
+    pub view: tokio::sync::watch::Sender<Arc<lk_agents_voice::agent_session::SessionView>>,
     pub time: Timebase,
     pub spawner: Arc<dyn Spawner>,
     pub config: DriverConfig,
     pub agent: String,
     pub instructions: Instructions,
-    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    pub dynamic_instructions: Option<Arc<dyn lk_agents_voice::generation::HostInstructions>>,
     /// The opening agent's `transcription_node` and `realtime_audio_output_node`.
-    pub output_nodes: crate::agent_session::nodes::OutputNodes,
+    pub output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes,
     /// The session starts from the agent's constructor context. Seeded before the instructions, so
     /// the system message lands in it.
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
@@ -137,7 +140,7 @@ pub struct DriverBuilder {
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
     pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `expressive=`, the session's and the opening agent's.
-    pub expressive: crate::generation::ExpressiveLayers,
+    pub expressive: lk_agents_voice::generation::ExpressiveLayers,
     /// Where the providers below are registered, and every one handed over later.
     pub resources: lk_agents_abi::resources::Resources,
     pub llm: Option<Arc<dyn Llm>>,
@@ -146,7 +149,7 @@ pub struct DriverBuilder {
     /// The runtime hands it over as the session runs it: adapted over `vad`, under `stt_node`.
     pub stt: Option<Arc<dyn Stt>>,
     /// `None`: nothing is pushed.
-    pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
+    pub keyterms: Option<lk_agents_voice::keyterm_detection::KeytermSetup>,
     /// `stt_context_options["forward_chat_context"]`: conversation turns reach an STT with the
     /// `chat_context` capability.
     pub forward_chat_context: bool,
@@ -159,17 +162,18 @@ pub struct DriverBuilder {
 
     pub room_events: Option<Rx<RoomEvent>>,
     pub room_io_events: Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>,
-    pub room_link: Option<crate::room_io::RoomLinkConfig>,
+    pub room_link: Option<lk_agents_voice::room_io::RoomLinkConfig>,
     /// `None` commits turns on silence alone.
     pub eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// `None` is VAD-only interruption: every burst past `min_interruption_duration`, a "mm-hm"
     /// included, stops the agent.
-    pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
+    pub interruption:
+        Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
     /// `None` forwards **every** frame the host pushes.
     pub video_sampler: Option<lk_agents_voice::room_io::video_sampler::VideoSampler>,
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
-    pub toolset: crate::tool_executor::Toolset,
+    pub toolset: lk_agents_voice::tool_executor::Toolset,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     pub session_id: String,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
@@ -185,7 +189,7 @@ impl DriverBuilder {
         spawner: Arc<dyn Spawner>,
         config: DriverConfig,
     ) -> Self {
-        let view = crate::agent_session::SessionView {
+        let view = lk_agents_voice::agent_session::SessionView {
             launch_holds: Default::default(),
             config: config.clone(),
             agent: agent.clone(),
@@ -193,6 +197,7 @@ impl DriverBuilder {
             dtmf_reply_running: false,
         };
         DriverBuilder {
+            speeches: Default::default(),
             view: tokio::sync::watch::Sender::new(Arc::new(view)),
             time,
             spawner,
@@ -226,13 +231,12 @@ impl DriverBuilder {
             video_sampler: None,
             realtime: None,
             toolset: Default::default(),
-            session_id: crate::agent_session::mint_session_id(),
+            session_id: lk_agents_voice::agent_session::mint_session_id(),
             storage: None,
             journal: Default::default(),
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `async` because the executor opens the providers' streams first.
     pub async fn start(
         mut self,
@@ -270,11 +274,14 @@ impl DriverBuilder {
         let tts = self.tts.clone().map(|t| resources.register_tts(t));
         let stt = self.stt.clone().map(|s| resources.register_stt(s));
         let vad = self.vad.clone().map(|v| resources.register_vad(v));
-        let outputs = crate::agent_session::Outputs::new(
+        let outputs = lk_agents_voice::agent_session::Outputs::new(
             self.audio_out.clone().map(|o| resources.register_audio_output(o)),
             self.text_out.clone().map(|o| resources.register_text_output(o)),
         );
         let shared = self.shared(&queue, closing, outputs.clone());
+        let shared_calls = Arc::clone(&shared.calls);
+        // The session's id sequence: the core's speeches and items, and a host speech call's id.
+        let speech_ids = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
         let journal = self.journal.clone();
         let time = self.time.clone();
@@ -291,7 +298,7 @@ impl DriverBuilder {
         };
         let driver = Driver::new(InitialSession {
             config: self.config.clone(),
-            parts: super::SessionParts {
+            parts: SessionParts {
                 llm,
                 tts,
                 stt,
@@ -324,7 +331,10 @@ impl DriverBuilder {
             rt_disabled,
             rt_resolved,
             view: Arc::clone(&self.view.borrow()),
-            queue: queue.clone(),
+            next_id: {
+                let ids = Arc::clone(&speech_ids);
+                Box::new(move || ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+            },
             now: time.read(),
             built_at: built,
             journalled: journal.is_on(),
@@ -332,10 +342,9 @@ impl DriverBuilder {
             keyterms,
         });
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
-        let ivr_detection = driver.session.config.effective.turn.ivr_detection();
+        let ivr_detection = driver.ivr_detection();
         let keyterms_pushed = shared.keyterms.subscribe();
         let chat_ctx = shared.chat_ctx.subscribe();
-        let speech_ids = driver.session.ids.speech_ids();
         let peer = PeerHandle {
             queue: queue.clone(),
             events: ev_tx,
@@ -371,17 +380,17 @@ impl DriverBuilder {
                 peer,
                 ivr_detection,
                 speech_ids,
+                calls: Arc::clone(&shared_calls),
             },
         ))
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// What the spawned tasks share with the loop.
     fn shared(
         &self,
         queue: &Tx,
         closing: tokio::sync::watch::Sender<bool>,
-        outputs: crate::agent_session::Outputs,
+        outputs: lk_agents_voice::agent_session::Outputs,
     ) -> Arc<SessionShared> {
         Arc::new(SessionShared {
             view: self.view.clone(),
@@ -393,6 +402,8 @@ impl DriverBuilder {
             ),
             conn: self.conn,
             queue: queue.clone(),
+            calls: Arc::new(Calls::default()),
+            speeches: Arc::clone(&self.speeches),
             closing,
             hook_host: self.hook_bound.is_some(),
             spawner: Arc::clone(&self.spawner),
@@ -417,7 +428,7 @@ impl DriverBuilder {
             sinks.insert(AudioChannel::Vad, sink);
         }
         {
-            use crate::agent_activity::options::DetectorKind;
+            use lk_agents_voice::agent_activity::options::DetectorKind;
             let eot = self.eot.is_some();
             self.config.edit(|_, legs| legs.detector = eot.then_some(DetectorKind::Streaming));
         }
@@ -444,26 +455,61 @@ impl DriverBuilder {
         // Who ends the turn, decided once from the model's capabilities and the session's
         // inputs (`_resolve_rt_turn_detection_enabled`).
         let caps = model.capabilities();
-        let side = crate::agent_activity::realtime::SessionSide {
+        let side = lk_agents_voice::agent_activity::realtime::SessionSide {
             stt: self.stt.is_some(),
             vad: self.vad.is_some(),
             detection: self.config.effective.turn.detection(),
             streaming_detector: self.config.legs.detector
-                == Some(crate::agent_activity::options::DetectorKind::Streaming),
+                == Some(lk_agents_voice::agent_activity::options::DetectorKind::Streaming),
             interruption_given: self.config.effective.turn.interruption.mode.is_some(),
             turn_detection_mode: self.config.effective.turn.owner(),
         };
-        let disabled = crate::agent_activity::realtime::turn_detection_disabled(&caps, side);
+        let disabled =
+            lk_agents_voice::agent_activity::realtime::turn_detection_disabled(&caps, side);
         // The refined mode goes into the config; the pre-refinement answer is kept so a later
         // re-resolution is compared against it.
-        let owner =
-            crate::agent_activity::realtime::realtime_turn_detection_mode(&caps, side, disabled);
+        let owner = lk_agents_voice::agent_activity::realtime::realtime_turn_detection_mode(
+            &caps, side, disabled,
+        );
         self.config.effective.turn.owner = Some(owner);
         let (session, sink) =
             executor.open_realtime(&self.resources, Arc::clone(model), disabled).await?;
         sinks.insert(AudioChannel::Realtime, sink);
         Ok(Some(RealtimeStart { session, caps, disabled, resolved: side.turn_detection_mode }))
     }
+}
+
+/// The opening STT and TTS as the session runs them: one attempt per call within the session's
+/// budgets, adapted by the executor and under the agent's nodes, once the core accepted the
+/// session's tools.
+pub(super) fn prepare_opening_legs(
+    builder: &mut DriverBuilder,
+    nodes: &crate::voice::nodes::Nodes,
+    tts_adapter: &TtsAdapter,
+    stt_adapter: &SttAdapter,
+) -> Result<(), DriverError> {
+    builder.toolset.refuse_unrunnable()?;
+    if let Some(llm) = &builder.llm {
+        llm.prewarm();
+    }
+    let clock = builder.time.clock();
+    let (vad, conn) = (builder.vad.clone(), builder.conn.stt);
+    builder.stt = builder
+        .stt
+        .take()
+        .map(|stt| nodes.stt(stt_leg(stt, stt_adapter, vad, clock.clone(), conn)));
+    if let Some(stt) = &builder.stt {
+        stt.prewarm();
+    }
+    // The engine's TTS budget: the session's, else the TTS's own policy (models.md).
+    builder.conn.tts =
+        builder.conn.tts.or_else(|| builder.tts.as_ref().and_then(|t| t.conn_options()));
+    let conn = builder.conn.tts;
+    builder.tts = builder.tts.take().map(|tts| nodes.tts(tts_leg(tts, tts_adapter, clock, conn)));
+    if let Some(tts) = &builder.tts {
+        tts.prewarm();
+    }
+    Ok(())
 }
 
 /// The sinks the microphone feeds, by channel: the decision core and the forwarder each learn
@@ -515,7 +561,7 @@ struct RealtimeStart {
     caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
     disabled: bool,
     /// The turn owner before the model's refinement, which a later re-resolution compares with.
-    resolved: crate::audio_recognition::TurnDetectionMode,
+    resolved: lk_agents_voice::audio_recognition::TurnDetectionMode,
 }
 
 /// A host provider is attempted once per call with the leg's timeout: the engine's `Attempt`

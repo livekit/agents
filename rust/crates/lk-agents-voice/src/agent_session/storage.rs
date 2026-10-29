@@ -115,8 +115,8 @@ impl Driver {
         self.session.storage.lost = true;
         self.storage_reported(speech, out);
         self.end_live_tools(now, speech, out);
-        if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
-            out.machine().push(Effect::CancelSpeech(handle.clone()));
+        if self.activity.speech_scheduler.contains(speech) {
+            out.machine().push(Effect::CancelSpeech(speech));
         }
         self.release_speech(now, speech, out);
     }

@@ -411,7 +411,7 @@ pub enum SessionEvent {
     /// A speech was created, for every kind: the host's `speech_created` and
     /// `session.current_speech` for speeches it did not start itself.
     SpeechCreated {
-        speech: Arc<crate::speech_handle::SpeechHandle>,
+        speech: crate::agent_activity::scheduling::SpeechId,
         kind: crate::agent_activity::scheduling::SpeechKind,
         /// The host asked for this one (`say()`, `generate_reply()`).
         user_initiated: bool,
@@ -502,6 +502,6 @@ pub enum SessionEvent {
     RunSettled {
         run: RunRef,
         outcome: RunOutcome,
-        speech: Option<Arc<crate::speech_handle::SpeechHandle>>,
+        speech: Option<crate::agent_activity::scheduling::SpeechId>,
     },
 }

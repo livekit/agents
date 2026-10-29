@@ -50,8 +50,9 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn scheduled(&self) -> bool;
 
-    /// `True` from the tick `interrupt()` was called, and once the loop has interrupted the speech
-    /// for any reason (an interruption, a supersede, the close).
+    /// `True` from the tick `interrupt()` was called until the speech is done, and once the loop
+    /// has interrupted the speech for any reason (an interruption, a supersede, the close). A done
+    /// speech reads the loop's verdict.
     #[host(getter)]
     fn interrupted(&self) -> bool;
 

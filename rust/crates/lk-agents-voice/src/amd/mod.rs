@@ -5,13 +5,11 @@ pub mod classifier;
 use crate::agent_session::SystemTap;
 use crate::events::SessionEvent;
 use classifier::{AmdCategory, AmdConfig, AmdReason, Human, In, Start, TranscriptSource, Verdict};
-use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdPort};
+use lk_agents_abi::voice::amd::AMD_PROMPT;
 use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{HostRef, Llm, Stt};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, VadEventType};
 use std::{fmt, sync::Arc};
-
-pub type AmdFactory = fn(crate::agent_session::PeerHandle, AmdSetup) -> Arc<dyn AmdPort>;
 
 pub struct AmdSetup {
     pub config: AmdConfig,

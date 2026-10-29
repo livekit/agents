@@ -13,9 +13,7 @@ use std::sync::Arc;
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
-    agent_session::Tx,
     events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle},
-    speech_handle::SpeechHandle,
     trace::Step,
 };
 
@@ -62,8 +60,8 @@ impl Authored {
         self.host(Host::Session(event))
     }
 
-    /// The host was told a speech exists. Builds a real, idle `SpeechHandle` for it, and opens the
-    /// speech in the run's own history so a `Ref<Speech>` resolves to it.
+    /// The host was told a speech exists, and the speech opens in the run's own history so a
+    /// `Ref<Speech>` resolves to it.
     pub fn speech_created(mut self, speech: u64, kind: SpeechKind) -> Self {
         let at = self.next();
         let user_initiated = matches!(kind, SpeechKind::Say | SpeechKind::GenerateReply);
@@ -73,8 +71,7 @@ impl Authored {
             Id::Speech(SpeechId(speech)),
             Detail::Speech { kind, user_initiated },
         );
-        let handle = SpeechHandle::new(SpeechId(speech), true, Tx::disconnected());
-        self.session(SessionEvent::SpeechCreated { speech: Arc::new(handle), kind, user_initiated })
+        self.session(SessionEvent::SpeechCreated { speech: SpeechId(speech), kind, user_initiated })
     }
 
     pub fn speech_done(self, speech: u64, outcome: SpeechOutcome) -> Self {
