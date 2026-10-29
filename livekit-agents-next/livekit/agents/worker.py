@@ -307,8 +307,8 @@ class _ServerHost:
     # --- the lifecycle
 
     async def _core_start(self, opts: _core.ProcessStartOptions) -> None:
-        """The job processes, when the core wants them."""
-        os.environ.update(opts.env)
+        """The job processes, when the core wants them. The server's settings reach the jobs as
+        their environment (``opts.env``), never this process's."""
         # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
         http_context._set_default_cert_env()
         logger.info(
@@ -348,6 +348,7 @@ class _ServerHost:
             memory_warn_mb=opts.pool.memory_warn_mb,
             memory_limit_mb=opts.pool.memory_limit_mb,
             http_proxy=opts.pool.http_proxy,
+            env=opts.env,
         )
         for event in ("process_started", "process_closed", "process_job_launched"):
             self._proc_pool.on(event, self._job_status)

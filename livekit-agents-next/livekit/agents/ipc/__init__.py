@@ -122,6 +122,7 @@ class JobExecutor:
         ping_timeout: float = 0,
         high_ping_threshold: float,
         http_proxy: str | None,
+        env: Sequence[tuple[str, str]] = (),
         mp_ctx: BaseContext | None = None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -173,6 +174,7 @@ class JobExecutor:
             session_end_timeout=session_end_timeout,
             preload_modules=tuple(preload_modules),
             setup_fnc=setup_fnc,
+            env=tuple(env),
         )
         self._id = shortuuid("THEXEC_" if thread else "PCEXEC_")
 
@@ -420,6 +422,7 @@ class ProcPool(
         memory_warn_mb: float,
         memory_limit_mb: float,
         http_proxy: str | None,
+        env: Sequence[tuple[str, str]] = (),
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__()
@@ -439,6 +442,7 @@ class ProcPool(
             "memory_warn_mb": memory_warn_mb,
             "memory_limit_mb": memory_limit_mb,
             "http_proxy": http_proxy,
+            "env": env,
             "mp_ctx": mp_ctx,
             "loop": loop,
         }

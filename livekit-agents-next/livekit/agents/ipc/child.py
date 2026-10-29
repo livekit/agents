@@ -72,11 +72,14 @@ class JobArgs:
     mp_cch: socket.socket | None = None
     log_config: tuple[str, str] | None = None
     logger_levels: dict[str, int] = field(default_factory=dict)
+    # the server's settings as environment variables, which the job's code reads
+    env: tuple[tuple[str, str], ...] = ()
 
 
 def job_main(args: JobArgs) -> None:
     # a process forked from the forkserver inherits its core: this one is a job process
     _core.init(_core.Role.Job)
+    os.environ.update(args.env)
     job_proc = _JobProc(
         args.job_entrypoint_fnc,
         args.session_end_fnc,
@@ -409,7 +412,9 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
 
 
 def thread_main(args: JobArgs) -> None:
-    """A job thread's main: the job runs on a loop of the thread's own, logging as the worker."""
+    """A job thread's main: the job runs on a loop of the thread's own, logging as the worker.
+    It shares the worker's process, so the job's environment is the process's."""
+    os.environ.update(args.env)
     job_proc = _JobProc(
         args.job_entrypoint_fnc,
         args.session_end_fnc,
