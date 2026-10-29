@@ -244,10 +244,23 @@ fn _extract_a2_a_door_dispatch_body_size(obj: &Bound<'_, PyAny>) -> PyResult<::s
 }
 
 #[pyclass(frozen, name = "_core_A2ADoor", module = "livekit.agents._core")]
-pub struct _core_A2ADoor(pub(crate) ::std::sync::Arc<_core_A2ADoorImpl>);
+pub struct _core_A2ADoor(::std::sync::Arc<_core_A2ADoorImpl>);
 
 #[pymethods]
 impl _core_A2ADoor {
+    /// The door over `storage`'s namespace, which opens its backend on first use; accepted work
+    /// is settled by the storage's `aclose`.
+    #[new]
+    #[pyo3(signature = (storage, config, host))]
+    fn new(storage: Bound<'_, PyAny>, config: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<_core_A2ADoor> {
+        ::lk_agents_abi::python::check_pid()?;
+        let storage = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::storage::StorageNamespace>(&storage).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("storage", ": expected a native Storage")))?;
+        let config = crate::generated::records::a2a_door::door_config_from_py(&config)?;
+        let host = crate::generated::a2a::TurnHostProxy::from_host(&host)?;
+        let out = <_core_A2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::new(storage, config, host).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(_core_A2ADoor(::std::sync::Arc::new(out)))
+    }
+
     #[getter]
     fn max_payload_bytes(&self) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;

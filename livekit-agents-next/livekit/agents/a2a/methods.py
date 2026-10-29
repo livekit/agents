@@ -34,7 +34,7 @@ class A2AService:
         self._agent_name = agent_name
         self._lane = lane
         self.credentials = credentials
-        self._opening: asyncio.Task[_core._core_A2ADoor] | None = None
+        self._door: _core._core_A2ADoor | None = None
 
     @property
     def agent_name(self) -> str:
@@ -44,13 +44,14 @@ class A2AService:
     def lane(self) -> str:
         return (self._lane() if self._lane is not None else None) or self.agent_name
 
-    async def _open(self) -> _core._core_A2ADoor:
+    def _open(self) -> _core._core_A2ADoor:
         endpoint = self._endpoint
         host = TurnHost(
             endpoint.handler,
             thread=Thread(self._storage, "", agent_name=self.lane),
         )
-        return await self._storage._core._core_a2a_door(
+        return _core._core_A2ADoor(
+            self._storage._core,
             DoorConfig(
                 lane=self.lane,
                 holder=self._storage.holder,
@@ -66,15 +67,9 @@ class A2AService:
         )
 
     async def native(self) -> _core._core_A2ADoor:
-        opening = self._opening
-        if opening is None:
-            opening = self._opening = asyncio.create_task(self._open())
-        try:
-            return await asyncio.shield(opening)
-        except Exception:
-            if self._opening is opening:
-                self._opening = None
-            raise
+        if self._door is None:
+            self._door = self._open()
+        return self._door
 
     async def dispatch(
         self,
@@ -95,5 +90,5 @@ class A2AService:
         )
 
     async def aclose(self) -> None:
-        if self._opening is not None:
-            await (await self._opening).aclose()
+        if self._door is not None:
+            await self._door.aclose()

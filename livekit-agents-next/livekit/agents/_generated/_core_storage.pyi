@@ -7,10 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from livekit.agents.storage.context import TurnHost
-
-from .._core import ChatItem, Streams, Thread, _core_A2ADoor
-from .a2a_door import DoorConfig
+from .._core import ChatItem, Streams, Thread
 from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
 from .storage_context import ContextField, ContextScope, ContextScopeWrite, ContextValues
 
@@ -39,7 +36,6 @@ class Storage:
         Otherwise agentstore through the public API derived from `url` (the project's
         `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
         """
-    async def _core_a2a_door(self, config: DoorConfig, host: TurnHost) -> _core_A2ADoor: ...
     @property
     def location(self) -> str:
         """The absolute local directory, or the public API agentstore is reached through."""

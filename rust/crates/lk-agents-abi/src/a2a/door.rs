@@ -6,7 +6,7 @@ use super::auth::{AuthError, AuthPrincipal};
 use super::card::EndpointDescriptor;
 use super::options::TurnOptions;
 use super::turn::TurnHost;
-use crate::storage::StorageError;
+use crate::storage::{StorageError, StorageNamespace};
 
 #[crate::host(record(module = "a2a_door", emit, extract))]
 #[derive(Debug, Clone)]
@@ -47,6 +47,15 @@ pub trait A2ADoor: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_A2AResponse"))]
     type Response: Send + Sync + 'static;
 
+    /// The door over `storage`'s namespace, which opens its backend on first use; accepted work
+    /// is settled by the storage's `aclose`.
+    #[host(new)]
+    fn new(
+        storage: Arc<dyn StorageNamespace>,
+        config: DoorConfig,
+        host: Arc<dyn TurnHost>,
+    ) -> Result<Self, StorageError>;
+
     #[host(getter)]
     fn max_payload_bytes(&self) -> usize;
 
@@ -76,6 +85,3 @@ pub trait A2AResponse: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn aclose(&self);
 }
-
-/// A factory parameter type shared with Storage's generated constructor method.
-pub type Handler = Arc<dyn TurnHost>;

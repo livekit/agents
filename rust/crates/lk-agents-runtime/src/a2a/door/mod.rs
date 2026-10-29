@@ -5,13 +5,14 @@ mod stream;
 
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 use lk_agents_worker::endpoint_budget::EndpointBudget;
+use std::any::Any;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a2a::JsonRpcId;
 use lk_agents_abi::a2a::auth::{AuthError, AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, StorageNamespace};
 use lk_agents_core::a2a::auth::{allows, allows_first_message};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
@@ -25,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::a2a::Turn;
-use crate::storage::{Storage, Thread, now_ms, shortuuid};
+use crate::storage::{HostStorage, Storage, Thread, now_ms, shortuuid};
 use stream::Sender;
 
 const RESPONSE_CAPACITY: usize = 64;
@@ -40,8 +41,15 @@ pub struct Door {
     owner: TaskTracker,
 }
 
+/// Where a door's storage comes from: an open backend, or a host namespace opening its own on
+/// first use.
+enum Store {
+    Open(Arc<dyn Storage>),
+    Namespace(Arc<HostStorage>),
+}
+
 struct Inner {
-    storage: Arc<dyn Storage>,
+    storage: Store,
     lane: String,
     holder: String,
     host: Arc<dyn TurnHost>,
@@ -50,11 +58,24 @@ struct Inner {
 }
 
 impl Door {
+    /// A door over an open backend, on the caller's runtime.
     pub fn new(
         storage: Arc<dyn Storage>,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
         owner: TaskTracker,
+    ) -> Result<Self, StorageError> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
+        Self::over(Store::Open(storage), config, host, owner, runtime)
+    }
+
+    fn over(
+        storage: Store,
+        config: DoorConfig,
+        host: Arc<dyn TurnHost>,
+        owner: TaskTracker,
+        runtime: tokio::runtime::Handle,
     ) -> Result<Self, StorageError> {
         lk_agents_core::a2a::card::agent_card(config.endpoint)
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
@@ -71,8 +92,7 @@ impl Door {
                 owner: owner.clone(),
             }),
             tasks: TaskTracker::new(),
-            runtime: tokio::runtime::Handle::try_current()
-                .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?,
+            runtime,
             budget: Arc::new(StdMutex::new(EndpointBudget::new(EndpointLimits::default()))),
             owner,
         })
@@ -81,6 +101,21 @@ impl Door {
 
 impl A2ADoor for Door {
     type Response = Response;
+
+    fn new(
+        storage: Arc<dyn StorageNamespace>,
+        config: DoorConfig,
+        host: Arc<dyn TurnHost>,
+    ) -> Result<Self, StorageError> {
+        let storage: Arc<dyn Any + Send + Sync> = storage;
+        let storage = storage.downcast::<HostStorage>().map_err(|_| {
+            StorageError::Invalid("an A2A door needs this process's Storage".into())
+        })?;
+        let runtime = crate::process::caller_handle()
+            .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
+        let owner = storage.a2a_tasks();
+        Self::over(Store::Namespace(storage), config, host, owner, runtime)
+    }
 
     fn max_payload_bytes(&self) -> usize {
         MAX_PAYLOAD_BYTES
@@ -202,6 +237,13 @@ impl Drop for Response {
 }
 
 impl Inner {
+    async fn storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
+        match &self.storage {
+            Store::Open(storage) => Ok(storage.clone()),
+            Store::Namespace(namespace) => namespace.shared_storage().await,
+        }
+    }
+
     fn authorize(
         principal: &AuthPrincipal,
         operation: AuthOperation,
@@ -224,9 +266,9 @@ impl Inner {
         id: &str,
         operation: AuthOperation,
     ) -> Result<Thread, DoorError> {
-        let info = self.storage.get_thread(id).await?;
+        let info = self.storage().await?.get_thread(id).await?;
         Self::authorize(principal, operation, id, Some(&info.scope))?;
-        Ok(self.storage.open(id, &self.holder).await?)
+        Ok(self.storage().await?.open(id, &self.holder).await?)
     }
 
     async fn execute(
@@ -325,11 +367,11 @@ impl Inner {
                 scope: grant.scope.clone(),
                 ..Default::default()
             };
-            let info = self.storage.create_thread(request).await?;
+            let info = self.storage().await?.create_thread(request).await?;
             Self::authorize(principal, AuthOperation::Write, &info.thread_id, Some(&info.scope))?;
             return Ok(Ok(info.thread_id));
         };
-        match self.storage.get_thread(context).await {
+        match self.storage().await?.get_thread(context).await {
             Ok(info) => {
                 Self::authorize(principal, AuthOperation::Write, context, Some(&info.scope))?;
                 Ok(Ok(context.to_owned()))
@@ -368,7 +410,7 @@ impl Inner {
             }
         };
         message.context_id = Some(context.clone());
-        let thread = self.storage.open(&context, &self.holder).await?;
+        let thread = self.storage().await?.open(&context, &self.holder).await?;
         let continuing = match message.task_id.clone() {
             None => None,
             Some(task_id) => {
@@ -383,7 +425,7 @@ impl Inner {
                 }
             }
         };
-        let streams = self.storage.response_streams();
+        let streams = self.storage().await?.response_streams();
         let created = streams.create(None).await?;
         let publisher = Arc::new(stream::Publisher::new(
             streams.clone(),
@@ -448,7 +490,7 @@ impl Inner {
         let refs =
             row.internal.as_ref().map(|internal| internal.streams.as_slice()).unwrap_or_default();
         let resume = rpc::resume(&task, refs, offset.as_deref())?;
-        let streams = self.storage.response_streams();
+        let streams = self.storage().await?.response_streams();
         let last = resume.len();
         for (index, (stream, after)) in resume.into_iter().enumerate() {
             let follow = !row.status.is_terminal() && index + 1 == last;

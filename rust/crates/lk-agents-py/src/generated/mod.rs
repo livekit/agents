@@ -67,7 +67,7 @@ pub trait Implementations: 'static {
     type StreamBuffer: ::lk_agents_abi::media::codecs::StreamBuffer;
     type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
-    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore, A2ADoor = Self::A2ADoor>;
+    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;

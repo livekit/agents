@@ -8,13 +8,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
+from livekit.agents._core import Storage
+from livekit.agents.storage.context import TurnHost
 from livekit.agents.types import APIConnectOptions
 
 from .._core import ChatItem
 from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
-from .a2a_door import DoorFrame
+from .a2a_door import DoorConfig, DoorFrame
 from .a2a_remote import RemoteEvent
 
 class _core_Credentials:
@@ -98,6 +100,10 @@ class AgentClient:
     async def aclose(self) -> None: ...
 
 class _core_A2ADoor:
+    def __init__(self, storage: Storage, config: DoorConfig, host: TurnHost) -> None:
+        """The door over `storage`'s namespace, which opens its backend on first use; accepted work
+        is settled by the storage's `aclose`.
+        """
     @property
     def max_payload_bytes(self) -> int: ...
     async def dispatch(

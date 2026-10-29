@@ -104,9 +104,13 @@ pub fn storage_error_to_py(error: StorageError) -> pyo3::PyErr {
     crate::python::host_exception("livekit.agents.storage.errors", class, message)
 }
 
+/// A native `Storage`, as an A2A door is opened over it.
+#[crate::host(native(refused = "expected a native Storage"))]
+pub trait StorageNamespace: std::any::Any + Send + Sync {}
+
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
-#[crate::host(class(name = "Storage"))]
+#[crate::host(class(name = "Storage", native = StorageNamespace))]
 pub trait Storage: Send + Sync + Sized + 'static {
     /// An open thread: the shared engine's handle, bound to a holder.
     #[host(handle(class = "Thread"))]
@@ -140,15 +144,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(default = None)] lease_ttl: Option<f64>,
         #[host(default = None)] renew_interval: Option<f64>,
     ) -> Result<Self, StorageError>;
-
-    #[host(class(name = "_core_A2ADoor"))]
-    type A2ADoor: Send + Sync + 'static;
-    #[host(await)]
-    async fn _core_a2a_door(
-        &self,
-        config: crate::a2a::door::DoorConfig,
-        host: std::sync::Arc<dyn crate::a2a::turn::TurnHost>,
-    ) -> Result<Self::A2ADoor, StorageError>;
 
     /// The absolute local directory, or the public API agentstore is reached through.
     #[host(getter)]

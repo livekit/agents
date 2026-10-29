@@ -11,13 +11,12 @@ use livekit_protocol::agent::agent_thread::{
     CreateRequest, GetItemsRequest, Item, ListRequest, ListResponse, Thread as ThreadRecord,
     UpdateRequest,
 };
-use lk_agents_abi::a2a::door::DoorConfig;
-use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage as host;
 use lk_agents_abi::storage::{
     Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem, ThreadItemPage,
     ThreadPage, ThreadTask,
 };
+use lk_agents_net::env::Env;
 use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 use tokio_util::task::TaskTracker;
@@ -30,33 +29,6 @@ use crate::schema::{EventRow, LaneRow};
 use crate::sqlite::SqliteStorage;
 use crate::voice::VoiceStore;
 use crate::{QueuedStreams, Storage, Thread};
-
-/// What the hosting process lends the `Storage` class (decision 88): [`lk_agents_net::env::Env`]
-/// plus the A2A door it opens over a namespace, which executes core's task decisions on these
-/// handles (decision 72). `lk-agents-runtime` binds it to its process and door.
-pub trait Env: lk_agents_net::env::Env {
-    type A2ADoor: Send + Sync + 'static;
-    fn a2a_door(
-        storage: Arc<dyn Storage>,
-        config: DoorConfig,
-        host: Arc<dyn TurnHost>,
-        owner: TaskTracker,
-    ) -> Result<Self::A2ADoor, StorageError>;
-}
-
-/// A Rust caller with no host opens no A2A door.
-impl Env for lk_agents_net::env::Standalone {
-    type A2ADoor = std::convert::Infallible;
-
-    fn a2a_door(
-        _: Arc<dyn Storage>,
-        _: DoorConfig,
-        _: Arc<dyn TurnHost>,
-        _: TaskTracker,
-    ) -> Result<Self::A2ADoor, StorageError> {
-        Err(StorageError::Invalid("an A2A door needs the agent runtime".into()))
-    }
-}
 
 /// What the lazily opened backend is built from.
 enum Config {
@@ -123,10 +95,19 @@ impl<E> HostStorage<E> {
         Ok(self.backend().await?.storage())
     }
 
-    async fn shared_storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
+    /// The namespace's backend, opened on first use.
+    pub async fn shared_storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
         Ok(self.backend().await?.shared_storage())
     }
+
+    /// The A2A work accepted over this namespace, which [`aclose`](HostStorageClass::aclose)
+    /// settles before closing.
+    pub fn a2a_tasks(&self) -> TaskTracker {
+        self.a2a_tasks.clone()
+    }
 }
+
+impl<E: Env> host::StorageNamespace for HostStorage<E> {}
 
 fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration, StorageError> {
     match value {
@@ -300,16 +281,6 @@ impl<E: Env> HostStorageClass for HostStorage<E> {
             a2a_tasks: TaskTracker::new(),
             env: std::marker::PhantomData,
         })
-    }
-
-    type A2ADoor = E::A2ADoor;
-
-    async fn _core_a2a_door(
-        &self,
-        config: DoorConfig,
-        host: Arc<dyn TurnHost>,
-    ) -> Result<E::A2ADoor, StorageError> {
-        E::a2a_door(self.shared_storage().await?, config, host, self.a2a_tasks.clone())
     }
 
     fn location(&self) -> String {
