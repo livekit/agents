@@ -498,45 +498,56 @@ inbox continues to serve endpoint request policies independently.
 
 ## Customizing the pipeline
 
-An `Agent` subclass overrides the steps a reply on a call runs through; `agent.run()`
-and `TextSession` do not run them. Each node
-receives a stream and returns a stream (an async iterable, or a coroutine
-returning one); `super()` runs the default, so an override can wrap it. A
-node's override can narrow its return type to what it actually returns:
+The steps a reply runs through belong to the session, not to an agent. Register
+at most one callback per step on the session before `start()`; it runs for
+whichever agent holds the call, `ctx.agent`, and for every `VoiceTask`.
+`session.default.<step>` is the built-in step, so a callback can wrap it.
+`agent.run()` and `TextSession` run none of these.
 
 ```python
 from collections.abc import AsyncIterable
 
-from livekit.agents import Agent, ModelSettings, StopResponse, llm
+from livekit import rtc
+from livekit.agents import ModelSettings, RunContext, StopResponse, VoiceSession, llm
+
+session = VoiceSession(stt=STT, llm=MODEL, tts=TTS, context=app, thread=ctx.thread)
 
 
-class FrontDesk(Agent):
-    async def on_user_turn_completed(
-        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
-    ) -> None:
-        if (new_message.text_content or "").strip().lower() == "hold on":
-            raise StopResponse()  # no reply to this turn
+@session.on_user_turn_completed
+async def hold_on(
+    ctx: RunContext[AppContext], turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+) -> None:
+    if (new_message.text_content or "").strip().lower() == "hold on":
+        raise StopResponse()  # no reply to this turn
 
-    async def transcription_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[str]:
-        async for chunk in text:
-            yield chunk.replace("Live Kit", "LiveKit")
+
+@session.tts_node
+def voice(
+    ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings
+) -> AsyncIterable[rtc.AudioFrame]:
+    if ctx.agent is billing:
+        text = spell_out_amounts(text)
+    return session.default.tts_node(ctx, text, model_settings)
+
+
+await session.start(agent=front_desk, room=ctx.room)
 ```
 
-| Override | Runs | Receives, returns |
+| Callback | Runs | Receives after `ctx`, returns |
 | --- | --- | --- |
-| `on_user_turn_completed(turn_ctx, new_message)` | when the person's turn ends, before the reply | the turn's `ChatContext` and the new `ChatMessage`, both editable in place; `StopResponse` skips the reply |
-| `llm_node(chat_ctx, tools, model_settings)` | each model request of a reply | `ChatChunk`s or text; a `FlushSentinel` ends the spoken segment there |
-| `stt_node(audio, model_settings)` | the person's audio | `rtc.AudioFrame`s in, `stt.SpeechEvent`s out |
-| `tts_node(text, model_settings)` | each spoken segment | text in, `rtc.AudioFrame`s out |
-| `transcription_node(text, model_settings)` | each segment's transcript before the transcription output | text (or `TimedString`s) in and out |
-| `realtime_audio_output_node(audio, model_settings)` | a realtime model's audio before playout | `rtc.AudioFrame`s in and out |
+| `on_user_turn_completed` | when the person's turn ends, before the reply | the turn's `ChatContext` and the new `ChatMessage`, both editable in place; `StopResponse` skips the reply |
+| `on_user_turn_exceeded` | when the person has spoken past the turn limit without a reply | the `UserTurnExceededEvent`; by default the agent cuts in with a short reply |
+| `llm_node` | each model request of a reply | `chat_ctx`, `tools`, `model_settings`; `ChatChunk`s or text, a `FlushSentinel` ending the spoken segment there |
+| `stt_node` | the person's audio | `rtc.AudioFrame`s and `model_settings`; `stt.SpeechEvent`s |
+| `tts_node` | each spoken segment | text and `model_settings`; `rtc.AudioFrame`s |
+| `transcription_node` | each segment's transcript before the transcription output | text (or `TimedString`s) and `model_settings`; text |
+| `realtime_audio_output_node` | a realtime model's audio before playout | `rtc.AudioFrame`s and `model_settings`; `rtc.AudioFrame`s |
 
-`ModelSettings.tool_choice` is the reply's tool choice. Edits to `turn_ctx`
-in `on_user_turn_completed` apply to this reply's request; the edited
-`new_message` text is what the history records. A node that returns `None`
-(a coroutine resolving to nothing) produces no output for that step.
+A node returns an async iterable or a coroutine resolving to one; `None`
+produces no output for that step. `ModelSettings.tool_choice` is the reply's
+tool choice. Edits to `turn_ctx` in `on_user_turn_completed` apply to this
+reply's request; the edited `new_message` text is what the history records.
+Registering a step twice, or after `start()`, raises `RuntimeError`.
 
 ## Tool calls on a call
 

@@ -179,6 +179,7 @@ Every tool, instruction function and output function receives
 | Member | What |
 |---|---|
 | `ctx.context` | the application object passed to `run(context=...)`; data, services, and helper methods |
+| `ctx.agent` | the agent this invocation runs; in a session's pipeline callback, the agent holding the call |
 | `ctx.store` | the managed store for explicit `load_context` and `save_context` calls |
 | `ctx.thread` | the durable thread this run belongs to, the same object an `a2a_session` handler gets; see [threads.md](threads.md) |
 | `ctx.live_session` | the `VoiceSession` of the call, `None` outside a call |
@@ -327,7 +328,6 @@ availability and authorization before committing the booking.
 | `@agent.instructions` | on every turn, before the model request |
 | `@agent.on_enter` | when the agent takes the active live role; receives the `VoiceSession` |
 | `@agent.on_exit` | when the agent relinquishes the active live role during an orderly agent replacement or session close; receives the `VoiceSession` |
-| `on_user_turn_completed` (subclass override) | on a call, when the person's turn ends and before the reply; `StopResponse` skips the reply |
 
 ```python
 @front_desk.on_enter
@@ -351,9 +351,9 @@ activation. Starting the task does not call the parent's `on_exit`; restoring
 the parent does not call its `on_enter`. This avoids repeating greetings or
 releasing parent resources during a bounded inline interaction.
 
-On a call, a subclass can also override the steps a reply runs through:
-`llm_node`, `stt_node`, `tts_node`, `transcription_node` and
-`realtime_audio_output_node`; `agent.run()` does not run them. See
+The steps a reply on a call runs through (the model request, speech
+recognition, synthesis, the transcript) and the turn hooks are the session's,
+registered on the `VoiceSession` once for every agent; see
 [customizing the pipeline](voice-session.md#customizing-the-pipeline).
 
 Use `on_exit` for orderly frontend cleanup. A process crash cannot guarantee
