@@ -10,162 +10,6 @@
 
 use pyo3::prelude::*;
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
-type ProviderMetricsImpl = <crate::Selected as super::Implementations>::ProviderMetrics;
-
-fn _extract_provider_metrics_stt_batch_metrics_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
-}
-
-fn _extract_provider_metrics_stt_batch_metrics_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
-}
-
-fn _extract_provider_metrics_stt_batch_metrics_audio_durations(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<f64>> {
-    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<f64>(&item, "audio_durations") }).collect::<PyResult<Vec<_>>>())
-}
-
-fn _extract_provider_metrics_stt_batch_metrics_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
-    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
-}
-
-fn _extract_provider_metrics_stt_stream_metrics_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
-    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
-}
-
-/// `STT.recognize`'s metrics for one batch recognition.
-#[pyfunction]
-#[pyo3(signature = (event, start, now, audio_durations, host))]
-pub fn stt_batch_metrics(event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_start)] start: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_now)] now: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)] audio_durations: ::std::vec::Vec<f64>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::lk_agents_abi::metrics::SttMetrics> {
-    let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host);
-    Ok(out)
-}
-
-/// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
-#[pyfunction]
-#[pyo3(signature = (event, host))]
-pub fn stt_stream_metrics(event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<(::std::option::Option<::lk_agents_abi::metrics::SttMetrics>, bool)> {
-    let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
-}
-
-// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
-type LlmMetricStateImpl = <crate::Selected as super::Implementations>::LlmMetricState;
-
-fn _extract_llm_metric_state_new_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
-}
-
-fn _extract_llm_metric_state_observe_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
-}
-
-fn _extract_llm_metric_state_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
-}
-
-fn _extract_llm_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
-    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
-}
-
-/// `LLMStream`'s metric fold as the host drives it.
-#[pyclass(name = "LlmMetricState", module = "livekit.agents._core")]
-pub struct LlmMetricState(LlmMetricStateImpl);
-
-#[pymethods]
-impl LlmMetricState {
-    #[new]
-    #[pyo3(signature = (start))]
-    fn new(#[pyo3(from_py_with = _extract_llm_metric_state_new_start)] start: f64) -> PyResult<LlmMetricState> {
-        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::new(start);
-        Ok(LlmMetricState(out))
-    }
-
-    /// Whether `chunk` is the first with a response.
-    #[pyo3(signature = (now, chunk))]
-    fn observe(&mut self, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: ::lk_agents_abi::LlmChunk) -> PyResult<bool> {
-        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk);
-        Ok(out)
-    }
-
-    /// `None` for a failed attempt or one that yielded no chunk.
-    #[pyo3(signature = (now, failed, host))]
-    fn finish(&self, #[pyo3(from_py_with = _extract_llm_metric_state_finish_now)] now: f64, failed: bool, #[pyo3(from_py_with = _extract_llm_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<::lk_agents_abi::metrics::LlmMetrics>> {
-        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host);
-        Ok(out)
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
-type TtsMetricStateImpl = <crate::Selected as super::Implementations>::TtsMetricState;
-
-fn _extract_tts_metric_state_observe_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
-}
-
-fn _extract_tts_metric_state_observe_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
-}
-
-fn _extract_tts_metric_state_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
-}
-
-fn _extract_tts_metric_state_finish_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
-}
-
-fn _extract_tts_metric_state_finish_input_tokens(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "input_tokens")
-}
-
-fn _extract_tts_metric_state_finish_output_tokens(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "output_tokens")
-}
-
-fn _extract_tts_metric_state_finish_acquire_time(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "acquire_time")
-}
-
-fn _extract_tts_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
-    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
-}
-
-/// The TTS streams' metric fold as the host drives it.
-#[pyclass(name = "TtsMetricState", module = "livekit.agents._core")]
-pub struct TtsMetricState(TtsMetricStateImpl);
-
-#[pymethods]
-impl TtsMetricState {
-    #[new]
-    #[pyo3(signature = (streamed))]
-    fn new(streamed: bool) -> PyResult<TtsMetricState> {
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::new(streamed);
-        Ok(TtsMetricState(out))
-    }
-
-    /// A streamed segment's text, in the order its audio is finished.
-    #[pyo3(signature = (text))]
-    fn queue_text(&mut self, text: ::std::string::String) -> PyResult<()> {
-        <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::queue_text(&mut self.0, text);
-        Ok(())
-    }
-
-    /// Whether `audio` ends its segment.
-    #[pyo3(signature = (now, start, audio))]
-    fn observe(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: ::lk_agents_abi::SynthesizedAudio) -> PyResult<bool> {
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio);
-        Ok(out)
-    }
-
-    /// The record of a finished request or segment, then the figures reset.
-    #[pyo3(signature = (now, start, failed, batch_text, input_tokens, output_tokens, acquire_time, connection_reused, host))]
-    fn finish(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_input_tokens)] input_tokens: u32, #[pyo3(from_py_with = _extract_tts_metric_state_finish_output_tokens)] output_tokens: u32, #[pyo3(from_py_with = _extract_tts_metric_state_finish_acquire_time)] acquire_time: f64, connection_reused: bool, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<::lk_agents_abi::metrics::TtsMetrics>> {
-        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, input_tokens, output_tokens, acquire_time, connection_reused, host);
-        Ok(out)
-    }
-}
-
 // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
 type _core_TelemetryPolicyImpl = <crate::Selected as super::Implementations>::TelemetryPolicy;
 
@@ -395,6 +239,162 @@ impl _core_MetricSeries {
     fn admit(&mut self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_MetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&mut self.0, name, attributes);
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
+type ProviderMetricsImpl = <crate::Selected as super::Implementations>::ProviderMetrics;
+
+fn _extract_provider_metrics_stt_batch_metrics_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+}
+
+fn _extract_provider_metrics_stt_batch_metrics_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_provider_metrics_stt_batch_metrics_audio_durations(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<f64>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<f64>(&item, "audio_durations") }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_provider_metrics_stt_batch_metrics_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
+    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
+}
+
+fn _extract_provider_metrics_stt_stream_metrics_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
+    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
+}
+
+/// `STT.recognize`'s metrics for one batch recognition.
+#[pyfunction]
+#[pyo3(signature = (event, start, now, audio_durations, host))]
+pub fn stt_batch_metrics(event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_start)] start: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_now)] now: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)] audio_durations: ::std::vec::Vec<f64>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::lk_agents_abi::metrics::SttMetrics> {
+    let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host);
+    Ok(out)
+}
+
+/// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
+#[pyfunction]
+#[pyo3(signature = (event, host))]
+pub fn stt_stream_metrics(event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<(::std::option::Option<::lk_agents_abi::metrics::SttMetrics>, bool)> {
+    let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
+type LlmMetricStateImpl = <crate::Selected as super::Implementations>::LlmMetricState;
+
+fn _extract_llm_metric_state_new_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+}
+
+fn _extract_llm_metric_state_observe_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_llm_metric_state_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_llm_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
+    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
+}
+
+/// `LLMStream`'s metric fold as the host drives it.
+#[pyclass(name = "LlmMetricState", module = "livekit.agents._core")]
+pub struct LlmMetricState(LlmMetricStateImpl);
+
+#[pymethods]
+impl LlmMetricState {
+    #[new]
+    #[pyo3(signature = (start))]
+    fn new(#[pyo3(from_py_with = _extract_llm_metric_state_new_start)] start: f64) -> PyResult<LlmMetricState> {
+        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::new(start);
+        Ok(LlmMetricState(out))
+    }
+
+    /// Whether `chunk` is the first with a response.
+    #[pyo3(signature = (now, chunk))]
+    fn observe(&mut self, #[pyo3(from_py_with = _extract_llm_metric_state_observe_now)] now: f64, chunk: ::lk_agents_abi::LlmChunk) -> PyResult<bool> {
+        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::observe(&mut self.0, now, chunk);
+        Ok(out)
+    }
+
+    /// `None` for a failed attempt or one that yielded no chunk.
+    #[pyo3(signature = (now, failed, host))]
+    fn finish(&self, #[pyo3(from_py_with = _extract_llm_metric_state_finish_now)] now: f64, failed: bool, #[pyo3(from_py_with = _extract_llm_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<::lk_agents_abi::metrics::LlmMetrics>> {
+        let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host);
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
+type TtsMetricStateImpl = <crate::Selected as super::Implementations>::TtsMetricState;
+
+fn _extract_tts_metric_state_observe_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_tts_metric_state_observe_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+}
+
+fn _extract_tts_metric_state_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_tts_metric_state_finish_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+}
+
+fn _extract_tts_metric_state_finish_input_tokens(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "input_tokens")
+}
+
+fn _extract_tts_metric_state_finish_output_tokens(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "output_tokens")
+}
+
+fn _extract_tts_metric_state_finish_acquire_time(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "acquire_time")
+}
+
+fn _extract_tts_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)> {
+    (|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "host"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<bool>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?,)) })()
+}
+
+/// The TTS streams' metric fold as the host drives it.
+#[pyclass(name = "TtsMetricState", module = "livekit.agents._core")]
+pub struct TtsMetricState(TtsMetricStateImpl);
+
+#[pymethods]
+impl TtsMetricState {
+    #[new]
+    #[pyo3(signature = (streamed))]
+    fn new(streamed: bool) -> PyResult<TtsMetricState> {
+        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::new(streamed);
+        Ok(TtsMetricState(out))
+    }
+
+    /// A streamed segment's text, in the order its audio is finished.
+    #[pyo3(signature = (text))]
+    fn queue_text(&mut self, text: ::std::string::String) -> PyResult<()> {
+        <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::queue_text(&mut self.0, text);
+        Ok(())
+    }
+
+    /// Whether `audio` ends its segment.
+    #[pyo3(signature = (now, start, audio))]
+    fn observe(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_observe_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_observe_start)] start: f64, audio: ::lk_agents_abi::SynthesizedAudio) -> PyResult<bool> {
+        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::observe(&mut self.0, now, start, audio);
+        Ok(out)
+    }
+
+    /// The record of a finished request or segment, then the figures reset.
+    #[pyo3(signature = (now, start, failed, batch_text, input_tokens, output_tokens, acquire_time, connection_reused, host))]
+    fn finish(&mut self, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_input_tokens)] input_tokens: u32, #[pyo3(from_py_with = _extract_tts_metric_state_finish_output_tokens)] output_tokens: u32, #[pyo3(from_py_with = _extract_tts_metric_state_finish_acquire_time)] acquire_time: f64, connection_reused: bool, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<::lk_agents_abi::metrics::TtsMetrics>> {
+        let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, input_tokens, output_tokens, acquire_time, connection_reused, host);
         Ok(out)
     }
 }

@@ -24,55 +24,6 @@ from .telemetry import (
 )
 from .tts import SynthesizedAudio
 
-def stt_batch_metrics(
-    event: SpeechEvent,
-    start: float,
-    now: float,
-    audio_durations: Sequence[float],
-    host: tuple[float, str, bool, str, str],
-) -> dict[str, object]:
-    """`STT.recognize`'s metrics for one batch recognition."""
-
-def stt_stream_metrics(
-    event: SpeechEvent,
-    host: tuple[float, str, bool, str, str],
-) -> tuple[dict[str, object] | None, bool]:
-    """`RecognizeStream`'s metrics for one event, and whether it resets the retry count."""
-
-class LlmMetricState:
-    """`LLMStream`'s metric fold as the host drives it."""
-    def __init__(self, start: float) -> None: ...
-    def observe(self, now: float, chunk: ChatChunk) -> bool:
-        """Whether `chunk` is the first with a response."""
-    def finish(
-        self,
-        now: float,
-        failed: bool,
-        host: tuple[float, str, bool, str, str],
-    ) -> dict[str, object] | None:
-        """`None` for a failed attempt or one that yielded no chunk."""
-
-class TtsMetricState:
-    """The TTS streams' metric fold as the host drives it."""
-    def __init__(self, streamed: bool) -> None: ...
-    def queue_text(self, text: str) -> None:
-        """A streamed segment's text, in the order its audio is finished."""
-    def observe(self, now: float, start: float, audio: SynthesizedAudio) -> bool:
-        """Whether `audio` ends its segment."""
-    def finish(
-        self,
-        now: float,
-        start: float,
-        failed: bool,
-        batch_text: str,
-        input_tokens: int,
-        output_tokens: int,
-        acquire_time: float,
-        connection_reused: bool,
-        host: tuple[float, str, bool, str, str],
-    ) -> dict[str, object] | None:
-        """The record of a finished request or segment, then the figures reset."""
-
 class _core_TelemetryPolicy:
     """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""
     def __init__(self, allow_pii: bool, capture_content: bool, project_redaction: bool) -> None: ...
@@ -150,6 +101,55 @@ class _core_MetricSeries:
     """
     def __init__(self) -> None: ...
     def admit(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool: ...
+
+def stt_batch_metrics(
+    event: SpeechEvent,
+    start: float,
+    now: float,
+    audio_durations: Sequence[float],
+    host: tuple[float, str, bool, str, str],
+) -> dict[str, object]:
+    """`STT.recognize`'s metrics for one batch recognition."""
+
+def stt_stream_metrics(
+    event: SpeechEvent,
+    host: tuple[float, str, bool, str, str],
+) -> tuple[dict[str, object] | None, bool]:
+    """`RecognizeStream`'s metrics for one event, and whether it resets the retry count."""
+
+class LlmMetricState:
+    """`LLMStream`'s metric fold as the host drives it."""
+    def __init__(self, start: float) -> None: ...
+    def observe(self, now: float, chunk: ChatChunk) -> bool:
+        """Whether `chunk` is the first with a response."""
+    def finish(
+        self,
+        now: float,
+        failed: bool,
+        host: tuple[float, str, bool, str, str],
+    ) -> dict[str, object] | None:
+        """`None` for a failed attempt or one that yielded no chunk."""
+
+class TtsMetricState:
+    """The TTS streams' metric fold as the host drives it."""
+    def __init__(self, streamed: bool) -> None: ...
+    def queue_text(self, text: str) -> None:
+        """A streamed segment's text, in the order its audio is finished."""
+    def observe(self, now: float, start: float, audio: SynthesizedAudio) -> bool:
+        """Whether `audio` ends its segment."""
+    def finish(
+        self,
+        now: float,
+        start: float,
+        failed: bool,
+        batch_text: str,
+        input_tokens: int,
+        output_tokens: int,
+        acquire_time: float,
+        connection_reused: bool,
+        host: tuple[float, str, bool, str, str],
+    ) -> dict[str, object] | None:
+        """The record of a finished request or segment, then the figures reset."""
 
 class Tagger:
     """Tag sessions with metadata for observability.
