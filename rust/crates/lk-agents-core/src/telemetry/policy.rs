@@ -11,12 +11,30 @@ const MAX_DEPTH: usize = 4;
 const REFUSED_BYTES: usize = MAX_RECORD_BYTES + 1;
 const REDACTED_EXCEPTION: &str = "exception details redacted";
 
+/// Does `key` carry the dot-delimited `pii` segment the Cloud collector strips? Not a substring:
+/// `lk.piiuser_input` is not marked.
+pub fn marks_pii(key: &str) -> bool {
+    key.split('.').any(|segment| segment == "pii")
+}
+
+/// The session report's own log bodies, which carry no user content.
+pub fn report_body_is_safe(body: &str) -> bool {
+    matches!(
+        body,
+        "session report" | "session event" | "chat item" | "evaluation" | "tag" | "outcome"
+    )
+}
+
+pub fn content_allowed(capture_content: bool, redaction: bool) -> bool {
+    capture_content && !redaction
+}
+
 pub struct DestinationPolicy {
     redacted: bool,
 }
 
 fn is_pii_attribute(key: &str) -> bool {
-    lk_agents_abi::telemetry::marks_pii(key)
+    marks_pii(key)
         || key.starts_with("gen_ai.prompt.variable")
         || matches!(
             key,
@@ -47,7 +65,7 @@ impl TelemetryPolicy for DestinationPolicy {
     fn new(allow_pii: bool, capture_content: bool, project_redaction: bool) -> Self {
         Self {
             redacted: !allow_pii
-                || !lk_agents_abi::telemetry::policy::content_allowed(
+                || !content_allowed(
                     capture_content,
                     project_redaction,
                 ),
@@ -173,7 +191,7 @@ impl TelemetryPolicy for DestinationPolicy {
     }
 
     fn log_body(&self, safe_body: bool, body: Option<String>) -> Option<String> {
-        let safe_body = safe_body && body.as_deref().is_some_and(policy::report_body_is_safe);
+        let safe_body = safe_body && body.as_deref().is_some_and(report_body_is_safe);
         (self.redacted && !safe_body).then(|| "log body redacted".to_owned())
     }
 
@@ -235,6 +253,12 @@ impl TelemetryPolicy for DestinationPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pii_marker_is_a_whole_segment() {
+        assert!(marks_pii("lk.pii.input"));
+        assert!(!marks_pii("lk.pii_input"));
+    }
 
     #[test]
     fn destination_consent_cannot_widen_capture_or_override_project_redaction() {

@@ -68,12 +68,6 @@ pub fn attr_strs(v: impl IntoIterator<Item = impl Into<String>>) -> SpanAttr {
     SpanAttr::StrArray(v.into_iter().map(Into::into).collect())
 }
 
-/// Does `key` carry the dot-delimited `pii` segment the Cloud collector strips? Not a substring:
-/// `lk.piiuser_input` is not marked.
-pub fn marks_pii(key: &str) -> bool {
-    key.split('.').any(|segment| segment == "pii")
-}
-
 /// Every string is a dashboard wire contract. None carries user content.
 pub mod attrs {
     pub const SPEECH_ID: &str = "lk.speech_id";
@@ -148,12 +142,6 @@ mod tests {
         let log =
             LogRecord::at((123, 456), "tools", "complete", Severity::Info, serde_json::Value::Null);
         assert_eq!(log.timestamp, (123, 456));
-    }
-
-    #[test]
-    fn pii_marker_is_a_whole_segment() {
-        assert!(marks_pii("lk.pii.input"));
-        assert!(!marks_pii("lk.pii_input"));
     }
 }
 

@@ -152,7 +152,7 @@ pub fn session_chat_record(
 ) -> Option<LogRecordWire> {
     if disabled
         || !options.transcript
-        || !policy::content_allowed(capture_content, options.redaction)
+        || !lk_agents_core::telemetry::policy::content_allowed(capture_content, options.redaction)
     {
         return None;
     }

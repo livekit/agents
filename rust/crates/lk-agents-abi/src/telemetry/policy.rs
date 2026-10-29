@@ -1,4 +1,5 @@
-//! Destination privacy and admission decisions over host SDK field facts.
+//! Destination privacy and admission records and limits; the decisions are
+//! `lk_agents_core::telemetry::policy`'s.
 
 pub const SDK_RECORD_BYTES: usize = 64 * 1024;
 pub const REPORT_EVENT_ITEMS: usize = 1024;
@@ -12,17 +13,6 @@ pub const SDK_MAX_PROVIDERS: usize = 4;
 pub const SDK_SHUTDOWN_TIMEOUT_SECONDS: f64 = 10.0;
 pub const REPORT_RETAINED_BYTES: usize = 4 * 1024 * 1024;
 pub const UPLOAD_TIMEOUT_SECONDS: u64 = 900;
-
-pub fn report_body_is_safe(body: &str) -> bool {
-    matches!(
-        body,
-        "session report" | "session event" | "chat item" | "evaluation" | "tag" | "outcome"
-    )
-}
-
-pub fn content_allowed(capture_content: bool, redaction: bool) -> bool {
-    capture_content && !redaction
-}
 
 #[crate::host(record(module = "telemetry", extract, emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
