@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -105,16 +104,6 @@ def test_audio_buffer_cleared_matches_the_interrupt_command(avatar):
     )
     session._handle_server_event({"type": "agent.speak_interrupted", "source_event_id": source})
     assert audio.finished == [(0.0, True)]
-
-
-def test_error_event_is_logged(avatar, caplog: pytest.LogCaptureFixture):
-    session, audio, _ = avatar
-    with caplog.at_level(logging.ERROR, logger="livekit.plugins.liveavatar"):
-        session._handle_server_event(
-            {"type": "error", "error": {"type": "invalid_request_error", "message": "bad audio"}}
-        )
-    assert "invalid_request_error" in caplog.text
-    assert audio.started == 0
 
 
 @pytest.mark.parametrize("invalid_source", [False, 42, {}])

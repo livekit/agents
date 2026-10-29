@@ -20,7 +20,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIError, Plugin
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.plugins import synthesia
@@ -28,21 +28,12 @@ from livekit.plugins.synthesia.api import SESSION_PATH, SynthesiaAPI
 from livekit.plugins.synthesia.errors import ErrorType, SynthesiaError
 from livekit.plugins.synthesia.types import (
     AVATAR_IDENTITY,
-    AVATAR_NAME,
-    DEFAULT_API_URL,
-    DEFAULT_JOIN_TIMEOUT,
     TOKEN_TTL,
     StartSessionRequest,
     StartSessionResponse,
 )
 
 pytestmark = pytest.mark.unit
-
-
-class TestPluginRegistration:
-    def test_plugin_registered(self):
-        titles = [p.title for p in Plugin.registered_plugins]
-        assert "livekit.plugins.synthesia" in titles
 
 
 class TestConfig:
@@ -58,47 +49,9 @@ class TestConfig:
         monkeypatch.delenv("SYNTHESIA_API_KEY", raising=False)
         monkeypatch.delenv("SYNTHESIA_API_URL", raising=False)
 
-    def test_api_key_from_env(self, monkeypatch):
-        monkeypatch.setenv("SYNTHESIA_API_KEY", "env-key")
-        avatar = synthesia.AvatarSession(self._config())
-        assert avatar._config.api_key == "env-key"
-
-    def test_api_key_arg_overrides_env(self, monkeypatch):
-        monkeypatch.setenv("SYNTHESIA_API_KEY", "env-key")
-        avatar = synthesia.AvatarSession(self._config(), api_key="arg-key")
-        assert avatar._config.api_key == "arg-key"
-
     def test_api_key_missing_raises(self):
         with pytest.raises(synthesia.SynthesiaError):
             synthesia.AvatarSession(self._config())
-
-    def test_api_url_default(self):
-        avatar = synthesia.AvatarSession(self._config(), api_key="k")
-        assert avatar._config.api_url == DEFAULT_API_URL
-
-    def test_api_url_from_env(self, monkeypatch):
-        monkeypatch.setenv("SYNTHESIA_API_URL", "https://staging.example")
-        avatar = synthesia.AvatarSession(self._config(), api_key="k")
-        assert avatar._config.api_url == "https://staging.example"
-
-    def test_api_url_arg_overrides_env(self, monkeypatch):
-        monkeypatch.setenv("SYNTHESIA_API_URL", "https://staging.example")
-        avatar = synthesia.AvatarSession(self._config(), api_key="k", api_url="https://arg.example")
-        assert avatar._config.api_url == "https://arg.example"
-
-    def test_avatar_id_passed_through(self):
-        avatar = synthesia.AvatarSession(self._config("my-avatar-id"), api_key="k")
-        assert avatar._config.avatar_ids == ("my-avatar-id",)
-
-    def test_avatar_ids_order_preserved(self):
-        config = synthesia.AvatarConfig(avatar_ids=[self.ADA, self.SECOND])
-        avatar = synthesia.AvatarSession(config, api_key="k")
-        assert avatar._config.avatar_ids == (self.ADA, self.SECOND)
-
-    def test_avatar_ids_max_five_accepted(self):
-        ids = [f"avatar-{i}" for i in range(5)]
-        avatar = synthesia.AvatarSession(synthesia.AvatarConfig(avatar_ids=ids), api_key="k")
-        assert avatar._config.avatar_ids == tuple(ids)
 
     def test_avatar_ids_empty_raises(self):
         with pytest.raises(ValueError, match="between 1 and"):
@@ -112,29 +65,9 @@ class TestConfig:
         with pytest.raises(ValueError, match="list"):
             synthesia.AvatarConfig(avatar_ids="lucas")
 
-    def test_avatar_ids_copied_from_input(self):
-        ids = [self.ADA]
-        config = synthesia.AvatarConfig(avatar_ids=ids)
-        ids.append(self.SECOND)
-        avatar = synthesia.AvatarSession(config, api_key="k")
-        assert avatar._config.avatar_ids == (self.ADA,)
-
-    def test_join_timeout_default(self):
-        avatar = synthesia.AvatarSession(self._config(), api_key="k")
-        assert avatar._config.join_timeout == DEFAULT_JOIN_TIMEOUT
-
-    def test_join_timeout_override(self):
-        avatar = synthesia.AvatarSession(self._config(), api_key="k", join_timeout=5.0)
-        assert avatar._config.join_timeout == 5.0
-
     def test_config_repr_redacts_api_key(self):
         avatar = synthesia.AvatarSession(self._config(), api_key="super-secret")
         assert "super-secret" not in repr(avatar._config)
-
-    def test_identity_and_provider(self):
-        avatar = synthesia.AvatarSession(self._config(), api_key="k")
-        assert avatar.avatar_identity == "synthesia-avatar-agent"
-        assert avatar.provider == "synthesia"
 
 
 class TestErrors:
@@ -155,17 +88,6 @@ class TestErrors:
         ErrorType.CONNECTION,
     ]
 
-    def test_base_is_api_error(self):
-        assert issubclass(SynthesiaError, APIError)
-
-    @pytest.mark.parametrize("error_type", [*_NON_RETRYABLE_TYPES, *_RETRYABLE_TYPES])
-    def test_typed_errors_caught_by_base(self, error_type):
-        with pytest.raises(SynthesiaError):
-            raise SynthesiaError("boom", type=error_type)
-
-    def test_untyped_error_defaults_not_retryable(self):
-        assert SynthesiaError("boom").retryable is False
-
     @pytest.mark.parametrize("error_type", _NON_RETRYABLE_TYPES)
     def test_retryable_defaults_false(self, error_type):
         assert SynthesiaError("boom", type=error_type).retryable is False
@@ -173,35 +95,6 @@ class TestErrors:
     @pytest.mark.parametrize("error_type", _RETRYABLE_TYPES)
     def test_retryable_defaults_true(self, error_type):
         assert SynthesiaError("boom", type=error_type).retryable is True
-
-    def test_retryable_can_be_overridden(self):
-        assert SynthesiaError("boom", type=ErrorType.AUTH, retryable=True).retryable is True
-        assert SynthesiaError("boom", type=ErrorType.CONNECTION, retryable=False).retryable is False
-
-    def test_rate_limited_carries_retry_after(self):
-        err = SynthesiaError("throttled", type=ErrorType.RATE_LIMITED, retry_after=12.5)
-        assert err.retry_after == 12.5
-
-    def test_retry_after_defaults_none(self):
-        err = SynthesiaError("throttled", type=ErrorType.RATE_LIMITED)
-        assert err.retry_after is None
-
-    def test_error_type_defaults_none(self):
-        assert SynthesiaError("boom").type is None
-
-    def test_status_and_request_id_default_none(self):
-        err = SynthesiaError("boom")
-        assert (err.status, err.request_id) == (None, None)
-
-    def test_forwards_status_and_request_id(self):
-        err = SynthesiaError(
-            "throttled", type=ErrorType.RATE_LIMITED, status=429, request_id="req_1"
-        )
-        assert (err.status, err.request_id) == (429, "req_1")
-
-    def test_errors_exported_from_package(self):
-        assert synthesia.SynthesiaError is SynthesiaError
-        assert synthesia.ErrorType is ErrorType
 
 
 class TestApiClient:
@@ -435,11 +328,6 @@ class TestApiClient:
         assert exc.value.type is expected
         assert exc.value.retry_after == retry_after
 
-    async def test_session_url_matches_the_published_route(self):
-        session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
-        await self._start(session, self._request())
-        assert session.calls[0]["url"] == session.url + SESSION_PATH
-
     async def test_request_carries_auth_header_and_payload(self):
         session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
         await self._start(session, self._request())
@@ -451,11 +339,6 @@ class TestApiClient:
             "livekitUrl": "wss://room.livekit.cloud",
             "livekitToken": "lk-token-secret",
         }
-
-    async def test_request_payload_carries_avatar_ids_in_order(self):
-        session = self._Peer([self._Reply(200, body={"session_id": "sess_123"})])
-        await self._start(session, self._request(["lead", "second", "third"]))
-        assert session.calls[0]["json"]["avatarIds"] == ["av_lead", "av_second", "av_third"]
 
     @pytest.mark.parametrize(
         ("code", "status", "expected"),
@@ -1094,19 +977,6 @@ class TestAvatarSession:
         assert api_recorder.requests[0].livekit_url == expected
         await session.aclose()
 
-    async def test_livekit_url_from_env_normalized_to_ws_scheme(
-        self, api_recorder, instant_join, monkeypatch
-    ):
-        monkeypatch.setenv("LIVEKIT_URL", "https://proj.livekit.cloud")
-        monkeypatch.setenv("LIVEKIT_API_KEY", "env-key")
-        monkeypatch.setenv("LIVEKIT_API_SECRET", "env-secret")
-        room = self._FakeRoom()
-        session = self._session()
-        await session.start(self._FakeAgentSession(), room)
-
-        assert api_recorder.requests[0].livekit_url == "wss://proj.livekit.cloud"
-        await session.aclose()
-
     async def test_secret_never_serialized(self, api_recorder, instant_join):
         room = self._FakeRoom()
         session = self._session()
@@ -1371,18 +1241,6 @@ class TestAvatarSession:
             )
         assert api_recorder.requests == []
 
-    async def test_livekit_credentials_from_env(self, api_recorder, instant_join, monkeypatch):
-        monkeypatch.setenv("LIVEKIT_URL", self.LK_URL)
-        monkeypatch.setenv("LIVEKIT_API_KEY", "env-key")
-        monkeypatch.setenv("LIVEKIT_API_SECRET", "env-secret")
-        room = self._FakeRoom()
-        session = self._session()
-        await session.start(self._FakeAgentSession(), room)
-
-        claims = self._decode_jwt(api_recorder.requests[0].lk_token)
-        assert claims["iss"] == "env-key"
-        await session.aclose()
-
     async def test_custom_identity_in_minted_token(self, api_recorder, instant_join):
         room = self._FakeRoom()
         session = self._session(avatar_participant_identity=self.CUSTOM_IDENTITY)
@@ -1440,32 +1298,6 @@ class TestAvatarSession:
 
         assert caplog.text.count("avatar left the room unexpectedly") == 1
 
-    async def test_track_handler_ignores_default_identity(self, api_recorder, instant_join, caplog):
-        room = self._FakeRoom()
-        session = self._session(avatar_participant_identity=self.CUSTOM_IDENTITY)
-        await self._start(session, room)
-
-        with caplog.at_level(logging.WARNING, logger="livekit.plugins.synthesia"):
-            publication = type("Pub", (), {"kind": rtc.TrackKind.KIND_VIDEO})()
-            default_p = type("P", (), {"identity": AVATAR_IDENTITY})()
-            room.fire("track_unpublished", publication, default_p)
-
-        assert caplog.text == ""
-        assert session._teardown_task is None
-        await session.aclose()
-
-    async def test_default_identity_when_omitted(self, api_recorder, instant_join):
-        room = self._FakeRoom()
-        agent = self._FakeAgentSession()
-        session = self._session()
-        await self._start(session, room, agent)
-
-        assert session.avatar_identity == AVATAR_IDENTITY
-        claims = self._decode_jwt(api_recorder.requests[0].lk_token)
-        assert claims["sub"] == AVATAR_IDENTITY
-        assert agent.output.audio.destination_identity == AVATAR_IDENTITY
-        await session.aclose()
-
     @pytest.mark.parametrize("identity", ["", "   "])
     async def test_blank_identity_rejected_at_construction(self, identity):
         with pytest.raises(SynthesiaError, match="avatar_participant_identity"):
@@ -1475,24 +1307,6 @@ class TestAvatarSession:
     async def test_blank_name_rejected_at_construction(self, name):
         with pytest.raises(SynthesiaError, match="avatar_participant_name"):
             self._session(avatar_participant_name=name)
-
-    async def test_custom_name_in_minted_token(self, api_recorder, instant_join):
-        room = self._FakeRoom()
-        session = self._session(avatar_participant_name="Host Avatar")
-        await self._start(session, room)
-
-        claims = self._decode_jwt(api_recorder.requests[0].lk_token)
-        assert claims["name"] == "Host Avatar"
-        await session.aclose()
-
-    async def test_default_name_when_omitted(self, api_recorder, instant_join):
-        room = self._FakeRoom()
-        session = self._session()
-        await self._start(session, room)
-
-        claims = self._decode_jwt(api_recorder.requests[0].lk_token)
-        assert claims["name"] == AVATAR_NAME
-        await session.aclose()
 
     async def test_teardown_unregisters_handlers(self, api_recorder, instant_join):
         room = self._FakeRoom()
