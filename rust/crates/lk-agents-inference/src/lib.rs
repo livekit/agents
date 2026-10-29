@@ -38,14 +38,7 @@ pub mod testkit;
 pub mod tts;
 pub mod vad;
 
-// The `_utils` surface, flat, because the binding re-exports it under the same names (imported by
-// `job.py:515`, `evals/evaluation.py:118` and `openai/responses/llm.py:16`).
-pub use headers::{
-    DEFAULT_INFERENCE_URL, HEADER_AGENT_ID, HEADER_INFERENCE_PRIORITY, HEADER_INFERENCE_PROVIDER,
-    HEADER_JOB_ID, HEADER_ROOM_ID, HEADER_SESSION_ID, HEADER_USER_AGENT, HEADER_WORKER_TOKEN,
-    JobIdentity, QUOTA_HEADER_FIELDS, STAGING_INFERENCE_URL, default_inference_url,
-    default_inference_url_from_env, extract_quota_usage, inference_headers,
-};
+pub use headers::default_inference_url_from_env;
 pub use ids::{RequestKind, create_inference_request_id, shortuuid};
 pub use llm::models::{drop_unsupported_params, min_reasoning_effort};
 

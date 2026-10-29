@@ -82,14 +82,14 @@ impl Connect {
                     let mut h = crate::headers::Headers::new();
                     h.set("User-Agent", crate::headers::user_agent(env!("CARGO_PKG_VERSION")));
                     if let Some(class) = inference_class {
-                        h.set(crate::HEADER_INFERENCE_PRIORITY, class.clone());
+                        h.set(crate::headers::HEADER_INFERENCE_PRIORITY, class.clone());
                     }
                     h
                 });
                 let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
                 h.set("Authorization", format!("Bearer {token}"));
                 if let Some(p) = provider {
-                    h.set(crate::HEADER_INFERENCE_PROVIDER, p.clone());
+                    h.set(crate::headers::HEADER_INFERENCE_PROVIDER, p.clone());
                 }
                 h.into_vec()
             }
