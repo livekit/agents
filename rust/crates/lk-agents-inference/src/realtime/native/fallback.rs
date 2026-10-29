@@ -33,8 +33,8 @@ pub enum RealtimeChild {
 impl RealtimeChild {
     fn resource_id(&self) -> ResourceId {
         match self {
-            Self::Native(model) => crate::fallback::backend_resource(model),
-            Self::Host(model, _) => crate::fallback::backend_resource(model),
+            Self::Native(model) => crate::fallback::backend_resource(model.as_ref()),
+            Self::Host(model, _) => crate::fallback::backend_resource(model.as_ref()),
         }
     }
 
@@ -533,7 +533,7 @@ impl RealtimeSession for FallbackSession {
                             let changes = st.policy.refresh(&self.priority, self.clock.now());
                             let target = if switch_model {
                                 st.policy.candidates(&self.priority, false).into_iter()
-                                    .find(|&index| index != st.active_index).unwrap_or(st.active_index)
+                                    .find(|&index| self.priority[index] != self.priority[st.active_index]).unwrap_or(st.active_index)
                             } else { st.active_index };
                             (target, changes)
                         };

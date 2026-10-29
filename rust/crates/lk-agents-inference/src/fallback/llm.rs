@@ -47,7 +47,7 @@ impl Backend for LlmBackend {
     type Session = LlmStream;
 
     fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
-        super::backend_resource(&self.inner)
+        super::backend_resource(self.inner.as_ref())
     }
 
     fn label(&self) -> String {

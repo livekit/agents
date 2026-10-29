@@ -145,3 +145,12 @@ fn cooldown_and_probe_recovery_share_one_rule_and_follow_explicit_priority() {
     assert!(policy.recovered(primary, policy.probe_generation(primary)));
     assert_eq!(policy.candidates(&priority, false), vec![0, 1]);
 }
+
+#[test]
+fn sticky_priority_keeps_the_selected_backend_after_duplicate_entries_are_removed() {
+    let primary = ResourceId(900);
+    let backup = ResourceId(3);
+    let mut policy = FallbackPolicy::default();
+    policy.select(backup, 1);
+    assert_eq!(policy.candidates(&[primary, primary, backup], true), vec![2, 0]);
+}

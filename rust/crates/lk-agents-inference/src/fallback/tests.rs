@@ -161,6 +161,10 @@ impl Backend for Fake {
     type Req = String;
     type Session = Step;
 
+    fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
+        super::backend_resource(self)
+    }
+
     fn label(&self) -> String {
         self.label.clone()
     }
@@ -714,4 +718,22 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
         );
         chain.close().await;
     }
+}
+
+#[tokio::test]
+async fn repeated_backend_entries_share_one_recovery_probe() {
+    let primary = Fake::new("primary", &[Step::FailCold]).shut(RecoverySlot::OneShot);
+    let backup = Fake::new("backup", &[Step::Serve]);
+    let rig = rig(vec![primary.clone(), primary.clone(), backup], ChainPolicy::llm_defaults());
+    let _ = run_once(&rig, RecoverySlot::OneShot).await;
+    until("the primary probe to park", || primary.probe_count(RecoverySlot::OneShot) == 1).await;
+    let _ = run_once(&rig, RecoverySlot::OneShot).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        primary.probe_count(RecoverySlot::OneShot),
+        1,
+        "a backend has one probe per recovery slot, independent of list occurrences"
+    );
+    primary.gate[RecoverySlot::OneShot as usize].add_permits(1);
+    rig.chain.close().await;
 }

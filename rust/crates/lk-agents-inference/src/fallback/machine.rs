@@ -122,7 +122,7 @@ impl FallbackPolicy {
                 .iter()
                 .copied()
                 .fold(0, |best, index| if selected(index) > selected(best) { index } else { best });
-            order.remove(first);
+            order.retain(|&index| index != first);
             order.insert(0, first);
         }
         order

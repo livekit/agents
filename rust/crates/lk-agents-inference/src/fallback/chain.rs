@@ -32,9 +32,7 @@ pub trait Backend: Send + Sync + 'static {
 
     fn label(&self) -> String;
 
-    fn resource_id(&self) -> ResourceId {
-        ResourceId((self as *const Self).cast::<()>() as usize as u64)
-    }
+    fn resource_id(&self) -> ResourceId;
 
     fn modality(&self) -> Modality {
         Modality::Llm
@@ -194,24 +192,6 @@ impl<B: Backend> FallbackChain<B> {
         })
     }
 
-    /// Construct from plugin resources already registered by the runtime.
-    pub fn registered(
-        entries: Vec<(ResourceId, Arc<B>)>,
-        policy: ChainPolicy,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
-        observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, NoBackends> {
-        let (resources, entries): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
-        let chain = Self::new(entries, policy, clock, spawner, observer)?;
-        for (backend, resource) in
-            chain.status.lock().expect("chain status").backends.iter_mut().zip(resources)
-        {
-            backend.resource = resource;
-        }
-        Ok(chain)
-    }
-
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.clock)
     }
@@ -322,32 +302,37 @@ impl<B: Backend> FallbackChain<B> {
         if all_failed {
             self.observer.all_unavailable();
         }
-        let entries = (0..self.entries.len())
-            .map(|index| {
-                (
-                    index,
-                    self.status.lock().expect("chain status").backends[index].resource,
-                    self.labels[index].clone(),
-                )
-            })
-            .collect();
-        let mut request = ChainRequest::new(
-            self.entries[0].modality(),
-            entries,
-            ChainPolicy {
+        let (mut request, recovery_order) = {
+            let status = self.status.lock().expect("chain status");
+            let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
+            let entries = status
+                .backends
+                .iter()
+                .enumerate()
+                .map(|(index, backend)| (index, backend.resource, self.labels[index].clone()))
+                .collect();
+            let policy = ChainPolicy {
                 retry_interval: Some(
                     self.policy.retry_interval.unwrap_or(caller_conn.retry_interval),
                 ),
                 ..self.policy
-            },
-            deadline,
-            &self.status.lock().expect("chain status").health,
-        );
+            };
+            (
+                ChainRequest::new(
+                    self.entries[0].modality(),
+                    entries,
+                    policy,
+                    deadline,
+                    &status.health,
+                ),
+                status.health.order(&priority, false),
+            )
+        };
         let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, started).into();
         let mut active: Option<(u64, usize, u64, RunningAttempt<T, S>)> = None;
         let mut served = None;
         let recover_conn = conn_options_for_attempt(caller_conn, &self.policy);
-        for index in 0..self.entries.len() {
+        for index in recovery_order {
             if !self.is_available(index) {
                 self.try_recovery(index, slot, req, &recover_conn, deadline);
             }

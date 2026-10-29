@@ -88,10 +88,6 @@ mod resampling_tests {
 }
 
 /// The allocation stays alive for the chain's lifetime; clones retain the provider's identity.
-pub(crate) fn backend_resource<T: ?Sized>(
-    backend: &std::sync::Arc<T>,
-) -> lk_agents_abi::resources::ResourceId {
-    lk_agents_abi::resources::ResourceId(
-        std::sync::Arc::as_ptr(backend).cast::<()>() as usize as u64
-    )
+pub(crate) fn backend_resource<T: ?Sized>(backend: &T) -> lk_agents_abi::resources::ResourceId {
+    lk_agents_abi::resources::ResourceId(std::ptr::from_ref(backend).cast::<()>() as usize as u64)
 }

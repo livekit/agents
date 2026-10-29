@@ -1,7 +1,5 @@
 //! The fallback adapters' availability records: `AvailabilityChangedEvent` (all three
-//! adapters), the chain's report to its adapter and `RealtimeModelFallbackAdapter`'s error plan.
-
-use lk_agents_host_derive::Host;
+//! adapters) and the chain's report to its adapter.
 
 /// `AvailabilityChangedEvent`, identical in all three fallback adapters: an entry, by position in
 /// the host's list, went unavailable or recovered. The host maps the index back to its instance.
@@ -24,29 +22,6 @@ pub trait ChainObserver: Send + Sync {
     /// anyway rather than failing fast, which is what `all_failed` does in all three adapters.
     #[host(notify, name = "_core_all_unavailable")]
     fn all_unavailable(&self) {}
-}
-
-/// One `realtime_availability_changed` a `RealtimeModelFallbackAdapter` emits: the host maps the
-/// index back to the model object it passed in, because users compare that object with `is`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct AvailabilityChange {
-    pub index: usize,
-    pub available: bool,
-}
-
-/// What `RealtimeModelFallbackAdapter._on_child_error` decided.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct ErrorPlan {
-    /// Emit these `realtime_availability_changed` events first, in order.
-    pub changes: Vec<AvailabilityChange>,
-    /// The rewrite: emit with `recoverable=True` because a fallback exists and the swap will
-    /// rescue the call.
-    pub rewrite_recoverable: bool,
-    /// The model to swap to, or `None`: the error was recoverable, every model is down, or a swap
-    /// is already in flight.
-    pub swap_to: Option<usize>,
 }
 
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
