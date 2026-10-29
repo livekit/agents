@@ -18,7 +18,7 @@ use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::db::TaskQuery;
-use lk_agents_storage::host::Namespace;
+use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::schema::TaskRow;
 use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
 use tokio::sync::{Mutex, mpsc};

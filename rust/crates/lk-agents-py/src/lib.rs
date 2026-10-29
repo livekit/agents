@@ -137,8 +137,8 @@ impl generated::Implementations for Selected {
     type EndpointServer = lk_agents_runtime::worker::endpoint::host::Endpoints;
     type AsgiReceive = lk_agents_runtime::worker::endpoint::host::ReceiveCall;
     type AsgiSend = lk_agents_runtime::worker::endpoint::host::SendCall;
-    type ServerConfig = lk_agents_runtime::worker::server_host::Configuration;
-    type ServerRuntime = lk_agents_runtime::worker::server_host::AgentServerRuntime;
+    type ServerConfig = lk_agents_runtime::worker::agent_server::Configuration;
+    type ServerRuntime = lk_agents_runtime::worker::agent_server::AgentServerRuntime;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;
@@ -175,7 +175,7 @@ impl generated::Implementations for Selected {
     type InferenceStt = lk_agents_runtime::inference::stt::GatewayStt;
     type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_runtime::inference::llm::parse::CompletionWire;
-    type Storage = lk_agents_runtime::storage::host::Namespace;
+    type Storage = lk_agents_runtime::storage::namespace::Namespace;
 }
 
 #[pymodule]

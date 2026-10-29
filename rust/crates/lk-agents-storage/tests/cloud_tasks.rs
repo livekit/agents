@@ -2,7 +2,7 @@
 
 use lk_agents_abi::storage::{Storage, StorageError, TaskState};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_storage::host::Namespace;
+use lk_agents_storage::namespace::Namespace;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;

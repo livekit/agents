@@ -18,7 +18,7 @@ pub mod hw;
 pub mod ipc;
 pub mod protocol;
 pub mod server;
-pub mod server_host;
+pub mod agent_server;
 pub mod state;
 #[cfg(test)]
 mod state_tests;

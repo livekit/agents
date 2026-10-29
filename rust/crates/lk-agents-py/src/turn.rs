@@ -14,7 +14,7 @@ use lk_agents_abi::storage as host;
 use lk_agents_abi::{Clock, RealClock};
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::db::TaskOrder;
-use lk_agents_runtime::storage::host::thread_item_page;
+use lk_agents_runtime::storage::namespace::thread_item_page;
 use lk_agents_runtime::storage::{
     CommitOptions, ItemRow, Run, RunOptions, RunOutcome, TaskQuery, TaskState, Thread,
 };

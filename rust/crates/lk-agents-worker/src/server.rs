@@ -3,7 +3,7 @@
 //! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
 //! processes and the user's callbacks.
 
-use crate::server_host::ServerCallbacks;
+use crate::agent_server::ServerCallbacks;
 use crate::{Worker, WorkerCommand, WorkerClient, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
