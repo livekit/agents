@@ -8,6 +8,95 @@ from livekit.agents.utils.aio.itertools import Tee
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
+async def test_upstream_cancellation_does_not_end_surviving_peers():
+    context = contextvars.ContextVar("source-context", default="caller")
+
+    class Source:
+        pulls = 0
+        closes = 0
+        token = None
+        tasks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.pulls += 1
+            self.tasks.append(asyncio.current_task())
+            if self.pulls == 1:
+                self.token = context.set("source")
+                raise asyncio.CancelledError
+            assert context.get() == "source"
+            if self.pulls == 2:
+                return "alive"
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            context.reset(self.token)
+            self.closes += 1
+
+    source = Source()
+    tee = Tee(source, n=3)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await anext(tee[0])
+        assert source.closes == 0
+        assert source.pulls == 1
+        assert [item async for item in tee[1]] == ["alive"]
+        assert [item async for item in tee[2]] == ["alive"]
+        assert source.pulls == 3
+        assert source.closes == 1
+        assert all(task is source.tasks[0] for task in source.tasks)
+    finally:
+        await tee.aclose()
+
+
+async def test_upstream_cancellation_is_retained_after_reader_cancellation():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Source:
+        pulls = 0
+        closes = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.pulls += 1
+            if self.pulls == 1:
+                entered.set()
+                await release.wait()
+                raise asyncio.CancelledError
+            if self.pulls == 2:
+                return "alive"
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            self.closes += 1
+
+    source = Source()
+    tee = Tee(source, n=3)
+    reader = asyncio.create_task(anext(tee[0]))
+    await entered.wait()
+    try:
+        reader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reader
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await anext(tee[1])
+        assert source.closes == 0
+        assert [item async for item in tee[2]] == ["alive"]
+        assert source.pulls == 3
+        assert source.closes == 1
+    finally:
+        release.set()
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        await tee.aclose()
+
+
 async def test_cancelled_upstream_pull_is_reused_by_surviving_peers():
     entered = asyncio.Event()
     release = asyncio.Event()

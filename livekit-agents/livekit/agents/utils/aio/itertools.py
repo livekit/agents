@@ -21,6 +21,7 @@ class _TeeSource(Generic[T]):
     """Own upstream iteration and cleanup in one task, without prefetching."""
 
     def __init__(self, iterator: AsyncIterator[T]) -> None:
+        """Initialize a lazy producer for the shared upstream iterator."""
         self._iterator = iterator
         self._request = asyncio.Event()
         self._response: asyncio.Future[T] | None = None
@@ -46,11 +47,21 @@ class _TeeSource(Generic[T]):
 
         # A cancelled peer relinquishes its wait, not the shared upstream read.
         # Keep the response for the next peer until its item has been delivered.
-        item = await asyncio.shield(self._response)
+        response = self._response
+        try:
+            item = await asyncio.shield(response)
+        except asyncio.CancelledError:
+            # Upstream cancellation belongs to this read. A custom iterator
+            # may remain usable, so another peer must get a fresh response.
+            # Peer cancellation alone leaves the shared response intact.
+            if response.cancelled():
+                self._response = None
+            raise
         self._response = None
         return item
 
     async def _run(self) -> None:
+        """Serve requested reads and clean up the iterator in one context."""
         self._started = True
         try:
             while not self._closing:
@@ -62,7 +73,8 @@ class _TeeSource(Generic[T]):
                     item = await self._iterator.__anext__()
                 except asyncio.CancelledError:
                     response.cancel()
-                    raise
+                    if self._closing:
+                        raise
                 except BaseException as error:
                     response.set_exception(error)
                     return
