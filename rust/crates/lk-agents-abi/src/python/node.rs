@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[rustfmt::skip]
 use super::{
-    AsyncMutex, CancellingHandle, HostBridge as _, capture, captured, provider_error_to_py,
+    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, provider_error_to_py,
 };
 use crate::errors::ProviderError;
 
@@ -178,9 +178,41 @@ pub type NodeCalls = Arc<Mutex<NodeCallState>>;
 pub struct HostSource<T> {
     state: State,
     locals: pyo3_async_runtimes::TaskLocals,
+    /// A returned value's awaits are cancelled when the core stops waiting; a host stream's are
+    /// left to its own `aclose`, its only teardown.
+    cancel: bool,
     convert: Convert<T>,
     clock: Arc<dyn crate::Clock>,
     calls: Option<NodeCalls>,
+}
+
+/// The awaits of one host object: cancelled with their Rust waiter, or not.
+enum Handle {
+    Cancelling(CancellingHandle),
+    Host(HostHandle),
+}
+
+impl Handle {
+    async fn anext(&self) -> PyResult<Option<Py<PyAny>>> {
+        match self {
+            Handle::Cancelling(h) => h.anext().await,
+            Handle::Host(h) => h.anext().await,
+        }
+    }
+
+    async fn awaited(&self) -> PyResult<Py<PyAny>> {
+        match self {
+            Handle::Cancelling(h) => h.await_call(|o| Ok(o.clone())).await,
+            Handle::Host(h) => h.await_call(|o| Ok(o.clone())).await,
+        }
+    }
+
+    async fn aclose(&self) {
+        match self {
+            Handle::Cancelling(h) => h.aclose().await,
+            Handle::Host(h) => h.aclose().await,
+        }
+    }
 }
 
 impl<T> HostSource<T> {
@@ -194,6 +226,25 @@ impl<T> HostSource<T> {
         HostSource {
             state: State::Returned(returned),
             locals,
+            cancel: true,
+            convert,
+            clock,
+            calls: None,
+        }
+    }
+
+    /// A host stream already iterating (`__anext__` on `handle`'s object).
+    pub fn iterating(
+        handle: HostHandle,
+        convert: Convert<T>,
+        clock: Arc<dyn crate::Clock>,
+    ) -> Self {
+        let (obj, locals) =
+            Python::attach(|py| (handle.object().clone_ref(py), handle.locals().clone()));
+        HostSource {
+            state: State::Iterating(obj),
+            locals,
+            cancel: false,
             convert,
             clock,
             calls: None,
@@ -206,9 +257,15 @@ impl<T> HostSource<T> {
         self
     }
 
-    /// Its awaits are cancelled when the core stops waiting.
-    fn handle(&self, obj: &Py<PyAny>) -> CancellingHandle {
-        Python::attach(|py| CancellingHandle::from_parts(obj.clone_ref(py), self.locals.clone()))
+    fn handle(&self, obj: &Py<PyAny>) -> Handle {
+        Python::attach(|py| {
+            let (obj, locals) = (obj.clone_ref(py), self.locals.clone());
+            if self.cancel {
+                Handle::Cancelling(CancellingHandle::from_parts(obj, locals))
+            } else {
+                Handle::Host(HostHandle::from_parts(obj, locals))
+            }
+        })
     }
 
     fn convert(&self, item: Py<PyAny>) -> Result<Option<T>, ProviderError> {
@@ -311,7 +368,7 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
                             Look::Channel(rx) => self.state = State::Channel(rx),
                             Look::Iterate(iter) => self.state = State::Iterating(iter),
                             Look::One(item) => return self.convert(item),
-                            Look::Await => match self.handle(&out).await_call(|o| Ok(o.clone())).await {
+                            Look::Await => match self.handle(&out).awaited().await {
                                 Ok(value) => self.state = State::Returned(value),
                                 Err(e) => {
                                     let cancelled = Python::attach(|py| {
@@ -365,6 +422,10 @@ impl<T: Send + 'static> crate::StreamSource<T> for HostSource<T> {
             match &self.state {
                 // A host stream is closed even once read to its end: `aclose` is its teardown.
                 State::Iterating(iter) => {
+                    let handle = self.handle(iter);
+                    crate::Closed::bounded(&*self.clock, deadline, handle.aclose()).await
+                }
+                State::Ended(iter) if !self.cancel => {
                     let handle = self.handle(iter);
                     crate::Closed::bounded(&*self.clock, deadline, handle.aclose()).await
                 }
