@@ -37,7 +37,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     Completed,
-    ModelSettings,
     RunContext,
     VADCapabilities,
     VADEvent,
@@ -57,6 +56,7 @@ from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, FlushSentinel
 from livekit.agents.utils import shortuuid
 from livekit.agents.voice import SpeechHandle
+from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.amd import AMD, AMDCategory
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.background_audio import (
@@ -2455,14 +2455,15 @@ async def main() -> int:
     await settle(room, 6)
 
     print("== a reply, asserted")
-    result = session._run(user_input="what's the weather like?")
+    run = session._run(user_input="what's the weather like?")
     await settle(room, 4)
-    assert result.done(), "the run did not settle"
+    result = await asyncio.wait_for(run, timeout=1)
+    assert result.status == "completed", result.status
     result.expect.next_event().is_function_call(name="get_weather")
     result.expect.next_event().is_function_call_output(output="sunny in Paris")
     result.expect.next_event().is_message(role="assistant")
     result.expect.no_more_events()
-    print(f"run events: {[type(e).__name__ for e in result.events]}")
+    print(f"run items: {[item.type for item in result.new_messages()]}")
 
     print("== handoff")
     session.generate_reply(user_input="put me through to billing")
