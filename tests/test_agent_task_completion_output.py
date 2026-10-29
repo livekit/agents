@@ -484,6 +484,52 @@ async def test_handled_task_error_does_not_supply_typed_output(error_after_succe
         await session.aclose()
 
 
+@pytest.mark.parametrize("speaks", [True, False], ids=["tool_says_a_line", "model_replies"])
+async def test_handled_task_error_in_tool_allows_parent_speech(speaks: bool) -> None:
+    class FailOnEnter(AgentTask[bool]):
+        async def on_enter(self) -> None:
+            self.complete(ValueError("verification failed"))
+
+    class Parent(Agent):
+        @function_tool
+        async def verify_details(self) -> ToolResult:
+            """Verify the synthetic details."""
+            try:
+                await FailOnEnter(instructions="Fail synthetic verification.")
+            except ValueError:
+                if speaks:
+                    await self.session.say(PARENT_LINES[0])
+                return ToolResult("verification failed", reply_required=not speaks)
+            return ToolResult("verified", reply_required=True)
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="yes",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="verify_details", arguments="{}", call_id="verify")
+                ],
+            ),
+            FakeLLMResponse(
+                input="verification failed", content=PARENT_LINES[1], ttft=0, duration=0
+            ),
+        ]
+    )
+    session = AgentSession(llm=llm)
+    await session.start(Parent(instructions="Synthetic conversation."), session_host=False)
+    try:
+        await asyncio.sleep(0.5)
+        result = await asyncio.wait_for(session.run(user_input="yes"), timeout=3)
+        assert [event.item.text_content for event in result.events if event.type == "message"] == (
+            [PARENT_LINES[0]] if speaks else [PARENT_LINES[1]]
+        )
+    finally:
+        await session.aclose()
+
+
 @pytest.mark.parametrize("error_type", [ValueError, ToolError])
 async def test_task_error_on_final_speech_is_propagated(error_type: type[Exception]) -> None:
     session, _, _ = await _start_confirmation(
