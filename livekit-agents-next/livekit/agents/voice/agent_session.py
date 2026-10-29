@@ -1465,9 +1465,9 @@ def _detection_llm(stt_context: dict[str, Any] | None) -> LLM | None:
     detection off, or when the model cannot be created (detection is then skipped)."""
     config = (stt_context or {}).get("keyterm_detection")
     resolved = _core.resolve_keyterm_detection(config)
-    if not resolved["enabled"]:
+    if not resolved.enabled:
         return None
-    if (model := resolved["model"]) is None:
+    if (model := resolved.model) is None:
         llm = config["llm"]  # type: ignore[index]
         return llm if isinstance(llm, LLM) else None
     try:

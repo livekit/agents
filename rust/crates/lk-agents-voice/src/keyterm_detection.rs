@@ -317,27 +317,24 @@ impl KeytermDetection {
     }
 }
 
-/// [`KeytermDetection`] as the host receives it. `model` is [`resolve_detection_model`]'s answer
-/// (`None`: use the caller's `LLM` object); `instructions` is always the resolved string.
-pub fn resolved_keyterm_detection(r: &KeytermDetection) -> ResolvedKeytermDetection {
-    ResolvedKeytermDetection {
-        enabled: r.enabled,
-        turn_interval: r.turn_interval,
-        max_keyterms: r.max_keyterms,
-        timeout: r.timeout,
-        instructions: r.instructions().to_owned(),
-        model: resolve_detection_model(r.llm.as_ref()).map(str::to_owned),
-        tool_name: RECORD_KEYTERMS_TOOL.to_owned(),
-    }
-}
+/// Keyterm detection's resolution, as the host calls it.
+pub struct KeytermRules;
 
-/// `_resolve_detection`: the defaults, then whatever keys the caller set. `turn_interval` comes
-/// back clamped to at least 1, and an empty `instructions` resolves to the default prompt.
-#[lk_agents_abi::host(export(name = "resolve_keyterm_detection", pid = false))]
-pub fn resolve_keyterm_detection(
-    config: Option<KeytermDetectionConfig>,
-) -> ResolvedKeytermDetection {
-    resolved_keyterm_detection(&resolve_detection(config.as_ref()))
+impl lk_agents_abi::turn::keyterms::KeytermFunctions for KeytermRules {
+    fn resolve_keyterm_detection(
+        config: Option<KeytermDetectionConfig>,
+    ) -> ResolvedKeytermDetection {
+        let r = resolve_detection(config.as_ref());
+        ResolvedKeytermDetection {
+            enabled: r.enabled,
+            turn_interval: r.turn_interval,
+            max_keyterms: r.max_keyterms,
+            timeout: r.timeout,
+            instructions: r.instructions().to_owned(),
+            model: resolve_detection_model(r.llm.as_ref()).map(str::to_owned),
+            tool_name: RECORD_KEYTERMS_TOOL.to_owned(),
+        }
+    }
 }
 
 /// `_resolve_detection`: defaults, then whatever keys the caller set.

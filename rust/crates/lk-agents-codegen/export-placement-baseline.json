@@ -96,7 +96,6 @@
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreTextOutput::capture_timed|host (method (kw_only = \"start_time\"))",
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreTextOutput::flush|host (method)",
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreTextOutput|lk_agents_abi :: host (object (cell = \"arc\"))",
-  "host|rust/crates/lk-agents-voice/src/keyterm_detection.rs|fn resolve_keyterm_detection|lk_agents_abi :: host (export (name = \"resolve_keyterm_detection\" , pid = false))",
   "host|rust/crates/lk-agents-voice/src/remote_session.rs|const STATE_OPTION_FIELDS|lk_agents_abi :: host (export (name = \"session_state_option_fields\"))",
   "host|rust/crates/lk-agents-voice/src/remote_session.rs|const TOPIC_SESSION_MESSAGES|lk_agents_abi :: host (export (name = \"session_messages_topic\" , pid = false))",
   "host|rust/crates/lk-agents-voice/src/remote_session.rs|fn frame|lk_agents_abi :: host (export)",

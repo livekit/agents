@@ -8,9 +8,29 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from typing_extensions import TypedDict
 
 from ..llm import LLM
+
+# The declared records.
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ResolvedKeytermDetection:
+    """The resolved detection config as the host receives it: `model` is `None` for a caller-supplied
+    `LLM`, and `instructions` is always the resolved string.
+    """
+
+    enabled: bool
+    turn_interval: int
+    max_keyterms: int | None
+    timeout: float
+    instructions: str
+    model: str | None
+    """The model to build, or `None` for "the caller supplied an LLM; use it"."""
+    tool_name: str
 
 
 class KeytermDetectionOptions(TypedDict, total=False):

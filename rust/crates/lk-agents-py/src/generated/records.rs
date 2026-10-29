@@ -1511,6 +1511,27 @@ pub mod io_events {
     }
 }
 
+pub mod keyterms {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
+    static RESOLVED_KEYTERM_DETECTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn resolved_keyterm_detection_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::keyterms::ResolvedKeytermDetection) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::turn::keyterms::ResolvedKeytermDetection { enabled, turn_interval, max_keyterms, timeout, instructions, model, tool_name } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("enabled", ::pyo3::IntoPyObjectExt::into_bound_py_any(enabled, py)?)?;
+            kwargs.set_item("turn_interval", ::pyo3::IntoPyObjectExt::into_bound_py_any(turn_interval, py)?)?;
+            kwargs.set_item("max_keyterms", match max_keyterms { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("timeout", ::pyo3::IntoPyObjectExt::into_bound_py_any(timeout, py)?)?;
+            kwargs.set_item("instructions", ::pyo3::IntoPyObjectExt::into_bound_py_any(instructions, py)?)?;
+            kwargs.set_item("model", match model { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("tool_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_name, py)?)?;
+            crate::host::construct(RESOLVED_KEYTERM_DETECTION.import(py, "livekit.agents._generated.keyterms", "ResolvedKeytermDetection")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod llm_fallback {
     use pyo3::prelude::*;
 

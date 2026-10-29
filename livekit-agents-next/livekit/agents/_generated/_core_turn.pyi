@@ -11,6 +11,7 @@ from livekit.agents.types import APIConnectOptions
 from livekit.local_inference import EOT
 from livekit.rtc import AudioFrame
 
+from .keyterms import KeytermDetectionOptions, ResolvedKeytermDetection
 from .turn_events import EotPrediction, ThresholdOverride, TurnDetectorModel
 
 class InferenceEot:
@@ -107,3 +108,8 @@ class InterruptionDetector:
         min_interruption_duration: float | None = None,
     ) -> None:
         """Shared with live streams, which reconnect to pick the options up."""
+
+def resolve_keyterm_detection(config: KeytermDetectionOptions | None) -> ResolvedKeytermDetection:
+    """`_resolve_detection`: the defaults, then whatever keys the caller set. `turn_interval`
+    comes back clamped to at least 1, and an empty `instructions` resolves to the default prompt.
+    """

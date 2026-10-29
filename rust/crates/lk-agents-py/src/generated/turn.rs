@@ -285,6 +285,18 @@ impl InterruptionDetector {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
+type KeytermFunctionsImpl = <crate::Selected as super::Implementations>::KeytermFunctions;
+
+/// `_resolve_detection`: the defaults, then whatever keys the caller set. `turn_interval`
+/// comes back clamped to at least 1, and an empty `instructions` resolves to the default prompt.
+#[pyfunction]
+#[pyo3(signature = (config))]
+pub fn resolve_keyterm_detection<'py>(py: Python<'py>, config: ::std::option::Option<::lk_agents_abi::turn::keyterms::KeytermDetectionConfig>) -> PyResult<Bound<'py, PyAny>> {
+    let out = <KeytermFunctionsImpl as ::lk_agents_abi::turn::keyterms::KeytermFunctions>::resolve_keyterm_detection(config);
+    Ok(crate::generated::records::keyterms::resolved_keyterm_detection_to_py(py, out)?)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/turn/detector.rs.
 
 /// [`::lk_agents_abi::EotDetector`] over a host `livekit.agents._core_view.TurnDetector`.

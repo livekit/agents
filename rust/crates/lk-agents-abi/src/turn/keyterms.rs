@@ -68,8 +68,8 @@ pub struct KeytermDetectionConfig {
 
 /// The resolved detection config as the host receives it: `model` is `None` for a caller-supplied
 /// `LLM`, and `instructions` is always the resolved string.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "keyterms", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedKeytermDetection {
     pub enabled: bool,
     pub turn_interval: u32,
@@ -79,6 +79,17 @@ pub struct ResolvedKeytermDetection {
     /// The model to build, or `None` for "the caller supplied an LLM; use it".
     pub model: Option<String>,
     pub tool_name: String,
+}
+
+/// Keyterm detection's resolution.
+#[crate::host(functions(pid = false))]
+pub trait KeytermFunctions {
+    /// `_resolve_detection`: the defaults, then whatever keys the caller set. `turn_interval`
+    /// comes back clamped to at least 1, and an empty `instructions` resolves to the default prompt.
+    #[host(function)]
+    fn resolve_keyterm_detection(
+        config: Option<KeytermDetectionConfig>,
+    ) -> ResolvedKeytermDetection;
 }
 
 /// Conversation-aware context for the STT.

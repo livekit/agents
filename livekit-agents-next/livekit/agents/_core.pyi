@@ -93,7 +93,6 @@ from ._generated._core_classes import (
     hyphenate_word as hyphenate_word,
     interruption_timeout as interruption_timeout,
     resolve_interruption_detector as resolve_interruption_detector,
-    resolve_keyterm_detection as resolve_keyterm_detection,
     rt_server_turn_detection as rt_server_turn_detection,
     rtc_wire_names as rtc_wire_names,
     session_messages_topic as session_messages_topic,
@@ -293,6 +292,7 @@ from ._generated._core_turn import (
     EotStream as EotStream,
     InferenceEot as InferenceEot,
     InterruptionDetector as InterruptionDetector,
+    resolve_keyterm_detection as resolve_keyterm_detection,
 )
 from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,

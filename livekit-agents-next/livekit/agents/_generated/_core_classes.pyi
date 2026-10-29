@@ -273,7 +273,6 @@ class GetCreditCardResult:
     def expiration_date(self) -> str: ...
 
 
-def resolve_keyterm_detection(config: Any | None = None) -> dict[str, Any]: ...
 def rt_server_turn_detection(
     *,
     caps_turn_detection: bool,
