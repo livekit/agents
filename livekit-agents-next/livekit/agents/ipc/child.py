@@ -412,9 +412,7 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
 
 
 def thread_main(args: JobArgs) -> None:
-    """A job thread's main: the job runs on a loop of the thread's own, logging as the worker.
-    It shares the worker's process, so the job's environment is the process's."""
-    os.environ.update(args.env)
+    """A job thread's main: the job runs on a loop of the thread's own, logging as the worker."""
     job_proc = _JobProc(
         args.job_entrypoint_fnc,
         args.session_end_fnc,
