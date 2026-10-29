@@ -28,6 +28,7 @@ scheduler = Agent[SchedulingContext](
 | `tools` | Tools and toolsets |
 | `output_type` | Final output contract; required for an agent exposed as a tool, including output functions |
 | `retries` | Retry budgets: an `int` for both, or `AgentRetries`; see [retries](#retries) |
+| `tool_handling` | Templates for what the model reads around tool calls (updates, refused duplicates, deferred replies); see [tools](tools.md#on-a-call) |
 
 `Agent[SchedulingContext]` and `RunContext[SchedulingContext]` carry the
 application context type. Tools read application data and services through

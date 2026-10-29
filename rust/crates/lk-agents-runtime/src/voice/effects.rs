@@ -419,6 +419,17 @@ impl Runtime {
                     shared.report(GenEvent::OutputValidated { speech, validation, verdict, value });
                 });
             }
+            E::RenderTemplate { rendering, template, hosted } => {
+                let shared = Arc::clone(&self.shared);
+                self.shared.spawner.spawn_unboxed(async move {
+                    let rendered = hosted.host.render_template(&hosted.invocation, template).await;
+                    let text = rendered.unwrap_or_else(|e| {
+                        log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
+                        None
+                    });
+                    shared.report(GenEvent::TemplateRendered { rendering, text });
+                });
+            }
         }
     }
 

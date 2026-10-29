@@ -138,6 +138,51 @@ ValidatedOutput: TypeAlias = ValidatedOutputAccepted | ValidatedOutputRetry | Va
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class ToolTemplateDuplicateReject:
+    """`on_duplicate="reject"` refused a call of `function_name` while `fnc_calls_json` run."""
+
+    function_name: str
+    fnc_calls_json: list[str]
+    fnc_calls_text: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ToolTemplateDuplicateConfirm:
+    """`on_duplicate="confirm"` asks the model to call again to confirm."""
+
+    function_name: str
+    fnc_calls_json: list[str]
+    fnc_calls_text: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ToolTemplateReplyAtTail:
+    """The deferred reply's instructions for the updates `call_ids`, the last still the record's
+    tail: the agent has not spoken since.
+    """
+
+    call_ids: list[str]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ToolTemplateReplyMaybeCovered:
+    """The deferred reply's instructions when newer items came after the updates."""
+
+    call_ids: list[str]
+
+
+ToolTemplate: TypeAlias = (
+    ToolTemplateDuplicateReject
+    | ToolTemplateDuplicateConfirm
+    | ToolTemplateReplyAtTail
+    | ToolTemplateReplyMaybeCovered
+)
+"""A `tool_handling` template the framework asks the host to render (`AsyncToolOptions`), with
+the arguments its `*PromptArgs` names.
+"""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class AgentDefinition:
     """The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads
     and none mutates. Host callables (tool bodies, validators, instruction functions, output

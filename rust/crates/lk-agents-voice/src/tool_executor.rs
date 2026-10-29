@@ -26,7 +26,7 @@ pub(crate) struct Tools {
     pub(crate) running: Vec<Running>,
     /// Update pairs batched for the next deferred reply.
     pub(crate) pending: Vec<Pending>,
-    pub(crate) reply: Option<Reply>,
+    pub(crate) reply: Option<ToolReply>,
     pub(crate) fillers: BTreeMap<FillerId, FillerRun>,
     /// The steps whose `function_tools_executed` handlers the host runs, until they answer.
     pub(crate) handling: BTreeMap<HookId, Handling>,
@@ -259,6 +259,8 @@ pub(crate) struct Pending {
     pub(crate) agent: String,
     pub(crate) items: Vec<ChatItem>,
     pub(crate) update_id: String,
+    /// The call's host: the deferred reply's instructions are its templates.
+    pub(crate) hosted: HostedTool,
 }
 
 /// The pending updates one deferred reply answers, in arrival order.
@@ -282,11 +284,22 @@ impl Batch {
     }
 }
 
-/// The deferred reply in flight: its speech and the updates it answers.
+/// The deferred reply in flight.
 #[derive(Debug, Clone)]
-pub(crate) struct Reply {
-    pub(crate) speech: SpeechId,
-    pub(crate) update_ids: Vec<String>,
+pub(crate) enum ToolReply {
+    /// The host renders its instructions (`render` names the rendering).
+    Rendering { render: u64, batch: Batch, at_tail: bool },
+    /// Spoken by `speech`, answering the updates `update_ids`.
+    Speaking { speech: SpeechId, update_ids: Vec<String> },
+}
+
+/// What a `tool_handling` template the host renders is for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rendering {
+    /// The refusal of a duplicate call of `speech`'s run.
+    Refusal { speech: SpeechId, call: CallId },
+    /// The deferred reply's instructions.
+    ToolReply { render: u64 },
 }
 
 /// One open `with_filler` scope (`voice/filler_scheduler.py`).

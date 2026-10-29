@@ -43,7 +43,7 @@ use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
 };
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
-use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
+use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer, ToolTemplate};
 use model_step::{ModelStep, Purpose};
 pub use result::{CallId, CheckpointId, RenderId, RequestId, StepId};
 
@@ -131,6 +131,11 @@ pub enum Event {
     ReadBackRendered {
         call: CallId,
         result: Result<ReadBackAnswer, String>,
+    },
+    /// The host rendered the call's template; `None` keeps the framework's text.
+    TemplateRendered {
+        call: CallId,
+        text: Option<String>,
     },
     /// `ctx.update(text)`.
     ToolProgress {
@@ -238,6 +243,12 @@ pub enum Effect {
     ToolArgumentsRelease {
         prepared: ResourceId,
     },
+    /// Render the call's `tool_handling` template (`AgentHost.render_template`), answered by
+    /// [`Event::TemplateRendered`].
+    TemplateRender {
+        call: CallId,
+        template: ToolTemplate,
+    },
     OutputValidate {
         validation: ValidationId,
         candidate: OutputCandidate,
@@ -283,6 +294,9 @@ impl From<tool_calls::Effect> for Effect {
             tool_calls::Effect::Cancel { call } => Effect::ToolCancel { call },
             tool_calls::Effect::ReleaseArguments { prepared } => {
                 Effect::ToolArgumentsRelease { prepared }
+            }
+            tool_calls::Effect::RenderTemplate { call, template } => {
+                Effect::TemplateRender { call, template }
             }
             tool_calls::Effect::Emit(event) => Effect::Emit(event),
             tool_calls::Effect::ArgumentsRepaired { call_id, error, repaired } => {
@@ -533,6 +547,12 @@ impl AgentRun {
                         self.history.iter(),
                         &mut fx,
                     );
+                }
+                self.step_settled(now, &mut fx);
+            }
+            Event::TemplateRendered { call, text } => {
+                if let Some(a) = self.phase.acting() {
+                    a.calls.template_rendered(call, text, &mut fx);
                 }
                 self.step_settled(now, &mut fx);
             }

@@ -269,6 +269,8 @@ impl Driver {
         self.activity.on_exit.abandon();
         // Nothing pending is delivered, a render in flight is dropped.
         self.activity.tools.pending.clear();
+        let tools = &mut self.activity.tools;
+        tools.reply.take_if(|r| matches!(r, crate::tool_executor::ToolReply::Rendering { .. }));
         self.abandon_hooks(out);
     }
 

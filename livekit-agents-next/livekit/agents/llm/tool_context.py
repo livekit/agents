@@ -758,6 +758,7 @@ class AsyncToolset(Toolset):
     is current at delivery time, so a ``ctx.update()`` started under agent A still
     completes after a handoff to agent B. Tools placed on ``Agent(tools=...)``
     instead use the activity-scoped executor and are cancelled/awaited on handoff.
+    ``tool_handling`` overrides the agent's templates for this toolset's tools.
 
     Example::
 
@@ -779,6 +780,4 @@ class AsyncToolset(Toolset):
         tool_handling: ToolHandlingOptions | None = None,
     ) -> None:
         super().__init__(id=id, tools=tools)
-        self._async_tool_options_override = (
-            tool_handling.get("async_options") if tool_handling is not None else None
-        )
+        self._tool_handling = tool_handling

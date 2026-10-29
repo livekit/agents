@@ -11,7 +11,8 @@ use crate::events::SessionEvent;
 use crate::generation::{PlanSpec, PlannedReply};
 use crate::run_result::RunOutput;
 use crate::tool_executor::{
-    APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, NextStep, StepNext, ToolGo, Toolset,
+    APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, NextStep, Rendering, StepNext, ToolGo,
+    Toolset,
 };
 use crate::trace::ToolStep as TraceToolStep;
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
@@ -260,6 +261,9 @@ impl Driver {
                 }
                 RunEffect::ReadBackRender { call, .. } => {
                     self.reply_move(speech, call, ToolGo::ReadBack { call })
+                }
+                RunEffect::TemplateRender { call, template } => {
+                    self.render_refusal(speech, call, template, out)
                 }
                 RunEffect::ToolExecute { call, function_call, .. } => {
                     self.reply_executes(speech, &function_call, out);
@@ -693,6 +697,47 @@ impl Driver {
             reply.accepted.insert(validation, value);
         }
         self.reply_event(speech, Event::OutputValidated { validation, verdict }, out);
+    }
+
+    // ------------------------------------------------------------------ templates
+
+    /// A duplicate call's refusal, rendered by the reply's agent with the call's templates.
+    fn render_refusal(
+        &mut self,
+        speech: SpeechId,
+        call: CallId,
+        template: lk_agents_abi::agent::ToolTemplate,
+        out: &mut Out,
+    ) {
+        let reply = self.activity.tools.replies.get(&speech);
+        let agent = reply.and_then(|r| r.agent.clone());
+        let item = reply.and_then(|r| r.run.step_call(call)).map(|(item, _)| item.clone());
+        let handle = self.activity.speech_scheduler.handle(speech).cloned();
+        let (Some(agent), Some(handle)) = (agent, handle) else {
+            return self.reply_event(speech, Event::TemplateRendered { call, text: None }, out);
+        };
+        let operation = self.activity.tools.mint_operation();
+        let session = self.session.ids.session();
+        let hosted = HostedTool::of(&agent, session, &handle, operation, item.as_ref());
+        let rendering = Rendering::Refusal { speech, call };
+        out.machine().push(Effect::RenderTemplate { rendering, template, hosted });
+    }
+
+    /// The host rendered a template: a refusal answers its call, the deferred reply's
+    /// instructions schedule it.
+    pub(crate) fn on_template_rendered(
+        &mut self,
+        now: lk_agents_abi::Ts,
+        rendering: Rendering,
+        text: Option<String>,
+        out: &mut Out,
+    ) {
+        match rendering {
+            Rendering::Refusal { speech, call } => {
+                self.reply_event(speech, Event::TemplateRendered { call, text }, out)
+            }
+            Rendering::ToolReply { render } => self.tool_reply_rendered(now, render, text, out),
+        }
     }
 
     /// The speech left the loop: its run goes, and a call task still waiting on it is gone.

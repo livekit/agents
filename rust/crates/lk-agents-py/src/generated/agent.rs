@@ -414,6 +414,30 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         })
     }
 
+    fn render_template<'a>(&'a self, invocation: &::lk_agents_abi::agent::Invocation, template: ::lk_agents_abi::agent::ToolTemplate) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::option::Option<::std::string::String>, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let template_arg = template;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.render_template", invocation, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, crate::generated::records::agent_run::tool_template_to_py(py, template_arg)?];
+                Ok((host.bind(py).getattr("render_template")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::std::string::String>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
     fn cancel(&self, invocation: &::lk_agents_abi::agent::Invocation) {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);

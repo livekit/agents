@@ -20,7 +20,7 @@ use crate::approval;
 use crate::tool_outcome;
 use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, ReadBack};
-use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
+use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
 
 /// Host work for the coordinator. Every outcome-bearing effect is answered for its call.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +53,12 @@ pub enum Effect {
     ReleaseArguments {
         prepared: ResourceId,
     },
+    /// Render the call's `tool_handling` template; answered with the text, or `None` for the
+    /// framework's.
+    RenderTemplate {
+        call: CallId,
+        template: ToolTemplate,
+    },
     Emit(StreamEvent),
     /// Diagnostic: malformed model arguments were repaired.
     ArgumentsRepaired {
@@ -65,21 +71,42 @@ pub enum Effect {
 /// The parameter the model sets to re-assert a call of an `on_duplicate="confirm"` tool.
 use lk_agents_abi::llm::provider_format::tools::CONFIRM_DUPLICATE_PARAM;
 
-/// The output of a call refused because the same tool is still running.
-fn duplicate_text(tool: &str, running: &[&FunctionCall], confirm: bool) -> String {
-    let calls: Vec<String> = running
+/// The template of a call refused because the same tool is still running.
+fn duplicate_template(tool: &str, running: &[&FunctionCall], confirm: bool) -> ToolTemplate {
+    let fnc_calls_json: Vec<String> = running
         .iter()
         .map(|c| format!("{{\"call_id\": {:?}, \"arguments\": {:?}}}", c.call_id, c.arguments))
         .collect();
-    let next = if confirm {
-        format!(
-            "Call it again with `{CONFIRM_DUPLICATE_PARAM}` set to true to run a duplicate, only \
-             when the user explicitly asks for it."
-        )
+    let function_name = tool.to_owned();
+    let fnc_calls_text = fnc_calls_json.join("\n");
+    if confirm {
+        ToolTemplate::DuplicateConfirm { function_name, fnc_calls_json, fnc_calls_text }
     } else {
-        "Do not call it again until it has finished.".to_owned()
+        ToolTemplate::DuplicateReject { function_name, fnc_calls_json, fnc_calls_text }
+    }
+}
+
+/// The refused call's output when no template overrides it.
+fn duplicate_text(template: &ToolTemplate) -> String {
+    let (function_name, fnc_calls_text, next) = match template {
+        ToolTemplate::DuplicateConfirm { function_name, fnc_calls_text, .. } => (
+            function_name,
+            fnc_calls_text,
+            format!(
+                "Call it again with `{CONFIRM_DUPLICATE_PARAM}` set to true to run a duplicate, \
+                 only when the user explicitly asks for it."
+            ),
+        ),
+        ToolTemplate::DuplicateReject { function_name, fnc_calls_text, .. } => (
+            function_name,
+            fnc_calls_text,
+            "Do not call it again until it has finished.".to_owned(),
+        ),
+        ToolTemplate::ReplyAtTail { .. } | ToolTemplate::ReplyMaybeCovered { .. } => {
+            unreachable!("a call is refused with a duplicate template")
+        }
     };
-    format!("Same tool `{tool}` is already running:\n{}\n{next}", calls.join("\n"))
+    format!("Same tool `{function_name}` is already running:\n{fnc_calls_text}\n{next}")
 }
 
 #[derive(Debug)]
@@ -117,6 +144,10 @@ enum Phase {
     },
     Running {
         identity: String,
+    },
+    /// Refused as a duplicate; the host renders the refusal.
+    Refusing {
+        template: ToolTemplate,
     },
     /// A `final_result` candidate the parent validates.
     Validating,
@@ -260,6 +291,20 @@ impl ToolCalls {
         self.admit(tools, history, fx);
     }
 
+    /// The host rendered a refused call's template: its output, the framework's text when
+    /// `None`.
+    pub fn template_rendered<E: From<Effect>>(
+        &mut self,
+        id: CallId,
+        text: Option<String>,
+        fx: &mut Vec<E>,
+    ) {
+        let Some(call) = self.call_mut(id) else { return };
+        let Phase::Refusing { template } = &call.phase else { return };
+        let text = text.unwrap_or_else(|| duplicate_text(template));
+        settle(call, ToolOutcome::ToolError(text), false, fx);
+    }
+
     pub fn progress<E: From<Effect>>(&mut self, id: CallId, message: String, fx: &mut Vec<E>) {
         if let Some(call) = self.call_mut(id).filter(|c| matches!(c.phase, Phase::Running { .. })) {
             fx.push(
@@ -344,6 +389,7 @@ impl ToolCalls {
                     fx.push(Effect::ReleaseArguments { prepared }.into());
                     settle(call, ToolOutcome::Cancelled, false, fx);
                 }
+                Phase::Refusing { .. } => settle(call, ToolOutcome::Cancelled, false, fx),
                 Phase::Validating | Phase::Settled(_) => {}
             }
         }
@@ -525,9 +571,12 @@ impl ToolCalls {
         };
         if let Some(confirm) = refusal {
             let shown: Vec<&FunctionCall> = running.iter().map(|&i| &self.calls[i].item).collect();
-            let text = duplicate_text(&tool.spec.name, &shown, confirm);
+            let template = duplicate_template(&tool.spec.name, &shown, confirm);
+            let call = &mut self.calls[index];
             fx.push(Effect::ReleaseArguments { prepared }.into());
-            return settle(&mut self.calls[index], ToolOutcome::ToolError(text), false, fx);
+            fx.push(Effect::RenderTemplate { call: call.id, template: template.clone() }.into());
+            call.phase = Phase::Refusing { template };
+            return;
         }
         let call = &mut self.calls[index];
         let arguments = match identity {

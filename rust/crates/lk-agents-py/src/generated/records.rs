@@ -621,6 +621,45 @@ pub mod agent_run {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    static TOOL_TEMPLATE_DUPLICATE_REJECT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_TEMPLATE_DUPLICATE_CONFIRM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_TEMPLATE_REPLY_AT_TAIL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_TEMPLATE_REPLY_MAYBE_COVERED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_template_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::agent::ToolTemplate) -> PyResult<Bound<'py, PyAny>> {
+            match value {
+                ::lk_agents_abi::agent::ToolTemplate::DuplicateReject { function_name, fnc_calls_json, fnc_calls_text } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("function_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(function_name, py)?)?;
+                    kwargs.set_item("fnc_calls_json", ::pyo3::types::PyList::new(py, fnc_calls_json.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+                    kwargs.set_item("fnc_calls_text", ::pyo3::IntoPyObjectExt::into_bound_py_any(fnc_calls_text, py)?)?;
+                    crate::host::construct(TOOL_TEMPLATE_DUPLICATE_REJECT.import(py, "livekit.agents._generated.agent_run", "ToolTemplateDuplicateReject")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::agent::ToolTemplate::DuplicateConfirm { function_name, fnc_calls_json, fnc_calls_text } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("function_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(function_name, py)?)?;
+                    kwargs.set_item("fnc_calls_json", ::pyo3::types::PyList::new(py, fnc_calls_json.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+                    kwargs.set_item("fnc_calls_text", ::pyo3::IntoPyObjectExt::into_bound_py_any(fnc_calls_text, py)?)?;
+                    crate::host::construct(TOOL_TEMPLATE_DUPLICATE_CONFIRM.import(py, "livekit.agents._generated.agent_run", "ToolTemplateDuplicateConfirm")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::agent::ToolTemplate::ReplyAtTail { call_ids } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("call_ids", ::pyo3::types::PyList::new(py, call_ids.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+                    crate::host::construct(TOOL_TEMPLATE_REPLY_AT_TAIL.import(py, "livekit.agents._generated.agent_run", "ToolTemplateReplyAtTail")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::agent::ToolTemplate::ReplyMaybeCovered { call_ids } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("call_ids", ::pyo3::types::PyList::new(py, call_ids.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+                    crate::host::construct(TOOL_TEMPLATE_REPLY_MAYBE_COVERED.import(py, "livekit.agents._generated.agent_run", "ToolTemplateReplyMaybeCovered")?.as_any(), (), Some(&kwargs))
+                },
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
     static AGENT_DEFINITION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

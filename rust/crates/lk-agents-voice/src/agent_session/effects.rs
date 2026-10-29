@@ -230,7 +230,7 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         Effect::CancelTool { call_id, .. } => {
             Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
         }
-        Effect::ValidateOutput { .. } => return None,
+        Effect::ValidateOutput { .. } | Effect::RenderTemplate { .. } => return None,
     };
     Some(step)
 }
@@ -359,6 +359,13 @@ pub enum Effect {
         speech: crate::agent_activity::scheduling::SpeechId,
         validation: lk_agents_abi::agent::run::ValidationId,
         candidate: lk_agents_abi::agent::OutputCandidate,
+        hosted: crate::tool_executor::HostedTool,
+    },
+    /// `hosted`'s agent renders a `tool_handling` template, reported as
+    /// [`GenEvent::TemplateRendered`](crate::generation::GenEvent::TemplateRendered).
+    RenderTemplate {
+        rendering: crate::tool_executor::Rendering,
+        template: lk_agents_abi::agent::ToolTemplate,
         hosted: crate::tool_executor::HostedTool,
     },
 }

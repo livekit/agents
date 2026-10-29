@@ -366,18 +366,21 @@ class RunContext(Generic[Context_T]):
         On a call, the first update releases control to the model with ``message`` as the
         tool's interim return; later ones are coalesced into a deferred reply by the core.
         """
-        from .tool_executor import UPDATE_TEMPLATE, _render
+        from .agent import _BindingContextVar, _VoiceBinding
+        from .agent_host import _template_tools
+        from .tool_executor import UPDATE_TEMPLATE, render_template
 
         raw = message
-        rendered = _render(
-            UPDATE_TEMPLATE,
-            {
-                "function_name": self.function_call.name,
-                "call_id": self.function_call.call_id,
-                "message": message,
-            },
-        )
         fnc_call = self.function_call
+        args = {"function_name": fnc_call.name, "call_id": fnc_call.call_id, "message": message}
+        binding = _BindingContextVar.get(None)
+        rendered = None
+        if isinstance(binding, _VoiceBinding):
+            options = binding.agent._tool_handling
+            tools = _template_tools(binding.agent, binding)
+            rendered = render_template(options, tools, fnc_call.name, "update_template", args)
+        if rendered is None:
+            rendered = UPDATE_TEMPLATE.format(**args)
         if self._first_update is None:
             # agent.run(): the run streams it as progress; the door that runs the turn forwards it
             if (

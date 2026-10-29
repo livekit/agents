@@ -925,6 +925,11 @@ pub enum GenEvent {
         verdict: lk_agents_core::agent_run::OutputVerdict,
         value: Option<lk_agents_abi::HostRef>,
     },
+    /// The host rendered a `tool_handling` template; `None` keeps the framework's text.
+    TemplateRendered {
+        rendering: crate::tool_executor::Rendering,
+        text: Option<String>,
+    },
     /// `recoverable` when the budget retries it. Then the close policy.
     ProviderFailed {
         speech: SpeechId,

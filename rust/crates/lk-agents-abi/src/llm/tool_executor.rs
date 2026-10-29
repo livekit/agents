@@ -1,5 +1,5 @@
 //! `voice/tool_executor.py`'s option `TypedDict`s and the marshal's wire dicts. The templates are
-//! rendered host-side, so no core code reads them.
+//! rendered host-side (`AgentHost.render_template`), so no core code reads them.
 
 use lk_agents_host_derive::Host;
 
@@ -63,14 +63,15 @@ pub struct AsyncToolOptions {
 /// Can be passed as a plain dict::
 ///
 #[cfg_attr(doctest, doc = "```text")]
-///     AgentSession(
+///     Agent(
+///         instructions="...",
 ///         tool_handling={
 ///             "async_options": {"update_template": "..."},
 ///         },
 ///     )
 #[cfg_attr(doctest, doc = "```")]
 ///
-/// Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+/// Set on ``Agent``, or on an ``AsyncToolset`` for its own tools (most specific wins).
 //
 // Also `total=False`. The nested annotation names the Python class.
 // The `cfg_attr(doctest)` lines fence the Python sample for `cargo test --doc` only; the codegen

@@ -366,6 +366,22 @@ generated inside the agent's `on_enter`, and `on_duplicate=` with
 (`"allow"`, `"reject"`, `"replace"`, or `"confirm"`, which asks the model to
 call again to confirm). See [voice-session.md](voice-session.md).
 
+What the model reads around these calls comes from templates set with
+`Agent(tool_handling={"async_options": {...}})`. An `AsyncToolset(tool_handling=)`
+overrides them for its own tools; the most specific wins:
+
+| Template | Rendered for | Arguments |
+|---|---|---|
+| `update_template` | a `ctx.update(message)`, as the model reads it | `function_name`, `call_id`, `message` |
+| `duplicate_reject_template` | a call `on_duplicate="reject"` refused | `function_name`, `fnc_calls_json`, `fnc_calls_text` |
+| `duplicate_confirm_template` | a call `on_duplicate="confirm"` asks the model to repeat | `function_name`, `fnc_calls_json`, `fnc_calls_text` |
+| `reply_at_tail_template` | the deferred reply to background results, when the agent has not spoken since | `call_ids` |
+| `reply_maybe_covered_template` | the deferred reply, when newer items followed the results | `call_ids` |
+
+Each is a `str.format()` template or a callable taking the arguments and
+returning the text; an unset template keeps the framework's text. The deferred
+reply reads the templates of its latest result's tool.
+
 A tool whose result is a question for the person returns
 `InputRequired(question)`: the agent facing the person asks it in its own
 words, or exactly as written with `verbatim=True`, and the person's next

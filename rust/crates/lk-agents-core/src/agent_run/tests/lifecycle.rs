@@ -110,6 +110,7 @@ fn duplicate_calls_follow_the_tool_policy() {
         run(DuplicateMode::Reject, DuplicateScope::Name, same.clone());
     assert_eq!(executed, [calls[0]]);
     d.send(Event::ToolSettled { call: calls[0], outcome: value("found") });
+    d.send(Event::TemplateRendered { call: calls[1], text: None });
     let (_, ctx, _) = d.request();
     assert!(
         transcript(&ctx.items)
@@ -118,6 +119,22 @@ fn duplicate_calls_follow_the_tool_policy() {
             .1
             .starts_with("Same tool `lookup` is already running")
     );
+
+    // Catches (decision 109): the agent's or toolset's `duplicate_reject_template` ignored.
+    let (calls, _, _, mut d) = run(DuplicateMode::Reject, DuplicateScope::Name, same.clone());
+    let template = d.effects.iter().find_map(|e| match e {
+        Effect::TemplateRender { call, template } if *call == calls[1] => Some(template.clone()),
+        _ => None,
+    });
+    assert!(matches!(
+        template,
+        Some(ToolTemplate::DuplicateReject { function_name, fnc_calls_json, .. })
+            if function_name == "lookup" && fnc_calls_json.len() == 1
+    ));
+    d.send(Event::ToolSettled { call: calls[0], outcome: value("found") });
+    d.send(Event::TemplateRendered { call: calls[1], text: Some("Still looking.".into()) });
+    let (_, ctx, _) = d.request();
+    assert_eq!(transcript(&ctx.items).last().unwrap().1, "Still looking.");
 
     let (calls, executed, cancelled, mut d) =
         run(DuplicateMode::Replace, DuplicateScope::Name, same.clone());

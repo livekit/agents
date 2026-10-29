@@ -4,7 +4,8 @@
 ``lk-agents-core``'s ``AgentRun`` decides what runs, when, and what an outcome means
 (continuation, approval, retries, phrasing); ``AgentHost`` only does host work: it binds and
 validates tool arguments, runs tool bodies and classifies what they returned or raised, renders
-the dynamic instructions, renders read-backs and validates output candidates. Each callback runs
+the dynamic instructions, read-backs and ``tool_handling`` templates, and validates output
+candidates. Each callback runs
 in a copy of the context captured when the invocation was entered (``run()``, or the voice frame's
 install), so what it serves is the binding ``_BindingContextVar`` holds there: a ``_TextRun`` or
 a ``_VoiceBinding``. The records crossing are the generated models of ``lk_agents_abi::agent``
@@ -43,6 +44,11 @@ from .._generated.agent_run import (
     ReadBackAnswerInputRequired,
     ReadBackAnswerQuestion,
     SerializedOutput,
+    ToolTemplate,
+    ToolTemplateDuplicateConfirm,
+    ToolTemplateDuplicateReject,
+    ToolTemplateReplyAtTail,
+    ToolTemplateReplyMaybeCovered,
     ValidatedOutput,
     ValidatedOutputAccepted,
     ValidatedOutputFailed,
@@ -65,7 +71,9 @@ from ..llm.tool_context import (
     InputRequired,
     ModelRetry,
     RawFunctionTool,
+    Tool,
     ToolError,
+    Toolset,
 )
 from ..llm.utils import (
     bind_function_arguments,
@@ -79,6 +87,7 @@ from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
 from .run_result import _tool_body
 from .speech_handle import SpeechHandle
+from .tool_executor import render_template
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -316,6 +325,18 @@ class AgentHost:
                 serialized = None
             return ValidatedOutputAccepted(text=None, value=value, serialized=serialized)
 
+    async def render_template(self, invocation: Invocation, template: ToolTemplate) -> str | None:
+        """The agent's ``tool_handling`` template, or the call's toolset's, rendered with the
+        template's arguments; ``None`` keeps the framework's text."""
+        call = invocation.function_call
+        return render_template(
+            self._agent._tool_handling,
+            _template_tools(self._agent, _BindingContextVar.get(None)),
+            _function_call(invocation).name if call is not None else None,
+            _TEMPLATE_KEYS[type(template)],
+            dataclasses.asdict(template),
+        )
+
     def cancel(self, invocation: Invocation) -> None:
         """Cancels the callback in flight for ``invocation``; it still settles."""
         task = self._running.get(_operation_key(invocation))
@@ -457,6 +478,22 @@ def _voice_tools(binding: _VoiceBinding) -> ToolContext:
         if own.get_function_tool(name) is None
     ]
     return ToolContext([*binding.agent.tools, *extra])
+
+
+def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Toolset]:
+    """Where a tool's ``tool_handling`` override is looked up: the agent's tools, and on a call the
+    session's (an ``AsyncToolset`` passed to ``VoiceSession(tools=)``)."""
+    if isinstance(binding, _VoiceBinding):
+        return [*agent.tools, *binding.session._tools]
+    return list(agent.tools)
+
+
+_TEMPLATE_KEYS: dict[type[ToolTemplate], str] = {
+    ToolTemplateDuplicateReject: "duplicate_reject_template",
+    ToolTemplateDuplicateConfirm: "duplicate_confirm_template",
+    ToolTemplateReplyAtTail: "reply_at_tail_template",
+    ToolTemplateReplyMaybeCovered: "reply_maybe_covered_template",
+}
 
 
 async def _call(body: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:

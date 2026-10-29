@@ -42,13 +42,14 @@ class ToolHandlingOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        AgentSession(
+        Agent(
+            instructions="...",
             tool_handling={
                 "async_options": {"update_template": "..."},
             },
         )
 
-    Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+    Set on ``Agent``, or on an ``AsyncToolset`` for its own tools (most specific wins).
     """
 
     async_options: AsyncToolOptions

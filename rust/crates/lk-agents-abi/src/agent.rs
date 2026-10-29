@@ -159,6 +159,22 @@ pub enum ValidatedOutput {
     Failed(String),
 }
 
+/// A `tool_handling` template the framework asks the host to render (`AsyncToolOptions`), with
+/// the arguments its `*PromptArgs` names.
+#[crate::host(record(module = "agent_run", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolTemplate {
+    /// `on_duplicate="reject"` refused a call of `function_name` while `fnc_calls_json` run.
+    DuplicateReject { function_name: String, fnc_calls_json: Vec<String>, fnc_calls_text: String },
+    /// `on_duplicate="confirm"` asks the model to call again to confirm.
+    DuplicateConfirm { function_name: String, fnc_calls_json: Vec<String>, fnc_calls_text: String },
+    /// The deferred reply's instructions for the updates `call_ids`, the last still the record's
+    /// tail: the agent has not spoken since.
+    ReplyAtTail { call_ids: Vec<String> },
+    /// The deferred reply's instructions when newer items came after the updates.
+    ReplyMaybeCovered { call_ids: Vec<String> },
+}
+
 /// The application callbacks of one agent definition, run by the host object of
 /// `livekit.agents.voice.agent_host.AgentHost` (its methods carry these names). Every call carries
 /// its [`Invocation`] and runs in a copy of the host context it captured; the caller's context is
@@ -220,6 +236,18 @@ pub trait AgentHost: Send + Sync {
         #[host(context)] invocation: &'a Invocation,
         candidate: OutputCandidate,
     ) -> crate::BoxFuture<'a, Result<ValidatedOutput, HostError>>;
+
+    /// The agent's `tool_handling` template for `template`, or its toolset's when the
+    /// invocation's call is of a tool whose toolset overrides it, rendered with its arguments.
+    /// `None` keeps the framework's text.
+    #[host(await)]
+    fn render_template<'a>(
+        &'a self,
+        #[host(context)] _invocation: &'a Invocation,
+        _template: ToolTemplate,
+    ) -> crate::BoxFuture<'a, Result<Option<String>, HostError>> {
+        Box::pin(async move { Ok(None) })
+    }
 
     /// Cancels the callback in flight for `invocation` (its tool call, when it has one). Its
     /// awaited call still settles, with the cancellation as its outcome.

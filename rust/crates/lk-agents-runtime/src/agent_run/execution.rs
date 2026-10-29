@@ -219,6 +219,24 @@ impl Execution {
                     },
                 );
             }
+            Effect::TemplateRender { call, template } => {
+                let host = self.ports.host.clone();
+                let function_call = self.calls.get(&call).cloned();
+                self.invoke(
+                    Work::Call(call),
+                    function_call,
+                    None,
+                    move |inv, events| async move {
+                        let text = host.render_template(&inv, template).await.unwrap_or_else(|e| {
+                            log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
+                            None
+                        });
+                        let _ = events
+                            .send(Report::Core(Event::TemplateRendered { call, text }))
+                            .await;
+                    },
+                );
+            }
             Effect::ToolExecute {
                 call,
                 prepared,

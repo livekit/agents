@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from .events import RunContext
     from .run_result import RunResult, RunUsage
     from .run_stream import RunStream
+    from .tool_executor import ToolHandlingOptions
 
 
 _P = ParamSpec("_P")
@@ -211,6 +212,8 @@ class Agent(Generic[Context_T, Output_T]):
     """Shared agent configuration, parameterized by application context and final output.
 
     ``retries`` sets the retry budgets of every run (``AgentRetries``); an int sets both.
+    ``tool_handling`` sets the templates rendered around its tools' background calls on a voice
+    session (``ToolHandlingOptions``); an ``AsyncToolset`` overrides them for its own tools.
     """
 
     def __init__(
@@ -227,6 +230,7 @@ class Agent(Generic[Context_T, Output_T]):
             llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
         ] = NOT_GIVEN,
         retries: int | AgentRetries | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
     ) -> None:
         if not isinstance(instructions, str):
             raise TypeError("instructions must be a string")
@@ -247,6 +251,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._frozen = False
         # the retry budgets every invocation of this agent reads, in text and on a call
         self._retries = _retries(retries, Retries())
+        self._tool_handling = tool_handling
 
         # a type, or an output function whose return value is the output
         self._output_type_explicit = output_type is not None

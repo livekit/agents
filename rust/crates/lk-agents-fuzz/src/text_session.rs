@@ -409,6 +409,12 @@ impl World {
                     V::ReadBackRendered { call: *call, result: Ok(answer) },
                 );
             }
+            E::TemplateRender { call, .. } => send(
+                timeline,
+                Src::Host,
+                now + self.rng.u64(1..50),
+                V::TemplateRendered { call: *call, text: None },
+            ),
             E::OutputValidate { validation, candidate } => {
                 let output = match candidate {
                     OutputCandidate::Value(v) => v.clone(),

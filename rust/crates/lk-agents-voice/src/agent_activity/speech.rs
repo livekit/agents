@@ -850,6 +850,9 @@ impl Driver {
             GenEvent::OutputValidated { speech, validation, verdict, value } => {
                 self.on_output_validated(speech, validation, verdict, value, out);
             }
+            GenEvent::TemplateRendered { rendering, text } => {
+                self.on_template_rendered(now, rendering, text, out);
+            }
         }
     }
 

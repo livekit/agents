@@ -14,12 +14,12 @@ use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{
-    Batch, CallId, Deferred, Delivery, FillerRun, HostedTool, MadeCall, Pending, Reply, Running,
-    ToolEnd, ToolExecution, ToolGo, ToolOutcome, answer, default_reply_instructions, emit_ended,
-    pair_for,
+    Batch, CallId, Deferred, Delivery, FillerRun, HostedTool, MadeCall, Pending, Rendering,
+    Running, ToolEnd, ToolExecution, ToolGo, ToolOutcome, ToolReply, answer,
+    default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
-use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
+use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
 use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
@@ -435,7 +435,9 @@ impl Driver {
         }
         if reply_required {
             let agent = self.activity.agent.clone();
-            self.activity.tools.pending.push(Pending { agent, items, update_id: id });
+            let mut hosted = running.hosted.clone();
+            hosted.invocation.operation = self.activity.tools.mint_operation();
+            self.activity.tools.pending.push(Pending { agent, items, update_id: id, hosted });
         }
     }
 
@@ -582,7 +584,42 @@ impl Driver {
         let last_pending = batch.last_item_id();
         let last_record = self.session.chat_ctx.last_agent_item_id().map(str::to_owned);
         let at_tail = last_pending.is_some() && last_pending == last_record;
-        let text = default_reply_instructions(&batch.update_ids(), at_tail);
+        // The instructions are the templates of the latest update's call.
+        let Some(mut hosted) = batch.0.last().map(|p| p.hosted.clone()) else { return };
+        let render = self.activity.tools.mint_operation();
+        hosted.invocation.operation = render;
+        let call_ids = batch.update_ids();
+        let template = if at_tail {
+            ToolTemplate::ReplyAtTail { call_ids }
+        } else {
+            ToolTemplate::ReplyMaybeCovered { call_ids }
+        };
+        self.activity.tools.reply = Some(ToolReply::Rendering { render, batch, at_tail });
+        let rendering = Rendering::ToolReply { render };
+        out.machine().push(Effect::RenderTemplate { rendering, template, hosted });
+    }
+
+    /// The deferred reply's instructions are rendered: it is scheduled, unless the floor stopped
+    /// being free meanwhile, when its updates wait for the next idle instant.
+    pub(crate) fn tool_reply_rendered(
+        &mut self,
+        now: Ts,
+        render: u64,
+        text: Option<String>,
+        out: &mut Out,
+    ) {
+        let rendering =
+            |r: &mut ToolReply| matches!(r, ToolReply::Rendering { render: n, .. } if *n == render);
+        let Some(ToolReply::Rendering { batch, at_tail, .. }) =
+            self.activity.tools.reply.take_if(rendering)
+        else {
+            return;
+        };
+        if self.session.closing_past_edge() || self.session.idle.held() || !self.is_idle() {
+            self.activity.tools.pending.splice(0..0, batch.0);
+            return;
+        }
+        let text = text.unwrap_or_else(|| default_reply_instructions(&batch.update_ids(), at_tail));
         self.schedule_tool_reply(now, batch, at_tail, text, out);
     }
 
@@ -628,13 +665,18 @@ impl Driver {
             status: ToolReplyStatus::Scheduled,
             speech,
         }));
-        self.activity.tools.reply = Some(Reply { speech, update_ids });
+        self.activity.tools.reply = Some(ToolReply::Speaking { speech, update_ids });
     }
 
     /// A speech ended: if it was the deferred reply, its fate is reported and the next batch may go.
     pub(crate) fn tool_reply_done(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        let reply = self.activity.tools.reply.take_if(|r| r.speech == speech);
-        let Some(Reply { update_ids, .. }) = reply else { return };
+        let speaking =
+            |r: &mut ToolReply| matches!(r, ToolReply::Speaking { speech: s, .. } if *s == speech);
+        let Some(ToolReply::Speaking { update_ids, .. }) =
+            self.activity.tools.reply.take_if(speaking)
+        else {
+            return;
+        };
         let status = match self.activity.speech_scheduler.handle(speech) {
             Some(h) if h.interrupted() => ToolReplyStatus::Interrupted,
             // The instruction permits an empty response when the agent already covered the result.
