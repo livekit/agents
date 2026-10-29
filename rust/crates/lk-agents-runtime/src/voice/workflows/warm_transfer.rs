@@ -4,12 +4,8 @@
 //! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
 //! makes the LiveKit and Twilio requests.
 
-use lk_agents_voice::workflows::prompts::warm_transfer as p;
-
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::voice::rtc::{
-    DisconnectReason, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO,
-};
+use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
@@ -25,15 +21,14 @@ use std::time::Duration;
 
 const LOG: &str = "livekit.agents";
 
+use lk_agents_voice::workflows::twilio::{self, TwilioError};
 use lk_agents_voice::workflows::warm_transfer::{
     Origination, Transfer, TransferEffects, TransferFailure, TransferOutcome, TransferPlan,
-    TransferTool, TransferToolEffect, human_agent_room_name, transfer_tools,
+    TransferTool, TransferToolEffect, ends_merged_call, human_agent_room_name, transfer_tools,
 };
 
 use lk_agents_abi::Maybe;
 pub use lk_agents_voice::workflows::warm_transfer::TransferConfig;
-
-const TWILIO_API_BASE: &str = "https://api.twilio.com/2010-04-01";
 
 pub use lk_agents_abi::voice::workflows::warm_transfer::TransferHost;
 
@@ -140,14 +135,8 @@ impl HostWarmTransfer {
         name: String,
         arguments: Value,
     ) -> Result<(), TransferFailed> {
-        let tool = match name.as_str() {
-            p::CONNECT_TOOL => TransferTool::Connect,
-            p::DECLINE_TOOL => TransferTool::Decline(
-                arguments.get("reason").and_then(Value::as_str).unwrap_or_default().to_owned(),
-            ),
-            p::VOICEMAIL_TOOL => TransferTool::Voicemail,
-            _ => return Err(TransferFailed::UnknownTool(name)),
-        };
+        let tool =
+            TransferTool::parse(&name, &arguments).ok_or(TransferFailed::UnknownTool(name))?;
         let effect = self.lock().core.tool(tool).ok_or(TransferFailed::NotRunning)?;
         match effect {
             TransferToolEffect::MoveParticipant => self.connect().await,
@@ -346,10 +335,7 @@ impl HostWarmTransfer {
                 let RoomEvent::ParticipantDisconnected { participant, .. } = event else {
                     continue;
                 };
-                if matches!(
-                    participant.kind(),
-                    ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard
-                ) {
+                if ends_merged_call(participant.kind()) {
                     log::info!(
                         target: LOG,
                         "participant disconnected from caller room: {}, closing",
@@ -376,38 +362,21 @@ fn reason_name(reason: DisconnectReason) -> String {
 enum DialError {
     #[error(transparent)]
     Host(#[from] HostError),
-    #[error("Twilio request failed (HTTP {status}, code {})", code.map_or("unknown".to_owned(), |c| c.to_string()))]
-    Twilio { status: u16, code: Option<i64> },
-    #[error("Twilio call creation returned no call SID")]
-    NoCallSid,
+    #[error(transparent)]
+    Twilio(#[from] TwilioError),
     #[error("supervisor did not answer")]
     NoAnswer,
     #[error(transparent)]
     Rtc(#[from] lk_agents_abi::voice::rtc::RtcError),
 }
 
-/// A Twilio request: a form `POST` under the account, with basic auth; the JSON body, `{}` when it
-/// is not an object.
-async fn twilio_request(
+/// One Twilio request through the host; the reply's JSON object.
+async fn twilio_send(
     host: &Arc<dyn TransferHost>,
-    dial: &TwilioDial,
-    path: &str,
-    form: Vec<(String, String)>,
+    request: twilio::Request,
 ) -> Result<serde_json::Map<String, Value>, DialError> {
-    use base64::Engine as _;
-    let auth = base64::engine::general_purpose::STANDARD
-        .encode(format!("{}:{}", dial.account_sid, dial.auth_token));
-    let url = format!("{TWILIO_API_BASE}/Accounts/{}{path}", quote(&dial.account_sid));
-    let headers = BTreeMap::from([("Authorization".to_owned(), format!("Basic {auth}"))]);
-    let (status, body) = host.http_post(url, headers, form).await?;
-    let body = match serde_json::from_str(&body) {
-        Ok(Value::Object(map)) => map,
-        _ => serde_json::Map::new(),
-    };
-    if !(200..300).contains(&status) {
-        return Err(DialError::Twilio { status, code: body.get("code").and_then(Value::as_i64) });
-    }
-    Ok(body)
+    let (status, body) = host.http_post(request.url, request.headers, request.form).await?;
+    Ok(twilio::reply(status, &body)?)
 }
 
 /// Create the outbound call, streaming into the connector: its SID.
@@ -418,27 +387,15 @@ async fn twilio_create_call(
     twiml: String,
     call_token: Option<String>,
 ) -> Result<String, DialError> {
-    let mut form = vec![
-        ("To".to_owned(), dial.phone_number.clone()),
-        ("From".to_owned(), from),
-        ("Twiml".to_owned(), twiml),
-    ];
-    form.extend(call_token.map(|t| ("CallToken".to_owned(), t)));
-    let call = twilio_request(&host, &dial, "/Calls.json", form).await?;
-    match call.get("sid").and_then(Value::as_str) {
-        Some(sid) if !sid.is_empty() => Ok(sid.to_owned()),
-        _ => Err(DialError::NoCallSid),
-    }
+    let call = twilio_send(&host, twilio::create_call(&dial, from, &twiml, call_token)).await?;
+    Ok(twilio::call_sid(&call)?)
 }
 
-/// A call the transfer gave up on, cancelled; one answered meanwhile (error 21220) is completed
-/// instead.
+/// A call the transfer gave up on, cancelled, or completed when it was answered meanwhile.
 async fn twilio_cancel(host: Arc<dyn TransferHost>, dial: TwilioDial, sid: String) {
-    let path = format!("/Calls/{}.json", quote(&sid));
-    let status = |s: &str| vec![("Status".to_owned(), s.to_owned())];
-    let cancelled = match twilio_request(&host, &dial, &path, status("canceled")).await {
-        Err(DialError::Twilio { status: 400, code: Some(21220) }) => {
-            twilio_request(&host, &dial, &path, status("completed")).await.map(drop)
+    let cancelled = match twilio_send(&host, twilio::set_status(&dial, &sid, "canceled")).await {
+        Err(DialError::Twilio(error)) if twilio::complete_instead(&error) => {
+            twilio_send(&host, twilio::set_status(&dial, &sid, "completed")).await.map(drop)
         }
         other => other.map(drop),
     };
@@ -495,10 +452,9 @@ impl Drop for CancelOnDrop {
     }
 }
 
-/// Dial through Twilio: the connector's stream URL, the call created from the caller's number
-/// when a call token preserves it (from the business number again if Twilio rejects that caller
-/// ID, errors 21210 and 21212, which create no call), then the human agent's audio track awaited
-/// in their room, within `ringing_timeout`.
+/// Dial through Twilio: the connector's stream URL, the call created with
+/// [`twilio::first_caller`] (again with [`twilio::retry_caller`] when Twilio rejects it), then
+/// the human agent's audio track awaited in their room, within `ringing_timeout`.
 async fn twilio_originate(
     host: &Arc<dyn TransferHost>,
     dial: &TwilioDial,
@@ -510,15 +466,8 @@ async fn twilio_originate(
 ) -> Result<(), DialError> {
     let connect_url =
         host.connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned()).await?;
-    let twiml = format!(
-        "<Response><Connect><Stream url={}/></Connect></Response>",
-        quoteattr(&connect_url)
-    );
-    let token = dial.call_token.clone().filter(|t| !t.is_empty());
-    let from = match &token {
-        Some(_) => dial.original_caller_number.clone().unwrap_or_default(),
-        None => dial.from_number.clone(),
-    };
+    let twiml = twilio::twiml(&connect_url);
+    let (from, token) = twilio::first_caller(dial);
     let create = |from: String, token: Option<String>| {
         let (reply, created) = tokio::sync::oneshot::channel();
         let (host, dial, twiml) = (host.clone(), dial.clone(), twiml.clone());
@@ -534,11 +483,11 @@ async fn twilio_originate(
         call: Some(Call::Creating(create(from, token.clone()))),
     };
     let mut created = guard.created().await;
-    if let Err(DialError::Twilio { status: 400, code: Some(21210 | 21212) }) = &created
-        && token.is_some()
+    if let Err(DialError::Twilio(error)) = &created
+        && let Some(from) = twilio::retry_caller(dial, token.as_deref(), error)
     {
         log::warn!(target: LOG, "Twilio rejected preserved caller ID; retrying with business caller ID");
-        guard.call = Some(Call::Creating(create(dial.from_number.clone(), None)));
+        guard.call = Some(Call::Creating(create(from, None)));
         created = guard.created().await;
     }
     created?;
@@ -558,48 +507,11 @@ async fn twilio_originate(
     Ok(())
 }
 
-/// `urllib.parse.quote(s, safe="")`.
-fn quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
-/// `xml.sax.saxutils.quoteattr`: escaped and quoted, in single quotes when the value holds a
-/// double quote but no single one.
-fn quoteattr(s: &str) -> String {
-    let escaped = s
-        .replace('&', "&amp;")
-        .replace('>', "&gt;")
-        .replace('<', "&lt;")
-        .replace('\n', "&#10;")
-        .replace('\r', "&#13;")
-        .replace('\t', "&#9;");
-    match (escaped.contains('"'), escaped.contains('\'')) {
-        (true, true) => format!("\"{}\"", escaped.replace('"', "&quot;")),
-        (true, false) => format!("'{escaped}'"),
-        _ => format!("\"{escaped}\""),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use lk_agents_abi::voice::workflows::IoEnableState;
-    #[test]
-    fn twiml_attributes_are_quoted_as_saxutils() {
-        assert_eq!(quoteattr("wss://x/y?a=1&b=2"), "\"wss://x/y?a=1&amp;b=2\"");
-        assert_eq!(quoteattr("a\"b"), "'a\"b'");
-        assert_eq!(quoteattr("a\"b'c"), "\"a&quot;b'c\"");
-        assert_eq!(quote("AC12/3"), "AC12%2F3");
-    }
-
+    use lk_agents_voice::workflows::prompts::warm_transfer as p;
     fn transfer() -> Arc<HostWarmTransfer> {
         let plan = TransferPlan::resolve(TransferConfig {
             sip_call_to: Some("+15550100".to_owned()),

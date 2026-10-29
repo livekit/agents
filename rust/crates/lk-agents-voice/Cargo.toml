@@ -22,6 +22,8 @@ lk-agents-core = { path = "../lk-agents-core" }
 lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
 log.workspace = true
 serde_json.workspace = true
+# The warm transfer's Twilio basic auth.
+base64.workspace = true
 # `replace_words`' ordered replacement table, as the host passes it.
 indexmap.workspace = true
 thiserror.workspace = true

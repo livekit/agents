@@ -277,6 +277,27 @@ pub enum TransferTool {
     Voicemail,
 }
 
+impl TransferTool {
+    /// The briefing agent's call of one of [`transfer_tools`]; `None` for a tool it was not given.
+    pub fn parse(name: &str, arguments: &Value) -> Option<Self> {
+        Some(match name {
+            p::CONNECT_TOOL => TransferTool::Connect,
+            p::DECLINE_TOOL => TransferTool::Decline(
+                arguments.get("reason").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            ),
+            p::VOICEMAIL_TOOL => TransferTool::Voicemail,
+            _ => return None,
+        })
+    }
+}
+
+/// Whether a participant leaving the caller's room after the merge ends the call (the room is
+/// deleted): the caller or the human agent, not an agent or egress.
+pub fn ends_merged_call(kind: lk_agents_abi::voice::rtc::ParticipantKind) -> bool {
+    use lk_agents_abi::voice::rtc::ParticipantKind;
+    matches!(kind, ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard)
+}
+
 pub enum TransferToolEffect {
     MoveParticipant,
     Settled(TransferEffects),
