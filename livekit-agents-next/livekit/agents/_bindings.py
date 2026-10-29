@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     from ._generated.llm import ChatChunk
     from ._generated.metrics import STTMetrics
     from ._generated.stt import STT, SpeechData, SpeechEvent
+    from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
+    from .stt import FallbackAdapter as _SttFallback
+    from .tts import FallbackAdapter as _TtsFallback
     from .utils.audio import AudioBuffer
 
 _T = TypeVar("_T")
@@ -49,6 +52,12 @@ class _MetricsProvider(Protocol):
     def emit(self, event: Literal["metrics_collected"], metrics: BaseModel) -> None: ...
 
 
+class _FallbackChain(Protocol):
+    @property
+    def active_index(self) -> int: ...
+    async def aclose(self) -> None: ...
+
+
 def on_loop(owner: object, build: Callable[[], _T]) -> _T:
     """``build()`` once per running event loop: a core object over host providers calls them on
     the loop it was built on, so an object shared by two loops (two jobs on threads, per-test
@@ -62,9 +71,11 @@ def on_loop(owner: object, build: Callable[[], _T]) -> _T:
     return native
 
 
-def built_on_loop(owner: Any) -> list[Any]:
+def built_on_loop(owner: _LlmFallback | _SttFallback | _TtsFallback) -> list[_FallbackChain]:
     """What ``on_loop`` built for ``owner``, the running loop's first."""
-    built = dict(owner.__dict__.get("_core_by_loop", {}))
+    built: dict[asyncio.AbstractEventLoop, _FallbackChain] = dict(
+        owner.__dict__.get("_core_by_loop", {})
+    )
     try:
         mine = built.pop(asyncio.get_running_loop(), None)
     except RuntimeError:
@@ -85,13 +96,13 @@ def overrides(obj: object, base: type, *names: str) -> bool:
     return any(getattr(type(obj), n) is not getattr(base, n) for n in names)
 
 
-_pending_cleanup: set[asyncio.Future[Any]] = set()
+_pending_cleanup: set[asyncio.Future[object]] = set()
 
 
-async def cancel_and_wait_bounded(*tasks: asyncio.Future[Any], timeout: float) -> bool:
+async def cancel_and_wait_bounded(*tasks: asyncio.Task[object], timeout: float) -> bool:
     """Cancel on the owning loop, retaining cleanup after the native settlement limit."""
 
-    def settled(finished: asyncio.Future[Any]) -> None:
+    def settled(finished: asyncio.Future[object]) -> None:
         _pending_cleanup.discard(finished)
         if not finished.cancelled():
             finished.exception()
@@ -99,7 +110,7 @@ async def cancel_and_wait_bounded(*tasks: asyncio.Future[Any], timeout: float) -
     for task in tasks:
         _pending_cleanup.add(task)
         task.add_done_callback(settled)
-        if not task.done() and (not isinstance(task, asyncio.Task) or not task.cancelling()):
+        if not task.done() and not task.cancelling():
             task.cancel()
     if not tasks:
         return True
