@@ -3,6 +3,7 @@
 //! deadline on the clock. Updates (stream events, then the settled result) reach the consumer
 //! through a bounded queue the driver waits on; nothing is dropped.
 
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,6 +48,9 @@ pub struct AgentRunHandle {
     cancel: Option<oneshot::Sender<()>>,
     progress: Progress,
     model_error: oneshot::Receiver<ProviderError>,
+    /// The driver's owner: dropping the handle cancels the run through `cancel`, and the driver
+    /// ends after its cleanup.
+    _driver: Arc<TaskSet>,
 }
 
 /// Where a tool body's `ctx.update(message)` reaches its run: the host operation running the body
@@ -120,23 +124,19 @@ pub fn start(
     let (model_error_tx, model_error) = oneshot::channel();
     let driver = Driver {
         run,
-        work: Execution::new(
-            ports,
-            runtime.clone(),
-            Reporter {
-                id: input_id,
-                tx: events_tx,
-            },
-        ),
+        work: Execution::new(ports, runtime.clone(), Reporter { id: input_id, tx: events_tx }),
         updates: update_tx,
         model_error: Some(model_error_tx),
         finished: false,
     };
-    runtime.spawn(driver.drive(events, progress, cancelled));
+    let driving = Arc::new(TaskSet::default());
+    let spawner = TokioSpawner::new(runtime.clone());
+    driving.spawn(&spawner, "agent run", driver.drive(events, progress, cancelled));
     let handle = AgentRunHandle {
         cancel: Some(cancel),
         progress: Progress(progress_tx),
         model_error,
+        _driver: driving,
     };
     Ok((handle, update_rx))
 }

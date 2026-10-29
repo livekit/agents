@@ -17,6 +17,7 @@ use lk_agents_media::recorder::{RecordingCommand, RecordingLimits};
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
@@ -65,6 +66,8 @@ pub struct SessionRecorder {
     tx: mpsc::Sender<Queued>,
     shared: Arc<Shared>,
     runtime: tokio::runtime::Handle,
+    /// The worker's supervisor and the finalization, which the recording owns past any waiter.
+    tasks: Arc<TaskSet>,
 }
 
 impl Shared {
@@ -161,7 +164,8 @@ impl SessionRecorder {
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
-        let recorder = Self { tx, shared: shared.clone(), runtime: runtime.clone() };
+        let recorder =
+            Self { tx, shared: shared.clone(), runtime: runtime.clone(), tasks: Arc::default() };
         let worker_shared = shared.clone();
         let worker = workers
             .try_spawn(MediaWorkerClass::Recording, move || {
@@ -177,7 +181,8 @@ impl SessionRecorder {
                 run(file, rx, worker_shared)
             })
             .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
-        runtime.spawn(async move {
+        let spawner = TokioSpawner::new(runtime.clone());
+        recorder.tasks.spawn(&spawner, "recording worker", async move {
             let outcome = worker
                 .await
                 .unwrap_or_else(|error| Err(RecordingFailure::Worker(error.to_string())));
@@ -317,7 +322,8 @@ impl SessionRecorder {
             let tx = self.tx.clone();
             // Finalization is owned by the recording, so cancellation of this waiter cannot
             // strand admission closed without delivering the reserved finish barrier.
-            self.runtime.spawn(async move {
+            let spawner = TokioSpawner::new(self.runtime.clone());
+            self.tasks.spawn(&spawner, "recording finalization", async move {
                 let _admission = shared.admission.write().await;
                 if matches!(
                     *shared.status.borrow(),

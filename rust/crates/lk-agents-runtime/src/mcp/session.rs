@@ -1,5 +1,7 @@
 //! The SDK service has one owner; requests borrow its peer, never its join handle.
 
+use lk_agents_abi::SpawnerExt;
+use lk_agents_net::task::TokioSpawner;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,6 +52,8 @@ struct Connection {
     state: Mutex<ConnectionSettlement>,
     changed: Notify,
     receipt: Arc<TransportReceipt>,
+    /// The close's settlement, which holds the connection until it ends.
+    closing: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
 }
 
 struct Call {
@@ -78,7 +82,7 @@ impl Connection {
         let Some(service) = self.service.lock().unwrap().take() else { return };
         let owner = self.clone();
         // The owner outlives a cancelled close waiter or a missed cleanup deadline.
-        tokio::spawn(async move {
+        let closing = TokioSpawner::current().spawn(async move {
             let joined = service.waiting().await;
             owner.receipt.closed().await;
             let clean = matches!(
@@ -97,6 +101,7 @@ impl Connection {
             }
             owner.changed.notify_waiters();
         });
+        let _ = self.closing.set(closing);
     }
 
     async fn settled(&self) {
@@ -362,6 +367,7 @@ impl McpSession {
             state: Mutex::default(),
             changed: Notify::new(),
             receipt,
+            closing: std::sync::OnceLock::new(),
         }));
         Ok(())
     }

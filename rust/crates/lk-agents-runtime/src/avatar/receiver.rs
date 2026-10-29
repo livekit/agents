@@ -6,7 +6,7 @@ use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
-use lk_agents_abi::{AbortHandle, BoxFuture, Clock, Spawner, SpawnerExt};
+use lk_agents_abi::{BoxFuture, Clock, OwnedTask, Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportStep, frame_size};
 use lk_agents_voice::avatar::{
@@ -170,7 +170,8 @@ impl RxInner {
 pub struct DataStreamAudioReceiver {
     inner: Arc<RxInner>,
     spawner: Arc<dyn Spawner>,
-    tasks: Mutex<Vec<AbortHandle>>,
+    /// The pump and the main loop; cancelled by the close.
+    tasks: Mutex<Vec<OwnedTask>>,
 }
 
 impl Drop for DataStreamAudioReceiver {
@@ -320,8 +321,8 @@ impl DataStreamAudioReceiver {
             }
         };
         let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
-        tasks.push(self.spawner.spawn_unboxed(pump));
-        tasks.push(self.spawner.spawn_unboxed(main));
+        tasks.push(self.spawner.spawn(pump));
+        tasks.push(self.spawner.spawn(main));
         Ok(())
     }
 
@@ -363,9 +364,8 @@ impl DataStreamAudioReceiver {
 
     pub fn aclose(&self) {
         self.inner.end(ReceiverEnd::Closed);
-        for t in self.tasks.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
-            t.abort();
-        }
+        // Cancelled, not awaited.
+        drop(std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())));
     }
 }
 

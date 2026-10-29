@@ -66,12 +66,12 @@ pub struct AvatarRunner {
     next_call: std::sync::atomic::AtomicU64,
     spawner: Arc<dyn Spawner>,
     io_tasks: Arc<TaskSet>,
-    owner: lk_agents_abi::AbortHandle,
+    /// The queue owner's loop; cancelled with the runner.
+    _owner: lk_agents_abi::OwnedTask,
 }
 
 impl Drop for AvatarRunner {
     fn drop(&mut self) {
-        self.owner.abort();
         self.io_tasks.abort_all();
     }
 }
@@ -93,7 +93,7 @@ impl AvatarRunner {
         let owner = {
             let (events, answers, io_tasks, spawner) =
                 (events.clone(), Arc::clone(&answers), Arc::clone(&io_tasks), Arc::clone(&spawner));
-            spawner.clone().spawn_unboxed(async move {
+            spawner.clone().spawn(async move {
                 let mut core = RunnerCore::new(lazy_publish);
                 let mut ready = std::collections::VecDeque::new();
                 loop {
@@ -119,7 +119,9 @@ impl AvatarRunner {
                             Effect::CancelIo => {
                                 let (io_tasks, events, clock) =
                                     (Arc::clone(&io_tasks), events.clone(), Arc::clone(&clock));
-                                spawner.spawn_unboxed(async move {
+                                // Detached: it ends once the cancelled ops settled, and only
+                                // reports to the loop, which ignores it once gone.
+                                spawner.spawn_detached(async move {
                                     io_tasks.cancel_and_wait(&*clock).await;
                                     let _ = events.send(Event::IoCancelled);
                                 });
@@ -143,7 +145,7 @@ impl AvatarRunner {
             next_call: Default::default(),
             spawner,
             io_tasks,
-            owner,
+            _owner: owner,
         }
     }
 

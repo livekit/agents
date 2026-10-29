@@ -1,5 +1,7 @@
 //! SDK transports with runtime-owned reader and process settlement receipts.
 
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_net::task::TokioSpawner;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -122,7 +124,8 @@ impl<T: Transport<RoleClient> + 'static> Drop for Observed<T> {
     fn drop(&mut self) {
         if let Some(mut inner) = self.inner.take() {
             let receipt = self.receipt.clone();
-            tokio::spawn(async move {
+            // Detached: the transport is being dropped; finishing settles its receipt.
+            TokioSpawner::current().spawn_detached(async move {
                 finish(&mut inner, &receipt).await;
             });
         }
@@ -133,7 +136,8 @@ pub(super) struct HostStreams {
     host: Arc<dyn McpTransport>,
     invocation: McpInvocation,
     receiver: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
-    reader: tokio::task::JoinHandle<()>,
+    /// Cancelled with the streams.
+    reader: OwnedTask,
     receipt: Arc<TransportReceipt>,
 }
 impl HostStreams {
@@ -147,7 +151,7 @@ impl HostStreams {
         let reader_receipt = receipt.clone();
         let reader_invocation = invocation.clone();
         let reader_guard = receipt.reader();
-        let reader = tokio::spawn(async move {
+        let reader = TokioSpawner::current().spawn(async move {
             let _reader_guard = reader_guard;
             loop {
                 let value = match reader_host.receive(&reader_invocation).await {
@@ -191,10 +195,10 @@ impl Transport<RoleClient> for HostStreams {
         self.receiver.recv().await
     }
     async fn close(&mut self) -> Result<(), McpError> {
-        self.reader.abort();
+        self.reader.cancel();
         match (&mut self.reader).await {
             Ok(()) => {}
-            Err(error) if error.is_cancelled() => {}
+            Err(TaskError::Cancelled) => {}
             Err(error) => self.receipt.update(|state| state.cleanup_failed(conn(error))),
         }
         self.host.close(&self.invocation).await.map_err(McpError::Host)

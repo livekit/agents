@@ -8,6 +8,7 @@ use lk_agents_abi::utils::clock::RealClock;
 use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Mutex;
 
 #[derive(Clone)]
@@ -141,9 +142,15 @@ fn start(
         output: None,
         finished: false,
     };
-    runtime.spawn(driver.drive(message, events, progress, releases, cancelled));
+    let driving = Arc::new(TaskSet::default());
+    let spawner = TokioSpawner::new(runtime.clone());
+    driving.spawn(
+        &spawner,
+        "text session",
+        driver.drive(message, events, progress, releases, cancelled),
+    );
     Ok((
-        Updates { cancel: Some(cancel), receiver, clock },
+        Updates { cancel: Some(cancel), receiver, clock, _driver: driving },
         Control { release: release_tx, progress: progress_tx },
     ))
 }
@@ -152,6 +159,9 @@ pub struct Updates {
     cancel: Option<oneshot::Sender<()>>,
     receiver: mpsc::Receiver<Result<TextSessionUpdate, ProviderError>>,
     clock: Arc<dyn Clock>,
+    /// The driver's owner: dropping the updates cancels the session through `cancel`, and the
+    /// driver ends after its cleanup.
+    _driver: Arc<TaskSet>,
 }
 
 impl Drop for Updates {
