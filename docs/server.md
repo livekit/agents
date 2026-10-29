@@ -116,7 +116,7 @@ if __name__ == "__main__":
 | --- | --- |
 | `agent_name`, `storage`, `preload_modules`, `setup_fnc` | see above and below |
 | `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
-| `num_idle_processes` | job processes kept warm ahead of dispatch |
+| `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |
 | `load_threshold` | the load (0 to 1) above which the worker stops taking jobs |
 | `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
 | `drain_timeout` | how long a draining worker waits for its running jobs |

@@ -501,7 +501,7 @@ impl ServerRuntime {
         settings.prometheus_multiproc_dir = directory;
         if let Some(cpus) = cpus {
             settings.num_idle_processes =
-                Some(crate::EnvOption::Split { dev: 0, prod: cpus.ceil() as u32 });
+                Some(crate::EnvOption::Split { dev: 0, prod: (cpus.ceil() as u32).min(4) });
         }
         if !start.has_rtc {
             settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
