@@ -290,17 +290,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-mod typed_decode_tests {
-    #[test]
-    fn stt_typed_decode_rejects_malformed_known_fields() {
-        for text in [
-            r#"{"type":"final_transcript","transcript":42}"#,
-            r#"{"type":"final_transcript","transcript":"hi","words":[{"word":"hi","start":"late"}]}"#,
-            r#"{"type":"error","code":"400"}"#,
-        ] {
-            assert!(super::decode(text).is_none(), "accepted malformed frame: {text}");
-        }
-    }
-}

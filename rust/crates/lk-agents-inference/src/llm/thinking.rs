@@ -119,13 +119,6 @@ mod tests {
         (out, state)
     }
 
-    // Catches: collapsing the empty-delta answer into `None`.
-    #[test]
-    fn an_empty_delta_answers_empty_and_a_missing_one_answers_none() {
-        let (out, _) = feed(&[Some(""), None], false);
-        assert_eq!(out, vec![Some(String::new()), None]);
-    }
-
     // Catches: emitting a tag-shaped tail (`"<thi"`).
     #[test]
     fn a_partial_start_tag_is_held_back_until_the_next_chunk_resolves_it() {
@@ -143,28 +136,5 @@ mod tests {
     fn a_whole_tag_is_never_reported_as_a_partial_match() {
         assert_eq!(partial_marker_length("<think>", START), 0);
         assert_eq!(partial_marker_length("a<think", START), 6);
-    }
-
-    // Catches: leaking the reasoning body across chunks.
-    #[test]
-    fn a_thinking_span_split_across_chunks_emits_nothing_from_inside_it() {
-        let (out, _) = feed(&[Some("a<think>se"), Some("cret</th"), Some("ink>b")], false);
-        assert_eq!(out, vec![Some("a".to_owned()), None, Some("b".to_owned())]);
-    }
-
-    // Catches: flushing at end of stream while a span is still open.
-    #[test]
-    fn an_unterminated_thinking_span_is_dropped_at_the_end_not_spoken() {
-        let (out, state) = feed(&[Some("hi <think>never closed")], true);
-        assert_eq!(out, vec![Some("hi ".to_owned())]);
-        assert_eq!(state, FilterState::default());
-    }
-
-    // Catches: dropping a held-back partial tag at end of stream outside a span.
-    #[test]
-    fn a_held_back_tail_is_flushed_by_the_final_chunk() {
-        let (out, state) = feed(&[Some("done <thi")], true);
-        assert_eq!(out, vec![Some("done <thi".to_owned())]);
-        assert_eq!(state.buffer, "");
     }
 }

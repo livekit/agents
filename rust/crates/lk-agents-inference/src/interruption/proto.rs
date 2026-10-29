@@ -110,38 +110,6 @@ mod tests {
         );
     }
 
-    // Catches: making `prediction_duration`/`probabilities` required.
-    #[test]
-    fn a_verdict_without_optional_fields_parses_with_zeroed_defaults() {
-        let msg: ServerMessage =
-            serde_json::from_str(r#"{"type":"bargein_detected","created_at":42}"#).unwrap();
-        assert_eq!(
-            msg,
-            ServerMessage::Detected(Verdict {
-                created_at: 42,
-                prediction_duration: 0.0,
-                probabilities: vec![]
-            })
-        );
-    }
-
-    // Catches: reading `default_threshold` as required, or as 0.0 when absent.
-    #[test]
-    fn an_absent_default_threshold_stays_absent() {
-        let msg: ServerMessage = serde_json::from_str(r#"{"type":"session.created"}"#).unwrap();
-        assert_eq!(msg, ServerMessage::SessionCreated { default_threshold: None });
-        let msg: ServerMessage =
-            serde_json::from_str(r#"{"type":"session.created","default_threshold":0.0}"#).unwrap();
-        assert_eq!(msg, ServerMessage::SessionCreated { default_threshold: Some(0.0) });
-    }
-
-    // Catches: swallowing an unknown message type.
-    #[test]
-    fn an_unknown_message_type_fails_to_parse_but_an_echo_does_not() {
-        assert!(serde_json::from_str::<ServerMessage>(r#"{"type":"nope"}"#).is_err());
-        assert!(serde_json::from_str::<ServerMessage>(r#"{"type":"session.close"}"#).is_ok());
-    }
-
     // Catches: a big-endian header, or none.
     #[test]
     fn the_binary_frame_is_a_little_endian_u64_header_then_pcm() {

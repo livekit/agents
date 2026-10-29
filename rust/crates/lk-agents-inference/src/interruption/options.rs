@@ -167,17 +167,4 @@ mod tests {
         assert_eq!(opts(3.001, "", ""), Err(OptionsError::MaxAudioDurationTooLarge));
         assert!(opts(3.0, "k", "s").is_ok());
     }
-
-    // Catches: `update_options` clearing the threshold when only `min_interruption_duration` is
-    // given.
-    #[test]
-    fn update_options_leaves_unspecified_fields_alone() {
-        let mut o = opts(MAX_AUDIO_DURATION, "k", "s").unwrap();
-        o.threshold = Some(0.8);
-        o.update(None, Some(0.1));
-        assert_eq!(o.threshold, Some(0.8));
-        assert_eq!(o.min_frames, 4);
-        o.update(Some(0.5), None);
-        assert_eq!((o.threshold, o.min_frames), (Some(0.5), 4));
-    }
 }

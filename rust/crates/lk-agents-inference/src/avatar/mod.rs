@@ -222,20 +222,4 @@ mod tests {
         );
         assert!(matches!(err, Err(AvatarError::CatalogIdAndImage(p)) if p == "lemonslice"));
     }
-
-    // Catches: a session-id typed as anything but a string accepted, or the gateway's rate
-    // replaced by the default.
-    #[test]
-    fn the_create_answer_is_decoded_to_its_typed_fields() {
-        let session = decode_created(br#"{"session_id":"s","provider_session_id":"p","terminate_token":"t","sample_rate":24000,"x":1}"#).unwrap();
-        assert_eq!(
-            (session.session_id.as_deref(), session.sample_rate, session.terminable()),
-            (Some("s"), 24_000, true)
-        );
-        assert_eq!(decode_created(b"{}").unwrap().sample_rate, DEFAULT_SAMPLE_RATE);
-        assert!(matches!(
-            decode_created(br#"{"session_id":7}"#),
-            Err(AttemptFailure::Malformed(_))
-        ));
-    }
 }

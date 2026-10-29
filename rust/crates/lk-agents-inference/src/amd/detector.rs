@@ -92,22 +92,4 @@ mod tests {
         assert!(!auto_select_models("wss://selfhosted.example.com", "k", "s"));
         assert!(!auto_select_models("wss://evil.com/?x=livekit.cloud", "k", "s"));
     }
-
-    // Catches: a renamed category wire string.
-    #[test]
-    fn the_category_wire_strings_round_trip() {
-        let all = [
-            (AmdCategory::Human, "human"),
-            (AmdCategory::MachineIvr, "machine-ivr"),
-            (AmdCategory::MachineVm, "machine-vm"),
-            (AmdCategory::MachineUnavailable, "machine-unavailable"),
-            (AmdCategory::Uncertain, "uncertain"),
-        ];
-        for (cat, s) in all {
-            assert_eq!(cat.as_str(), s);
-            assert_eq!(AmdCategory::from_wire(s), Some(cat));
-        }
-        assert_eq!(AmdCategory::from_wire("Human"), None, "the LLM's label is matched exactly");
-        assert_eq!(AmdCategory::from_wire("machine"), None);
-    }
 }

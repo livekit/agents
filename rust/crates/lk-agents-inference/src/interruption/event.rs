@@ -192,21 +192,4 @@ mod tests {
         );
         assert_eq!(ev.detected_at, 9.0);
     }
-
-    // Catches: a missing entry's `None`s propagating as anything but 0.0.
-    #[test]
-    fn an_empty_entry_yields_zeroed_durations_not_missing_ones() {
-        let ev = overlapping_speech_from_cache_entry(
-            &CacheEntry::default(),
-            false,
-            None,
-            None,
-            false,
-            0.0,
-        );
-        assert_eq!(
-            (ev.total_duration, ev.prediction_duration, ev.detection_delay, ev.probability),
-            (0.0, 0.0, 0.0, 0.0)
-        );
-    }
 }

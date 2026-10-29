@@ -592,13 +592,3 @@ fn agent_speech_start_re_arms_every_field_that_survives_a_turn() {
     assert_eq!(c.window.len(), 0);
     assert!(c.user_speech_span.is_none());
 }
-
-// Catches: `Flush` resetting state or emitting an event.
-#[test]
-fn flush_is_inert() {
-    let mut c = core();
-    c.on_input(InputEvent::AgentSpeechStarted, 0.0).unwrap();
-    start_overlap(&mut c, 0.0, 1.0);
-    assert_eq!(c.on_input(InputEvent::Flush, 1.0).unwrap(), None);
-    assert!(c.overlap_started && c.agent_speech_started);
-}

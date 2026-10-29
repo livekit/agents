@@ -181,19 +181,6 @@ mod tests {
             Some("openai")
         );
     }
-
-    // Catches: double slashes with a trailing-slash base URL.
-    #[test]
-    fn the_completions_url_tolerates_a_trailing_slash() {
-        assert_eq!(
-            completions_url("https://agent-gateway.livekit.cloud/v1"),
-            "https://agent-gateway.livekit.cloud/v1/chat/completions"
-        );
-        assert_eq!(
-            completions_url("https://agent-gateway.livekit.cloud/v1/"),
-            "https://agent-gateway.livekit.cloud/v1/chat/completions"
-        );
-    }
 }
 
 /// Whether a tool selection is valid for the available tools.

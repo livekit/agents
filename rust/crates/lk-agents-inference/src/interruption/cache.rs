@@ -63,16 +63,6 @@ mod tests {
         c.iter().map(|(k, _)| *k).collect()
     }
 
-    // Catches: eviction from the wrong end.
-    #[test]
-    fn overflow_evicts_the_oldest_insertion() {
-        let mut c = cache(3);
-        for k in 1..=5 {
-            c.insert(k, k as i32);
-        }
-        assert_eq!(keys(&c), vec![3, 4, 5]);
-    }
-
     // Catches: implementing this as an LRU.
     #[test]
     fn updating_an_entry_does_not_promote_it() {

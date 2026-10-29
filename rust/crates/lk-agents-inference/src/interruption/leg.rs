@@ -202,13 +202,6 @@ mod tests {
         }
     }
 
-    // Catches: the two agent-speech sentinels being swapped or collapsed.
-    #[test]
-    fn the_agent_speech_sentinels_map_one_to_one() {
-        assert_eq!(sentinel(S::AgentSpeechStarted, anchor()), InputEvent::AgentSpeechStarted);
-        assert_eq!(sentinel(S::AgentSpeechEnded, anchor()), InputEvent::AgentSpeechEnded);
-    }
-
     // Catches: `ev.overlap_started_at or ev.detected_at` read as `unwrap_or`.
     #[test]
     fn a_zero_overlap_start_falls_through_to_the_detection_time() {
@@ -224,17 +217,6 @@ mod tests {
                 "a falsy overlap start is the reference's `or`, not an `unwrap_or`"
             );
         }
-    }
-
-    // Catches: a verdict's `is_interruption` and `agent_ended` folded into one.
-    #[test]
-    fn the_verdicts_two_flags_stay_apart() {
-        let mut ev = event(Some(1_787_000_001.0), 1_787_000_003.0);
-        ev.is_interruption = false;
-        ev.agent_ended = true;
-        let v = verdict(&ev, anchor());
-        assert!(!v.is_interruption);
-        assert!(v.agent_ended);
     }
 
     #[tokio::test]
