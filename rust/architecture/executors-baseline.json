@@ -1,5 +1,3 @@
 {
-  "executor:rust/crates/lk-agents-runtime/src/voice/background_audio.rs:tokio-spawn": 5,
-  "executor:rust/crates/lk-agents-runtime/src/voice/background_audio.rs:tokio-time": 3,
   "executor:rust/crates/lk-agents-runtime/src/voice/console.rs:tokio-net": 2
 }
