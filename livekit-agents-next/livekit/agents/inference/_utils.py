@@ -40,7 +40,7 @@ def get_default_inference_url() -> str:
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
     """The gateway's quota headers as log fields; empty when it stamped none."""
-    return _core.inference_quota_usage(list(headers.items()))  # type: ignore[no-any-return]
+    return dict(_core.inference_quota_usage(list(headers.items())))
 
 
 def default_api_key(explicit: str | None) -> str:

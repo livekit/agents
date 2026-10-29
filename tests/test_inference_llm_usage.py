@@ -143,3 +143,12 @@ async def test_reasoning_tokens_default_to_zero_without_details() -> None:
         await client.close()
 
     assert usage_chunks[0].reasoning_tokens == 0
+
+
+# Catches: the quota fields returned as pairs, so the 429 handler's `**` raised TypeError
+# instead of the APIStatusError.
+def test_a_rate_limit_logs_the_quota_the_gateway_stamped() -> None:
+    from livekit.agents.inference._utils import extract_quota_usage
+
+    headers = httpx.Headers({"x-livekit-inference-rpm-limit": "60", "content-type": "text/plain"})
+    assert {**extract_quota_usage(headers)} == {"rpm_limit": "60"}
