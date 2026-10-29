@@ -1,13 +1,16 @@
 //! Runs the IVR navigator over the session's event feed and supplied clock.
 
-use lk_agents_abi::SpawnerExt;
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{Origin, PeerHandle};
 use lk_agents_voice::ivr::{IvrEffect, IvrSystem};
+use std::sync::Arc;
 
-pub(super) fn start(peer: PeerHandle, enabled: bool) {
+/// The navigator runs among the session's tasks until it closes.
+pub(super) fn start(peer: PeerHandle, enabled: bool, tasks: &Arc<TaskSet>) {
     let mut feed = peer.subscribe();
     let mut system = IvrSystem::new(peer.time.now(), enabled);
-    peer.spawner.clone().spawn_unboxed(async move {
+    let spawner = peer.spawner.clone();
+    tasks.spawn(spawner.as_ref(), "ivr navigator", async move {
         perform(&peer, system.take_effects());
         while !system.closed() {
             let deadline = system.wake_at();

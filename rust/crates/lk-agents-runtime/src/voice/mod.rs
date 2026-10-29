@@ -21,7 +21,8 @@ pub use legs::Executor;
 
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
-use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, SpawnerExt};
+use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
+use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_session::{
     Driver, Event, Now, PeerHandle, QueueOwner, SessionCores, Tx,
 };
@@ -33,8 +34,8 @@ use std::sync::Arc;
 pub use lk_agents_voice::agent_session::{SessionApi, SessionStartPlans};
 pub use lk_agents_voice::amd::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
-pub use lk_agents_voice::workflows::WorkflowRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
+pub use lk_agents_voice::workflows::WorkflowRules;
 
 pub struct Runtime {
     pub driver: Driver,
@@ -57,14 +58,14 @@ pub struct Runtime {
     reports: Tx,
     frames_tx: tokio::sync::mpsc::Sender<AudioFrame>,
     /// The microphone, its id and its reader.
-    source: Option<(ResourceId, AbortHandle)>,
+    source: Option<(ResourceId, TaskId)>,
     /// Where each awaited call's answer goes, until the core answers it.
     calls: std::collections::BTreeMap<
         lk_agents_voice::agent_session::RequestId,
         lk_agents_voice::agent_session::ReplyTo,
     >,
     /// The keyterm detection pass in flight, by request.
-    keyterms: Option<(u64, AbortHandle)>,
+    keyterms: Option<(u64, TaskId)>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
     realtime_players: std::collections::BTreeMap<
         lk_agents_voice::agent_activity::scheduling::SpeechId,
@@ -72,16 +73,19 @@ pub struct Runtime {
     >,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
     video_parts: audio::VideoForwarderParts,
-    video_forwarder: Option<AbortHandle>,
+    video_forwarder: Option<TaskId>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
     pending_legs: std::collections::BTreeMap<ResourceId, legs::PendingLeg>,
     /// The turn and interruption detectors, addressed by the core's effects.
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// The turn detector's predictions in flight, aborted at its close.
-    predictions: Vec<AbortHandle>,
+    predictions: Vec<TaskId>,
     interruption:
         Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
+    /// The executor's tasks: readers, drains, pumps, provider calls and closes. Each ends on its
+    /// own (most at `Closing`); dropping the runtime cancels none of them.
+    tasks: Arc<TaskSet>,
 }
 
 impl Runtime {
@@ -130,12 +134,13 @@ impl Runtime {
             eot,
             predictions: Vec::new(),
             interruption,
+            tasks: Arc::default(),
         };
         if let Some(session) = realtime_events {
             runtime.pump_realtime(session);
         }
         let ivr_detection = runtime.shared.view.borrow().config.effective.turn.ivr_detection();
-        ivr::start(runtime.peer.clone(), ivr_detection);
+        ivr::start(runtime.peer.clone(), ivr_detection, &runtime.tasks);
         if let Some(room_io) = room_io {
             let io_queue = runtime.reports.clone();
             let rtc_queue = runtime.reports.clone();
@@ -149,9 +154,10 @@ impl Runtime {
         }
         runtime.start_legs(opening);
         // The camera, one task per source, replaced whole by `SetVideoInput`.
-        runtime.video_forwarder = runtime.video_in.clone().map(|input| {
-            runtime.shared.spawner.spawn_unboxed(runtime.video_parts.clone().pump(input))
-        });
+        runtime.video_forwarder = runtime
+            .video_in
+            .clone()
+            .map(|input| runtime.spawn("video forwarder", runtime.video_parts.clone().pump(input)));
         // The session's first microphone is the host's attached one: nothing to tell it.
         if let Some(source) = source {
             runtime.read(source);
@@ -309,7 +315,7 @@ impl Runtime {
     fn set_source(&mut self, input: Option<ResourceId>) {
         let resources = self.shared.resources.clone();
         if let Some((old, reader)) = self.source.take() {
-            reader.abort();
+            self.tasks.cancel(reader);
             if let Some(old) = resources.audio_input(old) {
                 old.on_detached();
             }
@@ -324,6 +330,16 @@ impl Runtime {
         self.read(source);
     }
 
+    /// Runs `work` as one of the executor's tasks.
+    #[track_caller]
+    fn spawn(
+        &self,
+        name: &str,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> TaskId {
+        self.tasks.spawn(self.shared.spawner.as_ref(), name, work)
+    }
+
     fn read(&mut self, source: ResourceId) {
         let Some(input) = self.shared.resources.audio_input(source) else { return };
         let reader = read_audio(
@@ -332,7 +348,7 @@ impl Runtime {
             self.shared.closing.subscribe(),
             self.reports.clone(),
         );
-        self.source = Some((source, self.shared.spawner.spawn_unboxed(reader)));
+        self.source = Some((source, self.spawn("audio reader", reader)));
     }
 
     fn perform(&mut self, effects: Vec<ForwarderEffect>) {

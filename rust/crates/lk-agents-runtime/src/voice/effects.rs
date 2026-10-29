@@ -124,13 +124,13 @@ impl Runtime {
                     *request,
                     req,
                 );
-                let handle = shared.spawner.spawn_unboxed(task);
+                let handle = self.spawn("keyterm detection", task);
                 self.keyterms = Some((req, handle));
             }
             E::CancelKeyterms(req) => {
                 if self.keyterms.as_ref().is_some_and(|(pending, _)| *pending == req) {
                     if let Some((_, task)) = self.keyterms.take() {
-                        task.abort();
+                        self.tasks.cancel(task);
                     }
                 }
             }
@@ -145,7 +145,7 @@ impl Runtime {
                     return;
                 };
                 let deadline = self.shared.time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-                self.shared.spawner.spawn_unboxed(async move {
+                self.spawn("discarded leg close", async move {
                     match stream {
                         PendingLeg::Stt(source) => {
                             let _ = source.close(deadline).await;
@@ -310,14 +310,14 @@ impl Runtime {
                     return;
                 };
                 let tx = self.reports.clone();
-                self.shared.spawner.spawn_unboxed(async move {
+                self.spawn("realtime close", async move {
                     session.aclose().await;
                     let _ = tx.send(RealtimeWake::Closed);
                 });
             }
             E::EotClose => {
                 for task in self.predictions.drain(..) {
-                    task.abort();
+                    self.tasks.cancel(task);
                 }
             }
             E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
@@ -382,7 +382,7 @@ impl Runtime {
             }
             E::Audio(AudioOp::SetVideoInput(input)) => {
                 if let Some(old) = self.video_forwarder.take() {
-                    old.abort();
+                    self.tasks.cancel(old);
                 }
                 if let Some(old) = self.video_in.take() {
                     old.on_detached();
@@ -390,11 +390,8 @@ impl Runtime {
                 self.video_in = input.map(|input| input.0);
                 if let Some(input) = &self.video_in {
                     input.on_attached();
-                    self.video_forwarder = Some(
-                        self.shared
-                            .spawner
-                            .spawn_unboxed(self.video_parts.clone().pump(Arc::clone(input))),
-                    );
+                    let pump = self.video_parts.clone().pump(Arc::clone(input));
+                    self.video_forwarder = Some(self.spawn("video forwarder", pump));
                 }
             }
             E::Realtime { session, command } => {
@@ -403,10 +400,12 @@ impl Runtime {
                 }
             }
             E::CancelTool { hosted, .. } => hosted.cancel(),
-            E::AnswerExpert { hosted, answer } => hosted.host.answer_expert(&hosted.invocation, answer),
+            E::AnswerExpert { hosted, answer } => {
+                hosted.host.answer_expert(&hosted.invocation, answer)
+            }
             E::ValidateOutput { speech, validation, candidate, hosted } => {
                 let shared = Arc::clone(&self.shared);
-                self.shared.spawner.spawn_unboxed(async move {
+                self.spawn("output validation", async move {
                     let validated =
                         hosted.host.validate_output(&hosted.invocation, candidate).await;
                     let (verdict, value) = match validated {
@@ -422,7 +421,7 @@ impl Runtime {
             }
             E::RenderTemplate { rendering, template, hosted } => {
                 let shared = Arc::clone(&self.shared);
-                self.shared.spawner.spawn_unboxed(async move {
+                self.spawn("template rendering", async move {
                     let rendered = hosted.host.render_template(&hosted.invocation, template).await;
                     let text = rendered.unwrap_or_else(|e| {
                         log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
@@ -446,7 +445,7 @@ impl Runtime {
         };
         let tx = self.reports.clone();
         let time = self.shared.time.clone();
-        self.shared.spawner.spawn_unboxed(async move {
+        self.spawn("stream open", async move {
             let outcome = match pending {
                 PendingOpen::Stt(stt) => match stt.stream(None, None).await {
                     Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),

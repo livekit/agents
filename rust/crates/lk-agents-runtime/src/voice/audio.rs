@@ -1,7 +1,7 @@
 //! Provider drains and camera forwarding owned by the session runtime.
 
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{Closed, Spawner, SpawnerExt, StreamSource};
+use lk_agents_abi::{Closed, Spawner, StreamSource};
 use lk_agents_voice::agent_session::{Timebase, Tx};
 use lk_agents_voice::audio::{AudioChannel, ChannelEnd, Tagged};
 use lk_agents_voice::trace::ChannelEndCause;
@@ -78,14 +78,14 @@ impl VideoForwarderParts {
 /// sink, which the loop removes if it is still installed: a sink of a closed stream would raise on
 /// every frame for the rest of the call.
 pub fn spawn_drain<T: Into<lk_agents_voice::agent_session::Event> + Send + 'static>(
-    spawner: &Arc<dyn Spawner>,
+    (tasks, spawner): (&Arc<lk_agents_net::task::TaskSet>, &dyn Spawner),
     time: Timebase,
     mut closing: lk_agents_abi::BoxFuture<'static, ()>,
     mut source: Box<dyn StreamSource<T>>,
     queue: Tx,
     (channel, sink): (AudioChannel, ResourceId),
 ) {
-    spawner.spawn_unboxed(async move {
+    tasks.spawn(spawner, "leg drain", async move {
         let mut error = None;
         let cause = loop {
             // `biased` so an arrived item is delivered before a simultaneous close.

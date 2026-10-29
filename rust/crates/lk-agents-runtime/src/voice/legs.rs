@@ -64,7 +64,8 @@ impl Drop for OpeningLeg {
             input.end_input();
         }
         let channel = self.channel;
-        self.spawner.spawn_unboxed(async move {
+        // Detached: the leg was never adopted, so no session owns it; the close ends on its own.
+        self.spawner.spawn_detached(async move {
             let outcome = match source {
                 PendingLeg::Stt(source) => source.close(deadline).await,
                 PendingLeg::Vad(source) => source.close(deadline).await,
@@ -198,7 +199,7 @@ impl Runtime {
     /// Preserve the provider's event order, including failures and its final end notification.
     pub(super) fn pump_realtime(&self, session: Arc<dyn lk_agents_abi::RealtimeSession>) {
         let tx = self.reports.clone();
-        self.shared.spawner.spawn_unboxed(async move {
+        self.spawn("realtime events", async move {
             use lk_agents_voice::agent_activity::realtime::RealtimeWake;
             while let Some(event) = session.next_event().await {
                 if tx.send(RealtimeWake::Event(event)).is_err() {
@@ -230,7 +231,7 @@ impl Runtime {
             PendingLeg::Stt(mut source) => {
                 source.report_retries(super::audio::report_to(self.reports.clone()));
                 super::audio::spawn_drain(
-                    &shared.spawner,
+                    (&self.tasks, shared.spawner.as_ref()),
                     time,
                     closing,
                     super::audio::tagged(sink, source),
@@ -239,7 +240,7 @@ impl Runtime {
                 );
             }
             PendingLeg::Vad(source) => super::audio::spawn_drain(
-                &shared.spawner,
+                (&self.tasks, shared.spawner.as_ref()),
                 time,
                 closing,
                 source,
@@ -255,13 +256,13 @@ impl Runtime {
         let Some(detector) = self.eot.clone() else { return };
         let queue = self.reports.clone();
         let closing = self.shared.closing.subscribe();
-        let task = self.shared.spawner.spawn_unboxed(async move {
+        let task = self.spawn("turn prediction", async move {
             let outcome = detector.predict(timeout).await;
             if !*closing.borrow() {
                 let _ = queue.send(Input::Eot(req, outcome, None));
             }
         });
-        self.predictions.retain(|task| !task.is_finished());
+        self.predictions.retain(|task| self.tasks.contains(*task));
         self.predictions.push(task);
     }
 
@@ -270,7 +271,7 @@ impl Runtime {
     fn pump_verdicts(&self, detector: Arc<dyn InterruptionPort>) {
         let tx = self.reports.clone();
         let mut closing = self.shared.closing.subscribe();
-        self.shared.spawner.spawn_unboxed(async move {
+        self.spawn("interruption verdicts", async move {
             loop {
                 let ev = tokio::select! {
                     biased;
@@ -292,7 +293,7 @@ impl Runtime {
     ) {
         let tx = self.reports.clone();
         let mut closing = self.shared.closing.subscribe();
-        self.shared.spawner.spawn_unboxed(async move {
+        self.spawn("event forward", async move {
             loop {
                 let ev = tokio::select! {
                     biased;
