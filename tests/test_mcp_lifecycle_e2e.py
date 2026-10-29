@@ -40,7 +40,8 @@ async def server(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterato
                 if process.returncode is not None:
                     raise RuntimeError(f"MCP peer exited with {process.returncode}")
                 await asyncio.sleep(0.01)
-        server = MCPServerHTTP((tmp_path / "url").read_text())
+        transport = "sse" if mode == "sse" else "streamable_http"
+        server = MCPServerHTTP((tmp_path / "url").read_text(), transport_type=transport)
         try:
             yield server
         finally:

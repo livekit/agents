@@ -242,7 +242,7 @@ pub trait McpTools {
     #[host(function, name = "mcp_plan_setup")]
     fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String;
     #[host(function, name = "mcp_http_transport")]
-    fn http_transport(url: String, transport_type: Option<String>) -> Result<String, McpError>;
+    fn http_transport(transport_type: Option<String>) -> Result<String, McpError>;
     #[host(function, name = "mcp_render_result")]
     fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
     /// Validate public MCP constructor arguments before a transport can be opened.

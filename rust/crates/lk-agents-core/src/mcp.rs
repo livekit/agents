@@ -57,50 +57,12 @@ pub enum HttpTransport {
     StreamableHttp,
 }
 
-/// `transport_type` when given, else streamable HTTP only for a `urlparse` path ending in `/mcp`
-/// (case- and trailing-slash-insensitive); everything else is SSE.
-pub fn http_transport(url: &str, transport_type: Option<&str>) -> Result<HttpTransport, McpError> {
+/// `transport_type` when given, else streamable HTTP.
+pub fn http_transport(transport_type: Option<&str>) -> Result<HttpTransport, McpError> {
     match transport_type {
         Some("sse") => Ok(HttpTransport::Sse),
-        Some("streamable_http") => Ok(HttpTransport::StreamableHttp),
+        Some("streamable_http") | None => Ok(HttpTransport::StreamableHttp),
         Some(other) => Err(McpError::InvalidTransport(other.to_owned())),
-        None if url_path(url).to_lowercase().trim_end_matches('/').ends_with("/mcp") => {
-            Ok(HttpTransport::StreamableHttp)
-        }
-        None => Ok(HttpTransport::Sse),
-    }
-}
-
-/// CPython's `urlparse(url).path` (the `url` crate normalises differently).
-fn url_path(url: &str) -> String {
-    const USES_PARAMS: &[&str] = &[
-        "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu",
-        "sip", "sips", "mms", "sftp", "tel",
-    ];
-    let url: String = url
-        .trim_start_matches(|c| c <= ' ')
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
-        .collect();
-    let (mut scheme, mut rest) = ("", url.as_str());
-    if let Some(i) = rest.find(':')
-        && i > 0
-        && rest.as_bytes()[0].is_ascii_alphabetic()
-        && rest[..i].bytes().all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
-    {
-        (scheme, rest) = (&rest[..i], &rest[i + 1..]);
-    }
-    if let Some(r) = rest.strip_prefix("//") {
-        rest = &r[r.find(['/', '?', '#']).unwrap_or(r.len())..];
-    }
-    let rest = rest.split(['#', '?']).next().unwrap_or_default();
-    // `_splitparams`: cut at the first `;` after the last `/`.
-    let from = rest.rfind('/').unwrap_or(0);
-    match rest[from..].find(';') {
-        Some(i) if USES_PARAMS.contains(&scheme.to_lowercase().as_str()) => {
-            rest[..from + i].to_owned()
-        }
-        _ => rest.to_owned(),
     }
 }
 
@@ -361,28 +323,6 @@ pub fn render_result(tool_name: &str, result: &Value) -> Result<String, McpError
     })
 }
 
-#[cfg(test)]
-mod transport_selection_tests {
-    use super::*;
-
-    // Catches: detecting on anything but `urlparse`'s path (`;params` only for schemes that use
-    // them, query and fragment cut, `1a:` no scheme so its path ends in `/mcp`), or streamable HTTP for every URL.
-    #[test]
-    fn only_a_urlparse_path_ending_in_mcp_is_streamable_http() {
-        let t = |u| http_transport(u, None).unwrap() == HttpTransport::StreamableHttp;
-        for u in
-            ["https://h/MCP///", "https://h/a/mcp?x=/sse#f", "https://h/mcp;v=1", "/mcp", "1a:/mcp"]
-        {
-            assert!(t(u), "{u}");
-        }
-        for u in
-            ["https://h/sse", "https://h", "https://h/mcpx", "ws://h/mcp;v=1", "https://h?p=/mcp"]
-        {
-            assert!(!t(u), "{u}");
-        }
-    }
-}
-
 pub struct McpTools;
 impl McpToolsPort for McpTools {
     fn resolve_tool_options(config: Option<McpToolOptionsPatch>) -> McpToolOptions {
@@ -404,8 +344,8 @@ impl McpToolsPort for McpTools {
         }
         .into()
     }
-    fn http_transport(url: String, transport_type: Option<String>) -> Result<String, McpError> {
-        Ok(match http_transport(&url, transport_type.as_deref())? {
+    fn http_transport(transport_type: Option<String>) -> Result<String, McpError> {
+        Ok(match http_transport(transport_type.as_deref())? {
             HttpTransport::Sse => "sse",
             HttpTransport::StreamableHttp => "streamable_http",
         }

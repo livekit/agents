@@ -344,7 +344,7 @@ pub(super) async fn connect_http(
         clock: env.clock.clone(),
         receipt: receipt.clone(),
     };
-    match lk_agents_core::mcp::http_transport(&url, Some(transport))? {
+    match lk_agents_core::mcp::http_transport(Some(transport))? {
         lk_agents_core::mcp::HttpTransport::StreamableHttp => {
             Ok(HttpConnection::Streamable(StreamableHttpClientTransport::with_client(
                 client,

@@ -159,8 +159,7 @@ class MCPServerHTTP(MCPServer):
 
     Args:
         url: The server's URL.
-        transport_type: ``"sse"`` or ``"streamable_http"``; by default streamable HTTP when the
-            URL path ends with ``/mcp``, else SSE.
+        transport_type: ``"sse"`` or ``"streamable_http"`` (the default).
         allowed_tools: The tool names exposed; all when ``None``.
         headers: HTTP headers sent with every request.
         timeout: The connect timeout in finite, non-negative seconds; zero expires immediately.
@@ -185,7 +184,7 @@ class MCPServerHTTP(MCPServer):
         self.headers = headers or {}
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
-        self._transport = _core.mcp_http_transport(url, transport_type)
+        self._transport = _core.mcp_http_transport(transport_type)
         self._allowed_tools = list(allowed_tools or [])
         self._session.set_allowed_tools(self._allowed_tools)
 

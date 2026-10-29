@@ -776,10 +776,10 @@ pub fn mcp_plan_setup(toolset_initialized: bool, server_connected: bool) -> PyRe
 }
 
 #[pyfunction]
-#[pyo3(signature = (url, transport_type))]
-pub fn mcp_http_transport(url: ::std::string::String, transport_type: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+#[pyo3(signature = (transport_type))]
+pub fn mcp_http_transport(transport_type: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
     ::lk_agents_abi::python::check_pid()?;
-    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(url, transport_type).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(transport_type).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
