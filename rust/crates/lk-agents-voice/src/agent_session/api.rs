@@ -778,13 +778,13 @@ struct HostParts {
     job: Option<Arc<dyn SessionJob>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `session.usage`: every metrics record the host is handed, folded per model.
-    usage: Arc<Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>>,
+    usage: Arc<Mutex<lk_agents_core::telemetry::usage::ModelUsageCollector>>,
 }
 
 /// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
 /// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
 fn session_usage_updated(
-    usage: &mut lk_agents_abi::metrics::usage::ModelUsageCollector,
+    usage: &mut lk_agents_core::telemetry::usage::ModelUsageCollector,
     wire: &lk_agents_abi::voice::events::HostWire,
 ) -> Option<lk_agents_abi::voice::events::HostWire> {
     use lk_agents_abi::metrics::base::AgentMetrics;

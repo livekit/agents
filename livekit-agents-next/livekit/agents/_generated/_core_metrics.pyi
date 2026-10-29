@@ -29,7 +29,5 @@ def otel_usage_records(metrics: AgentMetrics) -> list[tuple[str, str, OtelValue,
 class ModelUsageCollector:
     """`metrics.ModelUsageCollector` -- the live per-model rollup."""
     def __init__(self) -> None: ...
-    def collect(self, metrics: AgentMetrics) -> None:
-        """Fold one metric in."""
-    def flatten(self) -> list[dict[str, object]]:
-        """Every provider/model pair's usage."""
+    def collect(self, metrics: AgentMetrics) -> None: ...
+    def flatten(self) -> list[dict[str, object]]: ...

@@ -49,7 +49,7 @@ pub trait MetricsRecords {
 
 pub use usage::{
     AgentSessionUsage, EotModelUsage, InterruptionModelUsage, LlmModelUsage, ModelUsage,
-    ModelUsageCollector, SttModelUsage, TtsModelUsage,
+    SttModelUsage, TtsModelUsage,
 };
 
 /// Not in `__all__`, but imported directly by `inference/interruption.py`.

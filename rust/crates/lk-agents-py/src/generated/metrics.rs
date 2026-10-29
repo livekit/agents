@@ -58,14 +58,12 @@ impl ModelUsageCollector {
         Ok(ModelUsageCollector(out))
     }
 
-    /// Fold one metric in.
     #[pyo3(signature = (metrics))]
     fn collect(&mut self, metrics: ::lk_agents_abi::metrics::AgentMetrics) -> PyResult<()> {
         <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::collect(&mut self.0, &metrics);
         Ok(())
     }
 
-    /// Every provider/model pair's usage.
     fn flatten(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::metrics::ModelUsage>> {
         let out = <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::flatten(&self.0);
         Ok(out)
