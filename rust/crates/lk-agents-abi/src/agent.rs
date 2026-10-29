@@ -343,19 +343,13 @@ pub enum OutputSpec {
 /// A run's retry budgets (`Agent(retries=)`, `run(retries=)`, pydantic-ai's): how many
 /// consecutive retries the model gets before the run fails, per tool for argument errors and
 /// `ModelRetry`, and for the final output.
-#[crate::host(record(module = "agent_run", extract))]
+#[crate::host(record(module = "agent_run", extract, default))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retries {
     #[host(default = 1)]
     pub tools: u32,
     #[host(default = 1)]
     pub output: u32,
-}
-
-impl Default for Retries {
-    fn default() -> Self {
-        Retries { tools: 1, output: 1 }
-    }
 }
 
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a

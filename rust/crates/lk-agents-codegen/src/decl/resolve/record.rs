@@ -354,6 +354,7 @@ pub(super) fn record_target(
             "nested_in",
             "dispatch",
             "typed_dict",
+            "default",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?

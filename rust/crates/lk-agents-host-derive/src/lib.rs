@@ -284,6 +284,14 @@ fn expand_host(
             Err(err) => return err.to_compile_error(),
         }
     }
+    if let (I::Struct(st), Some("record")) = (&parsed, head.as_deref())
+        && lk_agents_bindgen::Metas::parse(attr.clone()).is_ok_and(|m| m.has("record.default"))
+    {
+        match declared_default(st) {
+            Ok(tokens) => extra.extend(tokens),
+            Err(err) => return err.to_compile_error(),
+        }
+    }
     // Record properties, string classes, object wrappers and export forwarding metadata are
     // read by `lk-agents-codegen` only.
     match (&mut parsed, head.as_deref()) {
@@ -328,6 +336,34 @@ fn expand(
         (I::Struct(st), Some("kwargs")) => lk_agents_bindgen::kwargs(attr, st),
         _ => Ok(proc_macro2::TokenStream::new()),
     }
+}
+
+/// `record(.., default)`: `Default` from the fields' declared `default`s (a `Maybe` field: not
+/// given), so the host's defaults and Rust's are one list.
+fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStream> {
+    let syn::Fields::Named(named) = &st.fields else { return Ok(proc_macro2::TokenStream::new()) };
+    let mut inits = Vec::new();
+    for f in &named.named {
+        let m = lk_agents_bindgen::Metas::of(&f.attrs)?;
+        let value = match m.0.iter().rev().find(|x| x.key == "default").map(|x| &x.value) {
+            Some(lk_agents_bindgen::Value::Text(s)) => quote::quote!(#s.into()),
+            Some(lk_agents_bindgen::Value::Rust(r)) => r.parse::<proc_macro2::TokenStream>()?,
+            _ if is_maybe(&f.ty) => quote::quote!(::core::default::Default::default()),
+            _ => return Err(syn::Error::new_spanned(f, "`record(.., default)`: every field declares its `default`")),
+        };
+        let name = &f.ident;
+        inits.push(quote::quote!(#name: #value));
+    }
+    let (name, (imp, ty, wh)) = (&st.ident, st.generics.split_for_impl());
+    Ok(quote::quote! {
+        impl #imp ::core::default::Default for #name #ty #wh {
+            fn default() -> Self { #name { #(#inits),* } }
+        }
+    })
+}
+
+fn is_maybe(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Maybe"))
 }
 
 /// `error(raised = "..")`.

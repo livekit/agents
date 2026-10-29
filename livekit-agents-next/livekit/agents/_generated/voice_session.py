@@ -82,7 +82,7 @@ class UpdateAgentArgs:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class VoiceSessionArgs:
     """What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
-    `VoiceSession(...)` and `start()` hand them over. `Default` is a session with none of them.
+    `VoiceSession(...)` and `start()` hand them over.
     """
 
     instructions: str | None = None

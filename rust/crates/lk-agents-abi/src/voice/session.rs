@@ -167,8 +167,8 @@ pub struct UpdateAgentArgs {
 }
 
 /// What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
-/// `VoiceSession(...)` and `start()` hand them over. `Default` is a session with none of them.
-#[crate::host(record(module = "voice_session", extract))]
+/// `VoiceSession(...)` and `start()` hand them over.
+#[crate::host(record(module = "voice_session", extract, default))]
 #[derive(Clone)]
 pub struct VoiceSessionArgs {
     #[host(default = None)]
@@ -286,62 +286,6 @@ pub struct VoiceSessionArgs {
     /// The job whose room this is: `start()` connects it beside the opening.
     #[host(default = None)]
     pub job: Option<Arc<dyn crate::worker::job::SessionJob>>,
-}
-
-impl Default for VoiceSessionArgs {
-    fn default() -> Self {
-        VoiceSessionArgs {
-            instructions: None,
-            dynamic_instructions: None,
-            agent: String::new(),
-            agent_host: None,
-            chat_ctx: None,
-            storage: None,
-            stt: None,
-            vad: None,
-            llm: None,
-            realtime: None,
-            tts: None,
-            on_event: None,
-            hooks: None,
-            participant_identity: None,
-            auto_gain_control: true,
-            input_sample_rate: 24_000,
-            output_sample_rate: 24_000,
-            agent_turn_handling: None,
-            agent_min_consecutive_speech_delay: None,
-            agent_use_tts_aligned_transcript: None,
-            turn_detector: None,
-            interruption_detector: None,
-            text_output: true,
-            room_io_config: None,
-            tools: None,
-            tools_host: None,
-            voice_agent: None,
-            transcription_node: None,
-            realtime_audio_output_node: None,
-            llm_node: None,
-            tts_node: None,
-            stt_node: None,
-            host_audio_input: None,
-            host_audio_output: None,
-            host_video_input: None,
-            video_sampler: None,
-            host_video_sampler: false,
-            host_transcription_output: None,
-            using_default_vad: false,
-            hook_bound: None,
-            max_unrecoverable_errors: 3,
-            stt_context: None,
-            keyterm_llm: None,
-            keyterm_tools: None,
-            agent_expressive: Maybe::NotGiven,
-            session_id: None,
-            remote_session: None,
-            console: None,
-            job: None,
-        }
-    }
 }
 
 /// `AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,

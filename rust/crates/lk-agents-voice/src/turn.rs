@@ -3,7 +3,7 @@
 
 use crate::agent_activity::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
-use lk_agents_abi::Maybe;
+use lk_agents_abi::{Maybe, secs};
 use lk_agents_abi::voice::session_options::{
     EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode, PreemptiveKwargs,
     TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
@@ -189,8 +189,6 @@ fn user_turn_limit_options(kw: &UserTurnLimitKwargs) -> UserTurnLimitOptions {
         max_duration: nullable(kw.max_duration, secs),
     }
 }
-
-pub use lk_agents_abi::secs;
 
 /// A count, clamped: wrapping a negative would disable a guard.
 pub(crate) fn count(v: i64) -> u32 {
