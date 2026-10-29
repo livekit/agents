@@ -639,13 +639,18 @@ struct HeldSpawner {
 }
 
 impl Spawner for HeldSpawner {
-    fn execute(&self, task: lk_agents_abi::Spawned) {
+    fn launch(
+        &self,
+        task: lk_agents_abi::Launch,
+    ) -> lk_agents_abi::OwnedTask<Box<dyn std::any::Any + Send>> {
         self.queued.try_send(()).expect("one queued provider attempt");
         let release = self.release.clone();
+        let (run, owned) = lk_agents_net::task::launch(task);
         drop(self.runtime.handle().spawn(async move {
             let _permit = release.acquire().await.expect("held task released");
-            task.await;
+            run.await;
         }));
+        owned
     }
 }
 

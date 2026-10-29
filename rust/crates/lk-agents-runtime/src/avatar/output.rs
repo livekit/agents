@@ -12,7 +12,8 @@ use lk_agents_abi::voice::rtc::{
     AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RpcHandler, RtcRoom,
     StreamBytesOptions,
 };
-use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, TaskId, TaskSet, Ts, unix_secs};
+use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts, unix_secs};
+use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::avatar::output::{
     AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
     unacknowledged_clear,

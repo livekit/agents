@@ -6,8 +6,9 @@ use lk_agents_abi::voice::avatar::{
 };
 use lk_agents_abi::voice::room_owner::RoomSession;
 use lk_agents_abi::voice::rtc::{RoomEvent, RtcError, RtcRoom};
-use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet};
+use lk_agents_abi::{Clock, Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::TaskSet;
 pub use lk_agents_voice::avatar_runner::Event;
 use lk_agents_voice::avatar_runner::{CallId, Effect, IoOp, RunnerCore};
 use std::collections::HashMap;

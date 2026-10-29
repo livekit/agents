@@ -42,6 +42,7 @@ use lk_agents_abi::{
         SessionKwargs, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
+use lk_agents_abi::{Launch, OwnedTask};
 use lk_agents_runtime::voice::background_audio::BackgroundAudioPlayer;
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind};
 use lk_agents_voice::remote_session::{
@@ -546,14 +547,16 @@ struct Spawned {
 }
 
 impl Spawner for Tasks {
-    fn execute(&self, task: lk_agents_abi::Spawned) {
-        let site = task.site();
-        let future: BoxFuture<'static, ()> = match &self.gate {
-            Some(gate) => gate.wrap(Box::pin(task)),
-            None => Box::pin(task),
+    fn launch(&self, task: Launch) -> OwnedTask<Box<dyn std::any::Any + Send>> {
+        let site = task.site;
+        let (run, owned) = lk_agents_runtime::net::task::launch(task);
+        let run = match &self.gate {
+            Some(gate) => gate.wrap(run),
+            None => run,
         };
-        let task = tokio::spawn(future);
+        let task = tokio::spawn(run);
         self.spawned.lock().unwrap().push(Spawned { at: self.stamps.now(), site, task });
+        owned
     }
 }
 
@@ -574,12 +577,14 @@ impl Drop for Tasks {
 pub struct World(Arc<Tasks>);
 
 impl Spawner for World {
-    fn execute(&self, task: lk_agents_abi::Spawned) {
-        let future: BoxFuture<'static, ()> = match &self.0.gate {
-            Some(gate) => gate.wrap(Box::pin(task)),
-            None => Box::pin(task),
+    fn launch(&self, task: Launch) -> OwnedTask<Box<dyn std::any::Any + Send>> {
+        let (run, owned) = lk_agents_runtime::net::task::launch(task);
+        let run = match &self.0.gate {
+            Some(gate) => gate.wrap(run),
+            None => run,
         };
-        self.0.world.lock().unwrap().push(tokio::spawn(future));
+        self.0.world.lock().unwrap().push(tokio::spawn(run));
+        owned
     }
 }
 

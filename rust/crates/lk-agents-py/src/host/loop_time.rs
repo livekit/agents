@@ -35,7 +35,7 @@ use pyo3::types::PyCFunction;
 use pyo3_async_runtimes::generic::ContextExt;
 
 use lk_agents_abi::utils::clock::TICK_EPSILON;
-use lk_agents_abi::utils::spawner::{BoxFuture, Spawned, Spawner, SpawnerExt};
+use lk_agents_abi::utils::spawner::{BoxFuture, Launch, OwnedTask, Spawner, SpawnerExt};
 use lk_agents_abi::{Clock, Ts, lock};
 
 /// The env knob; see the module docs.
@@ -488,13 +488,15 @@ impl LoopRuntime {
                 };
             });
         });
+        // The callback owns the task: Python cancelling the future cancels it.
+        let task = Mutex::new(task);
         let on_done = PyCFunction::new_closure(
             py,
             Some(c"lk_loop_future_done"),
             None,
             move |args, _kwargs| -> PyResult<()> {
                 if args.get_item(0)?.call_method0("cancelled")?.is_truthy()? {
-                    task.cancel();
+                    lock(&task).cancel();
                 }
                 Ok(())
             },
@@ -611,8 +613,10 @@ impl Wake for Task {
 struct LoopSpawner(Arc<LoopRuntime>);
 
 impl Spawner for LoopSpawner {
-    fn execute(&self, task: Spawned) {
-        self.0.spawn_task(Box::pin(task));
+    fn launch(&self, task: Launch) -> OwnedTask<Box<dyn std::any::Any + Send>> {
+        let (run, owned) = lk_agents_runtime::net::task::launch(task);
+        self.0.spawn_task(run);
+        owned
     }
 }
 

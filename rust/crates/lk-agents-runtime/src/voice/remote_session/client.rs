@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Clock, Spawner, TaskSet};
+use lk_agents_abi::{Clock, Spawner};
+use lk_agents_net::task::TaskSet;
 use tokio::sync::oneshot;
 
 use super::{ClientSink, SessionTransport, proto, request_name};

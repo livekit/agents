@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Spawner, SpawnerExt, TaskSet};
+use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::Timebase;
 use tokio::sync::mpsc;
 

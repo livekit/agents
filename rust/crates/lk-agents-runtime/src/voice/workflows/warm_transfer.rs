@@ -659,9 +659,12 @@ mod tests {
         started: std::sync::atomic::AtomicUsize,
     }
     impl Spawner for ObservedSpawner {
-        fn execute(&self, task: lk_agents_abi::Spawned) {
+        fn launch(
+            &self,
+            task: lk_agents_abi::Launch,
+        ) -> lk_agents_abi::OwnedTask<Box<dyn std::any::Any + Send>> {
             self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.inner.execute(task)
+            self.inner.launch(task)
         }
     }
 

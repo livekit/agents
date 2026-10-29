@@ -170,7 +170,7 @@ impl AgentNodes {
         convert: crate::host::stream::Convert<T>,
         deliver: D,
         done: impl FnOnce(Result<(), IoError>) + Send + 'static,
-        tasks: Option<&Arc<lk_agents_abi::TaskSet>>,
+        tasks: Option<&Arc<lk_agents_runtime::net::task::TaskSet>>,
         mut cancelled: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Option<ItemSink<I>>
     where
@@ -350,7 +350,7 @@ impl NodeFactory for AgentNodes {
             retained: Arc::new(Mutex::new(None)),
             started: AtomicBool::new(false),
             cancelled: tokio::sync::watch::channel(false).0,
-            tasks: Arc::new(lk_agents_abi::TaskSet::default()),
+            tasks: Arc::new(lk_agents_runtime::net::task::TaskSet::default()),
         };
         Ok(Arc::new(node))
     }
@@ -416,7 +416,7 @@ struct TranscriptionNode {
     retained: Arc<Mutex<Option<Box<dyn Send>>>>,
     started: AtomicBool,
     cancelled: tokio::sync::watch::Sender<bool>,
-    tasks: Arc<lk_agents_abi::TaskSet>,
+    tasks: Arc<lk_agents_runtime::net::task::TaskSet>,
 }
 
 impl TranscriptionNode {

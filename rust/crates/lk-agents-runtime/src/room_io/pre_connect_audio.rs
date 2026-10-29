@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
-use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamSource, TaskSet};
+use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamSource};
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::pre_connect_state::{PreConnectBuffer, PreConnectState};
 use tokio::sync::Notify;
 
