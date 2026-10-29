@@ -3,7 +3,6 @@
 //! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
 //! `#[host(record)]` declarations of `lk-agents-abi`.
 
-mod a2a;
 mod agent;
 mod llm;
 mod stt;

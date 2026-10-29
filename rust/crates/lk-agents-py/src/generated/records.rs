@@ -190,33 +190,125 @@ pub mod a2a_client {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+    static MESSAGE_METADATA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn message_metadata_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::client::MessageMetadata> {
-        obj.extract::<::lk_agents_abi::a2a::client::MessageMetadata>()
+        let py = obj.py();
+            if !obj.is_instance(MESSAGE_METADATA.import(py, "livekit.agents._generated.a2a_client", "MessageMetadata")?)? {
+                return Err(super::not_a(obj, "MessageMetadata"));
+            }
+            Ok(::lk_agents_abi::a2a::client::MessageMetadata {
+                kind: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "kind", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                channel: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "channel", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                verbatim: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "verbatim", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                answer_tool: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "answer_tool", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                merged_into: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "merged_into", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                reason: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "reason", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                interrupted: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "interrupted", |v| if v.is_none() { Ok(None) } else { (v.extract::<bool>()).map(Some) })?,
+                interruption_reason: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "interruption_reason", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                application: ::lk_agents_abi::python::attr_with(obj, "MessageMetadata", "application", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "MessageMetadata.application")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("MessageMetadata.application: expected a dict")) }).map(Some) })?,
+            })
     }
 
     pub fn message_metadata_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::client::MessageMetadata) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::a2a::client::MessageMetadata { kind, channel, verbatim, answer_tool, merged_into, reason, interrupted, interruption_reason, application } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("kind", match kind { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("channel", match channel { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("verbatim", match verbatim { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("merged_into", match merged_into { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("reason", match reason { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("interrupted", match interrupted { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("interruption_reason", match interruption_reason { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("application", match application { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+            crate::host::construct(MESSAGE_METADATA.import(py, "livekit.agents._generated.a2a_client", "MessageMetadata")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+    static TEXT_PART: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static DATA_PART: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static FILE_PART: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn message_part_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::client::MessagePart> {
-        obj.extract::<::lk_agents_abi::a2a::client::MessagePart>()
+        let py = obj.py();
+            if obj.is_instance(TEXT_PART.import(py, "livekit.agents._generated.a2a_client", "TextPart")?)? {
+                return Ok(::lk_agents_abi::a2a::client::MessagePart::TextPart { text: ::lk_agents_abi::python::attr_with(obj, "TextPart", "text", |v| v.extract::<::std::string::String>())?, metadata: ::lk_agents_abi::python::attr_with(obj, "TextPart", "metadata", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "TextPart.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("TextPart.metadata: expected a dict")) }).map(Some) })? });
+            }
+            if obj.is_instance(DATA_PART.import(py, "livekit.agents._generated.a2a_client", "DataPart")?)? {
+                return Ok(::lk_agents_abi::a2a::client::MessagePart::DataPart { data: ::lk_agents_abi::python::attr_with(obj, "DataPart", "data", |v| ::lk_agents_abi::python::value_from_py(v, "DataPart.data"))?, metadata: ::lk_agents_abi::python::attr_with(obj, "DataPart", "metadata", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "DataPart.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("DataPart.metadata: expected a dict")) }).map(Some) })? });
+            }
+            if obj.is_instance(FILE_PART.import(py, "livekit.agents._generated.a2a_client", "FilePart")?)? {
+                return Ok(::lk_agents_abi::a2a::client::MessagePart::FilePart { url: ::lk_agents_abi::python::attr_with(obj, "FilePart", "url", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, data: ::lk_agents_abi::python::attr_with(obj, "FilePart", "data", |v| if v.is_none() { Ok(None) } else { ({ if v.is_instance_of::<::pyo3::types::PyBytes>() || v.is_instance_of::<::pyo3::types::PyByteArray>() || v.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&v, "FilePart.data") } else { v.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "FilePart.data") }).collect::<PyResult<Vec<_>>>()) } }).map(Some) })?, filename: ::lk_agents_abi::python::attr_with(obj, "FilePart", "filename", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, media_type: ::lk_agents_abi::python::attr_with(obj, "FilePart", "media_type", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, metadata: ::lk_agents_abi::python::attr_with(obj, "FilePart", "metadata", |v| if v.is_none() { Ok(None) } else { (match ::lk_agents_abi::python::value_from_py(v, "FilePart.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("FilePart.metadata: expected a dict")) }).map(Some) })? });
+            }
+            Err(super::not_a(obj, "TextPart | DataPart | FilePart"))
     }
 
     pub fn message_part_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::client::MessagePart) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            match value {
+                ::lk_agents_abi::a2a::client::MessagePart::TextPart { text, metadata } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                    kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+                    crate::host::construct(TEXT_PART.import(py, "livekit.agents._generated.a2a_client", "TextPart")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::a2a::client::MessagePart::DataPart { data, metadata } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("data", ::lk_agents_abi::python::value_to_py(py, &data)?)?;
+                    kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+                    crate::host::construct(DATA_PART.import(py, "livekit.agents._generated.a2a_client", "DataPart")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::a2a::client::MessagePart::FilePart { url, data, filename, media_type, metadata } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("url", match url { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("data", match data { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyBytes::new(py, &x).into_any() })?;
+                    kwargs.set_item("filename", match filename { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("media_type", match media_type { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
+                    crate::host::construct(FILE_PART.import(py, "livekit.agents._generated.a2a_client", "FilePart")?.as_any(), (), Some(&kwargs))
+                },
+            }
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+    static MESSAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn message_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::client::Message> {
-        obj.extract::<::lk_agents_abi::a2a::client::Message>()
+        let py = obj.py();
+            if !obj.is_instance(MESSAGE.import(py, "livekit.agents._generated.a2a_client", "Message")?)? {
+                return Err(super::not_a(obj, "Message"));
+            }
+            Ok(::lk_agents_abi::a2a::client::Message {
+                parts: ::lk_agents_abi::python::attr_with(obj, "Message", "parts", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::a2a_client::message_part_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
+                metadata: ::lk_agents_abi::python::attr_with(obj, "Message", "metadata", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::a2a_client::message_metadata_from_py(v)).map(Some) })?,
+                message_id: ::lk_agents_abi::python::attr_with(obj, "Message", "message_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                task_id: ::lk_agents_abi::python::attr_with(obj, "Message", "task_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                context_id: ::lk_agents_abi::python::attr_with(obj, "Message", "context_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                role: ::lk_agents_abi::python::attr_with(obj, "Message", "role", |v| v.extract::<::std::string::String>())?,
+                channel: ::lk_agents_abi::python::attr_with(obj, "Message", "channel", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                received_at: ::lk_agents_abi::python::attr_with(obj, "Message", "received_at", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "Message.received_at")).map(Some) })?,
+                raw: ::lk_agents_abi::python::attr_with(obj, "Message", "raw", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "Message.raw")).map(Some) })?,
+            })
     }
 
     pub fn message_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::client::Message) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::a2a::client::Message { parts, metadata, message_id, task_id, context_id, role, channel, received_at, raw } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("parts", ::pyo3::types::PyList::new(py, parts.into_iter().map(|x| PyResult::Ok(crate::generated::records::a2a_client::message_part_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("metadata", match metadata { None => py.None().into_bound(py), Some(x) => crate::generated::records::a2a_client::message_metadata_to_py(py, x)? })?;
+            kwargs.set_item("message_id", match message_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("task_id", match task_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("context_id", match context_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("role", ::pyo3::IntoPyObjectExt::into_bound_py_any(role, py)?)?;
+            kwargs.set_item("channel", match channel { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("received_at", match received_at { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("raw", match raw { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
+            crate::host::construct(MESSAGE.import(py, "livekit.agents._generated.a2a_client", "Message")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
@@ -226,7 +318,7 @@ pub mod a2a_client {
             return Ok(::lk_agents_abi::a2a::client::MessageInput::Text(obj.extract::<::std::string::String>()?));
         }
         if obj.is_instance(&obj.py().import("livekit.agents._generated.a2a_client")?.getattr("Message")?)? {
-            return Ok(::lk_agents_abi::a2a::client::MessageInput::Message(obj.extract::<::lk_agents_abi::a2a::client::Message>().map_err(::std::convert::Into::<PyErr>::into)?));
+            return Ok(::lk_agents_abi::a2a::client::MessageInput::Message(crate::generated::records::a2a_client::message_from_py(obj)?));
         }
         Err(super::not_a(obj, "MessageInput"))
     }
@@ -244,7 +336,7 @@ pub mod a2a_client {
                 artifact_id: ::lk_agents_abi::python::attr_with(obj, "Artifact", "artifact_id", |v| v.extract::<::std::string::String>())?,
                 name: ::lk_agents_abi::python::attr_with(obj, "Artifact", "name", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 description: ::lk_agents_abi::python::attr_with(obj, "Artifact", "description", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                parts: ::lk_agents_abi::python::attr_with(obj, "Artifact", "parts", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::a2a::client::MessagePart>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
+                parts: ::lk_agents_abi::python::attr_with(obj, "Artifact", "parts", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::a2a_client::message_part_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
                 metadata: ::lk_agents_abi::python::attr_with(obj, "Artifact", "metadata", |v| match ::lk_agents_abi::python::value_from_py(v, "Artifact.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("Artifact.metadata: expected a dict")) })?,
             })
     }
@@ -255,7 +347,7 @@ pub mod a2a_client {
             kwargs.set_item("artifact_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(artifact_id, py)?)?;
             kwargs.set_item("name", match name { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("description", match description { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("parts", ::pyo3::types::PyList::new(py, parts.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("parts", ::pyo3::types::PyList::new(py, parts.into_iter().map(|x| PyResult::Ok(crate::generated::records::a2a_client::message_part_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("metadata", ::lk_agents_abi::python::extra_to_py(py, &metadata)?.into_any())?;
             crate::host::construct(ARTIFACT.import(py, "livekit.agents._generated.a2a_client", "Artifact")?.as_any(), (), Some(&kwargs))
     }
@@ -1889,7 +1981,7 @@ pub mod storage_turn {
             kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
             kwargs.set_item("lane", ::pyo3::IntoPyObjectExt::into_bound_py_any(lane, py)?)?;
             kwargs.set_item("message", ::lk_agents_abi::python::extra_to_py(py, &message)?.into_any())?;
-            kwargs.set_item("batch", ::pyo3::types::PyList::new(py, batch.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("batch", ::pyo3::types::PyList::new(py, batch.into_iter().map(|x| PyResult::Ok(crate::generated::records::a2a_client::message_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::item_row_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("state", match state { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
             kwargs.set_item("context_scope_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(context_scope_id, py)?)?;

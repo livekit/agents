@@ -6,7 +6,7 @@ use lk_agents_core::a2a::caller_history::{CallerHistory, HistorySharing};
 use lk_agents_core::a2a::delegation::{
     DelegationUpdate, InteractionId, RemoteInteraction as Policy, retained,
 };
-use lk_agents_abi::a2a::client::{AgentClientError, Message, TaskUpdate};
+use lk_agents_abi::a2a::client::{AgentClientError, Message, MessagePart, TaskUpdate};
 use lk_agents_abi::a2a::remote::{RemoteEvent, RemoteInteraction as Port};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::{ChatItem, FunctionCall};
@@ -149,6 +149,27 @@ impl Port for RemoteInteraction {
 
 fn protocol(error: impl std::fmt::Display) -> AgentClientError {
     AgentClientError::Protocol(error.to_string())
+}
+
+impl lk_agents_abi::a2a::client::MessageContent for RemoteInteraction {
+    fn _core_a2a_message_text(message: Message) -> String {
+        message
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                MessagePart::TextPart { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn _core_a2a_message_data(message: Message) -> Option<Map<String, Value>> {
+        message.parts.into_iter().find_map(|part| match part {
+            MessagePart::DataPart { data: Value::Object(data), .. } => Some(data),
+            _ => None,
+        })
+    }
 }
 
 impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {

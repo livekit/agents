@@ -109,6 +109,7 @@ impl generated::Implementations for Selected {
     type Reply = lk_agents_runtime::net::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
+    type MessageContent = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type ContextActivation = lk_agents_runtime::storage::context::store::ContextStore;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type JudgeRunner =

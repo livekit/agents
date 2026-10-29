@@ -94,27 +94,16 @@ pub struct Message {
     pub raw: Option<Value>,
 }
 
-/// The text parts of a generated A2A message, joined by newlines.
-#[crate::host(export)]
-pub fn _core_a2a_message_text(message: Message) -> String {
-    message
-        .parts
-        .iter()
-        .filter_map(|part| match part {
-            MessagePart::TextPart { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+/// What the host reads from a generated A2A message.
+#[crate::host(functions)]
+pub trait MessageContent: Send + Sync + Sized + 'static {
+    /// The text parts of a generated A2A message, joined by newlines.
+    #[host(function)]
+    fn _core_a2a_message_text(message: Message) -> String;
 
-/// The first object data part of a generated A2A message.
-#[crate::host(export)]
-pub fn _core_a2a_message_data(message: Message) -> Option<Map<String, Value>> {
-    message.parts.into_iter().find_map(|part| match part {
-        MessagePart::DataPart { data: Value::Object(data), .. } => Some(data),
-        _ => None,
-    })
+    /// The first object data part of a generated A2A message.
+    #[host(function)]
+    fn _core_a2a_message_data(message: Message) -> Option<Map<String, Value>>;
 }
 
 /// A string is shorthand for a generated message with one text part.

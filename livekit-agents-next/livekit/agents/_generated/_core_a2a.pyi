@@ -58,6 +58,12 @@ def _core_a2a_extensions_header(requested: str | None) -> str | None:
 def _core_a2a_agent_card(descriptor: EndpointDescriptor) -> str:
     """Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation."""
 
+def _core_a2a_message_text(message: Message) -> str:
+    """The text parts of a generated A2A message, joined by newlines."""
+
+def _core_a2a_message_data(message: Message) -> dict[str, object] | None:
+    """The first object data part of a generated A2A message."""
+
 class Reply:
     @property
     def task_id(self) -> str: ...

@@ -102,7 +102,6 @@ pub const IN_PLACE: &[&str] = &[
     "::lk_agents_abi::EvaluationRecord",
     "::lk_agents_abi::telemetry::report::RecordingOptions",
     "::lk_agents_abi::telemetry::report::SpanUpdateWire",
-    "::lk_agents_abi::a2a::client::Message",
     "::lk_agents_abi::agent::run::RunError",
     "::lk_agents_abi::LogRecordWire",
     "::lk_agents_abi::llm::tool_executor::ToolOutcome",

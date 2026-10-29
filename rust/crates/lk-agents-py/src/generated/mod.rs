@@ -33,6 +33,7 @@ pub trait Implementations: 'static {
     type Credentials: ::lk_agents_abi::a2a::auth::Credentials;
     type AuthPermissions: ::lk_agents_abi::a2a::auth::AuthPermissions;
     type EndpointCard: ::lk_agents_abi::a2a::card::EndpointCard;
+    type MessageContent: ::lk_agents_abi::a2a::client::MessageContent;
     type Reply: ::lk_agents_abi::a2a::client::Reply;
     type AgentClient: ::lk_agents_abi::a2a::client::AgentClient<Reply = Self::Reply>;
     type A2ADoor: ::lk_agents_abi::a2a::door::A2ADoor<Response = Self::A2AResponse>;
@@ -142,6 +143,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_extensions_header, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_a2a_message_text, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_a2a_message_data, m)?)?;
     m.add_class::<a2a::Reply>()?;
     m.add_class::<a2a::AgentClient>()?;
     m.add_class::<a2a::_core_A2ADoor>()?;

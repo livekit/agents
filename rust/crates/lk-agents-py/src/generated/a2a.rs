@@ -100,6 +100,29 @@ pub fn _core_a2a_agent_card(descriptor: Bound<'_, PyAny>) -> PyResult<::std::str
 }
 
 // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+type MessageContentImpl = <crate::Selected as super::Implementations>::MessageContent;
+
+/// The text parts of a generated A2A message, joined by newlines.
+#[pyfunction]
+#[pyo3(signature = (message))]
+pub fn _core_a2a_message_text(message: Bound<'_, PyAny>) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let message = crate::generated::records::a2a_client::message_from_py(&message)?;
+    let out = <MessageContentImpl as ::lk_agents_abi::a2a::client::MessageContent>::_core_a2a_message_text(message);
+    Ok(out)
+}
+
+/// The first object data part of a generated A2A message.
+#[pyfunction]
+#[pyo3(signature = (message))]
+pub fn _core_a2a_message_data<'py>(py: Python<'py>, message: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let message = crate::generated::records::a2a_client::message_from_py(&message)?;
+    let out = <MessageContentImpl as ::lk_agents_abi::a2a::client::MessageContent>::_core_a2a_message_data(message);
+    Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::extra_to_py(py, &value)?.into_any())).transpose()?)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
 type ReplyImpl = <crate::Selected as super::Implementations>::Reply;
 
 #[pyclass(frozen, name = "Reply", module = "livekit.agents._core")]
@@ -188,9 +211,10 @@ impl AgentClient {
     }
 
     #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
-    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: ::std::option::Option<::lk_agents_abi::a2a::client::MessageMetadata>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: Option<Bound<'_, PyAny>>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let message = crate::generated::records::a2a_client::message_input_from_py(&message)?;
+        let metadata = metadata.map(|v| crate::generated::records::a2a_client::message_metadata_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx)
@@ -344,11 +368,11 @@ impl _core_RemoteInteraction {
     }
 
     #[pyo3(signature = (arguments, structured, offers_extension, history))]
-    fn message(&self, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<::lk_agents_abi::a2a::client::Message> {
+    fn message<'py>(&self, py: Python<'py>, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
         let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(out)
+        Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
     }
 
     #[pyo3(signature = (update))]
