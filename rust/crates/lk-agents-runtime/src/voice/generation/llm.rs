@@ -4,16 +4,18 @@ use super::pipeline_reply::teardown_deadline;
 use super::tools::ToolStep;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::telemetry::provider::{Context, LlmMetricState};
+use lk_agents_abi::telemetry::provider::Context;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::generation::{Attempt, Retry};
+use lk_agents_voice::generation::Attempt;
+pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
+use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read, retry_after};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
-use lk_agents_voice::transcription::{Visible, VisibleStream};
+use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -23,6 +25,15 @@ use tokio::sync::mpsc;
 pub(super) enum SegEvent {
     Chunk(Visible),
     End,
+}
+
+impl From<WordEffect> for SegEvent {
+    fn from(effect: WordEffect) -> Self {
+        match effect {
+            WordEffect::Chunk(words) => Self::Chunk(words),
+            WordEffect::End => Self::End,
+        }
+    }
 }
 
 pub(super) fn extend(acc: &mut Visible, more: &Visible) {
@@ -71,7 +82,7 @@ pub(super) async fn produce_segments(
             }
         }
     }
-    (Ok(LlmGenerationData::new(shared)), tools)
+    (Ok(LlmGenerationData::new(shared.time.wall_secs())), tools)
 }
 
 /// `perform_llm_inference`, retried per the request's budget while nothing has been produced.
@@ -133,19 +144,13 @@ async fn perform_llm_inference(
                 (error, None)
             }
             Ok(mut stream) => {
-                let mut data = LlmGenerationData {
-                    started_at,
-                    metrics: LlmMetricState::for_host(started_at),
-                    ..LlmGenerationData::new(shared)
-                };
+                let mut data = LlmGenerationData::new(started_at);
                 // A retried attempt produced nothing, so it dispatched no call.
                 let ended =
                     read_llm_stream(shared, handle, ctx, &mut stream, tx, tools, &mut data).await;
                 let class = ended.as_ref().err().map(|(error, _)| FailureClass::of(error));
                 shared.report(GenEvent::ChatFinished { speech, step, error: class });
-                if ended.is_ok() {
-                    data.report(shared, llm.as_ref(), handle);
-                }
+                report_llm_metrics(&data, ended.is_err(), shared, llm.as_ref(), handle);
                 // Always, on every path: dropping does not cancel a host stream, and `close`
                 // consumes it.
                 let _ = stream.close(teardown_deadline(shared)).await;
@@ -165,7 +170,7 @@ async fn perform_llm_inference(
             Retried::Again => continue,
             // What an interrupted retry reports: this stream's metrics, or none if it never opened.
             Retried::Interrupted => {
-                return Ok(data.unwrap_or_else(|| LlmGenerationData::new(shared)));
+                return Ok(data.unwrap_or_else(|| LlmGenerationData::new(shared.time.wall_secs())));
             }
             Retried::GiveUp => return Err(DriverError::from(error)),
         }
@@ -183,130 +188,56 @@ async fn read_llm_stream(
     tools: &mut ToolStep,
     data: &mut LlmGenerationData,
 ) -> Result<(), (ProviderError, bool)> {
-    // Segments are flush-delimited (`_produce_segments`). A segment opens on its first non-empty
-    // delta, so no empty segment ever reaches the TTS.
-    let mut open = false;
-    let mut produced = false;
-    // `usage.completion_tokens` over the streaming window, the first to the last text chunk.
-    let mut completion_tokens = None;
-    let mut window: Option<(f64, f64)> = None;
-    // One splitter per segment: a tag straddling two deltas is held until it closes.
-    let mut visible = VisibleStream::new();
-    let end_segment = |open: &mut bool, visible: &mut VisibleStream| {
-        if std::mem::replace(open, false) {
-            let tail = std::mem::replace(visible, VisibleStream::new()).flush();
-            if !tail.text.is_empty() {
-                let _ = tx.send(SegEvent::Chunk(tail));
-            }
-            let _ = tx.send(SegEvent::End);
-        }
-    };
     let ended = loop {
-        // Interruption is checked between chunks. A host stream's `next()` is never raced; a
-        // native one's is, so a speech cut at `Closing` does not hold its stream open.
-        if handle.interrupted() || tx.is_closed() {
-            break Ok(());
-        }
-        let next = if stream.cancel_safe() {
-            let polled = until_stopped(tx.closed(), until_interrupted(handle, stream.next()))
-                .await
-                .flatten();
-            match polled {
-                Some(next) => next,
-                None => break Ok(()),
+        let next = match before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe()) {
+            LlmRead::End => break Ok(()),
+            LlmRead::CancellableProvider => {
+                let polled = until_stopped(tx.closed(), until_interrupted(handle, stream.next()))
+                    .await
+                    .flatten();
+                match polled {
+                    Some(next) => next,
+                    None => break Ok(()),
+                }
             }
-        } else {
-            stream.next().await
+            LlmRead::Provider => stream.next().await,
         };
         let chunk = match next {
             Ok(None) => break Ok(()),
-            Err(error) => break Err((error, produced)),
+            Err(error) => break Err((error, data.produced)),
             Ok(Some(chunk)) => chunk,
         };
-        produced |= chunk.has_response();
         if let Some(delta) = &chunk.delta {
-            // Tool calls before the content guard: such a chunk has no content.
             for raw in &delta.tool_calls {
                 tools.dispatch(shared, handle, ctx, mint_call(shared, raw));
             }
-            if let Some(extra) = &delta.extra {
-                data.extra.extend(extra.clone());
-            }
-            if let Some(text) = &delta.content {
-                if !text.is_empty() {
-                    let now = shared.time.wall_secs();
-                    window = Some((window.map_or(now, |(first, _)| first), now));
-                    open = true;
-                    let _ = tx.send(SegEvent::Chunk(visible.push(text)));
-                }
-            }
         }
-        if let Some(usage) = &chunk.usage {
-            completion_tokens = Some(usage.completion_tokens);
-        }
-        data.called |= !chunk.node_text;
-        // After the calls are minted: their stamps come first.
-        data.metrics.observe(&chunk, || shared.time.wall_secs());
-        // `FlushSentinel` after the same chunk's content, which belongs to the closing segment.
-        if chunk.flush {
-            end_segment(&mut open, &mut visible);
+        for effect in data.chunk(&chunk, shared.time.wall_secs()) {
+            let _ = tx.send(effect.into());
         }
     };
-    // A segment left open when the stream ends, for any reason, is still a segment.
-    end_segment(&mut open, &mut visible);
-    // A reply in one chunk has no window, and no rate.
-    data.tps = match (completion_tokens, window) {
-        (Some(tokens), Some((first, last))) if last > first => {
-            Some(f64::from(tokens) / (last - first))
-        }
-        _ => None,
-    };
+    for effect in data.finish_stream() {
+        let _ = tx.send(effect.into());
+    }
     ended
 }
 
-/// `_LLMGenerationData` plus `LLMStream._metrics_monitor_task`'s fold.
-pub(super) struct LlmGenerationData {
-    pub(super) tps: Option<f64>,
-    pub(super) started_at: f64,
-    pub(super) metrics: LlmMetricState,
-    /// A model chunk came, not only an `llm_node`'s own text: there was a model call to meter.
-    called: bool,
-    /// `generated_extra`: every delta's provider extra, merged; lands on the assistant message.
-    pub(super) extra: lk_agents_abi::Extra,
-}
-
-impl LlmGenerationData {
-    /// No time-to-first-token and no rate: `0.0` would skew averages.
-    fn new(shared: &SessionShared) -> Self {
-        let started_at = shared.time.wall_secs();
-        LlmGenerationData {
-            tps: None,
-            started_at,
-            metrics: LlmMetricState::for_host(started_at),
-            called: false,
-            extra: lk_agents_abi::Extra::new(),
-        }
-    }
-
-    /// One `LLMMetrics` per request that ended cleanly having yielded a model chunk.
-    fn report(&self, shared: &SessionShared, llm: &dyn lk_agents_abi::Llm, handle: &SpeechHandle) {
-        if !self.called {
-            return;
-        }
-        let stamp = || {
-            let (id, now) = (llm.id(), shared.time.wall_secs());
-            let context = Context {
-                timestamp: now,
-                label: id.label.clone(),
-                cancelled: handle.interrupted(),
-                metadata: Some(id.metadata()),
-            };
-            (now, context)
-        };
-        if let Some(mut record) = self.metrics.finish(false, stamp) {
-            record.speech_id = Some(handle.speech_id().to_owned());
-            report_metrics(shared, handle, AgentMetrics::Llm(record));
-        }
+fn report_llm_metrics(
+    data: &LlmGenerationData,
+    failed: bool,
+    shared: &SessionShared,
+    llm: &dyn lk_agents_abi::Llm,
+    handle: &SpeechHandle,
+) {
+    let (id, now) = (llm.id(), shared.time.wall_secs());
+    let context = Context {
+        timestamp: now,
+        label: id.label.clone(),
+        cancelled: handle.interrupted(),
+        metadata: Some(id.metadata()),
+    };
+    if let Some(record) = data.collect_metrics(failed, now, context, handle.speech_id()) {
+        report_metrics(shared, handle, AgentMetrics::Llm(record));
     }
 }
 
@@ -338,23 +269,22 @@ pub(super) async fn retry(
     error: &ProviderError,
     provider: &(dyn Fn(ProviderError, bool) + Sync),
 ) -> Retried {
-    let kind = match leg {
-        ProviderKind::Llm => lk_agents_abi::types::retry::RequestKind::Llm,
-        ProviderKind::Tts => lk_agents_abi::types::retry::RequestKind::TtsStream,
-    };
-    let decision = attempt.failed(error, kind);
-    provider(error.clone(), matches!(decision, Retry::After { .. }));
-    // Every failed attempt is the reference's `error` event: `recoverable` while retried, terminal
-    // when the budget gives up.
+    let wait = retry_after(attempt, leg, error, shared.time.now());
+    provider(error.clone(), wait.is_some());
     shared.report(GenEvent::ProviderFailed {
         speech: handle.id(),
         leg,
-        recoverable: matches!(decision, Retry::After { .. }),
+        recoverable: wait.is_some(),
         error: Box::new(error.clone()),
     });
-    let Retry::After { attempt: failed, after } = decision else { return Retried::GiveUp };
-    let at = shared.time.now().saturating_add(after);
-    shared.trace(GenerationStep::RetryArmed { speech: handle.id(), leg, attempt: failed, at });
+    let Some(wait) = wait else { return Retried::GiveUp };
+    let at = wait.at;
+    shared.trace(GenerationStep::RetryArmed {
+        speech: handle.id(),
+        leg,
+        attempt: wait.failed_attempt,
+        at,
+    });
     // Raced against the interruption; a Rust-native wait, safe to drop.
     match until_interrupted(handle, shared.time.wait_until(at)).await {
         Some(()) => Retried::Again,

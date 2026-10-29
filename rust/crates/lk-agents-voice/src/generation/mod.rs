@@ -2,9 +2,10 @@
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
 pub mod forward;
-pub mod tts;
-pub mod realtime;
+pub mod llm;
 pub mod playout;
+pub mod realtime;
+pub mod tts;
 
 use crate::tts::markup::MarkupExt;
 
@@ -942,8 +943,8 @@ pub enum GenEvent {
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
-    use lk_agents_abi::Modality;
     use crate::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
+    use lk_agents_abi::Modality;
     use lk_agents_abi::resources::{ResourceId, TtsRef};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
     use lk_agents_abi::{ChatContext, TtsCapabilities};
