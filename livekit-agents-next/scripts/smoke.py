@@ -1192,9 +1192,8 @@ async def tool_outcomes() -> None:
     assert readback in spoken, spoken
     assert "The tool said: booked Monday" in spoken, spoken
     outputs = [i.output for i in session.history.items if i.type == "function_call_output"]
-    assert any(o.startswith("not run yet: the person answered 'yes, book it'") for o in outputs), (
-        outputs
-    )
+    # the history stores the person's words; only the model reads "not run yet: ..."
+    assert "yes, book it" in outputs, outputs
     await session.aclose()
 
 

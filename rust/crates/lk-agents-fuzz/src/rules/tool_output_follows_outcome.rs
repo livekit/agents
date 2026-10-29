@@ -121,30 +121,33 @@ impl Rule for ToolOutputFollowsOutcome {
                 )
             });
         }
-        // An open question is the latest output still waiting; the person's next message is it.
-        let mut waiting: Option<String> = None;
+        // Every output still waiting is an open question; the person's next message answers them.
+        let mut waiting: Vec<String> = Vec::new();
         for (i, (at, item, speech)) in announced.iter().enumerate() {
             match item {
                 // A step cut before its tools were awaited asks nothing.
                 ChatItem::FunctionCallOutput(o) if o.output.starts_with(WAITING_PREFIX) => {
                     let cut = speech.is_some_and(|s| host.speech(s.0).is_interrupted());
-                    waiting = (!cut).then(|| o.id.clone());
+                    if !cut {
+                        waiting.push(o.id.clone());
+                    }
                 }
                 ChatItem::Message(m) if m.role == Role::User => {
-                    let Some(id) = waiting.take() else { continue };
+                    let open = std::mem::take(&mut waiting);
                     if closing.is_some_and(|c| c <= *at) {
                         continue;
                     }
                     let said = m.text_content().unwrap_or_default();
-                    let answered = announced[..i].iter().rev().any(|(_, prior, _)| {
-                        matches!(prior, ChatItem::FunctionCallOutput(o)
-                            if o.id == id && !o.output.starts_with(WAITING_PREFIX)
-                                && (o.output.contains(said.as_str())
-                                    || o.output.starts_with("not run yet: the person answered")))
-                    });
-                    check.expect_with(Subject::Session, answered, || {
-                        format!("the question {id} waits on was never answered by {said:?}")
-                    });
+                    for id in open {
+                        let answered = announced[..i].iter().rev().any(|(_, prior, _)| {
+                            matches!(prior, ChatItem::FunctionCallOutput(o)
+                                if o.id == id && !o.output.starts_with(WAITING_PREFIX)
+                                    && o.output.contains(said.as_str()))
+                        });
+                        check.expect_with(Subject::Session, answered, || {
+                            format!("the question {id} waits on was never answered by {said:?}")
+                        });
+                    }
                 }
                 _ => {}
             }
