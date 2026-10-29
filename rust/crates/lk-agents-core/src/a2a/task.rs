@@ -983,8 +983,14 @@ impl TaskMachine {
 
     fn fail(&mut self, error: StorageError, now: Duration) -> Result<Option<Operation>, Finish> {
         if self.phase == Phase::Failing {
-            // a failure while failing tasks is the failure of the phase that started it
-            self.phase = self.failing.take().expect("tasks are failing").then;
+            let then = self.failing.take().expect("tasks are failing").then;
+            if let Phase::Answer { .. } = then {
+                // the failure was not stored: the client hears the database's error, never a
+                // failure its task does not show
+                return Err(Finish::Error(error));
+            }
+            // any other failure while failing tasks is the failure of the phase that started it
+            self.phase = then;
         }
         let operation = match (self.phase, &error) {
             (

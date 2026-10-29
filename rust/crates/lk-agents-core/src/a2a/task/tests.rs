@@ -156,6 +156,26 @@ fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
     ));
 }
 
+/// A2A_SEED=1164 (received_message_is_drained, Inbox): a turn that lost the database was answered
+/// failed storage-unavailable while the database, still unreachable, never stored the failure:
+/// its receipt stayed `working` and undrained. A failure that could not be stored answers the
+/// database's error.
+#[test]
+fn a_task_failure_the_database_could_not_store_answers_its_error() {
+    let mut m = machine(Policy::Queue);
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
+    m.pending = Some(4);
+    step(&mut m, Completion::Done);
+    let unavailable = || Err(StorageError::Unavailable("unreachable".into()));
+    operation(at(&mut m, Duration::ZERO, unavailable()));
+    assert!(matches!(step(&mut m, Completion::Done), Operation::Pickup(t) if t == "receipt"));
+    let effects = at(&mut m, Duration::ZERO, unavailable());
+    assert!(
+        matches!(&effects[..], [Effect::Finished(Err(StorageError::Unavailable(_)))]),
+        "{effects:?}"
+    );
+}
+
 /// A dead holder's `working` rows fail worker-lost, except the message's own task; a named task
 /// that already ended is not failed.
 #[test]
