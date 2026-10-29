@@ -206,12 +206,15 @@ lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
   process.rs      process Tokio runtime, fork guard, media pool, the `Process` environment
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
+  loop_watchdog.rs  the loop monitor's sampling thread feeding core's stall policy, and its join ownership
   agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
   text_session/   TextSession driver over agent_run's execution; the declared runner
   a2a/            turn: executes TaskMachine steps against storage and the handler;
                   door/: decodes, admits, calls storage, publishes response streams
   mcp/            the SDK session, stdio/host/HTTP/SSE transports, the SDK's HTTP client over lk-agents-net
   voice/          session executor (effects, legs, audio drains, storage, recorder observers)
+    generation/         provider stream, TTS, playout and forwarding pumps; their decisions are voice's
+    ivr.rs              IVR timers and feed over voice's navigator effects
     amd.rs              AMD timers, classification stream, tap stream, callee wait
     background_audio.rs mixer pump, file/stream reads, track publish/unpublish
     console.rs          the console TCP port adapter
