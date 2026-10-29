@@ -25,7 +25,7 @@ cd "$(dirname "$0")"
 args=(
     --locked -p lk-agents-storage -p lk-agents-runtime --lib
     --test lifecycle --test runs --test lease --test process --test schema --test memory
-    --test storage_context --test storage_voice --test a2a_turns --test a2a_door
+    --test context --test voice --test a2a_turns --test a2a_door
     --test a2a_attachment_boundary
     --no-tests fail
 )
