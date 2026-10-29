@@ -23,13 +23,12 @@ pub enum Role {
     Assistant,
 }
 
-/// `speech_handle.py:19`. Defaults to `Audio`, like `SpeechHandle`. The wire strings are public
-/// API: users compare `details.modality == "audio"`.
+/// `speech_handle.py:19`. The wire strings are public API: users compare
+/// `details.modality == "audio"`. The default is `voice::speech::DEFAULT_INPUT_MODALITY`.
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral { kind: "modality", value: s.to_owned() }))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Modality {
     Text,
-    #[default]
     Audio,
 }
 
