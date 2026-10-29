@@ -1,6 +1,6 @@
 //! A closing session's tasks end within its cleanup bound: its close cancels nothing still running.
 use lk_agents_fuzz::drive::{Case, Outcome, Setup, run};
-use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
+use lk_agents_fuzz::input::{AgentText, Input, Millis, Models, Ref, SayInput};
 
 // Catches: an interrupted `say` whose caller's text stream stays open went on reading it, and its
 // voice, its synthesis failed, went on waiting for the words, so the speech's task outlived the
@@ -22,6 +22,17 @@ fn an_interrupted_say_stops_reading_its_stream() {
             Input::FeedText { stream: Ref::new(0), text: AgentText("One moment please.".into()) },
             Input::Advance { ms: Millis(2_000) },
         ],
+    );
+    assert!(outcome.ok(), "{:#?}", outcome.failures);
+}
+
+// Catches: a provider stream a handoff was still opening when the session closed kept its open
+// running, which nothing would take any more, past the close's cleanup bound (survey seed 313).
+#[test]
+fn a_close_abandons_a_stream_still_opening() {
+    let outcome = closed(
+        Setup { stt: true, connect_ms: Some(30_000), ..Setup::default() },
+        vec![Input::UpdateModels { models: Models::All }, Input::Advance { ms: Millis(20) }],
     );
     assert!(outcome.ok(), "{:#?}", outcome.failures);
 }

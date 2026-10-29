@@ -438,7 +438,7 @@ impl Runtime {
     }
 
     /// Opens `provider`'s stream off the loop and reports it, or that the provider is gone, as
-    /// `Input::StreamOpened`.
+    /// `Input::StreamOpened`. A close abandons an open still in flight: nothing would take it.
     fn open_stream(&mut self, open: u64, leg: StreamKind, provider: Option<PendingOpen>) {
         let Some(pending) = provider else {
             let error = ProviderError::Local(
@@ -449,18 +449,26 @@ impl Runtime {
         };
         let tx = self.reports.clone();
         let time = self.shared.time.clone();
+        let mut closing = self.shared.closing.subscribe();
         self.spawn("stream open", async move {
-            let outcome = match pending {
-                PendingOpen::Stt(stt) => match stt.stream(None, None).await {
-                    Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),
-                    Err(e) => Err(e),
-                    Ok(None) => Err(ProviderError::Local(ApiError::new(
-                        "the new agent's STT does not stream",
-                    ))),
-                },
-                PendingOpen::Vad(vad) => {
-                    vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
+            let opening = async move {
+                match pending {
+                    PendingOpen::Stt(stt) => match stt.stream(None, None).await {
+                        Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),
+                        Err(e) => Err(e),
+                        Ok(None) => Err(ProviderError::Local(ApiError::new(
+                            "the new agent's STT does not stream",
+                        ))),
+                    },
+                    PendingOpen::Vad(vad) => {
+                        vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
+                    }
                 }
+            };
+            let outcome = tokio::select! {
+                biased;
+                _ = closing.wait_for(|c| *c) => return,
+                outcome = opening => outcome,
             };
             if let Err(StreamOpened { outcome: Ok(stream), .. }) =
                 tx.send_opened(StreamOpened { open, leg, outcome })
