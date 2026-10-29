@@ -158,7 +158,6 @@ mod tests {
 }
 
 pub mod attributes;
-pub mod gen_ai;
 pub mod report;
 
 pub mod loop_monitor;

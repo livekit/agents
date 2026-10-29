@@ -34,7 +34,7 @@ use crate::agent_session::{HookId, HookKind};
 use crate::events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle};
 use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::metrics::base::{AgentMetrics, LlmMetrics, Metadata};
-use lk_agents_abi::telemetry::gen_ai::provider_name;
+use lk_agents_core::telemetry::gen_ai::provider_name;
 use lk_agents_abi::voice::events::{
     AgentState, SpanEndedWire, SpanEvent, SpanMetric, SpanStartedWire, UserState,
 };

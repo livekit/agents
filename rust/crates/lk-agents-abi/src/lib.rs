@@ -52,7 +52,6 @@ pub mod worker;
 #[cfg(test)]
 mod testkit;
 
-pub use telemetry::gen_ai;
 // The session report (`traces.py`, `observability.py`). Its `RecordingOptions` is not
 // re-exported: `voice::session_options` has a type of that name.
 pub(crate) use telemetry::attributes;
