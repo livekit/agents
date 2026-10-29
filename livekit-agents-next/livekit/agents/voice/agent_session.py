@@ -899,6 +899,11 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _completed(options: dict[str, Any], under: Callable[[str], Any]) -> dict[str, Any]:
         """``options`` with each group (endpointing, interruption) filled in from the value it
         lands on, so restoring a base or a lower layer restores every key of the group."""
+        if "mode" in options.get("interruption", {}):
+            raise ValueError(
+                "interruption takes no mode here: the interruption mode is set with "
+                "VoiceSession(turn_handling=)"
+            )
         return {k: {**under(k), **v} if k in _GROUPS else v for k, v in options.items()}
 
     def _layered(self, key: str) -> bool:

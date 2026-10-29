@@ -990,16 +990,7 @@ mod host {
                     _ => None,
                 },
                 interruption: match d.get_item("interruption")? {
-                    Some(v) if !unsaid(&v)? => {
-                        let interruption: InterruptionKwargs = v.extract()?;
-                        if interruption.mode.is_some() {
-                            return Err(pyo3::exceptions::PyValueError::new_err(
-                                "update_options(interruption=) takes no mode: the interruption \
-                                 mode is set with VoiceSession(turn_handling=)",
-                            ));
-                        }
-                        Some(interruption)
-                    }
+                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
                     _ => None,
                 },
                 min_consecutive_speech_delay: match d.get_item("min_consecutive_speech_delay")? {
