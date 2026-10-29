@@ -1050,9 +1050,13 @@ core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
 support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
 
-The `clippy.toml` of `lk-agents-core`, `lk-agents-voice`, `lk-agents-abi` and
-`lk-agents-media` configures `disallowed-methods`, `disallowed-types` and
-`disallowed-macros`. Media's optional thread pool, added only for a measured
+The shared [`rust/architecture/clippy.toml`](../../rust/architecture/clippy.toml)
+configures `disallowed-methods`, `disallowed-types` and `disallowed-macros`.
+The architecture checker selects this config explicitly with `CLIPPY_CONF_DIR`
+and runs Clippy only for `lk-agents-core`, `lk-agents-voice`, `lk-agents-abi`
+and `lk-agents-media`. Packages requiring a different policy use a separate
+Clippy invocation with their own config and explicit package list.
+Media's optional thread pool, added only for a measured
 need, is its one allowed spawn site. Storage, inference, worker and net are
 unrestricted async crates. Banned constructs include task/thread spawns,
 `select!`/`join!`, ambient monotonic/wall clocks, random or UUID generation,

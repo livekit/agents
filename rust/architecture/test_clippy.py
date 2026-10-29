@@ -197,32 +197,19 @@ class ClippyContracts(unittest.TestCase):
             with self.subTest(records=records), self.assertRaises(ValueError):
                 clippy.compiler_messages("\n".join(map(json.dumps, records)))
 
-    def test_configuration_removal_fails_with_crate_and_method(self):
-        for crate in ("lk-agents-abi", "lk-agents-voice"):
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                path = root / f"rust/crates/{crate}/clippy.toml"
-                path.parent.mkdir(parents=True)
-                path.write_text(
-                    (ROOT / f"rust/crates/{crate}/clippy.toml")
-                    .read_text()
-                    .replace(
-                        '  { path = "std::thread::spawn",', '  { path = "not::the::banned_spawn",'
-                    )
-                )
-                errors = clippy.configuration_errors(root, [crate])
-                self.assertTrue(any(crate in e and "std::thread::spawn" in e for e in errors))
-                path.with_name(".clippy.toml").write_text("")
-                self.assertTrue(
-                    any("shadowing" in e for e in clippy.configuration_errors(root, [crate]))
-                )
+    def test_architecture_clippy_selects_only_restricted_packages(self):
+        packages = sorted(clippy.PURE)
+        command = clippy.command(ROOT, packages)
+        selected = [command[i + 1] for i, arg in enumerate(command) if arg == "-p"]
+        self.assertEqual(selected, packages)
+        self.assertNotIn("--workspace", command)
 
     def test_compiler_rejects_each_banned_construct_family_and_allowed_item_growth(self):
         self.assertIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"]))
         self.assertNotIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"], "default"))
         self.assertIn("lk-agents-abi/python", clippy.command(ROOT, ["lk-agents-abi"], "python"))
         source = ROOT / "rust/architecture/fixtures.rs"
-        env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / "rust/crates/lk-agents-abi")}
+        env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / "rust/architecture")}
         command = [
             "cargo",
             "clippy",

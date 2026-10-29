@@ -1,4 +1,6 @@
-# Core purity policy. Keep these configurations identical; architecture/check.sh verifies them.
+# Shared purity policy for ABI, core, voice and media.
+# Selected explicitly with CLIPPY_CONF_DIR by architecture/check.py and its compiler fixtures.
+# Other packages are outside this policy; see architecture/README.md.
 
 disallowed-methods = [
   { path = "tokio::runtime::Handle::spawn", reason = "Execute tasks and retain synchronization only in runtime." },

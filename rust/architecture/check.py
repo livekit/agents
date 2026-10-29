@@ -552,144 +552,6 @@ def check_warnings() -> int:
 
 
 LINTS = ("disallowed_methods", "disallowed_types", "disallowed_macros")
-# All configs carry the same compiler-resolved policy; aliases cannot bypass Clippy resolution.
-REQUIRED = {
-    "disallowed-methods": {
-        "tokio::runtime::Handle::spawn",
-        "tokio::runtime::Handle::spawn_blocking",
-        "tokio::runtime::Runtime::spawn",
-        "tokio::runtime::Runtime::spawn_blocking",
-        "tokio::task::LocalSet::spawn_local",
-        "tokio::task::JoinSet::spawn",
-        "tokio::task::JoinSet::spawn_on",
-        "tokio::task::JoinSet::spawn_local",
-        "tokio::task::JoinSet::spawn_local_on",
-        "tokio::task::JoinSet::spawn_blocking",
-        "tokio::task::JoinSet::spawn_blocking_on",
-        "rand::random_iter",
-        "rand::random_bool",
-        "rand::random_ratio",
-        "rand::make_rng",
-        "rand::Rng::sample",
-        "rand::Rng::sample_iter",
-        "rand::Rng::fill",
-        "rand::Rng::random_bool",
-        "rand::Rng::random_ratio",
-        "rand_core::TryRngCore::try_next_u32",
-        "rand_core::TryRngCore::try_next_u64",
-        "rand_core::TryRngCore::try_fill_bytes",
-        "rand::SeedableRng::from_os_rng",
-        "rand::SeedableRng::from_entropy",
-        "rand_core::SeedableRng::from_os_rng",
-        "rand_core::SeedableRng::from_entropy",
-        "std::thread::Scope::spawn",
-        "std::time::Instant::elapsed",
-        "std::time::SystemTime::elapsed",
-        "tokio::time::Instant::elapsed",
-        "rand::Rng::random",
-        "rand::Rng::random_range",
-        "rand::Rng::gen",
-        "rand::Rng::gen_range",
-        "rand::RngCore::next_u32",
-        "rand::RngCore::next_u64",
-        "rand::RngCore::fill_bytes",
-        "rand_core::RngCore::next_u32",
-        "rand_core::RngCore::next_u64",
-        "rand_core::RngCore::fill_bytes",
-        "getrandom::fill",
-        "std::thread::spawn",
-        "std::thread::Builder::spawn",
-        "std::time::Instant::now",
-        "std::time::SystemTime::now",
-        "std::collections::hash_map::RandomState::new",
-        "std::process::id",
-        "std::env::var",
-        "std::env::var_os",
-        "std::env::vars",
-        "std::env::vars_os",
-        "uuid::Uuid::new_v4",
-        "rand::random",
-        "rand::random_range",
-        "rand::rng",
-        "rand::thread_rng",
-        "tokio::spawn",
-        "tokio::task::spawn",
-        "tokio::task::spawn_blocking",
-        "tokio::task::spawn_local",
-        "tokio::time::sleep",
-        "tokio::time::sleep_until",
-        "tokio::time::interval",
-        "tokio::time::interval_at",
-        "tokio::time::timeout",
-        "tokio::time::timeout_at",
-        "tokio::time::Instant::now",
-        "tokio::sync::mpsc::unbounded_channel",
-        "std::sync::mpsc::channel",
-        "futures::channel::mpsc::unbounded",
-        "futures_channel::mpsc::unbounded",
-        "crossbeam::channel::unbounded",
-        "crossbeam_channel::unbounded",
-    },
-    "disallowed-types": {
-        "parking_lot::ReentrantMutex",
-        "lock_api::Mutex",
-        "lock_api::RwLock",
-        "lock_api::ReentrantMutex",
-        "rand::rngs::ThreadRng",
-        "rand::rngs::OsRng",
-        "tokio::sync::mpsc::UnboundedSender",
-        "tokio::sync::mpsc::UnboundedReceiver",
-        "futures::channel::mpsc::UnboundedSender",
-        "futures::channel::mpsc::UnboundedReceiver",
-        "futures_channel::mpsc::UnboundedSender",
-        "futures_channel::mpsc::UnboundedReceiver",
-        "std::sync::mpsc::Sender",
-        "std::sync::mpsc::Receiver",
-        "tokio::sync::Mutex",
-        "tokio::sync::RwLock",
-        "std::collections::HashMap",
-        "std::collections::HashSet",
-        "std::sync::Mutex",
-        "std::sync::RwLock",
-        "parking_lot::Mutex",
-        "parking_lot::RwLock",
-        "std::sync::atomic::AtomicBool",
-        "std::sync::atomic::AtomicU8",
-        "std::sync::atomic::AtomicU16",
-        "std::sync::atomic::AtomicU32",
-        "std::sync::atomic::AtomicU64",
-        "std::sync::atomic::AtomicUsize",
-        "std::sync::atomic::AtomicI8",
-        "std::sync::atomic::AtomicI16",
-        "std::sync::atomic::AtomicI32",
-        "std::sync::atomic::AtomicI64",
-        "std::sync::atomic::AtomicIsize",
-        "std::sync::atomic::AtomicPtr",
-    },
-    "disallowed-macros": {
-        "tokio::select",
-        "tokio::join",
-        "tokio::try_join",
-        "futures::select",
-        "futures::join",
-        "futures::try_join",
-    },
-}
-
-
-def configuration_errors(root: Path, crates: list[str]) -> list[str]:
-    errors = []
-    for crate in crates:
-        path = root / "rust/crates" / crate / "clippy.toml"
-        if path.with_name(".clippy.toml").exists():
-            errors.append(f"{path}: shadowing .clippy.toml is forbidden")
-        config = tomllib.loads(path.read_text())
-        for key, required in REQUIRED.items():
-            actual = {
-                entry if isinstance(entry, str) else entry["path"] for entry in config.get(key, [])
-            }
-            errors.extend(f"{path}: missing {key}: {name}" for name in sorted(required - actual))
-    return errors
 
 
 def policed(path: str) -> bool:
@@ -974,9 +836,7 @@ def compiler_messages(output: str | list[dict]) -> list[dict]:
 def check_clippy() -> int:
     root = Path(__file__).resolve().parents[2]
     crates = sorted(name for name in PURE if (root / "rust/crates" / name).is_dir())
-    errors = configuration_errors(root, crates)
-    if errors:
-        sys.exit("\n".join(errors))
+    errors: list[str] = []
     helper = build_helper(root)
     snapshots = {
         path: hashlib.sha256((root / path).read_bytes()).digest() for path in source_paths(root)
@@ -990,7 +850,7 @@ def check_clippy() -> int:
     if errors:
         return 1
     env = os.environ.copy()
-    env["CLIPPY_CONF_DIR"] = str(root / "rust/crates/lk-agents-abi")
+    env["CLIPPY_CONF_DIR"] = str(root / "rust/architecture")
     locations = set()
     for mode in ("default", "python", "all"):
         process = subprocess.run(

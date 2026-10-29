@@ -6,6 +6,10 @@ step once, then calls `launch-gate.sh --skip-architecture` for the remaining sui
 Checks never rewrite sources or baselines. Cargo honors `CARGO_TARGET_DIR` and
 the workspace Rust flags.
 
+From the repository root, `make -C rust architecture` runs the same gate.
+`make -C rust clippy` runs a scoped diagnostic pass, and `make -C rust check`
+checks formatting followed by the architecture gate. Run `make -C rust` for help.
+
 - `check.py` validates all-feature Cargo dependency closures, including normal,
   build and dev edges, and workspace layering against the documented crate graph
   (`GRAPH`, rust-core.md "Crates and dependencies").
@@ -40,7 +44,9 @@ the workspace Rust flags.
   first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
   shrinking ceilings.
 - Clippy resolves banned methods, types and macros over all targets in default,
-  Python and all-feature configurations. Per-core lint configurations are checked.
+  Python and all-feature configurations. One handwritten `clippy.toml` in this
+  directory defines the policy. The checker explicitly sets `CLIPPY_CONF_DIR`
+  to this directory and selects only ABI, core, voice and media with `-p`.
 - Codegen's shared source visitor inventories reasoned lint exemptions, identifies
   compiler sites and validates export placement, including inactive branches and
   macro bodies. Effective exemptions are required for every compiler site.
@@ -56,6 +62,29 @@ ceilings cannot grow. No check grants or broadens exemptions.
 RTC dependency/Clippy baselines bootstrap the previously unchecked crate once;
 the SQLite dependency baseline bootstraps the newly banned storage driver. Each
 retains independent history and rejects identities from older baseline families.
+
+## Selecting a Clippy policy
+
+An explicit `CLIPPY_CONF_DIR` selects one configuration for the invocation.
+Package selection determines where it applies; no generated configuration or
+crate-local copy is needed.
+For example, from the repository root:
+
+```bash
+CLIPPY_CONF_DIR="$PWD/rust/architecture" cargo clippy \
+    --config "$PWD/rust/.cargo/config.toml" \
+    --manifest-path rust/Cargo.toml --locked --no-deps --all-targets \
+    -p lk-agents-abi -p lk-agents-core -p lk-agents-voice -p lk-agents-media
+```
+
+This is a diagnostic command. The full `check.sh` also forces diagnostics for
+locally allowed sites, checks all three feature configurations, and validates
+each violation and exemption against its baseline. Plain `cargo clippy` uses
+ordinary lint configuration; it is not the architecture gate.
+
+If packages need different policies, run them in separate invocations, each
+with its own explicit `CLIPPY_CONF_DIR` and `-p` list. Do not apply the purity
+policy to `--workspace`: I/O packages intentionally use these APIs.
 
 Unittest and codegen tests include deliberately failing dependency, compiler,
 exemption, length, placement and history fixtures. Compiler counterexamples use

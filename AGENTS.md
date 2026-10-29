@@ -24,6 +24,13 @@ make type-check       # Run mypy type checker (strict mode)
 make check            # Run all checks (format-check, lint, type-check)
 ```
 
+Rust commands live in `rust/Makefile`:
+```bash
+make -C rust clippy        # Shared purity policy for ABI, core, voice and media
+make -C rust architecture  # Full architecture gate, fixtures and codegen checks
+make -C rust check         # Rust formatting and the architecture gate
+```
+
 ### Testing
 ```bash
 uv run pytest --unit                    # Run all unit tests
@@ -273,8 +280,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Move executors into the runtime by splitting: decisions stay in voice/core as synchronous
   state machines emitting effects; the runtime keeps pumps, node calls, timers and output
   binding. Never move a decision-bearing module into the runtime wholesale.
-- The `clippy.toml` of core, voice, ABI and media uses `disallowed-methods`, `disallowed-types`
-  and `disallowed-macros` to reject spawns, `select!`/`join!`, ambient clocks/entropy/environment/process reads,
+- The shared `rust/architecture/clippy.toml`, explicitly selected for core, voice, ABI and media,
+  uses `disallowed-methods`, `disallowed-types` and `disallowed-macros` to reject spawns,
+  `select!`/`join!`, ambient clocks/entropy/environment/process reads,
   unbounded channels, locks, host-shared atomics and randomly ordered decision state.
   Media's optional thread pool, added only for a measured need, is its one allowed spawn
   site. Storage, inference, worker and net are unrestricted async crates.
