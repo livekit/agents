@@ -13,11 +13,10 @@ use lk_agents_abi::voice::console::ConsolePort;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackTracker,
 };
-use lk_agents_abi::{AudioFrame, Spawner, SpawnerExt};
+use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt};
+use lk_agents_net::tcp::Connector;
 use prost::Message as _;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::net::tcp::OwnedReadHalf;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
 use lk_agents_voice::remote_session::console::{
@@ -31,9 +30,11 @@ use proto::agent_session_message::{Message, console_io};
 pub struct ConsoleIo {
     /// `host:port`, the CLI's `--connect-addr`.
     addr: String,
+    connector: Arc<dyn Connector>,
+    clock: Arc<dyn Clock>,
     outgoing: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     outgoing_rx: Mutex<Option<mpsc::UnboundedReceiver<Vec<u8>>>>,
-    reader: AsyncMutex<Option<(OwnedReadHalf, FrameDecoder)>>,
+    reader: AsyncMutex<Option<(Box<dyn AsyncRead + Unpin + Send>, FrameDecoder)>>,
     mic: Mutex<Option<mpsc::UnboundedSender<AudioFrame>>>,
     mic_rx: AsyncMutex<mpsc::UnboundedReceiver<AudioFrame>>,
     tracker: Arc<PlaybackTracker>,
@@ -48,10 +49,24 @@ struct Transport {
 
 impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
     fn new(addr: String) -> Self {
+        use lk_agents_net::env::Env;
+        Self::with_ports(
+            addr,
+            Arc::new(lk_agents_net::tcp::Tcp::<crate::process::Process>::new()),
+            crate::process::Process::clock(),
+        )
+    }
+}
+
+impl ConsoleIo {
+    /// The console protocol over supplied byte IO and the session's clock.
+    pub fn with_ports(addr: String, connector: Arc<dyn Connector>, clock: Arc<dyn Clock>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let (mic, mic_rx) = mpsc::unbounded_channel();
         ConsoleIo {
             addr,
+            connector,
+            clock,
             outgoing: Mutex::new(Some(tx)),
             outgoing_rx: Mutex::new(Some(rx)),
             reader: AsyncMutex::new(None),
@@ -100,11 +115,12 @@ impl SessionTransport for Transport {
                 return Ok(());
             };
             let addr = &self.io.addr;
-            let stream = TcpStream::connect(addr)
+            let lk_agents_net::tcp::Connection { read, mut write } = self
+                .io
+                .connector
+                .connect(addr)
                 .await
                 .map_err(|e| HostError::new(format!("console: connecting to {addr}: {e}")))?;
-            let _ = stream.set_nodelay(true);
-            let (read, mut write) = stream.into_split();
             *self.io.reader.lock().await = Some((read, FrameDecoder::new()));
             self.spawner.spawn_unboxed(async move {
                 while let Some(bytes) = rx.recv().await {
@@ -219,7 +235,7 @@ impl AudioOutput for ConsoleIo {
         f: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
-            let now = lk_agents_abi::unix_now();
+            let now = lk_agents_abi::unix_secs(self.clock.wall());
             let segment =
                 self.tracker.current_segment().ok_or(IoError::PlaybackSegmentUnavailable)?;
             let (message, opened) = self.playback.lock().unwrap().capture(f, segment)?;

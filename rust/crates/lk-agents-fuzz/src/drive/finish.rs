@@ -754,6 +754,7 @@ mod tests {
                 || site.contains("lk-agents-runtime/src/room_io/")
                 || site.ends_with("lk-agents-runtime/src/voice/mod.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/effects.rs")
+                || site.ends_with("lk-agents-runtime/src/voice/console.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/legs.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/background_audio.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/audio.rs")

@@ -24,6 +24,7 @@ pub mod session_report;
 pub mod source;
 pub mod sse;
 pub mod task;
+pub mod tcp;
 pub mod token;
 pub mod transport;
 pub mod websocket;
