@@ -17,8 +17,13 @@ impl Resolver<'_> {
         let enumeration = voc::find(&record.nested, "enum").is_some();
         let typed_dict = voc::find(&record.nested, "typed_dict").is_some();
         let pydantic = match voc::find(&record.nested, "pydantic") {
-            None if ["base", "repr"].iter().any(|w| voc::find(&record.nested, w).is_some()) => {
-                return Err(format!("{at}: `base` and `repr` shape a pydantic record's model"));
+            None if ["base", "repr", "validator"]
+                .iter()
+                .any(|w| voc::find(&record.nested, w).is_some()) =>
+            {
+                return Err(format!(
+                    "{at}: `base`, `repr` and `validator` shape a pydantic record's model"
+                ));
             }
             None => None,
             Some(_) if typed_dict || enumeration || transparent || persisted => {
@@ -30,6 +35,7 @@ impl Resolver<'_> {
             Some(_) => Some(Pydantic {
                 base: voc::text(at, &record.nested, "base")?,
                 repr: voc::text(at, &record.nested, "repr")?,
+                validator: voc::text(at, &record.nested, "validator")?,
             }),
         };
         let dispatch = voc::text(at, &record.nested, "dispatch")?;
@@ -128,14 +134,22 @@ impl Resolver<'_> {
             }
             _ => unreachable!("records are structs and enums"),
         };
+        if pydantic.is_some()
+            && let RecordBody::Struct(fields) = &body
+            && fields.iter().any(|f| f.omitted.is_some())
+        {
+            return Err(format!(
+                "{at}: a pydantic model computes a left-out field in Python: record(.., validator = \"..\")"
+            ));
+        }
         let members = crate::parse::members(item_attrs(item), "python", &ident);
         for (i, member) in members.iter().enumerate() {
             let RecordBody::Struct(fields) = &body else {
                 return Err(format!("{at}: computed properties belong to record structs"));
             };
-            if !member.is_property || !member.args.is_empty() {
+            if !(member.is_property || pydantic.is_some()) || !member.args.is_empty() {
                 return Err(format!(
-                    "{at}: a record declares computed properties without arguments"
+                    "{at}: a record declares computed properties (a pydantic model also methods) without arguments"
                 ));
             }
             if fields.iter().any(|field| field.host_name() == member.name)
@@ -407,6 +421,7 @@ pub(super) fn record_target(
             "pydantic",
             "base",
             "repr",
+            "validator",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?

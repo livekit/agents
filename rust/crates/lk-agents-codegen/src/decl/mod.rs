@@ -72,11 +72,14 @@ pub struct RecordDecl {
 }
 
 /// A pydantic record's model class: `base = ".."` names the pydantic record of the same module it
-/// subclasses (else `BaseModel`); `repr = ".."` the `_bindings` function its `__repr__` calls.
+/// subclasses (else `BaseModel`); `repr = ".."` the `_bindings` function its `__repr__` calls;
+/// `validator = ".."` the `_bindings` function its after-validator calls (a field defaulted from
+/// the others, computed on the host without crossing).
 #[derive(Debug, Clone, Default)]
 pub struct Pydantic {
     pub base: Option<String>,
     pub repr: Option<String>,
+    pub validator: Option<String>,
 }
 
 #[derive(Debug, Clone)]

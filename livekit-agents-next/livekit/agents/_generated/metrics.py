@@ -105,7 +105,7 @@ class STTMetrics(_BaseMetrics):
     """Total input tokens, including both audio and text (for token-based billing)."""
     output_tokens: int = 0
     """Total output tokens (for token-based billing)."""
-    total_tokens: int = None  # type: ignore[assignment]
+    total_tokens: int = 0
     """Sum of input and output tokens.
 
     Defaults to ``input_tokens + output_tokens`` when omitted.
@@ -119,12 +119,8 @@ class STTMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
     @model_validator(mode="after")
-    def _omitted_total_tokens(self) -> Self:
-        from .. import _core
-
-        if self.total_tokens is None:
-            self.total_tokens = _core._core_omitted_stt_metrics_total_tokens(self)
-        return self
+    def _default_total_tokens(self) -> Self:
+        return _bindings._default_total_tokens(self)
 
 
 class TTSMetrics(_BaseMetrics):

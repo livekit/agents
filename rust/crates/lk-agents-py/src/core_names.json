@@ -166,7 +166,6 @@
     "_core_install_frame_reader",
     "_core_judge_tool_schemas",
     "_core_mcp_timeout_check",
-    "_core_omitted_stt_metrics_total_tokens",
     "_core_persist_text_session_state",
     "_core_playback_begin",
     "_core_playback_current_segment",

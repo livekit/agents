@@ -142,6 +142,7 @@ impl LlmMetrics {
     name = "STTMetrics",
     pydantic,
     base = "_BaseMetrics",
+    validator = "_default_total_tokens",
     constant(type = "stt_metrics"),
     emit,
     extract,
@@ -166,7 +167,7 @@ pub struct SttMetrics {
     /// Sum of input and output tokens.
     ///
     /// Defaults to ``input_tokens + output_tokens`` when omitted.
-    #[host(omitted = Self::default_total_tokens)]
+    #[host(default = 0)]
     pub total_tokens: u32,
     /// Audio input tokens, a subset of input_tokens when reported by the provider.
     #[host(default = 0)]
@@ -183,11 +184,6 @@ pub struct SttMetrics {
 
 impl SttMetrics {
     pub const TYPE: &'static str = "stt_metrics";
-
-    /// `total_tokens` when the host leaves it out: input plus output.
-    pub fn default_total_tokens(&self) -> u32 {
-        self.input_tokens + self.output_tokens
-    }
 }
 
 // `metrics/base.py:67`.

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from .chat_items import MetricsReport
-from .metrics import AgentMetrics, STTMetrics
+from .metrics import AgentMetrics
 from .telemetry import OtelValue
 from .usage import ModelUsage
 
@@ -32,5 +32,3 @@ class ModelUsageCollector:
     def __init__(self) -> None: ...
     def collect(self, metrics: AgentMetrics) -> None: ...
     def flatten(self) -> list[ModelUsage]: ...
-
-def _core_omitted_stt_metrics_total_tokens(record: STTMetrics) -> int: ...

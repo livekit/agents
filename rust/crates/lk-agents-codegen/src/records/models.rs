@@ -361,7 +361,8 @@ fn model(
         .iter()
         .map(|(name, value)| format!("    {name}: Literal[{value:?}] = {value:?}\n"))
         .collect();
-    let mut class = |name: &str, doc: &[String], fields: &[&Field], nested: &str| {
+    // A pydantic model resolves its annotations as it is built: they are runtime imports.
+    let class = |name: &str, doc: &[String], fields: &[&Field], nested: &str, imports: &mut Imports| {
         let name = name.rsplit('.').next().unwrap_or(name);
         let mut s = match pydantic {
             Some(p) => {
@@ -404,10 +405,13 @@ fn model(
             };
             let ann = match &f.host_type {
                 Some((m, name)) => {
-                    typing.add(m, name);
-                    name.clone()
+                    imports.add(m, name);
+                    match f.ty {
+                        Ty::Optional(_) => format!("{name} | None"),
+                        _ => name.clone(),
+                    }
                 }
-                None => annotation(&f.ty, module, own, out, typing),
+                None => annotation(&f.ty, module, own, out, pydantic.is_some(), imports),
             };
             s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
@@ -426,17 +430,17 @@ fn model(
                 let ann = match &f.ty {
                     Ty::Maybe(inner) => {
                         runtime.add("typing", "NotRequired");
-                        format!("NotRequired[{}]", annotation(inner, module, own, out, typing))
+                        format!("NotRequired[{}]", annotation(inner, module, own, out, false, typing))
                     }
                     Ty::Optional(inner) if f.default == Some(crate::decl::Literal::None) => {
                         runtime.add("typing", "NotRequired");
-                        format!("NotRequired[{}]", annotation(inner, module, own, out, typing))
+                        format!("NotRequired[{}]", annotation(inner, module, own, out, false, typing))
                     }
                     ty if f.default.is_some() => {
                         runtime.add("typing", "NotRequired");
-                        format!("NotRequired[{}]", annotation(ty, module, own, out, typing))
+                        format!("NotRequired[{}]", annotation(ty, module, own, out, false, typing))
                     }
-                    ty => annotation(ty, module, own, out, typing),
+                    ty => annotation(ty, module, own, out, false, typing),
                 };
                 s.push_str(&format!("    {}: {ann}\n", f.host_name()));
                 s.push_str(&docstring(&f.doc, "    "));
@@ -450,13 +454,14 @@ fn model(
             if !r.constants.is_empty() {
                 runtime.add("typing", "Literal");
             }
-            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested);
-            for (f, function) in r.omitted() {
+            let fields = fields.iter().collect::<Vec<_>>();
+            let mut s = class(&r.name, &r.doc, &fields, nested, runtime);
+            if let Some(validator) = &p.validator {
                 runtime.add("pydantic", "model_validator");
                 runtime.add("typing_extensions", "Self");
-                let field = f.host_name();
+                runtime.add("..", "_bindings");
                 s.push_str(&format!(
-                    "\n    @model_validator(mode=\"after\")\n    def _omitted_{field}(self) -> Self:\n        from .. import _core\n\n        if self.{field} is None:\n            self.{field} = _core.{function}(self)\n        return self\n"
+                    "\n    @model_validator(mode=\"after\")\n    def {validator}(self) -> Self:\n        return _bindings.{validator}(self)\n"
                 ));
             }
             if let Some(repr) = &p.repr {
@@ -468,12 +473,12 @@ fn model(
                     "\n    def __repr__(self) -> str:\n        return _bindings.{repr}(self)\n"
                 ));
             }
-            s.push_str(&properties(r));
+            s.push_str(&properties(r, runtime));
             s
         }
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
-            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested);
+            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested, typing);
             if !r.constants.is_empty() {
                 runtime.add("typing", "Literal");
                 s = s.replace("    pass\n", "");
@@ -491,7 +496,7 @@ fn model(
                     ));
                 }
             }
-            s.push_str(&properties(r));
+            s.push_str(&properties(r, runtime));
             if r.persisted {
                 let (persist, restore) = r.persistence();
                 s.push_str(&format!(
@@ -507,7 +512,7 @@ fn model(
                 .iter()
                 .filter_map(|v| match &v.shape {
                     VariantShape::Tuple(Some(f)) => {
-                        Some(annotation(&f.ty, module, own, out, runtime))
+                        Some(annotation(&f.ty, module, own, out, false, runtime))
                     }
                     VariantShape::Unit => v.host_type.as_ref().map(|(module, name)| {
                         runtime.add(module, name);
@@ -539,7 +544,7 @@ fn model(
                     VariantShape::Tuple(Some(f)) => vec![f],
                     VariantShape::Named(fs) => fs.iter().collect(),
                 };
-                s.push_str(&class(&v.name, &v.doc, &fields, ""));
+                s.push_str(&class(&v.name, &v.doc, &fields, "", typing));
             }
             let names: Vec<&str> = variants
                 .iter()
@@ -578,20 +583,31 @@ fn model(
     }
 }
 
-/// A record's computed views: properties answered by `_core`.
-fn properties(r: &RecordDecl) -> String {
+/// A record's computed views, answered by `_core`; a pydantic model's are host hooks
+/// (`_bindings`), properties or methods, run on the host's own object without crossing.
+fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
     let mut s = String::new();
     for member in &r.members {
-        s.push_str("\n    @property\n");
+        if member.is_property {
+            s.push_str("\n    @property\n");
+        } else {
+            s.push('\n');
+        }
         s.push_str(&format!("    def {}(self) -> {}:\n", member.name, member.ret));
         s.push_str(&docstring(
             &member.doc.lines().map(str::to_owned).collect::<Vec<_>>(),
             "        ",
         ));
-        s.push_str(&format!(
-            "        from .. import _core\n\n        return _core.{}(self)\n",
-            member.hook
-        ));
+        match r.pydantic {
+            Some(_) => {
+                runtime.add("..", "_bindings");
+                s.push_str(&format!("        return _bindings.{}(self)\n", member.hook));
+            }
+            None => s.push_str(&format!(
+                "        from .. import _core\n\n        return _core.{}(self)\n",
+                member.hook
+            )),
+        }
     }
     s
 }
@@ -609,37 +625,49 @@ fn union_alias(name: &str, members: &[&str]) -> String {
     format!("{head}(\n    {}\n)", members.join("\n    | "))
 }
 
-fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imports) -> String {
+/// `any`: JSON reads `Any` (a pydantic model's public annotation), else `object`.
+fn annotation(
+    ty: &Ty,
+    module: &str,
+    own: &[String],
+    out: bool,
+    any: bool,
+    typing: &mut Imports,
+) -> String {
     match ty {
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Duration => "float".into(),
         Ty::Str => "str".into(),
+        Ty::Json | Ty::JsonObject if any => {
+            typing.add("typing", "Any");
+            if matches!(ty, Ty::Json) { "Any".into() } else { "dict[str, Any]".into() }
+        }
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
-        Ty::Optional(t) => format!("{} | None", annotation(t, module, own, out, typing)),
-        Ty::Boxed(t) => annotation(t, module, own, out, typing),
+        Ty::Optional(t) => format!("{} | None", annotation(t, module, own, out, any, typing)),
+        Ty::Boxed(t) => annotation(t, module, own, out, any, typing),
         Ty::Tuple(items) => format!(
             "tuple[{}]",
             items
                 .iter()
-                .map(|item| annotation(item, module, own, out, typing))
+                .map(|item| annotation(item, module, own, out, any, typing))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
         Ty::Maybe(t) => {
             typing.add("..types", "NotGivenOr");
-            format!("NotGivenOr[{}]", annotation(t, module, own, out, typing))
+            format!("NotGivenOr[{}]", annotation(t, module, own, out, any, typing))
         }
         // Bytes cross as `bytes`, as class arguments and results do.
         Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => "bytes".into(),
-        Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, typing)),
+        Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, any, typing)),
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => format!(
             "dict[{}, {}]",
-            annotation(k, module, own, out, typing),
-            annotation(t, module, own, out, typing)
+            annotation(k, module, own, out, any, typing),
+            annotation(t, module, own, out, any, typing)
         ),
-        Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, out, typing)),
+        Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, out, any, typing)),
         Ty::Error(_) => "BaseException".into(),
         Ty::Proxy { host, .. } => {
             let (m, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
