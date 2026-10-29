@@ -80,8 +80,9 @@ from its authoritative source for each activation. Resolve the authenticated pri
 request and saved routing references before loading application data.
 
 `RunContext[BookingContext]` is the framework wrapper. Only `ctx.context` is
-the application object; execution/thread IDs, usage, pending call, progress,
-approval, and live-session access are runtime metadata. Local context is not
+the application object; the other members (execution and task IDs, the thread,
+usage, the call being executed, progress updates and live-session access) are
+runtime metadata, listed in [RunContext](agents.md#runcontext). Local context is not
 automatically sent to the model. Render selected facts through instructions
 or tools. Agent definitions never hold mutable execution context.
 

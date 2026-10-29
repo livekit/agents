@@ -157,8 +157,8 @@ replaced output remain attributable to its old media and cannot advance the
 new output. The session retains accounting for already delivered audio while
 releasing obsolete endpoints. Recording failure and cleanup failure are
 observable outcomes, not silent loss of recording. Recording overflow fails the
-recording with a typed event, releases buffered audio and completes cleanup
-within its deadline. The conversation continues.
+recording with a `recording capacity exceeded` error, logged when the session
+ends, releases buffered audio and completes cleanup within its deadline. The conversation continues.
 
 Pre-connect audio is normalized to the session's format before entering the
 same processing chain as live input. A processor that needs the source format

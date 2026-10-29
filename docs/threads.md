@@ -98,18 +98,18 @@ server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
 the call. Without storage, a run's `ctx.thread` is an in-memory thread
 with the same API and no persistence; see [storage.md](internals/storage.md).
 
-| Member                                         | What                                                                          |
-| ---------------------------------------------- | ----------------------------------------------------------------------------- |
-| `id`                                           | the thread id                                                                 |
-| `info()`                                       | the platform's record: scope, attributes, created, last active, expiry        |
-| `update(attributes=, idle_ttl_seconds=)`       | change the attributes a listing returns, or the idle period                   |
-| `lane(agent).history()`                        | another agent's history in this thread                                        |
-| `chat_history(agent=None)`                     | this agent's history, or another agent's                                      |
-| `lane(agent).tasks(status=, limit=)` | A2A task records for the selected lane |
-| `list_items(agent=None, after=None, limit=100)` | one page of committed chat items in insertion order; the page's `after` reads the next |
-| `list_tasks(agent=None, status=None, order="inserted", page_token=None, limit=50)` | one page of task records, in insertion order or last updated first (`order="updated"`) |
-| `task(task_id)` | one task record, `None` when the thread has none of that id |
-| `journal(after_id=0, limit=100)`               | the journal, one page in order                                                |
+| Member | Returns | What |
+| --- | --- | --- |
+| `id` | `str` | the thread id |
+| `info()` | `ThreadInfo` | the platform's record: scope, attributes, `created_at`, `last_active`, `expires_at` |
+| `update(attributes=, idle_ttl_seconds=)` | `ThreadInfo` | change the attributes a listing returns, or the idle period |
+| `lane(agent).history()` | `ChatContext` | another agent's history in this thread |
+| `chat_history(agent=None)` | `ChatContext` | this agent's history, or another agent's |
+| `lane(agent).tasks(status=, limit=)` | `list[TaskRecord]` | A2A task records for the selected lane |
+| `list_items(agent=None, after=None, limit=100)` | `ThreadItemPage` | one page of committed chat items in insertion order; the page's `after` reads the next |
+| `list_tasks(agent=None, status=None, order="inserted", page_token=None, limit=50)` | `TaskPage` | one page of task records, in insertion order or last updated first (`order="updated"`) |
+| `task(task_id)` | `TaskRecord \| None` | one task record, `None` when the thread has none of that id |
+| `journal(after_id=0, limit=100)` | `list[EventRow]` | the journal, one page in order |
 
 ## Lifecycle
 

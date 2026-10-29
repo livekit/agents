@@ -282,8 +282,9 @@ backend child conversation. Frontend presentation belongs to the calling
 
 `RemoteAgent(url).as_tool()` exposes an A2A endpoint through the same agent-tool
 lifecycle. The remote card defines its public tool contract; its service owns
-history, approval, and execution. The text session retains the references needed to forward replies and
-deliver completion to its parent agent. The same remote tool can be attached
+history, approval, and execution. A remote call is an ordinary tool call in the
+calling frame: the text session retains, in that frame's history, the
+references needed to forward replies and deliver completion to its parent agent. The same remote tool can be attached
 to a frontend agent; there, `VoiceSession` owns those interactions without a
 session. Progress, cancellation, and protocol metadata are handled by the adapter. See
 [remote agents as tools](tools.md#remote-agents-as-tools).

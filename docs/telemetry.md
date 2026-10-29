@@ -34,7 +34,7 @@ Wrap each application exporter before adding its SDK processor:
 | --- | --- |
 | `RedactingSpanExporter(exporter, allow_pii=False)` | Apply content policy to one span destination |
 | `RedactingLogExporter(exporter, allow_pii=False)` | Apply content policy to one log destination |
-| `diagnostics()` | Read drop, export-failure and cleanup counters as `dict[str, int]` |
+| `diagnostics()` | Read the process's export counters as `dict[str, int]`: `dropped`, `failed`, `conflicts` (configuration conflicts reported) and `incomplete_cleanup` |
 
 Each destination receives an independent snapshot. Filtering one destination
 cannot change another's data. Project redaction narrows content access further.
