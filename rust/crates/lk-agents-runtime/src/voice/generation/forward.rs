@@ -14,6 +14,7 @@ use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
+use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::PlayoutStep;
@@ -226,12 +227,8 @@ impl Pump<'_> {
             }
             _ => false,
         };
-        let mut aligned = aligned_path.then(|| Aligned {
-            leg: text_out,
-            words: String::new(),
-            stamped: false,
-            closed: false,
-        });
+        let mut aligned =
+            aligned_path.then(|| Aligned { leg: text_out, words: String::new(), stamped: false, closed: false });
         let deltas = if aligned_path { None } else { text_out };
         // The segment's first delta; every other one is forwarded where it is consumed.
         capture(deltas, &first.text).await;
@@ -338,7 +335,8 @@ impl Pump<'_> {
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included.
         if text.is_some()
-            && text_out.is_some_and(|leg| leg.forwarded.get())
+            && text_out
+                .is_some_and(|leg| leg.state.lock().unwrap_or_else(|p| p.into_inner()).forwarded)
             && heard.frames == 0
             && heard.complete
             && let Some(out) = audio_out.as_ref()
@@ -383,11 +381,7 @@ impl Segment for Frames<'_> {
 pub(super) struct TextLeg<'a> {
     out: Option<Arc<dyn TextOutput>>,
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
-    /// Every user of the leg runs in one task (it borrows the reply's state), so checking and
-    /// setting this between awaits flushes once.
-    flushed: lk_agents_abi::Monotone<bool>,
-    /// Words of this segment went down the leg.
-    forwarded: lk_agents_abi::Monotone<bool>,
+    state: std::sync::Mutex<TextLegState>,
     shared: &'a Arc<SessionShared>,
     speech: SpeechId,
 }
@@ -399,28 +393,36 @@ impl<'a> TextLeg<'a> {
         shared: &'a Arc<SessionShared>,
         speech: SpeechId,
     ) -> Self {
-        let (flushed, forwarded) =
-            (lk_agents_abi::Monotone::new(false), lk_agents_abi::Monotone::new(false));
-        TextLeg { out, buffered, flushed, forwarded, shared, speech }
+        TextLeg { out, buffered, state: Default::default(), shared, speech }
+    }
+
+    fn handle(&self, event: TextLegEvent) -> Option<TextLegEffect> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).handle(event)
     }
 
     /// Errors are dropped: a text stream that will not open must not silence the agent.
     pub(super) async fn capture(&self, delta: &str) {
-        if !delta.is_empty() {
+        if matches!(
+            self.handle(TextLegEvent::Capture { empty: delta.is_empty() }),
+            Some(TextLegEffect::Forward)
+        ) {
             self.forward(SynthesisEvent::Text(delta.to_owned())).await;
         }
     }
 
     /// Timings kept, so a synchroniser paces on `start_time`.
     pub(super) async fn capture_timed(&self, word: &lk_agents_abi::TimedString) {
-        if !word.text.is_empty() {
+        if matches!(
+            self.handle(TextLegEvent::Capture { empty: word.text.is_empty() }),
+            Some(TextLegEffect::Forward)
+        ) {
             self.forward(SynthesisEvent::TimedText(word.clone())).await;
         }
     }
 
     pub(super) async fn forward(&self, event: SynthesisEvent) {
         if matches!(event, SynthesisEvent::Text(_) | SynthesisEvent::TimedText(_)) {
-            self.forwarded.set(true);
+            self.handle(TextLegEvent::Forwarded);
         }
         if let Some(tx) = self.buffered {
             let _ = tx.send(event);
@@ -444,8 +446,7 @@ impl<'a> TextLeg<'a> {
     }
 
     pub(super) fn flush(&self) {
-        if !self.flushed.get() {
-            self.flushed.set(true);
+        if matches!(self.handle(TextLegEvent::Flush), Some(TextLegEffect::Flush)) {
             if let Some(tx) = self.buffered {
                 let _ = tx.send(SynthesisEvent::FlushText);
             } else if let Some(out) = self.out.as_deref() {

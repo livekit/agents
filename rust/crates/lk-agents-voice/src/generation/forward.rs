@@ -81,3 +81,38 @@ impl PlaybackGate {
         }
     }
 }
+
+/// A transcript segment flushes once even when several completion paths meet.
+#[derive(Clone, Copy, Default)]
+pub struct TextLegState {
+    pub forwarded: bool,
+    flushed: bool,
+}
+
+pub enum TextLegEvent {
+    Capture { empty: bool },
+    Forwarded,
+    Flush,
+}
+
+pub enum TextLegEffect {
+    Forward,
+    Flush,
+}
+
+impl TextLegState {
+    pub fn handle(&mut self, event: TextLegEvent) -> Option<TextLegEffect> {
+        match event {
+            TextLegEvent::Capture { empty } => (!empty).then_some(TextLegEffect::Forward),
+            TextLegEvent::Forwarded => {
+                self.forwarded = true;
+                None
+            }
+            TextLegEvent::Flush if !self.flushed => {
+                self.flushed = true;
+                Some(TextLegEffect::Flush)
+            }
+            TextLegEvent::Flush => None,
+        }
+    }
+}
