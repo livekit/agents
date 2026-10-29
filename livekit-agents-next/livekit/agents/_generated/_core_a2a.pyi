@@ -141,7 +141,10 @@ class _core_RemoteInteraction:
         structured: bool,
         offers_extension: bool,
         history: Sequence[ChatItem],
-    ) -> Message: ...
+        thread_id: str | None = None,
+        token: str | None = None,
+    ) -> Message:
+        """The call's message; `thread_id` shares the caller's thread under `token`'s grant for it."""
     def answer(self, request_id: str, text: str) -> Message:
         """The person's answer to the retained input request `request_id`, on its task; refused
         once that request was settled or superseded.
@@ -151,5 +154,11 @@ class _core_RemoteInteraction:
     @property
     def extra(self) -> dict[str, object]: ...
 
-def _core_remote_token(endpoint: str, token: str | None = None) -> str | None:
-    """Resolve an endpoint credential from explicit input or the configured project's origin."""
+def _core_remote_token(
+    endpoint: str,
+    token: str | None = None,
+    thread_id: str | None = None,
+) -> str | None:
+    """Resolve an endpoint credential: `token` as given; else, for an endpoint on the configured
+    project's origin, a grant for the caller's `thread_id`, or a project credential without one.
+    """

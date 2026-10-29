@@ -33,7 +33,7 @@ class RemoteAgent:
         conn_options: APIConnectOptions | None = None,
     ) -> None:
         self._url = url
-        self._token = _core._core_remote_token(url, token)
+        self._token = token
         self._conn_options = conn_options
 
     def as_tool(self) -> Toolset:
@@ -61,12 +61,12 @@ class _RemoteTool(Toolset):
     def tools(self) -> Sequence[Tool | Toolset]:
         return [self._tool] if self._tool is not None else []
 
-    def _client(self) -> AgentClient:
-        return AgentClient(self._url, token=self._token, conn_options=self._conn_options)
+    def _client(self, token: str | None) -> AgentClient:
+        return AgentClient(self._url, token=token, conn_options=self._conn_options)
 
     async def setup(self) -> _RemoteTool:
         if self._tool is None:
-            client = self._client()
+            client = self._client(_core._core_remote_token(self._url, self._token))
             try:
                 self._card = await client.connect()
             finally:
@@ -96,7 +96,12 @@ class _RemoteTool(Toolset):
             to_core_item(ctx.function_call),
             to_core_items(history.items),
         )
-        client = self._client()
+        # with no token of its own, the call shares its thread with the endpoint under a grant
+        # minted for that thread (docs/internals/storage.md "Two brains, one thread")
+        thread_id = ctx.thread.id if self._token is None else None
+        token = _core._core_remote_token(self._url, self._token, thread_id)
+        shared = thread_id if self._token is None and token is not None else None
+        client = self._client(token)
         reply: Reply | None = None
         try:
             await client.connect()
@@ -105,6 +110,8 @@ class _RemoteTool(Toolset):
                 self._card.structured_input,
                 client.offers_extension,
                 to_core_items(history.items),
+                shared,
+                token if shared else None,
             )
             reply = await client.send(message)
             if ctx._session is not None:

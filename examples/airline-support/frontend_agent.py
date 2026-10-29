@@ -20,7 +20,8 @@ PERSONA = (
     "pleasantries and the conversation itself are yours."
 )
 
-# the back office as the front desk's one tool, described from its card
+# the back office as the front desk's one tool, described from its card; with no token, each
+# call shares its thread with it under a grant minted for that thread
 back_office = RemoteAgent(BACKEND)
 
 chat = Agent(

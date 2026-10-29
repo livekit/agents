@@ -851,6 +851,57 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
     assert seen["parts"] == [TextPart(text="what is the fare")]
 
 
+async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
+    thread_storage: Storage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/internals/storage.md "Two brains, one thread": the fast brain's ``RemoteAgent(url)``
+    with no token, in a conversation on thread T, mints a grant for T and shares it; the
+    endpoint's real authorization admits it, and the back office answers in T on its own lane.
+    A project credential alone (what it minted before) is refused 403 for a message."""
+    from livekit.agents import _core
+    from livekit.agents._core_view import to_core_item
+    from livekit.agents.llm import FunctionCall
+
+    seen: dict[str, Any] = {}
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        seen["thread"] = ctx.thread.id
+        return "booked"
+
+    server, _ = make_server(thread_storage, handler)
+    storage = server.storage
+    assert storage is not None
+    caller = await storage.threads.create_thread(scope="user:alice")
+    for name, value in (
+        ("LIVEKIT_URL", "wss://agents.test"),
+        ("LIVEKIT_API_KEY", API_KEY),
+        ("LIVEKIT_API_SECRET", API_SECRET),
+    ):
+        monkeypatch.setenv(name, value)
+    url = f"https://agents.test/{ENDPOINT}"
+    token = _core._core_remote_token(url, None, caller.thread_id)
+    call = FunctionCall(call_id="call_1", name="desk", arguments='{"request": "book"}')
+    interaction = _core._core_RemoteInteraction(url, "desk", to_core_item(call), [])
+    message = interaction.message({"request": "book"}, False, True, [], caller.thread_id, token)
+    assert message.context_id == caller.thread_id
+    async with http_client(server) as http:
+        sent = wire("book", message.message_id, context_id=message.context_id, kind="delegation")
+        r = await rpc(http, "message/send", {"message": sent}, Authorization=f"Bearer {token}")
+        assert r.status_code == 200, r.text
+        task = r.json()["result"]["task"]
+        assert (task["contextId"], task["status"]["state"]) == (
+            caller.thread_id,
+            "TASK_STATE_COMPLETED",
+        )
+        endpoint_only = _core._core_remote_token(url, None, None)
+        again = wire("book", "m2", context_id=caller.thread_id)
+        r = await rpc(
+            http, "message/send", {"message": again}, Authorization=f"Bearer {endpoint_only}"
+        )
+        assert r.status_code == 403
+    assert seen["thread"] == caller.thread_id
+
+
 async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
     thread_storages: Workers,
 ) -> None:

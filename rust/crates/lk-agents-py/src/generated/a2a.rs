@@ -362,11 +362,12 @@ impl _core_RemoteInteraction {
         Ok(_core_RemoteInteraction(::std::sync::Arc::new(out)))
     }
 
-    #[pyo3(signature = (arguments, structured, offers_extension, history))]
-    fn message<'py>(&self, py: Python<'py>, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<Bound<'py, PyAny>> {
+    /// The call's message; `thread_id` shares the caller's thread under `token`'s grant for it.
+    #[pyo3(signature = (arguments, structured, offers_extension, history, thread_id = None, token = None))]
+    fn message<'py>(&self, py: Python<'py>, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>, thread_id: ::std::option::Option<::std::string::String>, token: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
-        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history, thread_id, token).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
     }
 
@@ -404,12 +405,13 @@ impl _core_RemoteInteraction {
 // Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
 type RemoteConfigurationImpl = <crate::Selected as super::Implementations>::RemoteConfiguration;
 
-/// Resolve an endpoint credential from explicit input or the configured project's origin.
+/// Resolve an endpoint credential: `token` as given; else, for an endpoint on the configured
+/// project's origin, a grant for the caller's `thread_id`, or a project credential without one.
 #[pyfunction]
-#[pyo3(signature = (endpoint, token = None))]
-pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+#[pyo3(signature = (endpoint, token = None, thread_id = None))]
+pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option::Option<::std::string::String>, thread_id: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
     crate::host::check_pid()?;
-    let out = <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, token).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, token, thread_id).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 

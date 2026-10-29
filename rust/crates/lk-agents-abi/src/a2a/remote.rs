@@ -39,6 +39,7 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         history: Vec<ChatItem>,
     ) -> Result<Self, AgentClientError>;
 
+    /// The call's message; `thread_id` shares the caller's thread under `token`'s grant for it.
     #[host(call)]
     fn message(
         &self,
@@ -46,6 +47,10 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         structured: bool,
         offers_extension: bool,
         history: Vec<ChatItem>,
+        #[host(default = None)]
+        thread_id: Option<String>,
+        #[host(default = None)]
+        token: Option<String>,
     ) -> Result<Message, AgentClientError>;
 
     /// The person's answer to the retained input request `request_id`, on its task; refused
@@ -65,10 +70,12 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
 
 #[crate::host(functions)]
 pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
-    /// Resolve an endpoint credential from explicit input or the configured project's origin.
+    /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the configured
+    /// project's origin, a grant for the caller's `thread_id`, or a project credential without one.
     #[host(function)]
     fn _core_remote_token(
         endpoint: String,
         #[host(default = None)] token: Option<String>,
+        #[host(default = None)] thread_id: Option<String>,
     ) -> Result<Option<String>, AgentClientError>;
 }

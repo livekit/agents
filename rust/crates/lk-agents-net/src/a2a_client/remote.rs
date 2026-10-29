@@ -59,8 +59,33 @@ impl Port for RemoteInteraction {
         structured: bool,
         offers_extension: bool,
         history: Vec<ChatItem>,
+        thread_id: Option<String>,
+        token: Option<String>,
     ) -> Result<Message, AgentClientError> {
         let mut state = self.inner.lock().map_err(protocol)?;
+        // sharing the caller's thread needs a grant this project signed for it, verified here
+        let authority = match (thread_id.as_deref(), token.as_deref()) {
+            (Some(thread), Some(token)) => {
+                let endpoint = state.policy.snapshot().id.endpoint;
+                let project = Project::of(&endpoint)?.ok_or_else(|| {
+                    AgentClientError::InvalidInput(
+                        "sharing a thread needs the endpoint on the configured project".into(),
+                    )
+                })?;
+                let assertion = super::authority::AuthorityAssertion::Grant {
+                    project_url: &project.url,
+                    api_key: &project.api_key,
+                    api_secret: &project.api_secret,
+                    token,
+                };
+                let now = std::time::SystemTime::now();
+                Some(
+                    super::authority::verify(&endpoint, thread, DELEGATE, assertion, now)
+                        .map_err(protocol)?,
+                )
+            }
+            _ => None,
+        };
         if !arguments.is_object() {
             return Err(AgentClientError::InvalidInput(
                 "remote tool arguments must be an object".into(),
@@ -89,9 +114,9 @@ impl Port for RemoteInteraction {
             .message(
                 text,
                 crate::strings::shortuuid("msg_"),
-                None,
-                "",
-                None,
+                thread_id.as_deref().filter(|_| authority.is_some()),
+                DELEGATE,
+                authority.as_ref(),
                 offers_extension,
                 caller_history.as_ref(),
             )
@@ -187,28 +212,56 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
     fn _core_remote_token(
         endpoint: String,
         token: Option<String>,
+        thread_id: Option<String>,
     ) -> Result<Option<String>, AgentClientError> {
-        use lk_agents_abi::a2a::auth::Credentials as CredentialsApi;
+        use lk_agents_abi::a2a::auth::{AuthGrant, Credentials as CredentialsApi};
 
         if token.is_some() {
             return Ok(token);
         }
-        let Some(project_url) = std::env::var("LIVEKIT_URL").ok().filter(|value| !value.is_empty())
+        let Some(project) = Project::of(&endpoint)? else { return Ok(None) };
+        let credentials = crate::a2a_auth::Credentials::new(project.api_key, project.api_secret);
+        match thread_id.filter(|id| !id.is_empty()) {
+            // the caller's thread, shared with the endpoint (docs/internals/storage.md "Two
+            // brains, one thread"): an endpoint call alone grants no thread access
+            Some(thread_id) => credentials.thread_grant_token(
+                AuthGrant {
+                    thread_ids: vec![thread_id],
+                    read: true,
+                    write: true,
+                    ..AuthGrant::default()
+                },
+                DELEGATE.into(),
+                3600,
+            ),
+            // no thread to share: enough to read the card
+            None => credentials.project_token(DELEGATE.into(), 3600),
+        }
+        .map(Some)
+        .map_err(protocol)
+    }
+}
+
+/// The identity of the tokens a remote tool mints for itself.
+const DELEGATE: &str = "delegate";
+
+/// The configured LiveKit project (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`), when
+/// the endpoint is on its origin.
+struct Project {
+    url: String,
+    api_key: String,
+    api_secret: String,
+}
+
+impl Project {
+    fn of(endpoint: &str) -> Result<Option<Self>, AgentClientError> {
+        let var = |name| std::env::var(name).ok().filter(|value: &String| !value.is_empty());
+        let (Some(url), Some(api_key), Some(api_secret)) =
+            (var("LIVEKIT_URL"), var("LIVEKIT_API_KEY"), var("LIVEKIT_API_SECRET"))
         else {
             return Ok(None);
         };
-        let Some(api_key) = std::env::var("LIVEKIT_API_KEY").ok().filter(|value| !value.is_empty())
-        else {
-            return Ok(None);
-        };
-        let Some(api_secret) =
-            std::env::var("LIVEKIT_API_SECRET").ok().filter(|value| !value.is_empty())
-        else {
-            return Ok(None);
-        };
-        let Ok(mut project) = url::Url::parse(&project_url) else {
-            return Ok(None);
-        };
+        let Ok(mut project) = url::Url::parse(&url) else { return Ok(None) };
         let scheme = match project.scheme() {
             "ws" | "http" => "http",
             "wss" | "https" => "https",
@@ -220,13 +273,10 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         {
             return Ok(None);
         }
-        let destination = super::checked_url(&endpoint).map_err(protocol)?;
+        let destination = super::checked_url(endpoint).map_err(protocol)?;
         if project.origin() != destination.origin() {
             return Ok(None);
         }
-        crate::a2a_auth::Credentials::new(api_key, api_secret)
-            .project_token("delegate".into(), 3600)
-            .map(Some)
-            .map_err(protocol)
+        Ok(Some(Project { url: project.to_string(), api_key, api_secret }))
     }
 }

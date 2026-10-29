@@ -172,10 +172,15 @@ carries none. The endpoint admits a message or a task method only under an
 with `create` and `write` in its scope ([tokens](protocol/a2a.md#tokens)). A
 project credential (`agentEndpoint.call` alone) reads the card but is refused
 403 for messages, so a backend sends with a thread grant it minted.
-`RemoteAgent(url, token=)` sends the token it was given; given none, for an
+`RemoteAgent(url, token=)` sends the token it was given. Given none, for an
 endpoint on the project's own origin (`LIVEKIT_URL`, with `LIVEKIT_API_KEY`
-and `LIVEKIT_API_SECRET` set) it mints a one-hour project credential, identity
-`delegate`, and otherwise sends no token.
+and `LIVEKIT_API_SECRET` set), each call mints a one-hour thread grant,
+identity `delegate`, with `read` and `write` on the caller's thread, and shares
+that thread with the endpoint: the message carries it as `contextId`, and the
+endpoint answers in it on its own lane
+([two brains, one thread](internals/storage.md#two-brains-one-thread)). It
+reads the card under a project credential. Off the project's origin it sends
+no token.
 `chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
 extension ([conversation data](protocol/a2a.md#conversation-data-part)). Each update is a
 `TaskUpdate`: `state`, `text`, `task_id`, `context_id`, `metadata` with the
