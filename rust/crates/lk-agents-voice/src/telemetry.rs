@@ -610,11 +610,14 @@ impl SessionTrace {
                     self.inference(metrics, parent, out);
                 }
             }
-            // The overlap's verdict describes the speech it was made on.
-            SessionEvent::OverlappingSpeech(e) => {
-                if let Some((_, verdict)) = &mut self.user_speaking {
+            // The first detected interruption describes the speech; a backchannel or an
+            // inconclusive verdict does not.
+            SessionEvent::OverlappingSpeech(e) if e.is_interruption => {
+                if let Some((_, verdict)) = &mut self.user_speaking
+                    && verdict.0.get(attrs::IS_INTERRUPTION).is_none_or(|v| v != "true")
+                {
                     *verdict = Attrs::new()
-                        .set(attrs::IS_INTERRUPTION, e.is_interruption.to_string())
+                        .set(attrs::IS_INTERRUPTION, "true")
                         .set(attrs::INTERRUPTION_PROBABILITY, e.probability)
                         .set(attrs::INTERRUPTION_TOTAL_DURATION, e.total_duration)
                         .set(attrs::INTERRUPTION_PREDICTION_DURATION, e.prediction_duration)
@@ -890,34 +893,47 @@ mod tests {
         assert_eq!(wait.attributes["lk.eou.wait_duration"], 1.0);
     }
 
-    // Catches: the adaptive interruption verdict missing from `user_speaking`, or an overlap
-    // ended without one not marked `false` (1.x parity).
+    // Catches: the first detected interruption missing from `user_speaking` (or a backchannel or
+    // a later verdict written there), or an overlap ended without one not marked `false` (1.x).
     #[test]
     fn an_overlap_verdict_describes_the_user_speaking_span() {
         let mut t = opened();
         let mut out = Vec::new();
         let edge = |old, new| SessionEvent::UserStateChanged { old, new, at: Ts::ZERO };
         t.observe(3.0, &|_| 3.0, "a", &edge(UserState::Listening, UserState::Speaking), &mut out);
-        let verdict = lk_agents_abi::voice::events::OverlappingSpeechEvent {
-            created_at: 3.5,
-            detected_at: 3.5,
-            is_interruption: true,
-            agent_ended: false,
-            total_duration: 0.2,
-            prediction_duration: 0.05,
-            detection_delay: 0.4,
-            overlap_started_at: Some(3.1),
-            speech_input: None,
-            probabilities: None,
-            probability: 0.9,
-            num_requests: 1,
+        let verdict = |is_interruption, probability| {
+            let ev = lk_agents_abi::voice::events::OverlappingSpeechEvent {
+                created_at: 3.5,
+                detected_at: 3.5,
+                is_interruption,
+                agent_ended: false,
+                total_duration: 0.2,
+                prediction_duration: 0.05,
+                detection_delay: 0.4,
+                overlap_started_at: Some(3.1),
+                speech_input: None,
+                probabilities: None,
+                probability,
+                num_requests: 1,
+            };
+            SessionEvent::OverlappingSpeech(Arc::new(ev))
         };
-        let ev = SessionEvent::OverlappingSpeech(Arc::new(verdict));
-        t.observe(3.5, &|_| 3.5, "a", &ev, &mut out);
+        t.observe(3.2, &|_| 3.2, "a", &verdict(false, 0.1), &mut out);
+        out.clear();
+        t.observe(3.3, &|_| 3.3, "a", &edge(UserState::Speaking, UserState::Listening), &mut out);
+        let SessionEvent::SpanEnded(speaking) = &out[0] else { panic!("{out:?}") };
+        assert!(speaking.attributes.is_empty(), "a backchannel: {speaking:?}");
+
+        t.observe(3.4, &|_| 3.4, "a", &edge(UserState::Listening, UserState::Speaking), &mut out);
+        t.observe(3.5, &|_| 3.5, "a", &verdict(true, 0.9), &mut out);
+        t.observe(3.6, &|_| 3.6, "a", &verdict(true, 0.5), &mut out);
         out.clear();
         t.observe(4.0, &|_| 4.0, "a", &edge(UserState::Speaking, UserState::Listening), &mut out);
-        let SessionEvent::SpanEnded(speaking) = &out[0] else { panic!("{out:?}") };
-        assert_eq!(speaking.span_id, "user_speaking_4");
+        let ended = out.iter().find_map(|e| match e {
+            SessionEvent::SpanEnded(s) if s.span_id.starts_with("user_speaking") => Some(s),
+            _ => None,
+        });
+        let speaking = ended.expect("user_speaking ends");
         assert_eq!(speaking.attributes["lk.is_interruption"], "true");
         assert_eq!(speaking.attributes["lk.interruption.probability"], 0.9);
         assert_eq!(speaking.attributes["lk.interruption.total_duration"], 0.2);
