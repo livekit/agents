@@ -387,7 +387,9 @@ impl World {
                     }
                     None => V::ToolPrepareFailed {
                         call: *call,
-                        error: "nights must be an integer".into(),
+                        failure: lk_agents_core::tool_calls::PrepareFailure::Refused(
+                            "nights must be an integer".into(),
+                        ),
                     },
                 };
                 send(timeline, Src::Host, at, event);

@@ -214,7 +214,7 @@ impl ToolCalls {
     pub fn prepare_failed<'h, E: From<Effect>>(
         &mut self,
         id: CallId,
-        error: String,
+        failure: PrepareFailure,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
         fx: &mut Vec<E>,
@@ -223,7 +223,11 @@ impl ToolCalls {
         if !matches!(call.phase, Phase::Preparing { .. }) {
             return;
         }
-        settle(call, ToolOutcome::ToolError(error), true, fx);
+        let outcome = match failure {
+            PrepareFailure::Refused(feedback) => ToolOutcome::ToolError(feedback),
+            PrepareFailure::Internal => ToolOutcome::Internal,
+        };
+        settle(call, outcome, true, fx);
         self.admit(tools, history, fx);
     }
 
@@ -527,6 +531,15 @@ impl ToolCalls {
         );
         call.phase = Phase::Running { identity: canonical };
     }
+}
+
+/// Why the host did not prepare a call's arguments. Either way the call spends a retry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrepareFailure {
+    /// The arguments did not bind or validate: the message is the model's feedback.
+    Refused(String),
+    /// The host failed; it logged the error, and the model is told nothing about it.
+    Internal,
 }
 
 /// Parses a call's arguments and asks the host to prepare them; an unknown tool or arguments

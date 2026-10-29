@@ -184,11 +184,14 @@ impl Execution {
                 self.invoke(Work::Call(call), Some(function_call), None, move |inv, events| async move {
                     let report = match host.prepare_tool(&inv, arguments).await {
                         Ok(Ok(prepared)) => Report::Prepared { call, resource, prepared },
-                        Ok(Err(e)) => Report::Core(Event::ToolPrepareFailed { call, error: e.message }),
+                        Ok(Err(e)) => {
+                            let failure = PrepareFailure::Refused(e.message);
+                            Report::Core(Event::ToolPrepareFailed { call, failure })
+                        }
                         Err(e) => {
                             log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
-                            let error = INTERNAL_ERROR_OUTPUT.to_owned();
-                            Report::Core(Event::ToolPrepareFailed { call, error })
+                            let failure = PrepareFailure::Internal;
+                            Report::Core(Event::ToolPrepareFailed { call, failure })
                         }
                     };
                     let _ = events.send(report).await;

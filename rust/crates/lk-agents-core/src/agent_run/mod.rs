@@ -34,7 +34,7 @@ use serde_json::{Map, Value};
 
 use crate::agent::{self, AgentError, first_string_parameter};
 use crate::request::{RequestSnapshot, plan_request};
-use crate::tool_calls::{self, FinalCandidate, Recorded, ToolCalls};
+use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, ToolCalls};
 use crate::tool_outcome;
 use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
@@ -113,10 +113,10 @@ pub enum Event {
         prepared: ResourceId,
         identity: ArgumentIdentity,
     },
-    /// Validation or binding failed: feedback for the model.
+    /// The host did not prepare the arguments.
     ToolPrepareFailed {
         call: CallId,
-        error: String,
+        failure: PrepareFailure,
     },
     ReadBackRendered {
         call: CallId,
@@ -419,11 +419,11 @@ impl AgentRun {
                 }
                 self.step_settled(now, &mut fx);
             }
-            Event::ToolPrepareFailed { call, error } => {
+            Event::ToolPrepareFailed { call, failure } => {
                 if let Phase::Acting(a) = &mut self.phase {
                     a.calls.prepare_failed(
                         call,
-                        error,
+                        failure,
                         &self.agent.tools,
                         self.history.iter(),
                         &mut fx,

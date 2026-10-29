@@ -171,7 +171,10 @@ fn invalid_arguments_and_unknown_tools_are_feedback_and_never_run_a_body() {
     let mut d = Driver::new(text_agent(vec![string_tool("book", "day")]), "book", vec![]);
     d.reply("", &[("book", json!({"day": 5})), ("cancel", json!({}))]);
     let (call, _) = d.prepares()[0].clone();
-    d.send(Event::ToolPrepareFailed { call, error: "day: Input should be a valid string".into() });
+    d.send(Event::ToolPrepareFailed {
+        call,
+        failure: PrepareFailure::Refused("day: Input should be a valid string".into()),
+    });
     assert!(d.executes().is_empty());
     let (_, ctx, _) = d.request();
     let outputs: Vec<_> =

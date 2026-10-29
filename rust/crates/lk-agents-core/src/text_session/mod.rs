@@ -490,9 +490,10 @@ impl TextSession {
                     });
                     event = agent_run::Event::ToolPrepareFailed {
                         call: *call,
-                        error:
+                        failure: crate::tool_calls::PrepareFailure::Refused(
                             "local agent arguments must have a serializable validated JSON object"
                                 .into(),
+                        ),
                     };
                 }
             }

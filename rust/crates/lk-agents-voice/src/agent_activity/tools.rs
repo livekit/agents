@@ -127,7 +127,7 @@ impl Driver {
         speech: SpeechId,
         step: u32,
         call: CallId,
-        identity: Result<ArgumentIdentity, String>,
+        identity: Result<ArgumentIdentity, lk_agents_core::tool_calls::PrepareFailure>,
         go: RequestId,
         out: &mut Out,
     ) {

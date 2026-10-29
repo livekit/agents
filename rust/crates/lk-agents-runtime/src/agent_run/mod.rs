@@ -12,13 +12,13 @@ use lk_agents_abi::agent::run::{Output, RunError, RunSettled, RunUpdate, Validat
 use lk_agents_abi::agent::{AgentHost, Invocation, PreparedArguments, ValidatedOutput};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::tool_executor::Approval;
-use lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
 use lk_agents_core::agent_run::{
     CallId, CheckpointId, Effect, Event, OutputVerdict, RenderId, RequestId,
 };
+use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_core::{AgentError, AgentRun, RunInput, approval};
 use tokio::sync::{mpsc, oneshot};
 

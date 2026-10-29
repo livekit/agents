@@ -775,7 +775,7 @@ fn invalid_parameters_and_changed_approval_arguments_never_start_a_child() {
         .unwrap();
     invalid.run(agent_run::Event::ToolPrepareFailed {
         call,
-        error: "nights must be an integer".into(),
+        failure: crate::tool_calls::PrepareFailure::Refused("nights must be an integer".into()),
     });
     assert_eq!(invalid.session.state.frames.len(), 1);
     assert!(invalid.request().1.items.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.is_error && o.output.contains("integer"))));

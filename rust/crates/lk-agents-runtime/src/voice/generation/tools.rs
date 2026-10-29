@@ -8,6 +8,7 @@ use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
     CallId, StepDecision, ToolExecution, ToolGo, ToolOutcome, answer,
 };
+use lk_agents_core::tool_calls::PrepareFailure;
 use std::sync::Arc;
 
 /// Calls go to the runner as they arrive (latency hides behind the generation's tail). **Order is
@@ -235,11 +236,14 @@ impl HostedCall<'_> {
                                     prepared = Some(args.prepared);
                                     Ok(args.identity)
                                 }
-                                Ok(Err(refused)) => Err(refused.message),
-                                Err(e) => Err(e.to_string()),
+                                Ok(Err(refused)) => Err(PrepareFailure::Refused(refused.message)),
+                                Err(e) => {
+                                    log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
+                                    Err(PrepareFailure::Internal)
+                                }
                             }
                         }
-                        None => Err(format!("no runner for tool `{}`", one.name)),
+                        None => Err(PrepareFailure::Internal),
                     };
                     let (speech, step) = (self.speech, self.step);
                     go = self

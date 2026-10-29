@@ -895,13 +895,16 @@ pub enum GenEvent {
         tool: Option<Box<crate::tool_executor::FunctionToolInfo>>,
         go: crate::agent_session::RequestId,
     },
-    /// The host bound and validated the call's arguments, or refused them (the model's
-    /// feedback). Awaited with the call's next move.
+    /// The host bound and validated the call's arguments, or did not prepare them. Awaited with
+    /// the call's next move.
     ToolPrepared {
         speech: SpeechId,
         step: u32,
         call: crate::tool_executor::CallId,
-        identity: Result<lk_agents_abi::agent::ArgumentIdentity, String>,
+        identity: Result<
+            lk_agents_abi::agent::ArgumentIdentity,
+            lk_agents_core::tool_calls::PrepareFailure,
+        >,
         go: crate::agent_session::RequestId,
     },
     /// The tool's read-back function answered. Awaited with the call's settlement.
