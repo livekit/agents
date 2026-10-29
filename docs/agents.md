@@ -41,7 +41,7 @@ assigned to when it is first bound. An unnamed agent built anywhere else is
 `default_agent`.
 
 Tools, instruction functions, and lifecycle hooks are registered with
-decorators at import. The first time the agent is bound to a thread they
+decorators at import. The first time a run or a session uses the agent they
 freeze: a later registration raises `RuntimeError`.
 
 ## Registering tools
@@ -118,7 +118,7 @@ and `status == "input_required"` exposes `question: str`. The branches are
 `livekit.agents`. Both branches expose history and usage. A tool's
 `InputRequired(...)` sets the framework outcome; `output_type` contains only
 the application's final-result contract. See the
-[result and A2A mapping](#running-a-turn).
+[result and A2A mapping](server.md#handler-outcomes).
 
 `RunResult` describes one agent invocation:
 
@@ -360,7 +360,7 @@ current run works on, and outside them it raises.
 
 `agent.run_stream(...)` runs the same model/tool loop as `agent.run(...)` and
 exposes incremental events through an async context manager. It accepts the
-same message, history, context, and usage arguments. Streaming
+same message, history, context, usage, and retries arguments. Streaming
 does not change tool execution, output validation, approval, or human-input
 semantics.
 

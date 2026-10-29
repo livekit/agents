@@ -133,7 +133,7 @@ await session.start(agent=front_desk, room=ctx.room)
 ```
 
 The remote card supplies the tool's name, description, and supported input.
-`RemoteAgent(url, token=None, conn_options=None)` accepts the same
+`RemoteAgent(url, *, token=None, conn_options=None)` accepts the same
 [connection policy](models.md#connection-options) as `AgentClient`.
 The remote service owns its history, application data, approval behavior,
 and completion contract. The local tool takes its configuration from that
@@ -349,7 +349,7 @@ member_services = Agent(..., tools=[Cards(), rewards])
 |---|---|
 | `Toolset(id=, tools=)` | a group of tools; a subclass adds its `@function_tool` methods |
 | `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `VoiceSession(tools=)` |
-| `MCPToolset(id=, mcp_server=, tool_options=)` | the tools of an MCP server, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
+| `MCPToolset(id=, mcp_server=, tool_options=)` | an `AsyncToolset` of an MCP server's tools, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
 | `MCPServerHTTP(url, headers=, allowed_tools=, transport_type=, timeout=, sse_read_timeout=, client_session_timeout_seconds=)` | an MCP server over streamable HTTP, or SSE (`transport_type="sse"`); `timeout` bounds the connect and `client_session_timeout_seconds` one request |
 | `MCPServerStdio(command, args, env=, cwd=, client_session_timeout_seconds=)` | an MCP server run as a child process |
 | `MCPToolOptions(retries=, flags=, on_duplicate=, duplicate_scope=, report_progress=)` | one MCP tool's options, keyed by tool name in `tool_options`; `report_progress` turns the server's progress into `ctx.update()` |

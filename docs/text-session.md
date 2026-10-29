@@ -373,7 +373,7 @@ and application changes consistently so both describe the same completed turn.
 Serialize turns for one conversation and use revision checks on saves.
 `TextSession(agent=..., max_depth=8)` bounds the stack depth; an agent-tool call
 beyond it fails. Resolve stable agent names through the session's configured
-agent definitions; an unknown name produces a routing error.
+agent definitions; an unknown name raises `TextSessionRoutingError`.
 
 Conversation persistence preserves the position between turns. External effects
 require domain validation, idempotency, and reconciliation. Python call stacks

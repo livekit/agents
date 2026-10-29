@@ -91,7 +91,7 @@ pub trait Storage: Send + Sync {
 | Operation | Contract |
 | --- | --- |
 | `create_thread` | Accept optional scope, attributes and idle TTL; mint an `AT_` id and return only after its metadata and database exist. A partially created thread must not become usable. |
-| `get_thread` | Return thread metadata; unknown, deleted or expired threads fail with `ThreadNotFound`. |
+| `get_thread` | Return thread metadata; unknown, deleted or expired threads fail with `NotFound` (Python `ThreadNotFound`). |
 | `list_threads` | Page thread metadata by the supported scope and cursor, with the same ordering and expiry filtering on both backends. |
 | `update_thread` | Apply explicit attribute and idle-TTL updates and return the updated metadata. This is the activity boundary that moves expiry. |
 | `delete_thread` | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe. |
@@ -404,7 +404,7 @@ may create its own WAL and shared-memory sidecar files alongside these files.
 The local backend mints `AT_` ids and creates the thread database when creating
 a thread. It validates ids before constructing paths; a supplied id is never
 treated as an arbitrary filesystem path. Unknown ids follow the common
-`ThreadNotFound` contract.
+`NotFound` contract.
 
 Separate processes on the same machine can share a directory and use the
 shared engine's database-backed leases and fences. Local disk storage provides
@@ -436,6 +436,7 @@ API, at one base URL derived from `LIVEKIT_URL`
 | the data plane, a WebSocket | `/v0/agentstore/db` |
 | threads, `ThreadService` | `/v0/projects/p_/threads` |
 | databases, `DatabaseService` | `/v0/projects/p_/databases` |
+| response streams, HTTP | `/v0/agentstore/streams` |
 
 `p_` is the project of the request's token. The worker mints its own tokens
 from the project's key and secret: the data plane takes an

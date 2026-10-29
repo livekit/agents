@@ -235,7 +235,7 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
 
 LiveKit endpoints add typed chat items and these metadata keys, under the
 namespace `https://livekit.io/a2a/ext/agents/v1` and written `livekit/<name>`
-for short. They need no extension negotiation; the card's
+for short. The metadata keys need no extension negotiation; the card's
 `capabilities.extensions` entry is only a capability hint and grants no thread
 access ([explicit authority](protocol/a2a.md#delegation-and-conversation-data)).
 A stock client ignores them.
