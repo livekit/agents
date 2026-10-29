@@ -10,6 +10,8 @@ use tokio::sync::{mpsc, watch};
 
 pub(super) const COMMAND_BACKLOG: usize = 128;
 pub(crate) const EVENT_BACKLOG: usize = 256;
+/// Queued audio; the count bound covers every other event's small payload.
+const AUDIO_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone)]
 enum Ending {
@@ -59,8 +61,11 @@ impl Drop for QueuedEvent {
 }
 
 impl Delivery {
-    pub(crate) fn send(&self, mut event: Event) -> Result<(), ApiError> {
-        let bytes = super::event_retention::retained_bytes(&mut event)?;
+    pub(crate) fn send(&self, event: Event) -> Result<(), ApiError> {
+        let bytes = match &event {
+            Event::AudioDelta(delta) => delta.frame.data.len(),
+            _ => 0,
+        };
         let mut result = Err(ApiError::new("realtime event stream ended").with_retryable(false));
         let mut event = Some(event);
         // Serialize admission with terminal publication so a producer cannot keep filling
@@ -74,10 +79,10 @@ impl Delivery {
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
                         retained
                             .checked_add(bytes)
-                            .filter(|total| *total <= super::event_retention::EVENT_BYTES)
+                            .filter(|total| *total <= AUDIO_BYTES)
                     })
                     .map_err(|_| {
-                        ApiError::new("realtime event retained-byte limit exceeded")
+                        ApiError::new("realtime event audio limit exceeded")
                             .with_retryable(false)
                     })?;
                 let queued =
@@ -225,32 +230,29 @@ mod tests {
         assert!(receiver.next().await.is_none());
     }
 
-    fn text_with_capacity(capacity: usize) -> Event {
-        let mut delta = String::with_capacity(capacity);
-        delta.push('x');
-        Event::TextDelta(lk_agents_abi::llm::realtime::TextDelta {
+    fn audio(bytes: usize) -> Event {
+        Event::AudioDelta(lk_agents_abi::llm::realtime::AudioDelta {
             message_id: "message".into(),
             response_id: None,
-            delta,
-            start_time: None,
+            frame: lk_agents_abi::AudioFrame::new(vec![0u8; bytes], 24_000, 1, bytes as u32 / 2),
         })
     }
 
     #[tokio::test]
-    async fn event_backlog_bounds_retained_allocations_and_releases_read_capacity() {
+    async fn event_backlog_bounds_queued_audio_and_releases_read_capacity() {
         let (delivery, mut receiver) = events();
         assert!(
-            delivery.send(text_with_capacity(33 * 1024 * 1024)).is_err(),
-            "one short string retained an oversized allocation"
+            delivery.send(audio(33 * 1024 * 1024)).is_err(),
+            "one frame exceeded the audio budget"
         );
-        delivery.send(text_with_capacity(12 * 1024 * 1024)).unwrap();
-        delivery.send(text_with_capacity(12 * 1024 * 1024)).unwrap();
+        delivery.send(audio(12 * 1024 * 1024)).unwrap();
+        delivery.send(audio(12 * 1024 * 1024)).unwrap();
         assert!(
-            delivery.send(text_with_capacity(12 * 1024 * 1024)).is_err(),
+            delivery.send(audio(12 * 1024 * 1024)).is_err(),
             "several individually admissible events exceeded the shared byte budget"
         );
         assert!(matches!(receiver.next().await, Some(Event::TextDelta(_))));
-        delivery.send(text_with_capacity(12 * 1024 * 1024)).unwrap();
+        delivery.send(audio(12 * 1024 * 1024)).unwrap();
         delivery.finish();
         assert!(receiver.next().await.is_some());
         assert!(receiver.next().await.is_some());

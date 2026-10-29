@@ -1,7 +1,6 @@
 //! The realtime model over its WebSocket: session execution, framing and the declared classes.
 
 mod encode;
-mod event_retention;
 #[cfg(test)]
 mod machine_tests;
 mod model;
