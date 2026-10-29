@@ -39,7 +39,7 @@ pub fn launch(task: Launch) -> (BoxFuture<'static, ()>, OwnedTask<Box<dyn Any + 
         let mut panic = None;
         let result = {
             let mut work = work;
-            // A dropped control without a request is an `AbortHandle` gone: the work runs on.
+            // A dropped control without a request is detached work: it runs on.
             let mut requested = std::pin::pin!(async {
                 if cancelled.wait_for(|requested| *requested).await.is_err() {
                     std::future::pending::<()>().await;

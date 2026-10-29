@@ -6,7 +6,7 @@ use lk_agents_abi::voice::io::{
     PlaybackTracker, Result, TextOutput,
 };
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AudioFrame, Clock, Monotone, Spawner, SpawnerExt, TimedString};
+use lk_agents_abi::{AudioFrame, Clock, Monotone, OwnedTask, Spawner, SpawnerExt, TimedString};
 use lk_agents_voice::io::AudioSinkProxy;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::lifecycle::{
@@ -346,6 +346,8 @@ pub struct TranscriptSynchronizer {
     core: Arc<SyncCore>,
     audio: Arc<SyncedAudioOutput>,
     text: Arc<SyncedTextOutput>,
+    /// Forwards released words to the text sink; ends once the close drops its sender.
+    _forwarder: OwnedTask<()>,
 }
 
 impl TranscriptSynchronizer {
@@ -375,14 +377,14 @@ impl TranscriptSynchronizer {
         // The task holds only the done flag, so it never keeps the core alive.
         let forwarder_done = Arc::clone(&core.forwarder_done);
         let sink = text_next.clone();
-        spawner.spawn_unboxed(async move {
+        let forwarder = spawner.spawn(async move {
             SyncCore::forward(sink, rx).await;
             forwarder_done.set(true);
         });
 
         let audio = SyncedAudioOutput::new(core.clone(), audio_next);
         let text = Arc::new(SyncedTextOutput { core: core.clone(), next: text_next });
-        TranscriptSynchronizer { core, audio, text }
+        TranscriptSynchronizer { core, audio, text, _forwarder: forwarder }
     }
 
     /// The node to install as `session.output.audio`.

@@ -62,7 +62,7 @@ pub trait TaskControl: Send + Sync {
 /// were dropped and its settle step ran.
 #[must_use = "dropping an OwnedTask cancels it"]
 pub struct OwnedTask<T = ()> {
-    /// `None` only once handed to an [`AbortHandle`].
+    /// `None` once the work was detached (`spawn_detached`).
     control: Option<Arc<dyn TaskControl>>,
     /// `Sync` so an owner shared by reference (an `Arc`'d session, a callback) can hold it.
     output: TaskOutput<T>,
@@ -86,11 +86,6 @@ impl<T: 'static> OwnedTask<T> {
 
     pub fn is_finished(&self) -> bool {
         self.control.as_ref().is_none_or(|control| control.is_finished())
-    }
-
-    /// Gives up ownership for a cancel-only handle; the work then ends on its own.
-    pub fn into_abort_handle(mut self) -> AbortHandle {
-        AbortHandle(self.control.take().expect("an owned task has its control"))
     }
 
     fn map<U: 'static>(mut self, f: impl FnOnce(T) -> U + Send + Sync + 'static) -> OwnedTask<U> {
@@ -122,27 +117,6 @@ impl<T> std::fmt::Debug for OwnedTask<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let finished = self.control.as_ref().is_none_or(|control| control.is_finished());
         f.debug_struct("OwnedTask").field("finished", &finished).finish()
-    }
-}
-
-/// A cancel-only handle on work nobody owns, from [`SpawnerExt::spawn_unboxed`]; call sites
-/// still on it are being moved to [`OwnedTask`].
-#[derive(Clone)]
-pub struct AbortHandle(Arc<dyn TaskControl>);
-
-impl AbortHandle {
-    pub fn abort(&self) {
-        self.0.cancel();
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.0.is_finished()
-    }
-}
-
-impl std::fmt::Debug for AbortHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AbortHandle").field("finished", &self.is_finished()).finish()
     }
 }
 
@@ -199,20 +173,9 @@ pub trait SpawnerExt: Spawner {
         F: Future<Output = ()> + Send + 'static,
     {
         let work = Box::pin(async move { Box::new(work.await) as Box<dyn Any + Send> });
-        drop(
-            self.launch(Launch { work, settled: None, site: Location::caller() })
-                .into_abort_handle(),
-        );
-    }
-
-    /// Unowned work with a cancel-only handle.
-    #[track_caller]
-    fn spawn_unboxed<F>(&self, work: F) -> AbortHandle
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let work = Box::pin(async move { Box::new(work.await) as Box<dyn Any + Send> });
-        self.launch(Launch { work, settled: None, site: Location::caller() }).into_abort_handle()
+        // Dropped without its control: dropping cancels nothing, the work ends on its own.
+        let mut task = self.launch(Launch { work, settled: None, site: Location::caller() });
+        task.control = None;
     }
 }
 

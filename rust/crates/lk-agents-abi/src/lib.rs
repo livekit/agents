@@ -137,6 +137,6 @@ pub use utils::timer::{TimerId, TimerSet};
 pub use utils::bounded_lossy::{AUDIO_QUEUE_FRAMES, BoundedLossy, LossyTx, Pushed};
 pub use utils::monotone::Monotone;
 pub use utils::spawner::{
-    AbortHandle, BoxFuture, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError,
-    TaskOutcome, TaskOutput,
+    BoxFuture, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError, TaskOutcome,
+    TaskOutput,
 };
