@@ -85,3 +85,55 @@ impl ReplySource {
         }
     }
 }
+
+pub enum StartEvent {
+    Begin { speech: SpeechId },
+    Planned(Option<super::PlannedReply>),
+}
+
+pub enum StartEffect {
+    RequestPlan(super::ReplyPlan),
+    Run,
+    Finished(Finished),
+}
+
+pub enum Execution {
+    Pipeline,
+    Realtime,
+}
+
+impl ReplyContext {
+    /// A speculative request starts only after its preceding speech is on the accepted record.
+    pub fn startup(&mut self, event: StartEvent, now: crate::agent_session::Now) -> StartEffect {
+        match event {
+            StartEvent::Begin { speech } => match self.replan.take() {
+                Some(replan) => StartEffect::RequestPlan(super::ReplyPlan {
+                    speech,
+                    after: replan.after,
+                    step: None,
+                    spec: replan.spec,
+                    pending: Vec::new(),
+                    tool_choice: self.tool_choice.clone(),
+                }),
+                None => StartEffect::Run,
+            },
+            StartEvent::Planned(Some(planned)) => {
+                self.request = planned.request;
+                StartEffect::Run
+            }
+            StartEvent::Planned(None) => StartEffect::Finished(Finished {
+                outcome: self.empty_outcome(now.wall, lk_agents_abi::unix_secs(now.wall), true),
+                interrupted: true,
+            }),
+        }
+    }
+}
+
+impl ReplySource {
+    pub fn execution(&self) -> Execution {
+        match self {
+            Self::Realtime => Execution::Realtime,
+            _ => Execution::Pipeline,
+        }
+    }
+}

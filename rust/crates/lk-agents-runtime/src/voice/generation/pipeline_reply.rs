@@ -9,8 +9,10 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
-use lk_agents_voice::generation::pipeline::CompletionObservation;
 pub(crate) use lk_agents_voice::generation::pipeline::Finished;
+use lk_agents_voice::generation::pipeline::{
+    CompletionObservation, Execution, StartEffect, StartEvent,
+};
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
 use lk_agents_voice::speech_handle::SpeechHandle;
@@ -74,30 +76,23 @@ async fn run(
     mut ctx: ReplyContext,
     mut player: Option<RealtimePlayer>,
 ) -> Result<Finished, DriverError> {
-    if let Some(replan) = ctx.replan.take() {
-        let Some(planned) = request_plan(
-            shared,
-            lk_agents_voice::generation::ReplyPlan {
-                speech: handle.id(),
-                after: replan.after,
-                step: None,
-                spec: replan.spec,
-                pending: Vec::new(),
-                tool_choice: ctx.tool_choice.clone(),
-            },
-        )
-        .await
-        else {
-            return Ok(Finished { outcome: empty_outcome(shared, &ctx, true), interrupted: true });
-        };
-        ctx.request = planned.request;
+    let mut startup = ctx.startup(StartEvent::Begin { speech: handle.id() }, shared.time.read());
+    loop {
+        match startup {
+            StartEffect::RequestPlan(plan) => {
+                let planned = request_plan(shared, plan).await;
+                startup = ctx.startup(StartEvent::Planned(planned), shared.time.read());
+            }
+            StartEffect::Run => break,
+            StartEffect::Finished(finished) => return Ok(finished),
+        }
     }
     // The last step spoken on the realtime path, kept in case its follow-up never arrives.
     let mut last: Option<Finished> = None;
     loop {
-        let outcome = match &ctx.source {
+        let outcome = match ctx.source.execution() {
             // Borrowed: the channel outlives the step, because the follow-up arrives on it.
-            ReplySource::Realtime => {
+            Execution::Realtime => {
                 let events =
                     player.as_mut().expect("the runtime gives a realtime speech its player");
                 let wake = &shared.queue;
