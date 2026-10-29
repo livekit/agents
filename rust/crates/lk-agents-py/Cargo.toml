@@ -38,9 +38,6 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 # process runtime (`host::future_into_py`). Literal version: pyo3's companion, as in lk-agents-abi.
 pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
 
-[dev-dependencies]
-lk-agents-test-support = { path = "../lk-agents-test-support" }
-
 [features]
 extension-module = ["pyo3/extension-module"]
 # The audio decoder's ffmpeg path and the ogg/opus recorder. Enabled by maturin (pyproject.toml

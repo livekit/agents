@@ -89,7 +89,3 @@ impl AudioOutput for DataStreamAudioOutput {
         self.0.resume();
     }
 }
-
-#[cfg(test)]
-#[path = "avatar_output_tests.rs"]
-mod ordering_tests;

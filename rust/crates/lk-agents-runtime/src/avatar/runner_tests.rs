@@ -5,7 +5,7 @@ use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideo
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::{AudioFrame, TokioSpawner, VirtualClock};
 use lk_agents_abi::voice::avatar::AvatarRunner as _;
-use lk_agents_runtime::avatar::runner::{AvatarIo, AvatarRunner, Event};
+use super::{AvatarIo, AvatarRunner, Event};
 use lk_agents_test_support::rtc::FakeRtc;
 use std::sync::{
     Arc, OnceLock, Weak,
@@ -157,7 +157,7 @@ async fn scheduled_clear_race(block_interruption: bool) {
     let (frames_tx, frames) = mpsc::channel(8);
     let generator = Arc::new(Generator { pushed, frames_tx, frames: Mutex::new(frames) });
     let clock = Arc::new(VirtualClock::new());
-    let room = FakeRtc::new(clock.clone(), lk_agents_runtime::rtc::events::RoomEventBus::port)
+    let room = FakeRtc::new(clock.clone(), crate::rtc::events::RoomEventBus::port)
         .room("clear_overtakes_audio");
     let overtook = Arc::new(AtomicBool::new(false));
     let saw_race = Arc::clone(&overtook);

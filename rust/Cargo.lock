@@ -1542,7 +1542,6 @@ dependencies = [
  "indexmap",
  "lk-agents-abi",
  "lk-agents-runtime",
- "lk-agents-test-support",
  "log",
  "pyo3",
  "pyo3-async-runtimes",
