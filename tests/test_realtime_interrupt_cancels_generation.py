@@ -193,6 +193,39 @@ async def test_interrupt_racing_the_generation_event_cancels_the_response() -> N
         assert model.active_session.interrupted
 
 
+async def test_queued_reply_interrupted_before_playout_leaves_server_history() -> None:
+    # the server already holds a reply that waits behind the current speech; interrupted
+    # before it is authorized, the user never hears it, so the server must not keep it
+    async with _speaking_reply() as (session, rt_session, _, _, function_ch):
+        queued: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: queued.append(ev.speech_handle))
+
+        rt_session._chat_ctx = rt_session.chat_ctx.copy()
+        rt_session._chat_ctx.add_message(role="assistant", content="never heard", id="unplayed")
+
+        b_message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        b_function_ch = utils.aio.Chan[llm.FunctionCall]()
+        b_message_ch.close()
+        b_function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            llm.GenerationCreatedEvent(
+                message_stream=b_message_ch,
+                function_stream=b_function_ch,
+                user_initiated=False,
+                response_id="response-b",
+            ),
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(queued) == 1
+        queued[0].interrupt(force=True)
+        await asyncio.sleep(0.1)
+        function_ch.close()
+
+        assert rt_session.chat_ctx.get_by_id("unplayed") is None
+
+
 async def test_interrupting_a_finished_speech_spares_the_newer_reply() -> None:
     # the older handle stays alive for its tool while the next reply generates, and the cancel
     # it would send is the one that reply is running on
