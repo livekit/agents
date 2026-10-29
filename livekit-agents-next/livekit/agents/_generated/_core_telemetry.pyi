@@ -295,16 +295,6 @@ class _core_SessionReportUpload:
     def __init__(self, api_key: str, api_secret: str) -> None: ...
     def bearer(self) -> str:
         """A fresh LiveKit observability credential. No token policy lives in the host adapter."""
-    def content_policy(
-        self,
-        transcript_requested: bool,
-        audio_requested: bool,
-        capture_content: bool,
-        redaction_enabled: bool,
-    ) -> tuple[bool, bool]:
-        """Recording options are explicit consent for audio; transcript also requires GenAI content
-        capture. Project redaction excludes both raw content formats.
-        """
     async def upload(
         self,
         base_url: str,

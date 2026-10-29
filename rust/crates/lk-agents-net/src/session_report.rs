@@ -21,7 +21,6 @@ use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::UploadGate as UploadGateApi;
-use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
@@ -82,25 +81,6 @@ impl SessionReportUpload for SessionReportUploader {
 
     fn bearer(&self) -> Result<String, UploadError> {
         crate::token::observability_bearer(&self.api_key, &self.api_secret).map_err(upload_error)
-    }
-
-    fn content_policy(
-        &self,
-        transcript_requested: bool,
-        audio_requested: bool,
-        capture_content: bool,
-        redaction_enabled: bool,
-    ) -> (bool, bool) {
-        let projection = projection::ReportProjection::new(
-            capture_content,
-            &lk_agents_abi::telemetry::report::RecordingOptions {
-                transcript: transcript_requested,
-                audio: audio_requested,
-                ..Default::default()
-            },
-            redaction_enabled,
-        );
-        (projection.transcript(), projection.audio())
     }
 
     async fn upload(

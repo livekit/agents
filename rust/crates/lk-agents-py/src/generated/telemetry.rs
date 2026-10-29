@@ -778,15 +778,6 @@ impl _core_SessionReportUpload {
         Ok(out)
     }
 
-    /// Recording options are explicit consent for audio; transcript also requires GenAI content
-    /// capture. Project redaction excludes both raw content formats.
-    #[pyo3(signature = (transcript_requested, audio_requested, capture_content, redaction_enabled))]
-    fn content_policy(&self, transcript_requested: bool, audio_requested: bool, capture_content: bool, redaction_enabled: bool) -> PyResult<(bool, bool)> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_SessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::content_policy(&self.0, transcript_requested, audio_requested, capture_content, redaction_enabled);
-        Ok(out)
-    }
-
     /// Returns false only when the project disabled recording. Export failures are reported once
     /// to the caller, which decides where to surface them without failing the conversation.
     #[pyo3(signature = (base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled))]

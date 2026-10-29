@@ -19,17 +19,6 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
     #[host(call)]
     fn bearer(&self) -> Result<String, UploadError>;
 
-    /// Recording options are explicit consent for audio; transcript also requires GenAI content
-    /// capture. Project redaction excludes both raw content formats.
-    #[host(call)]
-    fn content_policy(
-        &self,
-        transcript_requested: bool,
-        audio_requested: bool,
-        capture_content: bool,
-        redaction_enabled: bool,
-    ) -> (bool, bool);
-
     /// Returns false only when the project disabled recording. Export failures are reported once
     /// to the caller, which decides where to surface them without failing the conversation.
     #[host(await)]
