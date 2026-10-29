@@ -63,6 +63,7 @@ class A2ASessionContext:
         turn: TurnContext,
         checkpoint: Callable[[], Awaitable[bool]],
         *,
+        store: ContextStore,
         thread: Thread,
         on_update: UpdateHook | None,
         on_token: TokenHook | None,
@@ -70,12 +71,7 @@ class A2ASessionContext:
         self.message = cast(ChatMessage, payload_to_item(turn.message))
         self.messages: list[Message] = list(turn.batch)
         self.message_history: ChatContext = history_of(turn.history)
-        self.store = ContextStore(
-            turn.state,
-            read_only=turn.read_only,
-            scopes=turn.context_scopes,
-            scope_id=turn.context_scope_id,
-        )
+        self.store = store
         self.thread = thread
         self.task_id = turn.task_id
         self.tasks: list[TaskRecord] = list(turn.tasks)
@@ -160,9 +156,17 @@ class TurnHost:
         thread = self._thread
         if thread.id != ctx.thread_id:
             thread = Thread(thread._storage, ctx.thread_id, agent_name=ctx.lane)
+        activation = await thread._storage.threads._core_turn_store(
+            ctx.thread_id,
+            ctx.lane,
+            ctx.context_scopes,
+            routing_state=ctx.state,
+            read_only=ctx.read_only,
+        )
         context = A2ASessionContext(
             ctx,
             checkpoint,
+            store=ContextStore(activation=activation, scope_id=ctx.context_scope_id),
             thread=thread,
             on_update=on_update,
             on_token=on_token,
@@ -253,6 +257,7 @@ class TurnHost:
             new_items=[item_to_payload(item) for r in results for item in r.new_messages()],
             state=None,
             scope_writes=ctx.store._scope_writes,
+            app_writes=ctx.store._statements,
             usage=_usage(results),
             input_required=question,
             pending_call=pending,

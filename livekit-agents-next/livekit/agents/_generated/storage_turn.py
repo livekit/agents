@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 if TYPE_CHECKING:
     from .a2a_client import Message
     from .storage_class import ItemRow, RunUsage, TaskRecord
-    from .storage_context import ContextScope, ContextScopeWrite
+    from .storage_context import AppStatement, ContextScope, ContextScopeWrite
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -51,6 +51,8 @@ class HandlerOutput:
     new_items: list[object]
     state: object | None
     scope_writes: list[ContextScopeWrite]
+    app_writes: list[AppStatement]
+    """What the handler's managed transactions staged, applied in the turn's commit."""
     usage: RunUsage
     input_required: str | None
     pending_call: PendingCall | None

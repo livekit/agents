@@ -864,6 +864,50 @@ async def test_create_thread_creates_the_database(thread_storage: Storage) -> No
     core.close()
 
 
+async def test_handler_transactions_join_the_turn_or_commit_on_exit(
+    thread_storage: Storage,
+) -> None:
+    """docs/context.md#application-records-and-transactions: ``transaction()`` commits or rolls
+    back with the turn, like a nested savepoint; ``independent_transaction()`` commits when its
+    block exits, whatever the turn does next."""
+    storage = thread_storage
+    thread_id = (await storage.threads.create_thread()).thread_id
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        async with ctx.store.independent_transaction() as tx:
+            await tx.execute("CREATE TABLE IF NOT EXISTS notes (body TEXT NOT NULL)")
+            await tx.execute("INSERT INTO notes (body) VALUES (?)", ("prepared",))
+        async with ctx.store.transaction() as tx:
+            await tx.execute("INSERT INTO notes (body) VALUES (?)", ("with the turn",))
+        with pytest.raises(RuntimeError):
+            async with ctx.store.transaction() as tx:
+                await tx.execute("INSERT INTO notes (body) VALUES ('rolled back')")
+                raise RuntimeError("the block failed")
+        async with ctx.store.independent_transaction() as tx:
+            assert await tx.fetch_one("SELECT body FROM notes WHERE body = 'none'") is None
+            rows = await tx.fetch("SELECT body FROM notes")
+            staged_unseen = rows.count(("with the turn",)) == rows.count(("prepared",)) - 1
+            assert staged_unseen, "the turn's own write is staged until it commits"
+        if ctx.message.text_content == "fail":
+            raise RuntimeError("the turn failed")
+        return "ok"
+
+    async def bodies() -> list[str]:
+        async def read(ctx: A2ASessionContext) -> str:
+            async with ctx.store.independent_transaction() as tx:
+                return ",".join(str(row[0]) for row in await tx.fetch("SELECT body FROM notes"))
+
+        result = await run_turn(
+            storage, thread_id, "probe", a2a("?", f"p{id(read)}"), "queue", read
+        )
+        return str(result.output).split(",")
+
+    await run_turn(storage, thread_id, LANE, a2a("go", "m1"), "queue", handler)
+    assert await bodies() == ["prepared", "with the turn"]
+    await run_turn(storage, thread_id, LANE, a2a("fail", "m2"), "queue", handler)
+    assert await bodies() == ["prepared", "with the turn", "prepared"], "only the independent one"
+
+
 async def test_the_thread_handle_pages_items_and_tasks(thread_storage: Storage) -> None:
     """``ctx.thread`` pages committed items and task records without a lease
     (docs/internals/storage.md#reading-thread-items-and-tasks)."""

@@ -46,6 +46,16 @@ class ContextScopeWrite:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class AppStatement:
+    """One application SQL statement a managed transaction staged for the turn's commit. `params`
+    are JSON scalars: null, booleans, numbers and strings.
+    """
+
+    sql: str
+    params: list[object]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ContextValues:
     """Values to hydrate in the host after the core accepted their schema contracts."""
 

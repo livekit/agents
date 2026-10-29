@@ -9,7 +9,13 @@ from collections.abc import Sequence
 
 from .._core import ChatItem, Streams, Thread
 from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
-from .storage_context import ContextField, ContextScope, ContextScopeWrite, ContextValues
+from .storage_context import (
+    AppStatement,
+    ContextField,
+    ContextScope,
+    ContextScopeWrite,
+    ContextValues,
+)
 
 class Storage:
     """Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
@@ -91,6 +97,18 @@ class Storage:
         """The existing thread's handle, its writes under `holder`. Takes no lease."""
     async def _core_context_store(self, thread_id: str, lane: str) -> _core_ContextActivation:
         """A runtime-supplied field store whose explicit saves commit outside a managed turn."""
+    async def _core_turn_store(
+        self,
+        thread_id: str,
+        lane: str,
+        scopes: Sequence[ContextScope],
+        *,
+        routing_state: object | None = None,
+        read_only: bool = False,
+    ) -> _core_ContextActivation:
+        """A managed turn's field store over the scopes and routing state its run loaded: saves
+        and `transaction()` writes stage for the turn's commit.
+        """
     async def streams(self) -> Streams:
         """The storage's response streams, shared by its threads."""
     async def aclose(self) -> None:
@@ -121,9 +139,31 @@ class _core_ContextActivation:
         """Stage the validated fields; a stale activation cannot overwrite a newer revision."""
     @property
     def writes(self) -> list[ContextScopeWrite]: ...
+    @property
+    def statements(self) -> list[AppStatement]:
+        """The application statements managed transactions staged for the turn's commit."""
+    async def transaction(self, independent: bool) -> _core_AppTransaction:
+        """Application SQL (docs/context.md#application-records-and-transactions): `independent`
+        commits when the transaction ends; otherwise it joins the managed turn's commit, or
+        commits like an independent one outside a managed turn.
+        """
     def acknowledge(self) -> None: ...
     def close(self) -> None:
         """End the activation, refusing subsequent loads or saves."""
+
+class _core_AppTransaction:
+    """One application transaction. Reads observe committed records; writes are staged and
+    applied atomically when the transaction ends, so a read after a write in the same
+    transaction is refused.
+    """
+    async def execute(self, sql: str, params: Sequence[object]) -> None:
+        """Stages one statement; `params` are JSON scalars."""
+    async def fetch(self, sql: str, params: Sequence[object]) -> list[list[object]]:
+        """One read's rows, each a list of column values in select order."""
+    async def commit(self) -> None:
+        """Ends the transaction: its writes commit (independent) or join the turn's commit."""
+    def rollback(self) -> None:
+        """Ends the transaction, discarding its writes."""
 
 class _core_VoiceStore:
     """The stable context store and initial snapshot belonging to one live call's lane."""

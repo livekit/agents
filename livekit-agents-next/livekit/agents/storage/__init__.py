@@ -2,7 +2,15 @@
 writes."""
 
 from .backends import AgentDBStorage, SQLiteStorage, Storage
-from .context_store import ContextStore, load_context, persisted, save_context
+from .context_store import (
+    ContextStore,
+    Row,
+    SqlValue,
+    Transaction,
+    load_context,
+    persisted,
+    save_context,
+)
 from .errors import (
     LeaseLost,
     NotSerializable,
@@ -16,6 +24,9 @@ from .errors import (
 
 __all__ = [
     "ContextStore",
+    "Row",
+    "SqlValue",
+    "Transaction",
     "persisted",
     "load_context",
     "save_context",

@@ -222,6 +222,7 @@ from ._generated._core_recorder import (
 )
 from ._generated._core_storage import (
     Storage as Storage,
+    _core_AppTransaction as _core_AppTransaction,
     _core_ContextActivation as _core_ContextActivation,
     _core_VoiceStore as _core_VoiceStore,
 )
