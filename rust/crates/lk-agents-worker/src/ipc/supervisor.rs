@@ -8,6 +8,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
+use lk_agents_abi::errors::HostError;
+
 use super::wire::{self, Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 
 mod timeline;
@@ -760,11 +762,9 @@ impl Supervision {
 
 /// What the supervisor needs from the host language: logging and the process handle.
 pub trait ProcHost: Send + Sync + 'static {
-    type Error: Send + 'static;
-
     fn log(&self, level: Level, msg: &str, extra: Extra);
     /// An error log with the failure's traceback.
-    fn log_exception(&self, msg: &str, err: Self::Error);
+    fn log_exception(&self, msg: &str, err: HostError);
     fn is_alive(&self) -> bool;
     /// SIGKILL (`Process.kill`; a terminate on Windows).
     fn kill(&self) -> Result<(), String>;
@@ -773,7 +773,7 @@ pub trait ProcHost: Send + Sync + 'static {
     }
     /// The process's footprint in MB and the metric it reflects (pss, uss or rss). Blocking: the
     /// supervisor calls it off the runtime.
-    fn sample_memory(&self) -> Result<(f64, String), MemoryError<Self::Error>>;
+    fn sample_memory(&self) -> Result<(f64, String), MemoryError>;
     /// The process exited and was reaped: the host's handle can go.
     fn release(&self) {}
     fn incomplete_cleanup(&self, _: CleanupObservation) {}
@@ -781,11 +781,11 @@ pub trait ProcHost: Send + Sync + 'static {
 }
 
 /// Why a runtime memory sampler failed. Host errors never enter supervision state.
-pub enum MemoryError<E> {
+pub enum MemoryError {
     /// The process is gone or inaccessible; stop sampling after a diagnostic.
     Unavailable(String),
     /// A transient failure, retaining the host error for its diagnostic.
-    Failed(E),
+    Failed(HostError),
     /// A process-control interruption; stop sampling without a diagnostic.
     Interrupted,
 }
@@ -976,10 +976,10 @@ impl ProcSupervisor {
     }
 }
 
-struct Driver<H: ProcHost> {
+struct Driver {
     state: Supervision,
     origin: Instant,
-    host: Arc<H>,
+    host: Arc<dyn ProcHost>,
     workers: crate::io::WorkerIo,
     writes: mpsc::Sender<(u64, ToChild)>,
     init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
@@ -988,9 +988,9 @@ struct Driver<H: ProcHost> {
     status: watch::Sender<Status>,
 }
 
-type Sampling<E> = Option<crate::io::WorkerIoTask<Result<(f64, String), MemoryError<E>>>>;
+type Sampling = Option<crate::io::WorkerIoTask<Result<(f64, String), MemoryError>>>;
 
-impl<H: ProcHost> Driver<H> {
+impl Driver {
     #[allow(clippy::too_many_arguments)]
     async fn run(
         mut self,
@@ -1005,7 +1005,7 @@ impl<H: ProcHost> Driver<H> {
         let mut commands_open = true;
         let mut control_open = true;
         let mut writer_open = true;
-        let mut sampling: Sampling<H::Error> = None;
+        let mut sampling: Sampling = None;
         let mut seen = Control::default();
         while !self.state.cleaned() {
             let now = Instant::now();
@@ -1124,7 +1124,7 @@ impl<H: ProcHost> Driver<H> {
         });
     }
 
-    fn apply(&mut self, input: Input, sampling: &mut Sampling<H::Error>) {
+    fn apply(&mut self, input: Input, sampling: &mut Sampling) {
         let effects =
             self.state.handle(Instant::now().duration_since(self.origin), time_ms(), input);
         self.execute(effects, sampling);
@@ -1139,7 +1139,7 @@ impl<H: ProcHost> Driver<H> {
         });
     }
 
-    fn execute(&mut self, effects: Vec<Effect>, sampling: &mut Sampling<H::Error>) {
+    fn execute(&mut self, effects: Vec<Effect>, sampling: &mut Sampling) {
         let mut queue = std::collections::VecDeque::from(effects);
         while let Some(effect) = queue.pop_front() {
             match effect {

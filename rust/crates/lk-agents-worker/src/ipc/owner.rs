@@ -396,8 +396,6 @@ pub(crate) fn queue_diagnostic(
 }
 
 impl ProcHost for ProcessDiagnostics {
-    type Error = HostError;
-
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.emit(level, msg, extra, None);
     }
@@ -422,7 +420,7 @@ impl ProcHost for ProcessDiagnostics {
         process.as_ref().map_or(Ok(()), |process| process.kill().map_err(|error| error.to_string()))
     }
 
-    fn sample_memory(&self) -> Result<(f64, String), MemoryError<HostError>> {
+    fn sample_memory(&self) -> Result<(f64, String), MemoryError> {
         let pid = self
             .process
             .borrow()

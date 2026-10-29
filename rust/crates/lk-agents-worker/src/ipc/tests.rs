@@ -13,6 +13,7 @@ use super::supervisor::{
 };
 use super::wire::{MAX_FRAME, decode, encode, read, write};
 use super::*;
+use lk_agents_abi::errors::HostError;
 
 mod writer;
 
@@ -119,7 +120,7 @@ async fn frames_are_length_prefixed_and_bounded() {
 
 // ------------------------------------------------------------------------------- supervision
 
-type Sample = Result<(f64, String), MemoryError<String>>;
+type Sample = Result<(f64, String), MemoryError>;
 
 #[derive(Default)]
 struct FakeHost {
@@ -135,14 +136,12 @@ struct FakeHost {
 }
 
 impl ProcHost for Arc<FakeHost> {
-    type Error = String;
-
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.logs.lock().unwrap().push((level, msg.to_owned(), extra));
         self.logged.notify_one();
     }
 
-    fn log_exception(&self, msg: &str, err: String) {
+    fn log_exception(&self, msg: &str, err: HostError) {
         self.log(Level::Error, &format!("{msg}: {err}"), Vec::new());
     }
 
@@ -499,9 +498,8 @@ async fn a_native_memory_sample_enforces_the_process_limit() {
 async fn kill_sends_sigusr1_then_kills() {
     struct ChildHost(Mutex<std::process::Child>, AtomicUsize);
     impl ProcHost for Arc<ChildHost> {
-        type Error = String;
         fn log(&self, _: Level, _: &str, _: Extra) {}
-        fn log_exception(&self, _: &str, _: String) {}
+        fn log_exception(&self, _: &str, _: HostError) {}
         fn is_alive(&self) -> bool {
             matches!(self.0.lock().unwrap().try_wait(), Ok(None))
         }
@@ -515,7 +513,7 @@ async fn kill_sends_sigusr1_then_kills() {
             let sent = unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1) };
             if sent == 0 { Ok(true) } else { Err(std::io::Error::last_os_error().to_string()) }
         }
-        fn sample_memory(&self) -> Result<(f64, String), MemoryError<String>> {
+        fn sample_memory(&self) -> Result<(f64, String), MemoryError> {
             Err(MemoryError::Unavailable(String::new()))
         }
     }
