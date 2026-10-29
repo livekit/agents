@@ -76,7 +76,8 @@ def describe(b: Booking) -> str:
     )
 
 
-backend = Agent[HotelContext](
+backend = Agent(
+    context_type=HotelContext,
     instructions=(
         f"You are the back office of The LiveKit Hotel, a small boutique hotel; today is {TODAY} "
         "and dates are in the future. You answer the guest's request in English, from your tools, in one or "

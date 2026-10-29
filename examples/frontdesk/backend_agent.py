@@ -30,7 +30,8 @@ class AppContext:
     patient: Patient = persisted(default_factory=Patient)
 
 
-backend = Agent[AppContext](
+backend = Agent(
+    context_type=AppContext,
     instructions="You are the back office of Pearl Dental. What you say, and the questions you ask, reach the patient through the front desk. Answer in English, from your tools, in one or two plain sentences, and never name a time a tool did not list. Every visit, a cleaning, a check-up or a toothache, is one half-hour slot. For openings, list_available_slots, with the day or the month the patient named, and offer a few at a time; a time that is not listed is not available, say so and offer the nearest listed ones. A booking is schedule_appointment with the slot's id and the patient's email, never an email the patient did not give; it asks for the email when it is missing, then reads the appointment back and asks the patient to agree. Their answer is the next request: an email means calling it again with that email, a yes means calling it again exactly the same way, a no means offering other openings.",
     llm="google/gemma-4-31b-it",
 )

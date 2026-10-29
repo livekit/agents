@@ -6,14 +6,15 @@ process. It holds no history, and nothing changes it after construction.
 
 ## Definition
 
-An agent declares its application context type with `Agent[Context]`. Pass an
-instance to `run(context=...)`; tools and instruction functions access it as
-`ctx.context`.
+An agent declares its application context type with `context_type=` and its
+final output with `output_type=`. Pass a context instance to `run(context=...)`;
+tools and instruction functions access it as `ctx.context`.
 
 ```python
 from livekit.agents import Agent, RunContext
 
-scheduler = Agent[SchedulingContext](
+scheduler = Agent(
+    context_type=SchedulingContext,
     instructions="Confirm, book or move appointments.",
     llm=MODEL,
     output_type=Appointment,
@@ -24,14 +25,19 @@ scheduler = Agent[SchedulingContext](
 | --- | --- |
 | `instructions` | Static instructions; dynamic parts come from registered functions |
 | `name` | Stable agent identity; see below |
+| `context_type` | The application context type, for the type checker only |
 | `llm` | The reasoning model |
 | `tools` | Tools and toolsets |
 | `output_type` | Final output contract; required for an agent exposed as a tool, including output functions |
 | `retries` | Retry budgets: an `int` for both, or `AgentRetries`; see [retries](#retries) |
 | `tool_handling` | Templates for what the model reads around tool calls (updates, refused duplicates, deferred replies); see [tools](tools.md#on-a-call) |
 
-`Agent[SchedulingContext]` and `RunContext[SchedulingContext]` carry the
-application context type. Tools read application data and services through
+As in pydantic-ai, the constructor infers the agent's type parameters from
+its arguments: `scheduler` above is an `Agent[SchedulingContext, Appointment]`,
+and an agent without `output_type` has `str` output. `Agent[Context, Output]`
+is the explicit spelling, for annotations such as a function taking any agent
+with a given context. `RunContext[SchedulingContext]` carries the same context
+type into tools. Tools read application data and services through
 `ctx.context`. The output contract determines the type of run results. See
 [application context](context.md) for persistence responsibilities.
 

@@ -1,5 +1,8 @@
 """Type checks for ``Agent[Context, Output]``, run by ``scripts/check_types.py``.
 
+The constructor infers both parameters, as pydantic-ai's: ``context_type`` the context,
+``output_type`` the output, ``str`` when omitted.
+
 Each ``type: ignore[code]`` marks an error the type checker must report; strict mode reports an
 ignore that is no longer needed, so the file fails both when a check is lost and when a new
 error appears.
@@ -34,13 +37,25 @@ class AppContext:
     patient: Patient
 
 
-backend = Agent[AppContext](instructions="")
+backend = Agent(instructions="", context_type=AppContext)
 fnol = Agent(instructions="", output_type=Claim)
 plain = Agent(instructions="")
+typed = Agent(instructions="", context_type=AppContext, output_type=Claim)
+explicit = Agent[AppContext, Claim](instructions="", output_type=Claim)
 
-assert_type(backend, Agent[AppContext, Any])
+
+async def claim_of(ctx: RunContext[AppContext]) -> Claim:
+    return Claim()
+
+
+resolved = Agent(instructions="", context_type=AppContext, output_type=claim_of)
+
+assert_type(backend, Agent[AppContext, str])
 assert_type(fnol, Agent[Any, Claim])
-assert_type(plain, Agent[Any, Any])
+assert_type(plain, Agent[Any, str])
+assert_type(typed, Agent[AppContext, Claim])
+assert_type(explicit, Agent[AppContext, Claim])
+assert_type(resolved, Agent[AppContext, Claim])
 
 
 @backend.instructions
@@ -65,6 +80,9 @@ async def other_output(ctx: RunContext, output: str) -> str:
 
 async def runs(patient: Patient) -> None:
     assert_type(await fnol.run("hi"), RunResult[Claim])
+    assert_type(await plain.run("hi"), RunResult[str])
+    assert_type(await typed.run("hi", context=AppContext(Calendar(), patient)), RunResult[Claim])
+    await typed.run("hi", context="a name")  # type: ignore[arg-type]
     await backend.run("hi", context=AppContext(calendar=Calendar(), patient=patient))
     await backend.run("hi", context="a name")  # type: ignore[arg-type]
     await backend.run("hi", context=42)  # type: ignore[arg-type]

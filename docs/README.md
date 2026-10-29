@@ -58,9 +58,9 @@ and storage mechanics have separate references below.
 - No `Any` in the public API: every function, class and callback is fully
   typed, user code passes mypy strict and pyright, and the Node package
   ships `.d.ts` files with no `any`.
-- Generics carry the types: `Agent[Context]`,
-  `RunContext[Context]` and typed run results. A typo in `ctx.context.x` is a
-  type error.
+- Generics carry the types: `Agent[Context, Output]`, inferred from
+  `context_type=` and `output_type=`, `RunContext[Context]` and typed run
+  results. A typo in `ctx.context.x` is a type error.
 - Data at every boundary is a validated type: persisted application data, output and tool arguments are validated schemas
   in Python and typed in Node. Local context can be an arbitrary Python object
   and is not automatically serialized.

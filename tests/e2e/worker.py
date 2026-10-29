@@ -103,8 +103,11 @@ def make_app(worker: str, service_url: str) -> AgentServer:
         api_key=os.environ["LIVEKIT_API_KEY"],
         api_secret=os.environ["LIVEKIT_API_SECRET"],
     )
-    agent = Agent[ServiceCall](
-        name="e2e", instructions="Follow the scripted model.", llm=ScriptedLLM()
+    agent = Agent(
+        context_type=ServiceCall,
+        name="e2e",
+        instructions="Follow the scripted model.",
+        llm=ScriptedLLM(),
     )
 
     async def service(call: ServiceCall) -> str:

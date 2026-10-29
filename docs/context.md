@@ -1,6 +1,6 @@
 # Application context and persisted fields
 
-Declare the application context type with `Agent[Context]`, pass an instance
+Declare the application context type with `Agent(context_type=Context)`, pass an instance
 with `run(context=...)`, and access it in tools through `ctx.context`.
 One typed object contains identity, mutable application data, services, and
 helper methods.
@@ -36,7 +36,8 @@ class BookingContext:
     )
 
 
-book_room = Agent[BookingContext](
+book_room = Agent(
+    context_type=BookingContext,
     name="book-room",
     instructions=BOOKING_INSTRUCTIONS,
     llm=MODEL,

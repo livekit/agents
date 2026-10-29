@@ -36,7 +36,8 @@ class BookingContext:
     draft: RoomDraft = persisted(default_factory=RoomDraft)
 
 
-book_room = Agent[BookingContext](
+book_room = Agent(
+    context_type=BookingContext,
     name="book-room",
     instructions=(
         "Collect the booking details. Ask for anything missing. "
@@ -90,7 +91,8 @@ class BookingRequest:
     nights: int
 
 
-front_desk = Agent[BookingContext](
+front_desk = Agent(
+    context_type=BookingContext,
     name="front-desk",
     instructions="Help customers plan their stay.",
     llm=MODEL,

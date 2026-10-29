@@ -19,6 +19,7 @@ from typing import (
     Generic,
     Literal,
     NamedTuple,
+    TypeAlias,
     TypedDict,
     overload,
 )
@@ -72,6 +73,10 @@ if TYPE_CHECKING:
     from .run_stream import RunStream
     from .tool_executor import ToolHandlingOptions
 
+    _LLMArg: TypeAlias = NotGivenOr[
+        llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
+    ]
+
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -79,6 +84,7 @@ _InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
 _HookFn = Callable[["VoiceSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
+_Context = TypeVar("_Context")
 
 DEFAULT_AGENT_NAME = "default_agent"
 
@@ -218,24 +224,83 @@ class ModelSettings:
 class Agent(Generic[Context_T, Output_T]):
     """Shared agent configuration, parameterized by application context and final output.
 
+    As pydantic-ai's, the constructor infers both parameters: ``context_type`` gives the
+    application context and ``output_type`` the output (``str`` when omitted), so
+    ``Agent(context_type=Ctx, output_type=X)`` is an ``Agent[Ctx, X]``. ``context_type`` exists
+    only for the type checker.
+
     ``retries`` sets the retry budgets of every run (``AgentRetries``); an int sets both.
     ``tool_handling`` sets the templates rendered around its tools' background calls on a voice
     session (``ToolHandlingOptions``); an ``AsyncToolset`` overrides them for its own tools.
     """
+
+    # One overload per inferred shape: without `output_type` the output is `str`; an async output
+    # function comes before the union, which mypy cannot solve for one.
+    @overload
+    def __init__(
+        self: Agent[Any, str],
+        *,
+        instructions: str,
+        name: str | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
+        llm: _LLMArg = NOT_GIVEN,
+        retries: int | AgentRetries | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Agent[_Context, str],
+        *,
+        instructions: str,
+        name: str | None = None,
+        context_type: type[_Context],
+        tools: list[llm.Tool | llm.Toolset] | None = None,
+        llm: _LLMArg = NOT_GIVEN,
+        retries: int | AgentRetries | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        instructions: str,
+        name: str | None = None,
+        context_type: type[Context_T] | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
+        output_type: Callable[..., Awaitable[Output_T]],
+        llm: _LLMArg = NOT_GIVEN,
+        retries: int | AgentRetries | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        instructions: str,
+        name: str | None = None,
+        context_type: type[Context_T] | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
+        output_type: type[Output_T] | Callable[..., Output_T],
+        llm: _LLMArg = NOT_GIVEN,
+        retries: int | AgentRetries | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
+    ) -> None: ...
 
     def __init__(
         self,
         *,
         instructions: str,
         name: str | None = None,
+        context_type: type[object] | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         output_type: type[Output_T]
         | Callable[..., Awaitable[Output_T]]
         | Callable[..., Output_T]
         | None = None,
-        llm: NotGivenOr[
-            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
-        ] = NOT_GIVEN,
+        llm: _LLMArg = NOT_GIVEN,
         retries: int | AgentRetries | None = None,
         tool_handling: ToolHandlingOptions | None = None,
     ) -> None:

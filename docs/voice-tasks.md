@@ -63,7 +63,8 @@ class EmailResult(BaseModel):
     email_address: EmailStr
 
 
-email_collector = Agent[object](
+email_collector = Agent(
+    context_type=object,
     instructions=(
         "Collect the passenger's receipt email. Clarify spelling when needed. "
         "Call confirm_email with the address. Its approval read-back asks the "
@@ -134,7 +135,8 @@ class AirlineContext:
 
 
 refunds = RemoteAgent(REFUND_AGENT_URL)
-front_desk = Agent[AirlineContext](
+front_desk = Agent(
+    context_type=AirlineContext,
     instructions=(
         "Help passengers with refunds through the airline refund expert. "
         "If the passenger asks to change their receipt email, collect and save it. "

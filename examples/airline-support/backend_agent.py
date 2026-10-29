@@ -271,7 +271,8 @@ def calculate_due(ticket: Ticket, booking: Booking) -> InputRequired | None:
     return None
 
 
-backend = Agent[SupportContext](
+backend = Agent(
+    context_type=SupportContext,
     instructions=(
         "You are Skyline Air's back office. The front desk relays a customer's request with "
         "what they wrote, word for word, and the address they write from; ask for that address "
