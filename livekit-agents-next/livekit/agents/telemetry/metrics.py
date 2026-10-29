@@ -125,10 +125,6 @@ def record_span_metric(name: str, value: float, attributes: dict[str, str]) -> N
     _record(name, "histogram", value, attributes)
 
 
-def record_event_loop_blocked(duration: float, *, severity: str) -> None:
-    _record("lk.agents.event_loop.blocked_duration", "histogram", duration, {"severity": severity})
-
-
 def _adopt_meter_provider(provider: metrics_api.MeterProvider) -> None:
     """Resolve instruments at setup against the application's current provider."""
     global _meter, _meter_provider

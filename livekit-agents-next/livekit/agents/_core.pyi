@@ -236,13 +236,11 @@ from ._generated._core_stt import (
 )
 from ._generated._core_telemetry import (
     LlmMetricState as LlmMetricState,
-    LoopMonitor as LoopMonitor,
     Tagger as Tagger,
     TtsMetricState as TtsMetricState,
     UploadGate as UploadGate,
     _core_EventRetention as _core_EventRetention,
     _core_format_trace_parent as _core_format_trace_parent,
-    _core_loop_monitor_thresholds as _core_loop_monitor_thresholds,
     _core_MetricSeries as _core_MetricSeries,
     _core_PreparedTranscript as _core_PreparedTranscript,
     _core_session_chat_record as _core_session_chat_record,

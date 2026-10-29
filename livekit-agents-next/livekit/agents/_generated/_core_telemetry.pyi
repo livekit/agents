@@ -287,34 +287,6 @@ class _core_SessionReportProjection:
         disabled: bool,
     ) -> LogRecordWire | None: ...
 
-class LoopMonitor:
-    """A loop's watchdog: runtime owns thresholds, timing, admission and cleanup, while the host
-    supplies asyncio scheduling, stack samples and OpenTelemetry emission.
-    """
-    def __init__(
-        self,
-        event_loop: object,
-        *,
-        warn_threshold: float,
-        error_threshold: float,
-        tick_interval: float | None,
-        name: str,
-        emit_spans: bool,
-        report: object,
-        span_of: object,
-    ) -> None: ...
-    @property
-    def warn_threshold(self) -> float: ...
-    @property
-    def error_threshold(self) -> float: ...
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-
-def _core_loop_monitor_thresholds(
-    warn_ms: str | None,
-    error_ms: str | None,
-) -> tuple[float, float] | None: ...
-
 class _core_EventRetention:
     """Bounded retention of a session report's host event snapshots. The native policy retains only
     byte charges and supplied monotonic timestamps; the adapter owns independent model copies.

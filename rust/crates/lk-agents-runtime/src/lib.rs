@@ -13,7 +13,6 @@ pub mod cores {
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::chat_plans::ChatPlans;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
-    pub use lk_agents_core::telemetry::loop_monitor::{LoopMonitorOptions, LoopMonitorPolicy};
     pub use lk_agents_core::telemetry::metrics::MetricSeries;
     pub use lk_agents_core::telemetry::policy::DestinationPolicy;
     pub use lk_agents_core::telemetry::provider::{
@@ -51,7 +50,6 @@ pub mod agent_run;
 pub mod host;
 #[cfg(feature = "media-images")]
 pub mod images;
-pub mod loop_watchdog;
 pub mod mcp;
 pub mod process;
 pub mod recording;

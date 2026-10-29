@@ -35,7 +35,6 @@ from .._generated.telemetry import LogRecordWire
 from . import _destination as destination
 from ._context import (
     capture_content_enabled as capture_content_enabled,
-    primary_session as primary_session,
     session_root_context as session_root_context,
     set_capture_content as set_capture_content,
     set_error_type as set_error_type,

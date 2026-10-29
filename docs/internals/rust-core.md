@@ -206,7 +206,6 @@ lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
   process.rs      process Tokio runtime, fork guard, media pool, the `Process` environment
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
-  loop_watchdog.rs  the loop monitor's sampling thread feeding core's stall policy, and its join ownership
   agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
   text_session/   TextSession driver over agent_run's execution; the declared runner
   a2a/            turn: executes TaskMachine steps against storage and the handler;

@@ -1,5 +1,4 @@
 from . import (
-    loop_monitor as loop_monitor,
     metrics as metrics,
     trace_types as trace_types,
     utils as utils,

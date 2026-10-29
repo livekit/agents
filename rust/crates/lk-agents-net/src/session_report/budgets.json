@@ -30,10 +30,6 @@
     "transcript_item_bytes": 65536,
     "input_batch_items": 1
   },
-  "watchdogs": {
-    "samples_per_incident": 2,
-    "stop_observation_seconds": 1
-  },
   "metrics": {
     "series": 1024,
     "labels": 8,
@@ -41,7 +37,6 @@
   },
   "validation_workloads": [
     "8192 insert refusals at observation capacity, including disabled capacity",
-    "1024 configured metric series followed by an overflow measurement",
-    "blocked watchdog sampling retains its owner past a 1 second cleanup observation"
+    "1024 configured metric series followed by an overflow measurement"
   ]
 }

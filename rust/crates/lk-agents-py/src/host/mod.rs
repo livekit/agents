@@ -24,7 +24,6 @@ use tokio::sync::oneshot;
 
 #[cfg(test)]
 mod cancellation_tests;
-pub mod loop_monitor;
 /// A virtual-time asyncio loop as the core's executor and clock.
 pub mod loop_time;
 #[cfg(test)]

@@ -169,8 +169,6 @@ impl generated::Implementations for Selected {
     type SessionReportUpload = lk_agents_runtime::net::session_report::SessionReportUploader<
         lk_agents_runtime::process::Process,
     >;
-    type LoopMonitor = crate::host::loop_monitor::LoopMonitor;
-    type LoopMonitorThresholds = lk_agents_runtime::cores::LoopMonitorOptions;
     type TextSessionRunner = lk_agents_runtime::text_session::Runner;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;

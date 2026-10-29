@@ -93,8 +93,6 @@ pub trait Implementations: 'static {
     type UploadGate: ::lk_agents_abi::telemetry::report::UploadGate;
     type ReportRecords: ::lk_agents_abi::telemetry::report::ReportRecords;
     type SessionReportProjection: ::lk_agents_abi::telemetry::report::projection::SessionReportProjection;
-    type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
-    type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
     type EventRetention: ::lk_agents_abi::telemetry::observation::EventRetention;
     type TraceParents: ::lk_agents_abi::telemetry::transport::TraceParents;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
@@ -283,8 +281,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::recording_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_session_chat_record, m)?)?;
     m.add_class::<telemetry::_core_SessionReportProjection>()?;
-    m.add_class::<telemetry::LoopMonitor>()?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds, m)?)?;
     m.add_class::<telemetry::_core_EventRetention>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_format_trace_parent, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_trace_parent, m)?)?;

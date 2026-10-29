@@ -47,7 +47,6 @@ from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
 from ..stt import STT
-from ..telemetry import trace_types
 from ..telemetry._export import attribute_bytes, policy
 from ..telemetry.metrics import collect_usage, record_span_metric
 from ..telemetry.traces import capture_content_enabled, tracer
@@ -290,7 +289,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._spans: dict[str, trace.Span] = {}
         self._session_span: trace.Span | None = None
         self._root_span_context: Any = None
-        self._loop_stalls: list[float] = []
         self._text_input_cb: TextInputCallback | None = None
         # the session's audio recording, written by the core; finished once it closes
         self._recorder: _core.SessionRecorder | None = None
@@ -1070,25 +1068,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         for metric in wire["metrics"]:
             record_span_metric(metric["instrument"], metric["value"], metric["attributes"])
         span.end(end_time=int(wire["end_time"] * 1e9))
-
-    def _record_loop_stall(self, duration: float, *, timestamp_ns: int) -> None:
-        """A blocked event loop on the agent_session span: one event per stall and a count,
-        total and max summary, so a session with stalls is findable from its list entry."""
-        if (span := self._session_span) is None or not span.is_recording():
-            return
-        self._loop_stalls.append(duration)
-        span.add_event(
-            "event_loop_blocked",
-            {trace_types.ATTR_BLOCKING_DURATION: duration},
-            timestamp=timestamp_ns,
-        )
-        span.set_attributes(
-            {
-                trace_types.ATTR_BLOCKING_COUNT: len(self._loop_stalls),
-                trace_types.ATTR_BLOCKING_TOTAL_DURATION: sum(self._loop_stalls),
-                trace_types.ATTR_BLOCKING_MAX_DURATION: max(self._loop_stalls),
-            }
-        )
 
     def _on_error(self, wire: dict[str, Any]) -> None:
         logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})

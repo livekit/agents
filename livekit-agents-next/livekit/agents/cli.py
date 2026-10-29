@@ -31,7 +31,6 @@ from ._generated.worker_cli import (
 )
 from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
 from .log import DEV_LEVEL, _add_global_log_fields, logger
-from .telemetry import loop_monitor
 from .types import NOT_GIVEN
 from .worker import AgentServer, Plugin
 
@@ -278,8 +277,6 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.slow_callback_duration = 0.1  # 100ms
-    # a blocked worker loop delays job dispatch; there is no session to attach a span to here
-    loop_monitor.start_monitoring(loop, name="worker", emit_spans=False)
     loop.set_exception_handler(_loop_exception_handler)
 
     exit_fut: asyncio.Future[None] = loop.create_future()
@@ -377,7 +374,6 @@ def _close_loop(loop: asyncio.AbstractEventLoop, exits: _core.ExitSignals | None
     for task in tasks:
         task.cancel()
     results = loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-    loop_monitor.stop_monitoring(loop)
     loop.run_until_complete(loop.shutdown_asyncgens())
     loop.run_until_complete(loop.shutdown_default_executor())
     loop.close()

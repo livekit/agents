@@ -107,8 +107,6 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         # -- RPC: handlers are session events, calls follow their caller
         "rpc_handler": {"agent_session", "job_entrypoint"},
         "rpc_call": {ANY},
-        # -- a stall lands under whatever was blocked (any span), or the session/job
-        "event_loop_blocked": {ANY},
     }.items()
 }
 
@@ -123,10 +121,6 @@ MAY_OUTLIVE_PARENT: dict[tuple[str, str], str] = {
         "session_start",
     ): "session.start() returns before the track is published",
     ("on_enter", "start_agent_activity"): "on_enter runs as a task the activity does not wait for",
-    (
-        "event_loop_blocked",
-        ANY,
-    ): "the heartbeat notices a stall one tick after the blocked call returned",
     (
         "keyterm_detection",
         "agent_turn",

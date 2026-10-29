@@ -50,7 +50,7 @@ from ..job import (
     callable_name,
 )
 from ..log import logger
-from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
+from ..telemetry import trace_types, tracer, utils as trace_utils
 from ..telemetry._transport import use_traceparent
 from ..utils import aio, http_context, log_exceptions
 from .launch import load_preload_modules
@@ -292,9 +292,6 @@ class _JobProc:
         with tracer.use_span(
             job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
         ):
-            # the loop monitor's heartbeat predates the job: give its reports this context
-            if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
-                monitor.set_report_context(contextvars.copy_context())
             try:
                 await self._job_entrypoint_fnc(self._job_ctx)
             except asyncio.CancelledError:
@@ -472,8 +469,6 @@ def serve_parent(mp_cch: socket.socket, host: Any) -> None:
     asyncio.set_event_loop(loop)
     loop.set_debug(client.asyncio_debug)
     loop.slow_callback_duration = 0.1  # 100ms
-    # flag synchronous code blocking the job loop (spans + warnings), see telemetry.loop_monitor
-    loop_monitor.start_monitoring(loop, name="job")
 
     try:
         task = loop.create_task(_serve(client, host), name="proc_client_main")
@@ -482,7 +477,6 @@ def serve_parent(mp_cch: socket.socket, host: Any) -> None:
             with contextlib.suppress(KeyboardInterrupt):
                 loop.run_until_complete(task)
     finally:
-        loop_monitor.stop_monitoring(loop)
         # shut the loop down the way asyncio.run() does, a thread runner reuses the process
         try:
             pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
