@@ -1075,6 +1075,23 @@ pub mod background_audio_wire {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
+    static SOUND_SOURCE_FILE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static SOUND_SOURCE_STREAM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn sound_source_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::background_audio::SoundSource> {
+        let py = obj.py();
+            if obj.is_instance(SOUND_SOURCE_FILE.import(py, "livekit.agents._generated.background_audio_wire", "SoundSourceFile")?)? {
+                return Ok(::lk_agents_abi::voice::background_audio::SoundSource::File(::lk_agents_abi::python::attr_with(obj, "SoundSourceFile", "path", |v| v.extract::<::std::string::String>())?));
+            }
+            if obj.is_instance(SOUND_SOURCE_STREAM.import(py, "livekit.agents._generated.background_audio_wire", "SoundSourceStream")?)? {
+                return Ok(::lk_agents_abi::voice::background_audio::SoundSource::Stream(::lk_agents_abi::python::attr_with(obj, "SoundSourceStream", "stream", |v| crate::generated::voice::FrameStreamProxy::from_host(&v))?));
+            }
+            Err(super::not_a(obj, "SoundSourceFile | SoundSourceStream"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
     static SOUND: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -1084,8 +1101,7 @@ pub mod background_audio_wire {
                 return Err(super::not_a(obj, "Sound"));
             }
             Ok(::lk_agents_abi::voice::background_audio::Sound {
-                path: ::lk_agents_abi::python::attr_with(obj, "Sound", "path", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-                stream: ::lk_agents_abi::python::attr_with(obj, "Sound", "stream", |v| if v.is_none() { Ok(None) } else { (crate::generated::voice::FrameStreamProxy::from_host(&v)).map(Some) })?,
+                source: ::lk_agents_abi::python::attr_with(obj, "Sound", "source", |v| crate::generated::records::background_audio_wire::sound_source_from_py(v))?,
                 volume: ::lk_agents_abi::python::attr_with(obj, "Sound", "volume", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.volume"))?,
                 probability: ::lk_agents_abi::python::attr_with(obj, "Sound", "probability", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.probability"))?,
                 fade_in: ::lk_agents_abi::python::attr_with(obj, "Sound", "fade_in", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.fade_in"))?,

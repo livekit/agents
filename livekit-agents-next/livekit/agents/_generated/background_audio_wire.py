@@ -7,20 +7,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
     from livekit.agents.voice.background_audio import _FrameStream
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class Sound:
-    """One candidate sound, as the host hands it over: a file path (a builtin clip arrives as its
-    path) or a host stream, and how to play it.
-    """
+class SoundSourceFile:
+    path: str
 
-    path: str | None
-    stream: _FrameStream | None
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SoundSourceStream:
+    stream: _FrameStream
+
+
+SoundSource: TypeAlias = SoundSourceFile | SoundSourceStream
+"""What a sound plays: a file (a builtin clip arrives as its path) or a host stream."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Sound:
+    """One candidate sound, as the host hands it over, and how to play it."""
+
+    source: SoundSource
     volume: float
     """0.0-1.0."""
     probability: float

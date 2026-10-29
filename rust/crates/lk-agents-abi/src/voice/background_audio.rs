@@ -32,13 +32,21 @@ impl std::fmt::Display for LoopingStreamError {
 
 impl std::error::Error for LoopingStreamError {}
 
-/// One candidate sound, as the host hands it over: a file path (a builtin clip arrives as its
-/// path) or a host stream, and how to play it.
+/// What a sound plays: a file (a builtin clip arrives as its path) or a host stream.
+#[crate::host(record(module = "background_audio_wire", extract))]
+#[derive(Clone)]
+pub enum SoundSource {
+    #[host(field = "path")]
+    File(String),
+    #[host(field = "stream")]
+    Stream(Arc<dyn FrameStream>),
+}
+
+/// One candidate sound, as the host hands it over, and how to play it.
 #[crate::host(record(module = "background_audio_wire", extract))]
 #[derive(Clone)]
 pub struct Sound {
-    pub path: Option<String>,
-    pub stream: Option<Arc<dyn FrameStream>>,
+    pub source: SoundSource,
     /// 0.0-1.0.
     pub volume: f64,
     /// The chance this one is picked when several are offered. 0.0-1.0.

@@ -12,7 +12,7 @@ from typing import Any, NamedTuple
 from livekit import rtc
 
 from .. import _core
-from .._generated.background_audio_wire import Sound
+from .._generated.background_audio_wire import Sound, SoundSourceFile, SoundSourceStream
 from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -101,8 +101,9 @@ def _sounds(
         audio = cfg.source.path() if isinstance(cfg.source, BuiltinAudioClip) else cfg.source
         sounds.append(
             Sound(
-                path=audio if isinstance(audio, str) else None,
-                stream=None if isinstance(audio, str) else _FrameStream(audio),
+                source=SoundSourceFile(path=audio)
+                if isinstance(audio, str)
+                else SoundSourceStream(stream=_FrameStream(audio)),
                 volume=cfg.volume,
                 probability=cfg.probability,
                 fade_in=cfg.fade_in,

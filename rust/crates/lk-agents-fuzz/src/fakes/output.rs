@@ -615,8 +615,7 @@ impl FakeSoundStream {
     pub fn sound(frames: u32) -> lk_agents_abi::voice::background_audio::Sound {
         let stream = Arc::new(FakeSoundStream { left: Mutex::new(frames) });
         lk_agents_abi::voice::background_audio::Sound {
-            path: None,
-            stream: Some(stream),
+            source: lk_agents_abi::voice::background_audio::SoundSource::Stream(stream),
             volume: 0.8,
             probability: 1.0,
             fade_in: 0.1,

@@ -3,8 +3,7 @@ use crate::room_io::FixedRoom;
 
 fn file(path: &str, probability: f64) -> Sound {
     Sound {
-        path: Some(path.to_owned()),
-        stream: None,
+        source: SoundSource::File(path.to_owned()),
         volume: 1.0,
         probability,
         fade_in: 0.0,
@@ -72,7 +71,8 @@ async fn play_refuses_what_cannot_play() {
     ));
 
     let (player, _room) = started().await;
-    let stream = Sound { stream: Some(Arc::new(Frames(Mutex::new(1)))), path: None, ..file("", 1.0) };
+    let stream =
+        Sound { source: SoundSource::Stream(Arc::new(Frames(Mutex::new(1)))), ..file("", 1.0) };
     let looping = player.play_for_host(vec![stream], 0.5, true, false, true);
     assert!(matches!(looping, Err(PlaybackError::LoopingStream(_))));
     assert!(LoopingStreamError.to_string().contains("loop=False"));
@@ -186,7 +186,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         calls: std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicUsize::new(0),
     });
-    let sound = Sound { stream: Some(stream.clone()), path: None, ..file("", 1.0) };
+    let sound = Sound { source: SoundSource::Stream(stream.clone()), ..file("", 1.0) };
     player
         .start_for_host(
             Arc::new(FixedRoom {

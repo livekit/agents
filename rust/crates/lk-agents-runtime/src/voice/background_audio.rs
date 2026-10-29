@@ -23,7 +23,7 @@ pub use lk_agents_voice::background_audio::{
 };
 
 pub use lk_agents_abi::voice::background_audio::{
-    FrameStream, PlaybackError, Sound,
+    FrameStream, PlaybackError, Sound, SoundSource,
 };
 
 /// Completion and stop notification owned by voice, shared with the caller's handle
@@ -299,10 +299,10 @@ impl BackgroundAudioPlayer {
         let sound = sounds.into_iter().nth(index).expect("the plan names one of the sounds");
         let handle = PlaybackHandle::new(sound.fade_out);
         let playback = Playback::new(&sound);
-        let input = match sound.stream {
-            Some(stream) => Input::Stream(stream),
-            None => Input::File(FileInput {
-                path: sound.path.unwrap_or_default(),
+        let input = match sound.source {
+            SoundSource::Stream(stream) => Input::Stream(stream),
+            SoundSource::File(path) => Input::File(FileInput {
+                path,
                 looping,
                 clock: self.clock.clone(),
                 media_pool: self.media_pool,

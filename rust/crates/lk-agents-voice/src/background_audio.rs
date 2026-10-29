@@ -1,7 +1,7 @@
 //! Background sound selection and per-frame fade progression.
 
 pub use lk_agents_abi::voice::background_audio::LoopingStreamError;
-use lk_agents_abi::voice::background_audio::{PlaybackError, Sound};
+use lk_agents_abi::voice::background_audio::{PlaybackError, Sound, SoundSource};
 use std::f64::consts::PI;
 
 // Kept small because `clear_queue()` would cut ambient sounds abruptly: a sound removed from the
@@ -100,7 +100,7 @@ pub fn plan_play(
         (!sounds.is_empty()).then_some(0)
     };
     let Some(index) = index else { return Ok(None) };
-    let is_stream = sounds[index].stream.is_some();
+    let is_stream = matches!(sounds[index].source, SoundSource::Stream(_));
     let looping = looping || (ambient && !is_stream);
     if looping && is_stream {
         return Err(LoopingStreamError.into());
