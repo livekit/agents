@@ -54,7 +54,7 @@ async def test_a_handler_with_a_lane_of_its_own(thread_storage: Storage) -> None
         storage=thread_storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET
     )
     front.add(front_desk, back_office)
-    assert set(front.a2a_endpoints) == {"frontend", "backend"}
+    assert set(front._a2a_endpoints) == {"frontend", "backend"}
 
     # A thread grant authorizes both doors for the same thread.
     async with http_client(front) as http:

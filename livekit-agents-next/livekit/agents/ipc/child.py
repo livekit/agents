@@ -428,7 +428,7 @@ def log_to_stdout(
 ) -> None:
     """A child process writes its own log lines, as the worker does (``config``: its level and
     line style), to the stdout it inherits; each record stamped with ``fields``, the process's
-    (its pid, the job's ids once one runs). A worker that set up no logging (``server.run()``
+    (its pid, the job's ids once one runs). A worker that set up no logging (``server._run()``
     from the user's code) has its processes log at its root level, colored on a terminal."""
     import sys
 

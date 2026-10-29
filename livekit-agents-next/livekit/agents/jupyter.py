@@ -26,7 +26,7 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
         if "google.colab" in sys.modules:
             from google.colab import userdata  # type: ignore
 
-            server.update_options(
+            server._update_options(
                 ws_url=userdata.get("LIVEKIT_URL"),
                 api_key=userdata.get("LIVEKIT_API_KEY"),
                 api_secret=userdata.get("LIVEKIT_API_SECRET"),
@@ -38,7 +38,7 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
                 "Alternatively, you can use `jupyter_url`, which generates and uses join tokens for authentication."  # noqa: E501
             )
 
-    server.update_options(job_executor_type=JobExecutorType.THREAD)
+    server._update_options(job_executor_type=JobExecutorType.THREAD)
     api_key = server._config.api_key
     api_secret = server._config.api_secret
 
@@ -106,7 +106,6 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
         if isinstance(handler, logging.StreamHandler):
             root.removeHandler(handler)
 
-    @server.once("worker_started")
     def _simulate_job() -> None:
         async def simulate_job() -> None:
             if jupyter_url:
@@ -116,7 +115,7 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
                 async with api.LiveKitAPI(ws_url, api_key, api_secret) as lk_api:
                     room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room_name))
 
-            await server.simulate_job(
+            await server._simulate_job(
                 room_name,
                 fake_job=False,
                 room_info=room_info,
@@ -124,6 +123,8 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
             )
 
         asyncio.run_coroutine_threadsafe(simulate_job(), asyncio.get_event_loop())
+
+    server._on_started.append(_simulate_job)
 
     cli._run_worker(
         server,

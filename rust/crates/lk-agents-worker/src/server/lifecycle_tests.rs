@@ -4,7 +4,7 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::server_host::{JobAnswer, ServerHost};
 use lk_agents_abi::worker::worker::ProcessStartOptions;
 
-use crate::{JobRequest, RunningJobInfo, WorkerRegistered};
+use crate::{JobRequest, RunningJobInfo};
 
 #[derive(Clone)]
 struct Host {
@@ -48,9 +48,6 @@ impl ServerHost for Host {
     }
     fn started(&self) -> BoxFuture<'_, Result<(), HostError>> {
         self.started.notify_one();
-        async { Ok(()) }.boxed()
-    }
-    fn registered(&self, _: WorkerRegistered) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
     fn idle_processes(&self, _: u32) -> BoxFuture<'_, Result<(), HostError>> {

@@ -210,9 +210,8 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AcceptArguments {
 //
 // `worker.py` matches on `event["kind"]`, so the tag values are API.
 
-/// Registration accepted by the server, delivered as a typed record.
+/// Registration accepted by the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::host(record(module = "worker_server", emit))]
 pub struct RegisteredInfo {
     /// The id the server issued.
     pub worker_id: String,

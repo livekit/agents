@@ -37,7 +37,7 @@ async def test_card_publishes_registered_endpoint_identity_and_version(
         return "ok"
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server.http.app),
+        transport=httpx.ASGITransport(app=server._http.app),
         base_url="http://card.test",
     ) as client:
         response = await client.get(

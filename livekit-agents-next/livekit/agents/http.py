@@ -49,20 +49,10 @@ _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRA
 
 
 class AgentHttp:
-    """The routes an agent serves, as a Starlette application.
-
-    ::
-
-        @server.http.get("/token")
-        async def token(request: Request) -> Response:
-            return JSONResponse({"ok": True})
-
-        @server.http.websocket("/echo")
-        async def echo(ws: WebSocket) -> None:
-            await ws.accept()
-            ...
-
-        server.http.mount("/api", fastapi_app)
+    """The routes an agent serves, as a Starlette application: its text doors, mounted by
+    ``AgentServer.add``, served through the LiveKit server at
+    ``/agents/{agent_name}/{deployment}/{path}``; a handler reads the request's preamble as
+    ``request.state.lk_request``.
 
     Handlers are Starlette endpoints: a request in, a response out. Any ASGI application mounts.
     """

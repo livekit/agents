@@ -106,7 +106,7 @@ def http_client(server: AgentServer, **headers: str) -> httpx.AsyncClient:
         ),
     )
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server.http.app),
+        transport=httpx.ASGITransport(app=server._http.app),
         base_url="http://agents.test",
         headers=headers,
         timeout=30.0,

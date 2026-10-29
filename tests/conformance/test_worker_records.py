@@ -83,9 +83,9 @@ async def test_non_linux_forkserver_fallback_is_reported_after_native_start(
         ws_url=credentials["LIVEKIT_URL"],
         api_key=credentials["LIVEKIT_API_KEY"],
         api_secret=credentials["LIVEKIT_API_SECRET"],
-        multiprocessing_context="forkserver",
         num_idle_processes=0,
     )
+    server._update_options(multiprocessing_context="forkserver")
 
     @server.rtc_session()
     async def entrypoint(context: JobContext) -> None:
@@ -93,8 +93,8 @@ async def test_non_linux_forkserver_fallback_is_reported_after_native_start(
 
     server._config.simulation = True
     started = asyncio.Event()
-    server.on("worker_started", started.set)
-    running = asyncio.create_task(server.run(devmode=True, unregistered=True))
+    server._on_started.append(started.set)
+    running = asyncio.create_task(server._run(devmode=True, unregistered=True))
     try:
         await asyncio.wait_for(started.wait(), timeout=3)
         async with asyncio.timeout(3):
@@ -122,11 +122,11 @@ async def test_native_simulated_job_reaches_python_launch_adapter(
 
     server._config.simulation = True
     started = asyncio.Event()
-    server.on("worker_started", started.set)
-    running = asyncio.create_task(server.run(devmode=True, unregistered=True))
+    server._on_started.append(started.set)
+    running = asyncio.create_task(server._run(devmode=True, unregistered=True))
     try:
         await asyncio.wait_for(started.wait(), timeout=3)
-        await server.simulate_job("typed-launch", fake_job=True)
+        await server._simulate_job("typed-launch", fake_job=True)
         assert len(launched) == 1
         assert launched[0].fake_job
         assert launched[0].job.room.name == "typed-launch"

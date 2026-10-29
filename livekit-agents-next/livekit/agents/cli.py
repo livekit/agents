@@ -265,7 +265,7 @@ def setup_logging(log_level: str, style: str) -> logging.Handler:
 def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool = False) -> int:
     """``start``: the worker until a signal, then drained (not in dev) and closed; nonzero
     when the worker failed."""
-    server.update_options(
+    server._update_options(
         ws_url=args.ws_url if args.ws_url is not None else NOT_GIVEN,
         api_key=args.api_key if args.api_key is not None else NOT_GIVEN,
         api_secret=args.api_secret if args.api_secret is not None else NOT_GIVEN,
@@ -347,7 +347,7 @@ async def _serve(
         )
         channel = asyncio.ensure_future(dev)
     try:
-        await server.run(devmode=devmode, unregistered=unregistered)
+        await server._run(devmode=devmode, unregistered=unregistered)
     finally:
         if channel is not None:
             channel.cancel()
@@ -355,7 +355,7 @@ async def _serve(
 
 async def _drain(server: AgentServer) -> None:
     try:
-        await server.drain()
+        await server._drain()
     except asyncio.TimeoutError:
         logger.warning("drain timed out, forcing shutdown")
 
@@ -402,7 +402,7 @@ class _DevServer:
                 info.worker_id,
                 info.fake_job,
             )
-            for info in self._server.active_jobs
+            for info in self._server._active_jobs
         ]
 
     async def _core_reload_jobs(
@@ -434,16 +434,17 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
 
     setup_logging("DEBUG", "console")
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record
-    server.update_options(job_executor_type=JobExecutorType.THREAD)
+    server._update_options(job_executor_type=JobExecutorType.THREAD)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    @server.once("worker_started")
     def _start_call() -> None:
         asyncio.run_coroutine_threadsafe(
-            server.simulate_job("console-room", agent_identity="console", fake_job=True), loop
+            server._simulate_job("console-room", agent_identity="console", fake_job=True), loop
         )
+
+    server._on_started.append(_start_call)
 
     exits = _core.ExitSignals(escalate=False)
 
@@ -456,7 +457,7 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
         signal.signal(sig, _on_signal)
 
     try:
-        loop.run_until_complete(server.run(devmode=True, unregistered=True))
+        loop.run_until_complete(server._run(devmode=True, unregistered=True))
     finally:
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, lambda *_: os._exit(1))

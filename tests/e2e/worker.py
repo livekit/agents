@@ -128,7 +128,7 @@ def make_app(worker: str, service_url: str) -> AgentServer:
         """Ask for the confirmation email."""
         return InputRequired("Which email?", verbatim=True)
 
-    @server.http.get("/ready")
+    @server._http.get("/ready")
     async def ready(request: Request) -> PlainTextResponse:
         return PlainTextResponse(worker)
 
@@ -170,5 +170,5 @@ if __name__ == "__main__":
     server = make_app(args.worker, args.service)
     sock = socket.socket(fileno=args.fd)
     uvicorn.Server(
-        uvicorn.Config(server.http.app, log_level="warning", timeout_graceful_shutdown=1)
+        uvicorn.Config(server._http.app, log_level="warning", timeout_graceful_shutdown=1)
     ).run(sockets=[sock])

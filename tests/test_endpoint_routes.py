@@ -31,13 +31,13 @@ async def test_endpoint_route_inventory(monkeypatch: pytest.MonkeyPatch) -> None
     async def desk(ctx: A2ASessionContext) -> str:
         return "received: " + ctx.message.text_content
 
-    @server.http.get("/application-content")
+    @server._http.get("/application-content")
     async def application_content(_: Request) -> PlainTextResponse:
         return PlainTextResponse("application owned")
 
     token = Credentials(key, secret).project_token(identity="route-test")
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server.http.app),
+        transport=httpx.ASGITransport(app=server._http.app),
         base_url="http://agents.test",
         headers={"Authorization": f"Bearer {token}"},
     ) as client:

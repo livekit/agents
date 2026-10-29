@@ -18,7 +18,7 @@ from livekit import rtc
 from livekit.protocol import agent, models
 
 from . import _core, ipc, telemetry, utils
-from ._generated.worker_options import ServerOptions, WorkerPermissions
+from ._generated.worker_options import ServerOptions
 from ._generated.worker_server import (
     EndpointRoute,
     JobAnswer,
@@ -26,7 +26,6 @@ from ._generated.worker_server import (
     JobAnswerReject,
     JobAnswerTerminate,
     JobAnswerUnanswered,
-    RegisteredInfo,
 )
 from .http import AgentHttp, AsgiApplication
 from .ipc.launch import preload_module_names, validate_setup_fnc
@@ -67,10 +66,6 @@ class RtcSessionOptions(TypedDict, total=False):
 
     endpoint: str
     """The door's name under the agent, ``{agent_name}/{endpoint}``; the agent's name when empty."""
-    type: ServerType
-    """A job per room (the default) or per publisher."""
-    on_request: Callable[[JobRequest], Any] | None
-    """Decides on each job request; every job is accepted without one."""
     on_session_end: Callable[[JobContext], Any] | None
     on_simulation_end: Callable[[SimulationContext], Any] | None
 
@@ -81,10 +76,12 @@ class RtcDoor:
 
     entrypoint: Entrypoint
     endpoint: str = ""
-    type: ServerType = ServerType.ROOM
-    on_request: Callable[[JobRequest], Any] | None = None
     on_session_end: Callable[[JobContext], Any] | None = None
     on_simulation_end: Callable[[SimulationContext], Any] | None = None
+    type: ServerType = ServerType.ROOM
+    """A job per room or per publisher."""
+    on_request: Callable[[JobRequest], Any] | None = None
+    """Decides on each job request; every job is accepted without one."""
 
 
 def rtc_session(**options: Unpack[RtcSessionOptions]) -> Callable[[Entrypoint], RtcDoor]:
@@ -161,14 +158,14 @@ class AgentHandler:
 
 def _core_options(given: dict[str, Any]) -> ServerOptions:
     """The server options given by name, as the core takes them; the core has the defaults."""
-    skip = ("self", "__class__", "storage", "load_fnc", "preload_modules", "setup_fnc")
+    skip = ("self", "__class__", "storage", "preload_modules", "setup_fnc")
     options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
     if "job_executor_type" in options:
         options["job_executor_type"] = options["job_executor_type"].value
     return ServerOptions(**options)
 
 
-class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "worker_registered"]]):
+class AgentServer(AgentHandler):
     """The worker: its doors (one voice door, text doors under ``/<endpoint>``), the job
     processes, and the connection to LiveKit, whose lifecycle is the core's
     (``_core.ServerRuntime``). An option left out is the core's default, from the environment
@@ -180,40 +177,28 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         *,
         agent_name: NotGivenOr[str] = NOT_GIVEN,
         storage: Storage | None = None,
-        load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         ws_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        job_executor_type: NotGivenOr[JobExecutorType] = NOT_GIVEN,
         load_threshold: NotGivenOr[float] = NOT_GIVEN,
         job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
         drain_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
-        shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
-        session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
-        initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
-        permissions: NotGivenOr[WorkerPermissions] = NOT_GIVEN,
-        max_retry: NotGivenOr[int] = NOT_GIVEN,
-        host: NotGivenOr[str] = NOT_GIVEN,
-        port: NotGivenOr[int] = NOT_GIVEN,
-        http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
-        multiprocessing_context: NotGivenOr[Literal["spawn", "forkserver"]] = NOT_GIVEN,
         preload_modules: Sequence[str] = (),
         setup_fnc: Callable[[JobProcess], None] | None = None,
-        prometheus_port: NotGivenOr[int] = NOT_GIVEN,
-        prometheus_multiproc_dir: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         options = _core_options({**locals(), "version": __version__})
         AgentHandler.__init__(self)
-        utils.EventEmitter.__init__(self)
         self._config = _core.ServerConfig(options)
         self._storage = storage
         self._preload_modules = preload_module_names(preload_modules)
         self._setup_fnc = validate_setup_fnc(setup_fnc)
-        self.load_fnc = load_fnc
+        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
+        self._on_started: list[Callable[[], Any]] = []
         self._rtc: RtcDoor | None = None
-        # built here and not in run(): the @server.http decorators run at import time
+        # HTTP routes served alongside the agent through the LiveKit server at
+        # /agents/{agent_name}/{deployment}/{path}; the text doors are mounted on it
         self._http = AgentHttp()
         self._a2a_endpoints: dict[str, A2AEndpoint] = {}
         self._runtime: _core.ServerRuntime | None = None
@@ -223,26 +208,6 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
     def storage(self) -> Storage | None:
         """The session storage every door of this server opens its lane with."""
         return self._storage
-
-    @property
-    def http(self) -> AgentHttp:
-        """HTTP routes served alongside the agent, as a Starlette application::
-
-            @server.http.get("/token")
-            async def token(request: Request) -> Response:
-                return JSONResponse({"ok": True})
-
-        Routes are served through the LiveKit server at
-        ``/agents/{agent_name}/{deployment}/{path}``, over the agent endpoint data plane; no
-        local listener exposes them. Serving them requires an ``agent_name``. The handler reads
-        the request's preamble as ``request.state.lk_request``.
-        """
-        return self._http
-
-    @property
-    def a2a_endpoints(self) -> dict[str, A2AEndpoint]:
-        """The text doors served, by endpoint name."""
-        return dict(self._a2a_endpoints)
 
     def add(
         self, *doors: AgentHandler | RtcDoor | A2AEndpoint
@@ -270,7 +235,7 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
             self._a2a_endpoints[door.name] = door
         return doors
 
-    async def run(self, *, devmode: bool = False, unregistered: bool = False) -> None:
+    async def _run(self, *, devmode: bool = False, unregistered: bool = False) -> None:
         """Start the job processes and the health listener and, unless ``unregistered``, register
         with LiveKit; return once ``aclose()`` ran, or raise when the connection fails for good.
 
@@ -288,13 +253,13 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
             has_text_doors=bool(self._a2a_endpoints),
             publisher=self._rtc is not None and self._rtc.type == ServerType.PUBLISHER,
             routes=[EndpointRoute(**route) for route in self._http.manifest()],
-            has_load_fnc=self.load_fnc is not None,
+            has_load_fnc=self._load_fnc is not None,
             has_on_request=self._rtc is not None and self._rtc.on_request is not None,
             endpoints=self._http._server,
             app=AsgiApplication(self._http.app),
         )
 
-    def update_options(self, **options: Any) -> None:
+    def _update_options(self, **options: Any) -> None:
         """Change options of ``AgentServer()`` before the server starts."""
         self._config.update(_core_options(options))
 
@@ -303,21 +268,21 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         return self._runtime.worker_id if self._runtime is not None else "unregistered"
 
     @property
-    def active_jobs(self) -> list[RunningJobInfo]:
+    def _active_jobs(self) -> list[RunningJobInfo]:
         return self._jobs.active_jobs() if self._jobs is not None else []
 
     @property
     def draining(self) -> bool:
         return self._runtime is not None and self._runtime.draining
 
-    async def drain(self, timeout: NotGivenOr[float | None] = NOT_GIVEN) -> None:
+    async def _drain(self, timeout: NotGivenOr[float | None] = NOT_GIVEN) -> None:
         """Stop taking jobs and wait for the running ones; past ``timeout`` (the server's
         ``drain_timeout`` when not given) raises ``asyncio.TimeoutError``."""
         if self._runtime is not None:
             await self._runtime.drain(timeout if is_given(timeout) else self._config.drain_timeout)
 
     @utils.log_exceptions(logger=logger)
-    async def simulate_job(
+    async def _simulate_job(
         self,
         room: str,
         *,
@@ -327,7 +292,7 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         token: str | None = None,
     ) -> None:
         """Run a job in ``room`` with no dispatch: the console's, a notebook's."""
-        assert self._runtime is not None, "simulate_job() needs a running server"
+        assert self._runtime is not None, "_simulate_job() needs a running server"
         await self._runtime.simulate_job(
             room,
             fake_job=fake_job,
@@ -408,15 +373,8 @@ class _ServerHost:
         await self._proc_pool.start()
 
     async def _core_started(self) -> None:
-        self._server.emit("worker_started")
-
-    async def _core_registered(self, info: RegisteredInfo) -> None:
-        server = self._server
-        server.emit(
-            "worker_registered",
-            info.worker_id,
-            models.ServerInfo(region=info.region, protocol=info.protocol),
-        )
+        for callback in self._server._on_started:
+            callback()
 
     async def _core_idle_processes(self, target: int) -> None:
         if self._proc_pool is not None:
@@ -503,7 +461,7 @@ class _ServerHost:
 
     async def _core_load(self) -> float:
         """The user's ``load_fnc``, which the core asks only when there is one."""
-        load_fnc: Callable[..., float] | None = self._server.load_fnc
+        load_fnc: Callable[..., float] | None = self._server._load_fnc
         assert load_fnc is not None
         args = (self._server,) if inspect.signature(load_fnc).parameters else ()
         return await asyncio.get_running_loop().run_in_executor(None, load_fnc, *args)

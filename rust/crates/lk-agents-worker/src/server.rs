@@ -551,36 +551,25 @@ impl ServerRuntime {
             resources.worker = Some(handle.clone());
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();
-            let (host, snapshots, failed) =
-                (self.host.clone(), self.snapshot.clone(), status.clone());
+            let (snapshots, failed) = (self.snapshot.clone(), status.clone());
             resources.connection = Some(tokio::spawn(async move {
                 let forward = async {
                     while let Ok(event) = notifications.recv().await {
                         match event {
-                            WorkerNotification::Registered(info) => {
-                                snapshots.send_modify(|snapshot| {
-                                    snapshot.worker_id = info.worker_id.clone()
-                                });
-                                host.proxy
-                                    .registered(info)
-                                    .await
-                                    .map_err(|error| error.to_string())?;
-                            }
+                            WorkerNotification::Registered(info) => snapshots
+                                .send_modify(|snapshot| snapshot.worker_id = info.worker_id),
                             WorkerNotification::Stopped(_) => break,
                             _ => {}
                         }
                     }
-                    Ok::<(), String>(())
                 };
                 let run = worker.run();
                 tokio::pin!(run);
                 let result = tokio::select! {
-                    result = &mut run => result.map_err(|error| error.to_string()),
-                    result = forward => match result {
-                        Ok(()) => run.await.map_err(|error| error.to_string()),
-                        Err(error) => Err(error),
-                    },
-                };
+                    result = &mut run => result,
+                    () = forward => run.await,
+                }
+                .map_err(|error| error.to_string());
                 if result.is_err() {
                     failed.connection_failed.store(true, std::sync::atomic::Ordering::Release);
                 }

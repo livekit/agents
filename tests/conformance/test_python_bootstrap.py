@@ -29,9 +29,9 @@ def test_startup_failure_exits_nonzero_after_cleanup(entry: str) -> None:
         from livekit.agents import AgentServer, cli
 
         class FailingServer(AgentServer):
-            async def run(self, **kwargs):
+            async def _run(self, **kwargs):
                 raise RuntimeError("startup refused")
-            async def drain(self):
+            async def _drain(self):
                 print("drained")
             async def aclose(self):
                 print("closed")
@@ -109,7 +109,7 @@ def test_notebook_starts_and_dispatches_with_available_credentials(
         else AgentServer()
     )
     simulate = AsyncMock()
-    monkeypatch.setattr(server, "simulate_job", simulate)
+    monkeypatch.setattr(server, "_simulate_job", simulate)
     room_api = AsyncMock()
 
     async def create_room(request: api.CreateRoomRequest) -> models.Room:
@@ -147,13 +147,14 @@ def test_notebook_starts_and_dispatches_with_available_credentials(
     ) -> None:
         assert unregistered, "notebooks with join tokens cannot register as workers"
         assert args.log_style == "json"
-        server.update_options(
+        server._update_options(
             ws_url=args.ws_url or "", api_key=args.api_key or "", api_secret=args.api_secret or ""
         )
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            server.emit("worker_started")
+            for callback in server._on_started:
+                callback()
             for coro in pending:
                 loop.run_until_complete(coro)
         finally:

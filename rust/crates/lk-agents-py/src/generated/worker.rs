@@ -2834,29 +2834,6 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
         })
     }
 
-    fn registered(&self, info: ::lk_agents_abi::worker::worker::RegisteredInfo) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let info_arg = info;
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "ServerHost._core_registered", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::worker_server::registered_info_to_py(py, info_arg)?];
-                Ok((host.bind(py).getattr("_core_registered")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }));
-        ::std::boxed::Box::pin(async move {
-        let out = started.await;
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
-            Ok(out)
-        })
-        })
-    }
-
     fn idle_processes(&self, target: u32) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let target_arg = target;

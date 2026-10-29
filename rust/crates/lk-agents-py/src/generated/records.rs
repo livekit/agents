@@ -4017,21 +4017,6 @@ pub mod worker_ipc {
 pub mod worker_server {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
-    static REGISTERED_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn registered_info_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::worker::worker::RegisteredInfo) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::worker::worker::RegisteredInfo { worker_id, region, protocol, deployment, agent_name } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("worker_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(worker_id, py)?)?;
-            kwargs.set_item("region", ::pyo3::IntoPyObjectExt::into_bound_py_any(region, py)?)?;
-            kwargs.set_item("protocol", ::pyo3::IntoPyObjectExt::into_bound_py_any(protocol, py)?)?;
-            kwargs.set_item("deployment", ::pyo3::IntoPyObjectExt::into_bound_py_any(deployment, py)?)?;
-            kwargs.set_item("agent_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_name, py)?)?;
-            crate::host::construct(REGISTERED_INFO.import(py, "livekit.agents._generated.worker_server", "RegisteredInfo")?.as_any(), (), Some(&kwargs))
-    }
-
     // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
     static JOB_ANSWER_ACCEPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();

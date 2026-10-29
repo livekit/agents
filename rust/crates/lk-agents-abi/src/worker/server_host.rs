@@ -7,9 +7,7 @@ use std::sync::Arc;
 use crate::errors::HostError;
 use crate::worker::endpoint_host::{AsgiApplication, EndpointService};
 use crate::worker::ipc_host::WorkerError;
-use crate::worker::worker::{
-    JobRequest, ProcessStartOptions, RegisteredInfo, RunningJobInfo, ServerOptions,
-};
+use crate::worker::worker::{JobRequest, ProcessStartOptions, RunningJobInfo, ServerOptions};
 
 /// Preserve the native configuration identity shared by a server and its options surface.
 #[crate::host(native(refused = "expected a native ServerConfig"))]
@@ -98,8 +96,6 @@ pub trait ServerHost: Send + Sync {
     fn start(&self, options: ProcessStartOptions) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_started")]
     fn started(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_registered")]
-    fn registered(&self, info: RegisteredInfo) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_idle_processes")]
     fn idle_processes(&self, target: u32) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_worker_load")]

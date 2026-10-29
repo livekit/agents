@@ -319,8 +319,8 @@ async def _entrypoint(ctx: Any) -> None:
 
 async def _drive(server: Any, jobs: int) -> None:
     started = asyncio.Event()
-    server.on("worker_started", started.set)
-    run = asyncio.create_task(server.run(devmode=False, unregistered=True))
+    server._on_started.append(started.set)
+    run = asyncio.create_task(server._run(devmode=False, unregistered=True))
     readiness = asyncio.create_task(started.wait())
     try:
         await asyncio.wait({run, readiness}, timeout=60, return_when=asyncio.FIRST_COMPLETED)
@@ -330,13 +330,13 @@ async def _drive(server: Any, jobs: int) -> None:
             raise TimeoutError("the worker did not become ready")
         for i in range(jobs):
             room = f"room-{i}"
-            await server.simulate_job(room, fake_job=True)
+            await server._simulate_job(room, fake_job=True)
             # Start the next job only after the previous one's actual lifecycle settled.
             while True:
                 began = (MARKERS / f"{room}.started").exists() or (
                     MARKERS / f"{room}.shutdown"
                 ).exists()
-                if began and not server.active_jobs:
+                if began and not server._active_jobs:
                     break
                 await asyncio.sleep(0.05)
     finally:

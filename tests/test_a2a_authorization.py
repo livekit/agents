@@ -153,7 +153,7 @@ async def test_agent_card_requires_a_token_and_runs_custom_auth_on_every_request
         return "ok"
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server.http.app), base_url="http://test"
+        transport=httpx.ASGITransport(app=server._http.app), base_url="http://test"
     ) as client:
         path = "/auth/.well-known/agent-card.json"
         refused = await client.get(path)
