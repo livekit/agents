@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from collections.abc import Mapping
+from types import TracebackType
+from typing import TypeAlias
 
 DEV_LEVEL = 23
 TRACE_LEVEL = 5
@@ -10,14 +12,55 @@ logging.addLevelName(DEV_LEVEL, "DEV")
 logging.addLevelName(TRACE_LEVEL, "TRACE")
 
 
-class Logger(logging.Logger):
-    def trace(self, message: str, *args: Any, **kwargs: Any) -> None:
-        if self.isEnabledFor(TRACE_LEVEL):
-            self._log(TRACE_LEVEL, message, args, **kwargs)
+_ExcInfo: TypeAlias = (
+    BaseException
+    | bool
+    | tuple[type[BaseException], BaseException, TracebackType | None]
+    | tuple[None, None, None]
+    | None
+)
 
-    def dev(self, message: str, *args: Any, **kwargs: Any) -> None:
+
+class Logger(logging.Logger):
+    def trace(
+        self,
+        message: str,
+        *args: object,
+        exc_info: _ExcInfo = None,
+        extra: Mapping[str, object] | None = None,
+        stack_info: bool = False,
+        stacklevel: int = 1,
+    ) -> None:
+        if self.isEnabledFor(TRACE_LEVEL):
+            self._log(
+                TRACE_LEVEL,
+                message,
+                args,
+                exc_info=exc_info,
+                extra=extra,
+                stack_info=stack_info,
+                stacklevel=stacklevel,
+            )
+
+    def dev(
+        self,
+        message: str,
+        *args: object,
+        exc_info: _ExcInfo = None,
+        extra: Mapping[str, object] | None = None,
+        stack_info: bool = False,
+        stacklevel: int = 1,
+    ) -> None:
         if self.isEnabledFor(DEV_LEVEL):
-            self._log(DEV_LEVEL, message, args, **kwargs)
+            self._log(
+                DEV_LEVEL,
+                message,
+                args,
+                exc_info=exc_info,
+                extra=extra,
+                stack_info=stack_info,
+                stacklevel=stacklevel,
+            )
 
 
 _logger_class = logging.getLoggerClass()
