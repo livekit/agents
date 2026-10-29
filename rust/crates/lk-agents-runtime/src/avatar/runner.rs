@@ -1,10 +1,15 @@
-//! Avatar runner execution: host I/O and ownership around the synchronous RunnerCore.
+//! The avatar worker's runner (`AvatarRunner`): host I/O and ownership around the synchronous
+//! RunnerCore, implementing its ABI class directly.
 
-use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
-use lk_agents_abi::voice::rtc::{RoomEvent, RtcRoom};
+use lk_agents_abi::voice::avatar::{
+    self, AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator, RunnerError,
+};
+use lk_agents_abi::voice::room_owner::RoomSession;
+use lk_agents_abi::voice::rtc::{RoomEvent, RtcError, RtcRoom};
 use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet};
+use lk_agents_net::env::Env;
+pub use lk_agents_voice::avatar_runner::Event;
 use lk_agents_voice::avatar_runner::{CallId, Effect, IoOp, RunnerCore};
-pub use lk_agents_voice::avatar_runner::{Event, RunnerError};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
@@ -155,25 +160,25 @@ impl AvatarRunner {
         rx.await.unwrap_or(Err(RunnerError::Closed))
     }
 }
-impl AvatarRunner {
+impl avatar::AvatarRunner for AvatarRunner {
     /// `room` is the avatar worker's `rtc.Room`; `media` the SDK half (`rtc.AVSynchronizer` and
     /// the tracks); `lazy_publish` holds the tracks back until the first frame.
-    pub fn new(
-        room: lk_agents_abi::voice::room_owner::RoomSession,
+    fn new(
+        room: RoomSession,
         receiver: Arc<dyn AvatarAudioReceiver>,
         generator: Arc<dyn AvatarVideoGenerator>,
         media: Arc<dyn AvatarMedia>,
         lazy_publish: bool,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
-    ) -> Result<Self, lk_agents_abi::voice::rtc::RtcError> {
-        let room = room.0.rtc().ok_or(lk_agents_abi::voice::rtc::RtcError::NotConnected)?;
+    ) -> Result<Self, RtcError> {
+        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
+        let spawner = crate::process::Process::spawner().map_err(RtcError::host)?;
         let io = AvatarIo { receiver, generator, media };
+        let clock = crate::process::Process::clock();
         Ok(AvatarRunner::scheduled(room, io, lazy_publish, clock, spawner, |_| 0))
     }
 
     /// `start()`, once the receiver has started (`await audio_recv.start()`).
-    pub async fn start(&self) -> Result<(), RunnerError> {
+    async fn start(&self) -> Result<(), RunnerError> {
         // subscribed before the state is read, so no change falls between the two
         let mut room_events = self.room.events();
         let connected = self.room.connection_state()?.is_connected();
@@ -197,17 +202,17 @@ impl AvatarRunner {
     }
 
     /// Both loops ran out; the first failure as soon as one fails; `CancelledError` once closed.
-    pub async fn wait_for_complete(&self) -> Result<(), RunnerError> {
+    async fn wait_for_complete(&self) -> Result<(), RunnerError> {
         self.call(|call| Event::WaitForComplete { call }).await
     }
 
     /// The receiver's `clear_buffer` event.
-    pub fn clear_buffer(&self, epoch: u64) {
+    fn clear_buffer(&self, epoch: u64) {
         let _ = self.events.send(Event::ClearBuffer { epoch });
     }
 
     /// `aclose()`: the receiver, then the loops and what is in flight, then the media.
-    pub async fn aclose(&self) -> Result<(), RunnerError> {
+    async fn aclose(&self) -> Result<(), RunnerError> {
         self.call(|call| Event::Close { call }).await
     }
 }

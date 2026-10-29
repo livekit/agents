@@ -759,9 +759,7 @@ mod tests {
                 || site.ends_with("lk-agents-runtime/src/voice/background_audio.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/audio.rs")
                 || site.ends_with("lk-agents-runtime/src/voice/amd.rs")
-                || site.ends_with("lk-agents-runtime/src/avatar_runner.rs")
-                || site.ends_with("lk-agents-runtime/src/avatar/receiver.rs")
-                || site.ends_with("lk-agents-runtime/src/avatar/output.rs");
+                || site.contains("lk-agents-runtime/src/avatar/");
             assert!(placed, "a task is placed at {site}");
         }
     }

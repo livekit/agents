@@ -61,8 +61,6 @@ pub use lk_agents_media as media;
 pub mod voice;
 
 pub mod avatar;
-pub mod avatar_runner;
-mod avatar_runner_host;
 /// Runtime room execution over the ABI-declared SDK capabilities.
 pub mod room_io;
 pub mod rtc;

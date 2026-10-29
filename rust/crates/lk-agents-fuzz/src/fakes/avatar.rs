@@ -1,5 +1,5 @@
 //! The avatar worker the agent's voice streams to, in its own room, on the production wiring: the
-//! agent's `DataStreamAudioReceiver`, the runner (`lk_agents_runtime::avatar_runner`, its ready
+//! agent's `DataStreamAudioReceiver`, the runner (`lk_agents_runtime::avatar::runner`, its ready
 //! events taken in the run's seeded order), and in place of the user's model and the SDK's
 //! `rtc.AVSynchronizer` a generator and a synchronizer that keep real time:
 //!
@@ -28,7 +28,8 @@ use lk_agents_abi::{
     errors::{ApiError, ProviderError},
 };
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
-use lk_agents_runtime::avatar_runner::{AvatarIo, AvatarRunner, Event};
+use lk_agents_abi::voice::avatar::AvatarRunner as _;
+use lk_agents_runtime::avatar::runner::{AvatarIo, AvatarRunner, Event};
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},

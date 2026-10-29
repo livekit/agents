@@ -168,7 +168,6 @@ def host_call_violations(root: Path, paths: list[str]) -> set[str]:
 EXECUTORS = tuple(
     f"rust/crates/lk-agents-runtime/src/{module}/" for module in ("voice", "room_io", "avatar", "rtc")
 )
-EXECUTOR_FILES = {"rust/crates/lk-agents-runtime/src/avatar_runner.rs"}
 TOKIO_RUNTIME = {
     "tokio-spawn": re.compile(r"\btokio::(?:task::)?spawn"),
     "tokio-time": re.compile(r"\btokio::time\b"),
@@ -200,7 +199,7 @@ def executor_violations(root: Path, paths: list[str]) -> dict[str, int]:
     its tests (a test file or an inline `#[cfg(test)]` module)."""
     violations = {}
     for path in paths:
-        if not (path.startswith(EXECUTORS) or path in EXECUTOR_FILES) or any(
+        if not path.startswith(EXECUTORS) or any(
             part.removesuffix(".rs").endswith("tests") for part in Path(path).parts
         ):
             continue

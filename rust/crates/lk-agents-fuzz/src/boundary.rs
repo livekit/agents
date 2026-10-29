@@ -26,7 +26,7 @@ pub const VOICE: Boundary = Boundary {
         "voice decision core (agent_session::Driver), stepped in the real runtime owner by the \
          deterministic harness per delivered event, with effects performed against fake ports",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
-        "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::avatar_runner, ::rtc) \
+        "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
          over FakeRoom, on the run's scheduler (decision 92)",
     ],
     fakes: &[

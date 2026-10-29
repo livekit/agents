@@ -55,7 +55,7 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::process::Process,
     >;
     type DataStreamAudioReceiver = lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
-    type AvatarRunner = lk_agents_runtime::avatar_runner::AvatarRunner;
+    type AvatarRunner = lk_agents_runtime::avatar::runner::AvatarRunner;
     type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;
     type PlayoutLedger = lk_agents_runtime::rtc::playout::PlayoutLedger;
     type RoomRuntime = lk_agents_runtime::room_io::RoomFactory;
