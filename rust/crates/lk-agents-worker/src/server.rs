@@ -207,7 +207,9 @@ impl ServerRuntime {
         self.publish(&state, effects);
         self.snapshot.send_modify(|snapshot| snapshot.has_rtc = start.has_rtc);
         let runtime = self.clone();
-        tokio::spawn(async move { runtime.serve(start, receiver, state, origin).await });
+        // Detached: the server's lifecycle runs until its stop; `outcome` reports its end.
+        TokioSpawner::current()
+            .spawn_detached(async move { runtime.serve(start, receiver, state, origin).await });
         wait_outcome(&self.outcome).await
     }
 
