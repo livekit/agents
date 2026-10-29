@@ -61,10 +61,12 @@ back_office = AgentHandler(lane="backend")
 async def text(ctx: A2ASessionContext) -> str: ...
 ```
 
-`lane=` names the lane its doors write; left out, the worker's own. A
+`lane=` names the lane its text doors write; left out, the worker's own. A
 handler with a lane of its own keeps its conversations apart from the
 worker's on the same thread ([lane mechanics](internals/storage.md#lanes)), which is how two
-agents share one process in `examples/`. `livekit.agents.a2a_session` and
+agents share one process in `examples/`. Such a handler has text doors only:
+the voice door, the call's fast brain, takes no lane and writes the worker's,
+so `rtc_session()` on a handler with `lane=` raises. `livekit.agents.a2a_session` and
 `rtc_session` are the same decorators for a single door with no handler;
 `server.a2a_session` and `server.rtc_session` serve one in one step.
 

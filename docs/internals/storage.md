@@ -244,8 +244,9 @@ The database and journal are shared by all lanes. History, tasks, inbox and
 lease ownership are per lane; saved fields retain their explicit context-scope
 identity. See [what is saved](#what-is-saved).
 
-A phone line and text endpoint configured for the same lane share transport
-history. Their application data remains subject to explicit load/save.
+A call writes the worker's own lane (the voice door takes no lane), so it
+shares transport history with the worker's own text doors, not with a handler's
+lane. Their application data remains subject to explicit load/save.
 
 Each direct `agent.run()` executes the selected agent. An optional
 [TextSession](../text-session.md) owns local routing frames and private histories;

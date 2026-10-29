@@ -33,9 +33,11 @@ with `ctx.thread.lane(agent).history()`.
 
 ## Lanes and session frames
 
-`AgentHandler(lane=...)` names a transport history/task and concurrency boundary
-inside a thread. Voice and text doors configured for that same lane can share
-transport history. A lane is not allocated for every local agent invocation.
+`AgentHandler(lane=...)` names a text door's transport history, tasks and
+concurrency boundary inside a thread. The voice door, `rtc_session`, is the
+call's fast brain and takes no lane: a call writes the worker's own lane, which
+the worker's text doors share, and `AgentHandler(lane=...).rtc_session()`
+raises. A lane is not allocated for every local agent invocation.
 `TextSessionState` keeps its own agent frames, private histories, and pending
 calls; those frames do not each create a lane.
 
