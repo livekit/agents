@@ -125,7 +125,7 @@ class DependencyContracts(unittest.TestCase):
 
     def test_direction_allows_only_the_documented_graph(self):
         for crate, target in (
-            ("lk-agents-storage", "lk-agents-media"),
+            ("lk-agents-net", "lk-agents-media"),
             ("lk-agents-test-support", "lk-agents-runtime"),
             ("lk-agents-bench-steps", "lk-agents-inference"),
             ("lk-agents-media", "lk-agents-core"),

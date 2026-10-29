@@ -71,7 +71,7 @@ async fn prepare(
     input: ImageInput,
     options: ImageEncodeOptions,
 ) -> Result<PreparedImage, ImageError> {
-    let workers = (env.workers)().map_err(ImageError)?;
+    let workers = (env.workers)().map(MediaWorkers::from).map_err(ImageError)?;
     prepare_on(&workers, Process::images(), input, options).await.map_err(ImageError)
 }
 

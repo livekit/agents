@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 pub use lk_agents_abi::media::workers::{
-    WorkerClass as MediaWorkerClass, WorkerError as MediaWorkerError,
+    MediaPool, WorkerClass as MediaWorkerClass, WorkerError as MediaWorkerError,
 };
 
 /// An idle thread waits this long for its next job before it exits.
@@ -89,28 +89,79 @@ impl Shared {
     }
 }
 
+/// The pool's threads and admission state.
+struct Pool(Arc<Shared>);
+
+impl MediaPool for Pool {
+    fn admit(&self, class: MediaWorkerClass) -> Result<(), MediaWorkerError> {
+        let mut state = self.0.lock();
+        if !self.0.fits(&state, class) {
+            return Err(MediaWorkerError::Exhausted(class));
+        }
+        state.used[index(class)] += 1;
+        state.total += 1;
+        Ok(())
+    }
+
+    fn release(&self, class: MediaWorkerClass) {
+        let waiters = {
+            let mut state = self.0.lock();
+            state.used[index(class)] -= 1;
+            state.total -= 1;
+            std::mem::take(&mut state.capacity_waiters)
+        };
+        waiters.into_iter().for_each(Waker::wake);
+    }
+
+    fn poll_capacity(&self, class: MediaWorkerClass, cx: &mut Context<'_>) -> Poll<()> {
+        let mut state = self.0.lock();
+        if self.0.fits(&state, class) {
+            return Poll::Ready(());
+        }
+        state.capacity_waiters.push(cx.waker().clone());
+        Poll::Pending
+    }
+
+    fn run(&self, job: Job) {
+        let mut state = self.0.lock();
+        state.jobs.push_back(job);
+        if state.jobs.len() <= state.idle {
+            self.0.work.notify_one();
+        } else {
+            // One thread per queued job beyond the idle ones, so no job waits behind a long-lived
+            // one; every job holds a permit, so threads never outnumber the total ceiling.
+            let shared = self.0.clone();
+            std::thread::Builder::new()
+                .name("lk-media-worker".into())
+                .spawn(move || run(shared))
+                .expect("spawning a media worker thread");
+        }
+    }
+}
+
 /// The process's admission pool. Clones share the same class and total capacity.
 #[derive(Clone)]
 pub struct MediaWorkers {
-    shared: Arc<Shared>,
+    pool: Arc<dyn MediaPool>,
+}
+
+/// The typed face of a lent pool.
+impl From<Arc<dyn MediaPool>> for MediaWorkers {
+    fn from(pool: Arc<dyn MediaPool>) -> Self {
+        Self { pool }
+    }
 }
 
 /// A class reservation. Native jobs retain it until they settle; dropping it releases the slot
 /// and wakes capacity waiters.
 pub struct MediaWorkerPermit {
-    shared: Arc<Shared>,
+    pool: Arc<dyn MediaPool>,
     class: MediaWorkerClass,
 }
 
 impl Drop for MediaWorkerPermit {
     fn drop(&mut self) {
-        let waiters = {
-            let mut state = self.shared.lock();
-            state.used[index(self.class)] -= 1;
-            state.total -= 1;
-            std::mem::take(&mut state.capacity_waiters)
-        };
-        waiters.into_iter().for_each(Waker::wake);
+        self.pool.release(self.class);
     }
 }
 
@@ -162,7 +213,7 @@ impl<T> MediaWorker<T> {
 
 /// Resolves once `class` could be admitted; it reserves nothing.
 pub struct CapacityAvailable {
-    shared: Arc<Shared>,
+    pool: Arc<dyn MediaPool>,
     class: MediaWorkerClass,
 }
 
@@ -170,12 +221,7 @@ impl Future for CapacityAvailable {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut state = self.shared.lock();
-        if self.shared.fits(&state, self.class) {
-            return Poll::Ready(());
-        }
-        state.capacity_waiters.push(cx.waker().clone());
-        Poll::Pending
+        self.pool.poll_capacity(self.class, cx)
     }
 }
 
@@ -194,7 +240,7 @@ impl MediaWorkers {
             return Err(MediaWorkerError::InvalidLimits);
         }
         Ok(Self {
-            shared: Arc::new(Shared {
+            pool: Arc::new(Pool(Arc::new(Shared {
                 limits,
                 state: Mutex::new(State {
                     used: [0; CLASSES],
@@ -204,8 +250,13 @@ impl MediaWorkers {
                     capacity_waiters: Vec::new(),
                 }),
                 work: Condvar::new(),
-            }),
+            }))),
         })
+    }
+
+    /// The pool as the runtime lends it.
+    pub fn pool(&self) -> Arc<dyn MediaPool> {
+        self.pool.clone()
     }
 
     /// Refuse overload synchronously without retaining a job or an admission waiter.
@@ -213,18 +264,13 @@ impl MediaWorkers {
         &self,
         class: MediaWorkerClass,
     ) -> Result<MediaWorkerPermit, MediaWorkerError> {
-        let mut state = self.shared.lock();
-        if !self.shared.fits(&state, class) {
-            return Err(MediaWorkerError::Exhausted(class));
-        }
-        state.used[index(class)] += 1;
-        state.total += 1;
-        Ok(MediaWorkerPermit { shared: self.shared.clone(), class })
+        self.pool.admit(class)?;
+        Ok(MediaWorkerPermit { pool: self.pool.clone(), class })
     }
 
     /// Wait after refused admission without retaining work or reserving capacity.
     pub fn wait_for_capacity(&self, class: MediaWorkerClass) -> CapacityAvailable {
-        CapacityAvailable { shared: self.shared.clone(), class }
+        CapacityAvailable { pool: self.pool.clone(), class }
     }
 
     /// Synchronous ingress refuses overload before retaining work. There is no admission queue.
@@ -260,19 +306,7 @@ impl MediaWorkers {
                 waker.wake();
             }
         });
-        let mut state = self.shared.lock();
-        state.jobs.push_back(job);
-        if state.jobs.len() <= state.idle {
-            self.shared.work.notify_one();
-        } else {
-            // One thread per queued job beyond the idle ones, so no job waits behind a long-lived
-            // one; every job holds a permit, so threads never outnumber the total ceiling.
-            let shared = self.shared.clone();
-            std::thread::Builder::new()
-                .name("lk-media-worker".into())
-                .spawn(move || run(shared))
-                .expect("spawning a media worker thread");
-        }
+        self.pool.run(job);
         MediaWorker { slot }
     }
 }

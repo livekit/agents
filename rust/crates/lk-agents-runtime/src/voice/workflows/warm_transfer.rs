@@ -27,6 +27,7 @@ use lk_agents_voice::workflows::warm_transfer::{
 };
 
 use lk_agents_abi::Maybe;
+use lk_agents_net::env::ProcessEnv;
 pub use lk_agents_voice::workflows::warm_transfer::TransferConfig;
 
 pub use lk_agents_abi::voice::workflows::warm_transfer::TransferHost;
@@ -716,7 +717,10 @@ mod tests {
 pub struct WarmTransfer(Arc<HostWarmTransfer>);
 
 impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransfer {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         sip_call_to: Option<String>,
         sip_trunk_id: Maybe<Option<String>>,
         has_sip_connection: bool,
@@ -744,10 +748,8 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
             env_sip_number,
             twilio,
         })?;
-        let env = crate::process::env();
         let spawner = (env.spawner)().map_err(HostError::new)?;
-        let clock = env.clock;
-        Ok(Self(Arc::new(HostWarmTransfer::new(plan, clock, spawner))))
+        Ok(Self(Arc::new(HostWarmTransfer::new(plan, env.clock.clone(), spawner))))
     }
 
     fn instructions(&self) -> String {

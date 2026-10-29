@@ -6,7 +6,9 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt};
 use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
+use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{Mixer, StreamId};
+use lk_agents_net::env::{ProcessEnv, WorkerPool};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -85,6 +87,8 @@ impl PlaybackHandle {
 pub struct BackgroundAudioPlayer {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
+    /// The media pool file sounds decode on.
+    workers: WorkerPool,
     state: tokio::sync::Mutex<MixerState>,
 
     queued: Arc<Mutex<Vec<Source>>>,
@@ -125,6 +129,7 @@ impl BackgroundAudioPlayer {
         stream_timeout_ms: u64,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
+        workers: WorkerPool,
     ) -> Self {
         Self::build(
             sample_rate,
@@ -133,6 +138,7 @@ impl BackgroundAudioPlayer {
             Duration::from_millis(stream_timeout_ms),
             clock,
             spawner,
+            workers,
         )
     }
 
@@ -143,6 +149,7 @@ impl BackgroundAudioPlayer {
         timeout: Duration,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
+        workers: WorkerPool,
     ) -> Self {
         let mixer = Mixer::new(sample_rate, num_channels, blocksize);
         let blocksize = mixer.blocksize();
@@ -150,6 +157,7 @@ impl BackgroundAudioPlayer {
         Self {
             clock,
             spawner,
+            workers,
             state: tokio::sync::Mutex::new(MixerState {
                 mixer,
                 sources: BTreeMap::new(),
@@ -287,9 +295,13 @@ impl BackgroundAudioPlayer {
         let sound = sounds.into_iter().nth(index).expect("the plan names one of the sounds");
         let handle = PlaybackHandle::new(sound.config.fade_out);
         let input = match sound.input {
-            PlaybackInput::File(path) => {
-                Input::File(FileInput { path, looping, clock: self.clock.clone(), decoder: None })
-            }
+            PlaybackInput::File(path) => Input::File(FileInput {
+                path,
+                looping,
+                clock: self.clock.clone(),
+                workers: self.workers,
+                decoder: None,
+            }),
             PlaybackInput::Stream(stream) => Input::Stream(stream),
         };
         self.queued.lock().unwrap().push(Source {
@@ -613,6 +625,7 @@ struct FileInput {
     path: String,
     looping: bool,
     clock: Arc<dyn Clock>,
+    workers: WorkerPool,
     decoder: Option<AudioDecoder>,
 }
 
@@ -623,7 +636,7 @@ impl FileInput {
         num_channels: u16,
     ) -> Option<Result<Vec<i16>, String>> {
         if self.decoder.is_none() {
-            let opened = crate::process::workers().map_err(|e| e.to_string()).and_then(|workers| {
+            let opened = (self.workers)().map(MediaWorkers::from).and_then(|workers| {
                 let limits = decoder_limits(sample_rate, num_channels);
                 let path = self.path.clone();
                 AudioDecoder::open_file(
@@ -690,23 +703,24 @@ pub struct HostBackgroundAudioPlayer(Arc<BackgroundAudioPlayer>);
 
 impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for HostBackgroundAudioPlayer {
     type State = PlayState;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         sample_rate: u32,
         num_channels: u16,
         blocksize: usize,
         stream_timeout_ms: u64,
     ) -> Result<Self, ProviderError> {
-        let env = crate::process::env();
         let spawner = (env.spawner)().map_err(lk_agents_abi::errors::ApiError::new)?;
-        let clock = env.clock;
         Ok(Self(Arc::new(BackgroundAudioPlayer::for_host(
             sample_rate,
             num_channels,
             blocksize,
             stream_timeout_ms,
-            clock,
+            env.clock.clone(),
             spawner,
+            env.workers,
         ))))
     }
 

@@ -46,7 +46,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
-        workers: lk_agents_net::env::ProcessEnv::current_runtime().workers,
+        workers: crate::testkit::workers,
     });
     let (events, receiver) = super::super::queue::events();
     let pump = Pump {

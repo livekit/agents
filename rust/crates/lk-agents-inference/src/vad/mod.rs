@@ -46,7 +46,9 @@ impl NativeVad {
         let unavailable = |error: String| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
-        let workers = (self.env.workers)().map_err(unavailable)?;
+        let workers = (self.env.workers)()
+            .map(lk_agents_media::workers::MediaWorkers::from)
+            .map_err(unavailable)?;
         let runtime = self.env.caller_runtime().map_err(unavailable)?;
         let (sink, source) = stream::open(
             self.opts.subscribe(),

@@ -247,8 +247,10 @@ impl EotStream {
             let Some(shell) = shell else {
                 let make = self.make.clone();
                 let (send, receive) = oneshot::channel();
-                let admitted =
-                    (self.workers)().map_err(MediaWorkerError::Unavailable).and_then(|workers| {
+                let admitted = (self.workers)()
+                    .map(lk_agents_media::workers::MediaWorkers::from)
+                    .map_err(MediaWorkerError::Unavailable)
+                    .and_then(|workers| {
                         workers.try_spawn(MediaWorkerClass::EotModel, move || {
                             let _ = send.send(make(model));
                         })

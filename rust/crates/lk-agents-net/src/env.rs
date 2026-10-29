@@ -3,19 +3,19 @@
 //! text algorithms, as one [`ProcessEnv`] value. Internal constructors take the handles they need;
 //! a class the host constructs receives the runtime's value from the generated bindings.
 
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
+use lk_agents_abi::media::workers::MediaPool;
 use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{Clock, ImageContent, Spawner};
-use lk_agents_media::workers::MediaWorkers;
 
 use crate::http::GatewayHttp;
 use crate::session_report::ReportAdmission;
 use crate::worker_io::WorkerIo;
 
 /// The media worker pool, read at use so a fork is checked before dispatching work.
-pub type WorkerPool = fn() -> Result<MediaWorkers, String>;
+pub type WorkerPool = fn() -> Result<Arc<dyn MediaPool>, String>;
 
 /// What the hosting process lends a declared class (decision 100): the generated bindings pass
 /// it to each declared constructor that takes it, and Rust callers and tests build their own.
@@ -53,7 +53,8 @@ impl ProcessEnv {
 
     /// A Rust caller with no host: the caller's Tokio runtime, the wall clock, a connection pool
     /// per client (a pool's connections belong to the runtime that opened them, and the
-    /// caller's runtime may not outlive the client) and one report admission.
+    /// caller's runtime may not outlive the client), one report admission, no media worker pool
+    /// and no image preparation, and text spoken as given.
     pub fn current_runtime() -> Self {
         fn runtime() -> Result<tokio::runtime::Handle, String> {
             tokio::runtime::Handle::try_current().map_err(|error| error.to_string())
@@ -69,14 +70,7 @@ impl ProcessEnv {
                 Ok(ADMISSION.clone())
             },
             worker_io: || WorkerIo::new(runtime()?, 4).map_err(|error| error.to_string()),
-            workers: || {
-                static WORKERS: OnceLock<Result<MediaWorkers, String>> = OnceLock::new();
-                WORKERS
-                    .get_or_init(|| {
-                        MediaWorkers::new(Default::default()).map_err(|error| error.to_string())
-                    })
-                    .clone()
-            },
+            workers: || Err("no media worker pool in this process".into()),
             images: Arc::new(NoImagePreparation),
             strip_assistant_markup: str::to_owned,
             speech_text: SpeechTextProcessors::VERBATIM,

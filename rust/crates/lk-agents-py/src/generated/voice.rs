@@ -329,7 +329,8 @@ impl BackgroundAudioPlayer {
     #[pyo3(signature = (sample_rate = 48000, num_channels = 1, *, blocksize = 4800, stream_timeout_ms = 200))]
     fn new(#[pyo3(from_py_with = _extract_background_audio_player_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_background_audio_player_new_num_channels)] num_channels: u16, #[pyo3(from_py_with = _extract_background_audio_player_new_blocksize)] blocksize: usize, #[pyo3(from_py_with = _extract_background_audio_player_new_stream_timeout_ms)] stream_timeout_ms: u64) -> PyResult<BackgroundAudioPlayer> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::new(sample_rate, num_channels, blocksize, stream_timeout_ms).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::new(&env, sample_rate, num_channels, blocksize, stream_timeout_ms).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(BackgroundAudioPlayer(::std::sync::Arc::new(out)))
     }
 
@@ -719,8 +720,9 @@ impl WarmTransfer {
     #[pyo3(signature = (*, sip_call_to = None, sip_trunk_id = ::lk_agents_abi::Maybe::NotGiven, has_sip_connection = false, sip_number = ::lk_agents_abi::Maybe::NotGiven, sip_headers = None, dtmf = None, ringing_timeout = None, instructions = ::lk_agents_abi::Maybe::NotGiven, conversation = None, env_sip_trunk = None, env_sip_number = "".to_owned(), twilio = None))]
     fn new(sip_call_to: ::std::option::Option<::std::string::String>, sip_trunk_id: ::lk_agents_abi::Maybe<::std::option::Option<::std::string::String>>, has_sip_connection: bool, sip_number: ::lk_agents_abi::Maybe<::std::string::String>, sip_headers: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>, dtmf: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_warm_transfer_new_ringing_timeout)] ringing_timeout: ::std::option::Option<f64>, instructions: ::lk_agents_abi::Maybe<Bound<'_, PyAny>>, conversation: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>, env_sip_trunk: ::std::option::Option<::std::string::String>, env_sip_number: ::std::string::String, twilio: ::std::option::Option<::lk_agents_abi::voice::workflows::TwilioDial>) -> PyResult<WarmTransfer> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let instructions = match instructions { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((crate::generated::records::workflows::instructions_arg_from_py(&value))?) };
-        let out = <WarmTransferImpl as ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer>::new(sip_call_to, sip_trunk_id, has_sip_connection, sip_number, sip_headers, dtmf, ringing_timeout, instructions, conversation, env_sip_trunk, env_sip_number, twilio).map_err(|e: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused| <::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <WarmTransferImpl as ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer>::new(&env, sip_call_to, sip_trunk_id, has_sip_connection, sip_number, sip_headers, dtmf, ringing_timeout, instructions, conversation, env_sip_trunk, env_sip_number, twilio).map_err(|e: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused| <::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(WarmTransfer(::std::sync::Arc::new(out)))
     }
 
@@ -775,7 +777,8 @@ impl ConsoleIo {
     #[pyo3(signature = (addr))]
     fn new(addr: ::std::string::String) -> PyResult<ConsoleIo> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <ConsoleIoImpl as ::lk_agents_abi::voice::console::ConsoleIo>::new(addr);
+        let env = crate::process::env();
+        let out = <ConsoleIoImpl as ::lk_agents_abi::voice::console::ConsoleIo>::new(&env, addr);
         Ok(ConsoleIo(::std::sync::Arc::new(out)))
     }
 }

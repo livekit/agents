@@ -19,6 +19,7 @@ use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_voice::remote_session::console::{
     CONSOLE_SAMPLE_RATE, ConsolePlayback, microphone_frame,
 };
@@ -48,9 +49,14 @@ struct Transport {
 }
 
 impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
-    fn new(addr: String) -> Self {
-        let env = crate::process::env();
-        Self::with_ports(addr, Arc::new(lk_agents_net::tcp::Tcp::new(env.runtime)), env.clock)
+    type Env = ProcessEnv;
+
+    fn new(env: &ProcessEnv, addr: String) -> Self {
+        Self::with_ports(
+            addr,
+            Arc::new(lk_agents_net::tcp::Tcp::new(env.runtime)),
+            env.clock.clone(),
+        )
     }
 }
 
@@ -272,7 +278,7 @@ mod tests {
     async fn the_socket_carries_the_call_both_ways() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let io = Arc::new(ConsoleIo::new(addr));
+        let io = Arc::new(ConsoleIo::new(&ProcessEnv::current_runtime(), addr));
         let transport = io.clone().as_transport(Arc::new(lk_agents_abi::TokioSpawner::current()));
         transport.start().await.unwrap();
         let (mut cli, _) = listener.accept().await.unwrap();

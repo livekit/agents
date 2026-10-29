@@ -113,11 +113,16 @@ pub trait PlayState: Send + Sync + Sized + 'static {
 /// Runtime-owned mixer and published background track.
 #[crate::host(class(name = "BackgroundAudioPlayer"))]
 pub trait BackgroundAudioPlayer: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "PlayState"))]
     type State: PlayState;
 
     #[host(new)]
     fn new(
+        env: &Self::Env,
         #[host(default = 48_000)] sample_rate: u32,
         #[host(default = 1)] num_channels: u16,
         #[host(kw, default = 4800)] blocksize: usize,

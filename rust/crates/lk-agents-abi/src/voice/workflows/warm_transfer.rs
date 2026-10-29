@@ -117,8 +117,13 @@ pub trait TransferHost: Send + Sync {
 /// A transfer plan and the runtime ownership of its current dial.
 #[crate::host(class(name = "WarmTransfer"))]
 pub trait WarmTransfer: Sized + Send + Sync + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         #[host(kw, default = None)] sip_call_to: Option<String>,
         sip_trunk_id: Maybe<Option<String>>,
         #[host(default = false)] has_sip_connection: bool,

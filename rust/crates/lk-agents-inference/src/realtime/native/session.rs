@@ -710,7 +710,7 @@ impl Pump {
                         let created_at = self.clock.wall();
                         let workers = self.shared.workers;
                         decoding = Some(Box::pin(async move {
-                            let workers = workers().map_err(|error| ApiError::new(error).with_retryable(false))?;
+                            let workers = workers().map(lk_agents_media::workers::MediaWorkers::from).map_err(|error| ApiError::new(error).with_retryable(false))?;
                             let worker = workers.try_spawn(lk_agents_media::workers::MediaWorkerClass::Decoder, move || {
                                 wire::decode_text(&text, &shape, created_at)
                             }).map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;

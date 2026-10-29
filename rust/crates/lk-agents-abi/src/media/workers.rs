@@ -1,5 +1,7 @@
 //! Native worker admission contracts shared by the injected pool and host services.
 
+use std::task::{Context, Poll};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerClass {
     Decoder,
@@ -18,4 +20,17 @@ pub enum WorkerError {
     Exhausted(WorkerClass),
     #[error("native worker service unavailable: {0}")]
     Unavailable(String),
+}
+
+/// The process's admitted native worker pool as the runtime lends it (decisions 84, 100);
+/// `lk_agents_media::workers::MediaWorkers` is its typed face.
+pub trait MediaPool: Send + Sync {
+    /// Reserve a slot of `class`, or refuse at once.
+    fn admit(&self, class: WorkerClass) -> Result<(), WorkerError>;
+    /// Release a slot [`admit`](Self::admit) reserved, waking capacity waiters.
+    fn release(&self, class: WorkerClass);
+    /// Ready once `class` could be admitted, else woken by the next release; reserves nothing.
+    fn poll_capacity(&self, class: WorkerClass, cx: &mut Context<'_>) -> Poll<()>;
+    /// Run an admitted job on a worker thread.
+    fn run(&self, job: Box<dyn FnOnce() + Send>);
 }

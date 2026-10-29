@@ -26,7 +26,16 @@ impl Pump {
             let events = self.events.clone();
             let workers = self.shared.workers;
             let _owner = self.spawner.spawn_unboxed(async move {
-                run(shared, wake, clock, label, events, settled, workers()).await;
+                run(
+                    shared,
+                    wake,
+                    clock,
+                    label,
+                    events,
+                    settled,
+                    workers().map(lk_agents_media::workers::MediaWorkers::from),
+                )
+                .await;
             });
         }
         self.shared.retirement_wake.notify_one();

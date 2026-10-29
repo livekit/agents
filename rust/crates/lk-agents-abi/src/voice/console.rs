@@ -51,15 +51,17 @@ pub trait ConsolePort: Send + Sync {
 /// `lk agent console`'s socket, opened when the session starts.
 #[crate::host(class(name = "ConsoleIo", native = ConsolePort))]
 pub trait ConsoleIo: ConsolePort + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new(addr: String) -> Self;
+    fn new(env: &Self::Env, addr: String) -> Self;
 }
 
 /// Starts a native voice session with its runtime-owned queue executor.
 #[crate::host(functions)]
 pub trait VoiceSessionExecution {
     #[host(function, name = "_core_voice_session_start")]
-    async fn start(
-        session: crate::HostRef,
-    ) -> Result<(), crate::errors::ProviderError>;
+    async fn start(session: crate::HostRef) -> Result<(), crate::errors::ProviderError>;
 }

@@ -86,7 +86,7 @@ impl room_owner::RoomRuntime for RoomFactory {
         let time = lk_agents_voice::agent_session::Timebase::real();
         match room {
             Some(room) => {
-                let pool = (env.workers)().ok();
+                let pool = (env.workers)().ok().map(lk_agents_media::workers::MediaWorkers::from);
                 room_owner::RoomSession(Arc::new(FixedRoom { rtc: room, time, pool }))
             }
             None => room_owner::RoomSession(Arc::new(DetachedSession(time))),

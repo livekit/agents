@@ -144,7 +144,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
                 .map_err(|error| error.to_string())
         },
         worker_io: || worker_io().map_err(|error| error.to_string()),
-        workers: || workers().map_err(|error| error.to_string()),
+        workers: || workers().map(|workers| workers.pool()).map_err(|error| error.to_string()),
         images: images(),
         strip_assistant_markup: lk_agents_voice::tts::markup::strip_expr_markup,
         speech_text: SpeechText::PROCESSORS,

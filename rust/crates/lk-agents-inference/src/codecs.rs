@@ -398,7 +398,8 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
         sample_rate: Option<u32>,
         num_channels: u16,
     ) -> Result<Self, CodecFailure> {
-        let workers = (env.workers)().map_err(failure)?;
+        let workers =
+            (env.workers)().map(lk_agents_media::workers::MediaWorkers::from).map_err(failure)?;
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
         let (output, input) =
             AudioDecoder::open_stream(&workers, &mime, sample_rate, num_channels, limits)

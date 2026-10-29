@@ -99,7 +99,9 @@ pub(super) async fn run(
     generation: u64,
     receipts: mpsc::Sender<ResponseSent>,
 ) -> Result<(), ApiError> {
-    let workers = workers().map_err(|error| ApiError::new(error).with_retryable(false))?;
+    let workers = workers()
+        .map(lk_agents_media::workers::MediaWorkers::from)
+        .map_err(|error| ApiError::new(error).with_retryable(false))?;
     let mut encoder = Encoder::new();
     while let Some(batch) = effects.recv().await {
         let worker_images = images.clone();
