@@ -49,7 +49,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))
 
 [features]
 # `testing`: the contract fixtures over both backends and a fault-injecting connection.
-testing = []
+testing = ["rusqlite/functions"]
 
 [dev-dependencies]
 lk-agents-storage = { path = ".", features = ["testing"] }

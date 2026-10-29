@@ -4,6 +4,7 @@
 //! backend: local SQLite in a fresh directory always runs; AgentDB needs a LiveKit project
 //! (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) and is `#[ignore]`d, so a plain run
 //! reports it skipped. The credentialed job runs `--ignored`, where missing credentials fail.
+//! A deterministic simulation runs a thread's database in memory instead ([`MemoryConnection`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -151,6 +152,20 @@ pub struct Faulty {
 }
 
 impl Faulty {
+    pub fn new(inner: Box<dyn SqliteConnection>) -> Self {
+        Self {
+            inner,
+            commit: std::sync::Mutex::new(None),
+            unreachable_for: std::sync::Mutex::new(None),
+            unreachable_until: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Every request fails `Unavailable` for `d` from now.
+    pub fn unreachable_for(&self, d: Duration) {
+        *self.unreachable_until.lock().unwrap() = Some(tokio::time::Instant::now() + d);
+    }
+
     pub fn fail_next_commit(&self, fault: CommitFault) {
         *self.commit.lock().unwrap() = Some(fault);
     }
@@ -210,16 +225,50 @@ impl Fixture {
     pub async fn faulty_thread(&self, holder: &str) -> (Thread, Arc<Faulty>) {
         let dir = self.dir.as_ref().expect("faults are injected on the SQLite backend");
         let file = dir.join("threads").join(format!("{}.sqlite", self.thread_id));
-        let faulty = Arc::new(Faulty {
-            inner: Box::new(FileConnection::open(file, false).await.unwrap()),
-            commit: std::sync::Mutex::new(None),
-            unreachable_for: std::sync::Mutex::new(None),
-            unreachable_until: std::sync::Mutex::new(None),
-        });
+        let faulty =
+            Arc::new(Faulty::new(Box::new(FileConnection::open(file, false).await.unwrap())));
         let thread =
             Thread::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default(), holder)
                 .await
                 .unwrap();
         (thread, faulty)
     }
+}
+
+/// One thread database in memory, every statement run inline on the caller's task, its
+/// `unixepoch()` read from `clock`: storage as a deterministic simulation runs it, on its virtual
+/// time. Clones share the database; `close` leaves it open.
+#[derive(Clone)]
+pub struct MemoryConnection(Arc<std::sync::Mutex<rusqlite::Connection>>);
+
+impl MemoryConnection {
+    pub fn new(clock: Arc<dyn lk_agents_abi::Clock>) -> Result<Self, StorageError> {
+        use rusqlite::functions::FunctionFlags;
+        let conn = rusqlite::Connection::open_in_memory().map_err(crate::sqlite::sqlite_error)?;
+        let wall = move || {
+            let wall = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            wall.as_secs_f64()
+        };
+        let flags = FunctionFlags::SQLITE_UTF8;
+        let secs = wall.clone();
+        conn.create_scalar_function("unixepoch", 0, flags, move |_| Ok(secs() as i64))
+            .map_err(crate::sqlite::sqlite_error)?;
+        // `unixepoch('subsec')`, the one modifier the schema uses.
+        conn.create_scalar_function("unixepoch", 1, flags, move |_| Ok(wall()))
+            .map_err(crate::sqlite::sqlite_error)?;
+        Ok(Self(Arc::new(std::sync::Mutex::new(conn))))
+    }
+}
+
+#[async_trait::async_trait]
+impl SqliteConnection for MemoryConnection {
+    async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
+        crate::sqlite::query(&self.0.lock().unwrap(), &statement)
+    }
+
+    async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
+        crate::sqlite::batch(&mut self.0.lock().unwrap(), &statements)
+    }
+
+    async fn close(&self) {}
 }

@@ -89,7 +89,6 @@ fn subject_of_message(record: &Record, message_id: &str) -> &'static str {
 /// names the message's own task or the one it was merged into.
 pub fn message_executes_once(record: &Record) -> Vec<Violation> {
     let mut out: Vec<Violation> = record
-        .port
         .ledger
         .executions
         .iter()
@@ -101,11 +100,8 @@ pub fn message_executes_once(record: &Record) -> Vec<Violation> {
         .collect();
     for r in &record.requests {
         let Some(Ok(answer)) = &r.answer else { continue };
-        let Some(task) = record
-            .port
-            .tasks
-            .values()
-            .find(|t| t.message_id.as_deref() == Some(r.message_id.as_str()))
+        let Some(task) =
+            record.tasks.values().find(|t| t.message_id.as_deref() == Some(r.message_id.as_str()))
         else {
             continue;
         };
@@ -113,9 +109,9 @@ pub fn message_executes_once(record: &Record) -> Vec<Violation> {
         // a client canceled the receipt while the turn ran: the commit left its row as the client
         // wrote it, and the continued task carries the answer
         let continued = r.continues.as_deref().filter(|_| task.status == TaskState::Canceled);
-        let named = [Some(answer.task_id.as_str()), answer.answered_by.as_deref()];
+        let named = [answer.task.task_id.as_str(), answer.answered_by.as_str()];
         let ours = |n: &str| n == task.task_id || Some(n) == merged || Some(n) == continued;
-        if !named.iter().flatten().any(|n| ours(n)) {
+        if !named.iter().any(|n| ours(n)) {
             out.push(Violation {
                 subject: subject_of(r),
                 text: format!(
@@ -131,12 +127,12 @@ pub fn message_executes_once(record: &Record) -> Vec<Violation> {
 /// At most one question waits on the lane: a reply settles the one waiting before its turn asks
 /// another.
 pub fn one_question_pending(record: &Record) -> Vec<Violation> {
-    let pending = &record.port.ledger.most_pending;
+    let pending = &record.ledger.most_pending;
     if pending.len() < 2 {
         return Vec::new();
     }
     let batched = pending.iter().any(|task_id| {
-        let message = record.port.tasks.get(task_id).and_then(|t| t.message_id.as_deref());
+        let message = record.tasks.get(task_id).and_then(|t| t.message_id.as_deref());
         record
             .requests
             .iter()
@@ -148,25 +144,22 @@ pub fn one_question_pending(record: &Record) -> Vec<Violation> {
     }]
 }
 
-/// A run stages only what storage accepts, and a committed run's terminal rows end as it staged
-/// them, unless a client canceled one: no other turn overwrites them and none of its writes is
-/// silently dropped.
+/// A committed run's terminal rows end as its commit wrote them, unless a client canceled one: no
+/// other turn overwrites them. (A write storage refuses fails the turn `Invalid`, which
+/// [`answer_is_an_outcome`] rejects.)
 pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
-    let ledger = &record.port.ledger;
-    let subject = |exclusive: bool| if exclusive { "Run" } else { "Concurrent" };
-    let refused = ledger.refused.iter().map(|(exclusive, why)| Violation {
-        subject: subject(*exclusive),
-        text: format!("refused: {why}"),
-    });
-    let overwritten =
-        ledger.staged_terminal.iter().filter_map(|(run_id, exclusive, task_id, staged)| {
-            let now = record.port.tasks.get(task_id).map(|t| t.status);
+    record
+        .ledger
+        .staged_terminal
+        .iter()
+        .filter_map(|(commit, task_id, staged)| {
+            let now = record.tasks.get(task_id).map(|t| t.status);
             (now != Some(*staged) && now != Some(TaskState::Canceled)).then(|| Violation {
-                subject: subject(*exclusive),
-                text: format!("{run_id}: staged {task_id} {staged:?}, it is {now:?}"),
+                subject: "Run",
+                text: format!("commit {commit}: wrote {task_id} {staged:?}, it is {now:?}"),
             })
-        });
-    refused.chain(overwritten).collect()
+        })
+        .collect()
 }
 
 /// A request whose worker lived is answered: no task is watched or waited on forever.
@@ -195,7 +188,7 @@ pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
                 let ended = r
                     .continues
                     .as_ref()
-                    .and_then(|t| record.port.tasks.get(t))
+                    .and_then(|t| record.tasks.get(t))
                     .is_some_and(|t| t.terminal());
                 let actionable = match e {
                     StorageError::Invalid(_) => ended,
@@ -221,7 +214,6 @@ pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
 /// A terminal task never changes.
 pub fn terminal_task_never_changes(record: &Record) -> Vec<Violation> {
     record
-        .port
         .ledger
         .terminal_changes
         .iter()
@@ -234,12 +226,11 @@ pub fn terminal_task_never_changes(record: &Record) -> Vec<Violation> {
 /// failure it did not observe. A later turn's own outcome is that turn's.
 pub fn no_failure_nobody_observed(record: &Record) -> Vec<Violation> {
     record
-        .port
         .ledger
         .applied_unacknowledged
         .iter()
         .filter_map(|(task_id, staged)| {
-            let row = record.port.tasks.get(task_id)?;
+            let row = record.tasks.get(task_id)?;
             let reason = row
                 .data
                 .status_message
@@ -261,7 +252,7 @@ pub fn one_task_per_message(record: &Record) -> Vec<Violation> {
     let mut out = Vec::new();
     for r in &record.requests {
         let Some(Ok(answer)) = &r.answer else { continue };
-        let task = answer.task_id.as_str();
+        let task = answer.task.task_id.as_str();
         match named.get(r.message_id.as_str()) {
             Some((first, _)) if *first != task => out.push(Violation {
                 subject: subject(r.policy),
@@ -272,13 +263,12 @@ pub fn one_task_per_message(record: &Record) -> Vec<Violation> {
             }
         }
         let receipt = record
-            .port
             .tasks
             .values()
             .find(|row| row.message_id.as_deref() == Some(r.message_id.as_str()));
         if let Some(receipt) = receipt
             && receipt.task_id != task
-            && answer.answered_by.as_deref() != Some(task)
+            && answer.answered_by != task
         {
             out.push(Violation {
                 subject: subject(r.policy),
@@ -303,7 +293,7 @@ pub fn received_message_is_drained(record: &Record) -> Vec<Violation> {
             .any(|r| r.message_id == message && !r.killed && !matches!(r.answer, Some(Err(_))))
     };
     let pending: Vec<&str> =
-        record.port.unanswered_receipts().into_iter().filter(|m| waiting(m)).collect();
+        record.unanswered_receipts.iter().map(String::as_str).filter(|m| waiting(m)).collect();
     if pending.is_empty() {
         Vec::new()
     } else {
@@ -322,7 +312,7 @@ mod tests {
     #[test]
     fn a_second_commit_of_a_message_is_rejected() {
         let mut r = record();
-        r.port.ledger.executions.insert("m0".into(), ["a".into(), "b".into()].into());
+        r.ledger.executions.insert("m0".into(), [1, 2].into());
         assert!(!message_executes_once(&r).is_empty());
     }
 
@@ -347,31 +337,24 @@ mod tests {
     #[test]
     fn a_changed_terminal_row_is_rejected() {
         let mut r = record();
-        r.port.ledger.terminal_changes.push("AST_1 Completed -> Failed".into());
+        r.ledger.terminal_changes.push("AST_1 Completed -> Failed".into());
         assert!(!terminal_task_never_changes(&r).is_empty());
     }
 
     #[test]
     fn two_questions_pending_at_once_are_rejected() {
         let mut r = record();
-        r.port.ledger.most_pending = vec!["AST_1".into(), "AST_2".into()];
+        r.ledger.most_pending = vec!["AST_1".into(), "AST_2".into()];
         assert!(!one_question_pending(&r).is_empty());
     }
 
     #[test]
     fn a_staged_terminal_row_that_ended_otherwise_is_rejected() {
         let mut r = record();
-        let (id, row) = r.port.tasks.iter_mut().next().unwrap();
+        let (id, row) = r.tasks.iter_mut().next().unwrap();
         row.status = TaskState::Failed;
-        let staged = (String::from("run"), false, id.clone(), TaskState::Completed);
-        r.port.ledger.staged_terminal.push(staged);
-        assert!(!commit_is_what_the_run_staged(&r).is_empty());
-    }
-
-    #[test]
-    fn a_write_storage_refused_is_rejected() {
-        let mut r = record();
-        r.port.ledger.refused.push((false, "edited item i1".into()));
+        let staged = (1, id.clone(), TaskState::Completed);
+        r.ledger.staged_terminal.push(staged);
         assert!(!commit_is_what_the_run_staged(&r).is_empty());
     }
 
@@ -380,8 +363,8 @@ mod tests {
         let mut r = record();
         let q = r.requests.iter_mut().find(|q| matches!(q.answer, Some(Ok(_)))).unwrap();
         if let Some(Ok(answer)) = &mut q.answer {
-            answer.task_id = "AST_other".into();
-            answer.answered_by = None;
+            answer.task.task_id = "AST_other".into();
+            answer.answered_by = "AST_other".into();
         }
         assert!(!message_executes_once(&r).is_empty());
     }
@@ -389,12 +372,12 @@ mod tests {
     #[test]
     fn a_failed_task_whose_commit_applied_is_rejected() {
         let mut r = record();
-        let (id, row) = r.port.tasks.iter_mut().next().unwrap();
+        let (id, row) = r.tasks.iter_mut().next().unwrap();
         row.status = TaskState::Failed;
         row.data.status_message =
             Some(lk_agents_core::a2a::failed_message(id, "worker-lost", "m".into()));
         let id = id.clone();
-        r.port.ledger.applied_unacknowledged.insert(id, Some(TaskState::Completed));
+        r.ledger.applied_unacknowledged.insert(id, TaskState::Completed);
         assert!(!no_failure_nobody_observed(&r).is_empty());
     }
 }

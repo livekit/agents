@@ -17,7 +17,7 @@ fn reach(record: &a2a::Record, into: &mut BTreeMap<&'static str, u64>) {
     let answered = |p: Policy| {
         record.requests.iter().filter(|r| r.policy == p && r.answer.is_some()).count() as u64
     };
-    let ledger = &record.port.ledger;
+    let ledger = &record.ledger;
     for (name, n) in [
         ("Answer", record.requests.iter().filter(|r| r.answer.is_some()).count() as u64),
         ("Batch", answered(Policy::Batch)),
@@ -47,7 +47,7 @@ fn campaign(seeds: impl Iterator<Item = u64>) -> (Vec<String>, BTreeMap<&'static
         *reached.entry("KnownFinding").or_default() += known.len() as u64;
         if !new.is_empty() {
             let new: Vec<String> = new.iter().map(ToString::to_string).collect();
-            failures.push(format!("A2A_SEED={seed} ({} steps): {new:?}", record.steps));
+            failures.push(format!("A2A_SEED={seed} ({:?}): {new:?}", record.now));
         }
     }
     (failures, reached)
@@ -64,7 +64,12 @@ fn a_small_window_keeps_every_a2a_rule() {
 fn a_seed_replays_its_run() {
     let a = a2a::run(7, MESSAGES);
     let b = a2a::run(7, MESSAGES);
-    assert_eq!((a.steps, a.now, a.requests.len()), (b.steps, b.now, b.requests.len()));
+    let outcome = |r: &a2a::Record| {
+        let statuses: Vec<_> = r.tasks.values().map(|t| t.status).collect();
+        let answered = r.requests.iter().map(|q| (q.killed, q.answer.as_ref().map(Result::is_ok)));
+        (r.now, statuses, answered.collect::<Vec<_>>())
+    };
+    assert_eq!(outcome(&a), outcome(&b));
 }
 
 #[test]

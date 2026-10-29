@@ -59,7 +59,7 @@ pub const VOICE: Boundary = Boundary {
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
         "worker, IPC and job processes (lk-agents-worker's own tests; the DST fakes the worker)",
-        "agent-db storage and the A2A door's transport (I-27 backend contracts; the A2A DST fakes the storage port)",
+        "agent-db storage and the A2A door's transport (I-27 backend contracts; the A2A DST runs storage in memory)",
     ],
 };
 
@@ -68,24 +68,23 @@ pub const A2A: Boundary = Boundary {
     cores: &["A2A task machine (lk_agents_core::a2a::task::TaskMachine: deduplication, arrival \
          policy, claim, drain, the turn as separate steps (pending question, checkpoints, \
          output, settlement), commit, every typed storage failure) under every inbox policy, \
-         one operation at a time"],
+         executed by the runtime's door turn (lk_agents_runtime::a2a::Turn) over \
+         lk-agents-storage (lease, renewal, waiter mark, fenced commit, lost-ack resolution) on \
+         the run's scheduler and virtual clock"],
     fakes: &[
-        "a2a::port: one lane in memory with the storage contract's semantics (arrival-ordered \
-         lease, waiter mark, acquire snapshots, conditional pickups and orphan failures, \
-         append-only concurrent history, resend under the fence), injecting Unavailable, \
-         Uncertain before and after the commit applied, Rejected, LeaseLost, VersionConflict, \
-         NotFound, a refused statement and a cancelled or failing handler",
-        "a2a::handler: checkpoints, a yield, a text answer, a tool's question, a raise",
+        "lk_agents_storage::testing: the thread database in memory on the run's clock \
+         (MemoryConnection) behind the fault connection (Faulty): Uncertain before and after the \
+         commit applied, a refused commit, an unreachable database; each request a little late",
+        "a2a::handler (the TurnHost port): checkpoints, a yield, a text answer, a tool's \
+         question, a raise, a lost lane, a cancellation, a lost database",
         "the clients: out-of-order arrivals on three channels under door options mixing the \
          policies, resends at once and after a failed answer or a dead worker, client cancels, \
          answers to questions with or without the waiting task's id",
     ],
-    transitional: &[
-        "none: the task machine and its turn are core steps the simulation steps itself",
-    ],
+    transitional: &["none"],
     outside: &[
-        "the runtime door's execution of the operations (runtime a2a_turns and a2a_door suites)",
-        "lk-agents-storage's backends (real SQLite and a fake AgentDB server, its own suites)",
+        "the door's HTTP serving and response stream publishing (runtime a2a_door suite)",
+        "lk-agents-storage's file SQLite and AgentDB backends (its own suites)",
         "SubscribeToTask and resubscribe from a cursor: runtime door and response streams",
     ],
 };
