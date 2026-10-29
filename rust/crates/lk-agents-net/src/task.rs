@@ -129,8 +129,9 @@ struct TaskEntries {
     tasks: BTreeMap<u64, (String, Option<OwnedTask>)>,
 }
 
-/// Owned by the work: leaves the set when the work is dropped, however it ended.
-struct Leave {
+/// Owned by the work: leaves the set when the work is dropped, however it ended. Also handed
+/// out by [`TaskSet::track`] for work another set runs.
+pub struct Leave {
     table: Arc<TaskSet>,
     id: u64,
 }
@@ -144,6 +145,16 @@ impl Drop for Leave {
 }
 
 impl TaskSet {
+    /// Counts work run elsewhere (another set's task) until the guard drops, so this set's
+    /// waits include it; it cannot be cancelled from here.
+    pub fn track(self: &Arc<Self>, name: &str) -> Leave {
+        let mut g = self.inner.lock().expect("task table");
+        g.next += 1;
+        let id = g.next;
+        g.tasks.insert(id, (name.to_owned(), None));
+        Leave { table: Arc::clone(self), id }
+    }
+
     #[track_caller]
     pub fn spawn(
         self: &Arc<Self>,
