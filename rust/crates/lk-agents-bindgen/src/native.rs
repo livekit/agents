@@ -11,7 +11,7 @@ pub fn native(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream
     let m = Metas::parse(attr)?;
     let at = &tr.ident;
     for x in &m.0 {
-        if !(x.key == "native" || x.key == "native.refused") {
+        if !matches!(x.key.as_str(), "native" | "native.refused" | "native.class") {
             return Err(syn::Error::new_spanned(
                 at,
                 format!("native({}) has no meaning", x.key.trim_start_matches("native.")),

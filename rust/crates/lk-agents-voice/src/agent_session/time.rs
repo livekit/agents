@@ -79,34 +79,6 @@ impl Timebase {
         self.virt.is_some()
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    /// For a host that stopped moving time (awaiting `aclose()`). Paced on real time (1 ms per
-    /// step) so host tasks can run between steps. Panics on a real clock.
-    pub async fn advance_until(
-        &self,
-        done: impl std::future::Future<Output = ()>,
-        step: Duration,
-        budget: u32,
-    ) {
-        let pacer = RealClock::new();
-        let mut done = std::pin::pin!(done);
-        let mut steps = 0u32;
-        loop {
-            let tick = pacer.wait_until(pacer.now().saturating_add(Duration::from_millis(1)));
-            tokio::select! {
-                biased;
-                () = &mut done => break,
-                () = tick => {
-                    self.advance(step);
-                    steps += 1;
-                    if steps > budget {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
     /// On a virtual clock only moving time releases it.
     pub async fn wait_until(&self, at: Ts) {
         self.clock.wait_until(at).await

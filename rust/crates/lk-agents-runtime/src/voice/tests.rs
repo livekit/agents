@@ -15,61 +15,16 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
         Default::default(),
         lk_agents_voice::agent_activity::options::SessionLegs::none(),
     );
-    let (view, _) = tokio::sync::watch::channel(Arc::new(SessionView {
-        launch_holds: Default::default(),
-        config: config.clone(),
-        agent: "agent".into(),
-        vad: None,
-        dtmf_reply_running: false,
-    }));
     let steps: Steps = Arc::default();
     let observed = steps.clone();
-    let builder = DriverBuilder {
-        view,
-        time,
-        config,
-        spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
-        journal: Journal::observed(move |step| observed.lock().unwrap().push(step.clone())),
-        probe: None,
-        agent: "agent".into(),
-        session_id: name.into(),
-        resources: Default::default(),
-        instructions: Default::default(),
-        dynamic_instructions: None,
-        output_nodes: Default::default(),
-        chat_ctx: None,
-        hook_bound: None,
-        max_unrecoverable_errors: 3,
-        conn: Default::default(),
-        expressive: Default::default(),
-        llm: None,
-        tts: None,
-        tts_node: None,
-        stt_node: None,
-        stt: None,
-        keyterms: None,
-        forward_chat_context: true,
-        vad: None,
-        audio_in: None,
-        video_in: None,
-        storage: None,
-        recorder: None,
-        audio_out: None,
-        text_out: None,
-        room_events: None,
-        room_io_events: None,
-        room_link: None,
-        eot: None,
-        interruption: None,
-        video_sampler: None,
-        realtime: None,
-        toolset: Default::default(),
-        // `dst` is enabled by the runtime's test dependency so SessionCores has the same shape.
-    };
+    let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
+    let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
+    builder.journal = Journal::observed(move |step| observed.lock().unwrap().push(step.clone()));
+    builder.session_id = name.into();
     (builder, steps)
 }
 
-async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
+pub(super) async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
     let (builder, steps) = builder(name);
     let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let (cores, handle) = builder.start(&mut executor).await.unwrap();

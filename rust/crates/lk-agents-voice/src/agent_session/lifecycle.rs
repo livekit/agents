@@ -1,6 +1,8 @@
 //! Session lifecycle decisions over an observed phase; execution retains the phase's resources.
 
-use super::api::{OpenRefused, SessionRefused};
+use crate::agent_activity::options::{RECORDING_ALL_OFF, RECORDING_ALL_ON, records_anything};
+use lk_agents_abi::voice::session::{OpenRefused, SessionRefused};
+use lk_agents_abi::voice::session_effects::StartPlan;
 
 #[derive(Clone, Copy)]
 pub enum SessionLifecycle {
@@ -72,5 +74,24 @@ impl SessionLifecycle {
 
     pub fn closed(self) -> CloseAction {
         CloseAction::Closed
+    }
+}
+
+/// The session's start planning (`_core.plan_session_start`).
+pub struct SessionStartPlans;
+
+impl lk_agents_abi::voice::session_effects::SessionStart for SessionStartPlans {
+    /// The job's recording setting, held by its primary session only: a second session in the
+    /// job neither records nor hosts.
+    fn plan_session_start(job_default: bool, another_session_is_primary: bool) -> StartPlan {
+        let is_primary = !another_session_is_primary;
+        let recording =
+            if job_default && is_primary { RECORDING_ALL_ON } else { RECORDING_ALL_OFF };
+        StartPlan {
+            recording,
+            is_primary,
+            hosting: is_primary,
+            records: records_anything(&recording),
+        }
     }
 }

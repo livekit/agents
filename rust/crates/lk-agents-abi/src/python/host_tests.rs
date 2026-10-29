@@ -7,7 +7,7 @@ mod provider_bridge {
     //! package must not be imported here, so `livekit.agents.types` and `livekit.rtc` are stubs;
     //! nextest's process per test keeps each type's cached class on these.
     use crate::python::{HostBridge as _, HostHandle, extract_generated, pyo3_async_runtimes};
-    use crate::{AudioFrame, LlmChunk, Role, SpeechEvent, VadEvent};
+    use crate::{LlmChunk, Role, SpeechEvent, VadEvent};
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
 
@@ -691,64 +691,6 @@ mod session_bridge {
                 !parse_specs(py, "del out[0]['ignore_on_enter']").unwrap()[0].flags.ignore_on_enter
             );
             assert_eq!(parse_specs(py, "del out[0]['description']").unwrap()[0].description, "");
-        });
-    }
-
-    /// `program`'s `out`, with `tool_report` the generated models (`_generated/tool_report.py`).
-    fn answer(py: Python<'_>, program: &str) -> PyResult<crate::llm::tool_executor::ToolReport> {
-        let models = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../livekit-agents-next/livekit/agents/_generated/tool_report.py"
-        );
-        let load = format!(
-            "import importlib.util, sys, types\n\
-             for p in ('livekit', 'livekit.agents', 'livekit.agents._generated'):\n    \
-                 sys.modules.setdefault(p, types.ModuleType(p))\n\
-             name = 'livekit.agents._generated.tool_report'\n\
-             if name not in sys.modules:\n    \
-                 spec = importlib.util.spec_from_file_location(name, {models:?})\n    \
-                 m = importlib.util.module_from_spec(spec)\n    \
-                 sys.modules[name] = m\n    \
-                 spec.loader.exec_module(m)\n\
-             tool_report = sys.modules[name]\n{program}"
-        );
-        let v = out(py, &load);
-        extract_generated::<crate::llm::tool_executor::ToolReport>(v.bind(py))
-    }
-
-    // Catches: a variant read as another, a defaulted flag read as given, a transition dropped,
-    // or an untyped outcome accepted in place of its declared model.
-    #[test]
-    fn a_tool_outcome_carries_its_payload() {
-        use crate::llm::tool_executor::ToolOutcome;
-        attach(|py| {
-            let a = answer(
-                py,
-                "out = tool_report.ToolReport(outcome=tool_report.ToolOutcomeValue(text='12C', reply_required=False))",
-            )
-            .unwrap();
-            let value = ToolOutcome::Value {
-                text: "12C".into(),
-                reply_required: false,
-                verbatim: false,
-                more: None,
-            };
-            assert_eq!(a.outcome, value);
-            assert!(a.transition.is_none());
-            let program = "out = tool_report.ToolReport(\
-                           outcome=tool_report.ToolOutcomeInputRequired(question='Yes?', verbatim=True), \
-                           transition=object())";
-            let a = answer(py, program).unwrap();
-            let ask =
-                ToolOutcome::InputRequired { question: "Yes?".into(), verbatim: true, tool: None };
-            assert_eq!(a.outcome, ask);
-            assert!(a.transition.is_some());
-            let working = "out = tool_report.ToolReport(outcome=tool_report.ToolOutcomeWorking())";
-            assert_eq!(answer(py, working).unwrap().outcome, ToolOutcome::Working(None));
-            let unknown = "out = tool_report.ToolReport(outcome=object())";
-            assert!(answer(py, unknown).is_err(), "an outcome outside the declared variants");
-            assert!(answer(py, "out = {'outcome': {'kind': 'working'}}").is_err(), "a dict");
-            assert!(answer(py, "out = 'sunny'").is_err(), "not a report at all");
         });
     }
 

@@ -470,12 +470,12 @@ pub mod a2a_remote {
                     kwargs.set_item("request_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?)?;
                     kwargs.set_item("verbatim", match verbatim { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
                     kwargs.set_item("verbatim_full", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim_full, py)?)?;
-                    kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+                    kwargs.set_item("outcome", crate::generated::records::tool_report::tool_outcome_to_py(py, outcome)?)?;
                     crate::host::construct(REMOTE_EVENT_INPUT_REQUIRED.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventInputRequired")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::a2a::remote::RemoteEvent::Outcome { outcome } => {
                     let kwargs = ::pyo3::types::PyDict::new(py);
-                    kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+                    kwargs.set_item("outcome", crate::generated::records::tool_report::tool_outcome_to_py(py, outcome)?)?;
                     crate::host::construct(REMOTE_EVENT_OUTCOME.import(py, "livekit.agents._generated.a2a_remote", "RemoteEventOutcome")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::a2a::remote::RemoteEvent::Follow { task_id, thread_id } => {
@@ -2287,7 +2287,7 @@ pub mod session_wire {
     pub fn start_plan_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_effects::StartPlan) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::session_effects::StartPlan { recording, is_primary, hosting, records } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("recording", ::pyo3::IntoPyObjectExt::into_bound_py_any(recording, py)?)?;
+            kwargs.set_item("recording", crate::generated::records::telemetry::recording_options_to_py(py, recording)?)?;
             kwargs.set_item("is_primary", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_primary, py)?)?;
             kwargs.set_item("hosting", ::pyo3::IntoPyObjectExt::into_bound_py_any(hosting, py)?)?;
             kwargs.set_item("records", ::pyo3::IntoPyObjectExt::into_bound_py_any(records, py)?)?;
@@ -3074,13 +3074,32 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    static RECORDING_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn recording_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::report::RecordingOptions> {
-        obj.extract::<::lk_agents_abi::telemetry::report::RecordingOptions>()
+        let py = obj.py();
+            if !obj.is_instance(RECORDING_OPTIONS.import(py, "livekit.agents._generated.telemetry", "RecordingOptions")?)? {
+                return Err(super::not_a(obj, "RecordingOptions"));
+            }
+            Ok(::lk_agents_abi::telemetry::report::RecordingOptions {
+                audio: ::lk_agents_abi::python::attr_with(obj, "RecordingOptions", "audio", |v| v.extract::<bool>())?,
+                traces: ::lk_agents_abi::python::attr_with(obj, "RecordingOptions", "traces", |v| v.extract::<bool>())?,
+                logs: ::lk_agents_abi::python::attr_with(obj, "RecordingOptions", "logs", |v| v.extract::<bool>())?,
+                transcript: ::lk_agents_abi::python::attr_with(obj, "RecordingOptions", "transcript", |v| v.extract::<bool>())?,
+                redaction: ::lk_agents_abi::python::attr_with(obj, "RecordingOptions", "redaction", |v| v.extract::<bool>())?,
+            })
     }
 
     pub fn recording_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::RecordingOptions) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let ::lk_agents_abi::telemetry::report::RecordingOptions { audio, traces, logs, transcript, redaction } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("audio", ::pyo3::IntoPyObjectExt::into_bound_py_any(audio, py)?)?;
+            kwargs.set_item("traces", ::pyo3::IntoPyObjectExt::into_bound_py_any(traces, py)?)?;
+            kwargs.set_item("logs", ::pyo3::IntoPyObjectExt::into_bound_py_any(logs, py)?)?;
+            kwargs.set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
+            kwargs.set_item("redaction", ::pyo3::IntoPyObjectExt::into_bound_py_any(redaction, py)?)?;
+            crate::host::construct(RECORDING_OPTIONS.import(py, "livekit.agents._generated.telemetry", "RecordingOptions")?.as_any(), (), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
@@ -3126,7 +3145,7 @@ pub mod telemetry {
                 started_at: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "started_at", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportInput.started_at")).map(Some) })?,
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportInput.timestamp"))?,
                 options: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "options", |v| ::lk_agents_abi::python::value_from_py(v, "SessionReportInput.options"))?,
-                recording_options: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "recording_options", |v| v.extract::<::lk_agents_abi::telemetry::report::RecordingOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
+                recording_options: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "recording_options", |v| crate::generated::records::telemetry::recording_options_from_py(v))?,
                 model_usage: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "model_usage", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::metrics::ModelUsage>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
                 chat_history: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "chat_history", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
                 omitted_events: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "omitted_events", |v| ::lk_agents_abi::python::number_from_py::<usize>(v, "SessionReportInput.omitted_events"))?,
@@ -3714,13 +3733,142 @@ pub mod tool_report {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+    static TOOL_OUTCOME_VALUE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_NOTHING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_TOOL_ERROR: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_MODEL_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_STOP_RESPONSE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_INTERNAL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_INVALID: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_CANCELLED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_UPDATE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_COMPLETED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_FAILED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_REJECTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static TOOL_OUTCOME_WORKING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn tool_outcome_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::tool_executor::ToolOutcome> {
-        obj.extract::<::lk_agents_abi::llm::tool_executor::ToolOutcome>()
+        let py = obj.py();
+            if obj.is_instance(TOOL_OUTCOME_VALUE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeValue")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeValue", "text", |v| v.extract::<::std::string::String>())?, reply_required: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeValue", "reply_required", |v| v.extract::<bool>())?, verbatim: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeValue", "verbatim", |v| v.extract::<bool>())?, more: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeValue", "more", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })? });
+            }
+            if obj.is_instance(TOOL_OUTCOME_NOTHING.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeNothing")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Nothing);
+            }
+            if obj.is_instance(TOOL_OUTCOME_TOOL_ERROR.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeToolError")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::ToolError(::lk_agents_abi::python::attr_with(obj, "ToolOutcomeToolError", "message", |v| v.extract::<::std::string::String>())?));
+            }
+            if obj.is_instance(TOOL_OUTCOME_MODEL_RETRY.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeModelRetry")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::ModelRetry(::lk_agents_abi::python::attr_with(obj, "ToolOutcomeModelRetry", "message", |v| v.extract::<::std::string::String>())?));
+            }
+            if obj.is_instance(TOOL_OUTCOME_STOP_RESPONSE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeStopResponse")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::StopResponse);
+            }
+            if obj.is_instance(TOOL_OUTCOME_INTERNAL.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInternal")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Internal);
+            }
+            if obj.is_instance(TOOL_OUTCOME_INVALID.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInvalid")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Invalid);
+            }
+            if obj.is_instance(TOOL_OUTCOME_CANCELLED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeCancelled")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled);
+            }
+            if obj.is_instance(TOOL_OUTCOME_UPDATE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeUpdate")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Update { message: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeUpdate", "message", |v| v.extract::<::std::string::String>())?, raw: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeUpdate", "raw", |v| v.extract::<::std::string::String>())? });
+            }
+            if obj.is_instance(TOOL_OUTCOME_COMPLETED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeCompleted")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Completed { text: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeCompleted", "text", |v| v.extract::<::std::string::String>())?, verbatim: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeCompleted", "verbatim", |v| v.extract::<bool>())? });
+            }
+            if obj.is_instance(TOOL_OUTCOME_FAILED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeFailed")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Failed(::lk_agents_abi::python::attr_with(obj, "ToolOutcomeFailed", "error", |v| v.extract::<::std::string::String>())?));
+            }
+            if obj.is_instance(TOOL_OUTCOME_REJECTED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeRejected")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Rejected(::lk_agents_abi::python::attr_with(obj, "ToolOutcomeRejected", "reason", |v| v.extract::<::std::string::String>())?));
+            }
+            if obj.is_instance(TOOL_OUTCOME_INPUT_REQUIRED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInputRequired")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::InputRequired { question: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeInputRequired", "question", |v| v.extract::<::std::string::String>())?, verbatim: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeInputRequired", "verbatim", |v| v.extract::<bool>())?, tool: ::lk_agents_abi::python::attr_with(obj, "ToolOutcomeInputRequired", "tool", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })? });
+            }
+            if obj.is_instance(TOOL_OUTCOME_WORKING.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeWorking")?)? {
+                return Ok(::lk_agents_abi::llm::tool_executor::ToolOutcome::Working(::lk_agents_abi::python::attr_with(obj, "ToolOutcomeWorking", "message", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?));
+            }
+            Err(super::not_a(obj, "ToolOutcomeValue | ToolOutcomeNothing | ToolOutcomeToolError | ToolOutcomeModelRetry | ToolOutcomeStopResponse | ToolOutcomeInternal | ToolOutcomeInvalid | ToolOutcomeCancelled | ToolOutcomeUpdate | ToolOutcomeCompleted | ToolOutcomeFailed | ToolOutcomeRejected | ToolOutcomeInputRequired | ToolOutcomeWorking"))
     }
 
     pub fn tool_outcome_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::tool_executor::ToolOutcome) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            match value {
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text, reply_required, verbatim, more } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                    kwargs.set_item("reply_required", ::pyo3::IntoPyObjectExt::into_bound_py_any(reply_required, py)?)?;
+                    kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+                    kwargs.set_item("more", match more { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    crate::host::construct(TOOL_OUTCOME_VALUE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeValue")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Nothing => crate::host::construct(TOOL_OUTCOME_NOTHING.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeNothing")?.as_any(), (), None),
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::ToolError(message) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    crate::host::construct(TOOL_OUTCOME_TOOL_ERROR.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeToolError")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::ModelRetry(message) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    crate::host::construct(TOOL_OUTCOME_MODEL_RETRY.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeModelRetry")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::StopResponse => crate::host::construct(TOOL_OUTCOME_STOP_RESPONSE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeStopResponse")?.as_any(), (), None),
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Internal => crate::host::construct(TOOL_OUTCOME_INTERNAL.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInternal")?.as_any(), (), None),
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Invalid => crate::host::construct(TOOL_OUTCOME_INVALID.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInvalid")?.as_any(), (), None),
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled => crate::host::construct(TOOL_OUTCOME_CANCELLED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeCancelled")?.as_any(), (), None),
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Update { message, raw } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    kwargs.set_item("raw", ::pyo3::IntoPyObjectExt::into_bound_py_any(raw, py)?)?;
+                    crate::host::construct(TOOL_OUTCOME_UPDATE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeUpdate")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Completed { text, verbatim } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                    kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+                    crate::host::construct(TOOL_OUTCOME_COMPLETED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeCompleted")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Failed(error) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
+                    crate::host::construct(TOOL_OUTCOME_FAILED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeFailed")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Rejected(reason) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
+                    crate::host::construct(TOOL_OUTCOME_REJECTED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeRejected")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::InputRequired { question, verbatim, tool } => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
+                    kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+                    kwargs.set_item("tool", match tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    crate::host::construct(TOOL_OUTCOME_INPUT_REQUIRED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInputRequired")?.as_any(), (), Some(&kwargs))
+                },
+                ::lk_agents_abi::llm::tool_executor::ToolOutcome::Working(message) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", match message { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                    crate::host::construct(TOOL_OUTCOME_WORKING.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeWorking")?.as_any(), (), Some(&kwargs))
+                },
+            }
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
@@ -3743,9 +3891,18 @@ pub mod tool_report {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
+    static TOOL_REPORT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn tool_report_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::tool_executor::ToolReport> {
-        obj.extract::<::lk_agents_abi::llm::tool_executor::ToolReport>()
+        let py = obj.py();
+            if !obj.is_instance(TOOL_REPORT.import(py, "livekit.agents._generated.tool_report", "ToolReport")?)? {
+                return Err(super::not_a(obj, "ToolReport"));
+            }
+            Ok(::lk_agents_abi::llm::tool_executor::ToolReport {
+                outcome: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "outcome", |v| crate::generated::records::tool_report::tool_outcome_from_py(v))?,
+                transition: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "transition", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+            })
     }
 }
 
@@ -3817,6 +3974,44 @@ pub mod turn_events {
             kwargs.set_item("inference_duration", match inference_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("backchannel_probability", match backchannel_probability { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(EOT_PREDICTION.import(py, "livekit.agents._generated.turn_events", "EotPrediction")?.as_any(), (), Some(&kwargs))
+    }
+}
+
+pub mod voice_session {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
+    static UPDATE_AGENT_ARGS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn update_agent_args_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session::UpdateAgentArgs> {
+        let py = obj.py();
+            if !obj.is_instance(UPDATE_AGENT_ARGS.import(py, "livekit.agents._generated.voice_session", "UpdateAgentArgs")?)? {
+                return Err(super::not_a(obj, "UpdateAgentArgs"));
+            }
+            Ok(::lk_agents_abi::voice::session::UpdateAgentArgs {
+                instructions: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "instructions", |v| v.extract::<::std::string::String>())?,
+                dynamic_instructions: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "dynamic_instructions", |v| if v.is_none() { Ok(None) } else { (crate::generated::agent::HostInstructionsProxy::from_host(&v)).map(Some) })?,
+                agent: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "agent", |v| v.extract::<::std::string::String>())?,
+                agent_host: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "agent_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+                tools: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tools", |v| if v.is_none() { Ok(None) } else { (v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::ToolSpec>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                tools_host: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tools_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+                voice_agent: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "voice_agent", |v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentFrame>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.voice_agent", ": expected an agent's voice frame (`_core.VoiceAgent`)"))))?,
+                chat_ctx: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "chat_ctx", |v| if v.is_none() { Ok(None) } else { (v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
+                llm: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "llm", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::generated::llm::LlmProxy::from_host(&v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                tts: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tts", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::generated::tts::TtsProxy::from_host(&v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                stt: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "stt", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::generated::stt::SttProxy::from_host(&v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                vad: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "vad", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (if v.is_none() { Ok(None) } else { (crate::generated::vad::VadProxy::from_host(&v)).map(Some) }).map(::lk_agents_abi::Maybe::Given) })?,
+                turn_handling: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "turn_handling", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::voice::session_options::TurnHandlingKwargs>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+                min_consecutive_speech_delay: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "min_consecutive_speech_delay", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "UpdateAgentArgs.min_consecutive_speech_delay")).map(Some) })?,
+                use_tts_aligned_transcript: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "use_tts_aligned_transcript", |v| if v.is_none() { Ok(None) } else { (v.extract::<bool>()).map(Some) })?,
+                expressive: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "expressive", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::lk_agents_abi::voice::session_options::Expressive>().map_err(::std::convert::Into::<PyErr>::into)).map(::lk_agents_abi::Maybe::Given) })?,
+                llm_node: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "llm_node", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.llm_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).map(Some) })?,
+                tts_node: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "tts_node", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.tts_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).map(Some) })?,
+                stt_node: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "stt_node", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.stt_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).map(Some) })?,
+                transcription_node: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "transcription_node", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.transcription_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).map(Some) })?,
+                realtime_audio_output_node: ::lk_agents_abi::python::attr_with(obj, "UpdateAgentArgs", "realtime_audio_output_node", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("UpdateAgentArgs.realtime_audio_output_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).map(Some) })?,
+            })
     }
 }
 

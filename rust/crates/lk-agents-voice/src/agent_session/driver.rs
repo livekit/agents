@@ -200,7 +200,7 @@ impl Tx {
         &self,
         origin: Origin,
         command: Command,
-        call: Option<crate::agent_session::api::Call>,
+        call: Option<crate::agent_session::calls::Call>,
     ) -> Result<(), QueueClosed> {
         let input = Input::Host(Sent { origin, command });
         match call {
@@ -301,7 +301,7 @@ pub enum Event {
     Input(Input),
     /// For the decision core, from a sender awaiting the answer to the call it names: the
     /// runtime keeps the call's reply until the core answers it.
-    Awaited(Input, crate::agent_session::api::Call),
+    Awaited(Input, crate::agent_session::calls::Call),
     /// A provider completion, adopted into runtime resources before entering the core.
     LegOpened(StreamOpened),
     /// For the data plane, from the decision core.

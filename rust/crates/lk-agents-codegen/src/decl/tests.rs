@@ -141,21 +141,24 @@ fn aliases_generics_reexports_and_declared_kinds_resolve() {
 }
 
 // Catches: an awaited method declared `-> BoxFuture<'static, T>` started only when the host
-// awaits it (a command it sends would then be ordered after later calls), or its future's output
-// read as the declared result instead of the future itself.
+// awaits it (a command it sends would then be ordered after later calls), its future's output
+// read as the declared result instead of the future itself, or a call refused in a `Result`
+// raising only once awaited.
 #[test]
 fn an_eager_await_runs_at_the_call_and_awaits_its_future() {
     let decls = read(&class(
-        "#[host(await)] fn ready(&self, id: String) -> crate::BoxFuture<'static, Res<u32>>;",
+        "#[host(await)] fn ready(&self, id: String) -> Result<crate::BoxFuture<'static, Res<u32>>, crate::errors::ApiError>;",
     ))
     .expect("resolves");
     let ready = &decls.classes[0].methods[0];
-    assert!(ready.eager && ready.kind == MethodKind::Await);
+    assert!(ready.eager && ready.kind == MethodKind::Await && ready.refused.is_some());
     assert_eq!(ready.ret.ok, Ty::Int(crate::decl::Int::U32));
     let adapter = crate::adapter::emit(&decls).unwrap();
     let text = adapter.iter().map(|o| o.text.as_str()).collect::<String>();
     let (sent, awaited) = (text.find("let call = <").unwrap(), text.find("call.await").unwrap());
     assert!(sent < text.find("future_into_py").unwrap() && sent < awaited, "{text}");
+    let raised = text[sent..].find(".map_err(").unwrap() + sent;
+    assert!(raised < text.find("future_into_py").unwrap(), "{text}");
     let err = refuse("#[host(await)] fn ready(&self) -> crate::BoxFuture<'_, Res<u32>>;");
     assert!(err.contains("BoxFuture<'static"), "{err}");
 }
@@ -282,7 +285,10 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
     assert!(root.contains("m.add_class::<llm::Live>()?;"), "{root}");
-    assert!(!llm.contains("pub struct Live(::lk_agents_runtime::net::source::NativeSource"), "{llm}");
+    assert!(
+        !llm.contains("pub struct Live(::lk_agents_runtime::net::source::NativeSource"),
+        "{llm}"
+    );
     for expected in [
         "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
         "::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
@@ -556,7 +562,9 @@ fn a_core_stream_reaches_a_host_call_as_its_generated_stream_class() {
     ))
     .expect("resolves");
     let p = &decls.proxies[0];
-    assert!(matches!(&p.methods[0].params[0].ty, Ty::Source { class, .. } if class == "ChunkStream"));
+    assert!(
+        matches!(&p.methods[0].params[0].ty, Ty::Source { class, .. } if class == "ChunkStream")
+    );
     assert_eq!(crate::adapter::proxy_sources(&decls, p).len(), 1);
     let text = crate::proxy::proxy(p).expect("emits");
     assert!(

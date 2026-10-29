@@ -3,8 +3,8 @@
 //! below; every request opens the host node, which reaches the provider itself.
 //! `transcription_node` and `realtime_audio_output_node`: [`OutputNodes`].
 
-use super::api::NodeFactory;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::{
     AudioFrame, ChatRequest, LanguageCode, Llm, LlmStream, SpeechEvent, StreamSource, Stt,
     SttCapabilities, SttSink, SttSource, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,

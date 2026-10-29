@@ -143,10 +143,10 @@ pub struct DriverBuilder {
     pub llm: Option<Arc<dyn Llm>>,
     /// Adapted at start by the executor's [`TtsAdapter`], under `tts_node`.
     pub tts: Option<Arc<dyn Tts>>,
-    pub tts_node: Option<Arc<dyn super::api::NodeFactory>>,
+    pub tts_node: Option<Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>>,
     /// Adapted at start by the executor's [`SttAdapter`] over `vad`, under `stt_node`.
     pub stt: Option<Arc<dyn Stt>>,
-    pub stt_node: Option<Arc<dyn super::api::NodeFactory>>,
+    pub stt_node: Option<Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>>,
     /// `None`: nothing is pushed.
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
     /// `stt_context_options["forward_chat_context"]`: conversation turns reach an STT with the
@@ -177,12 +177,65 @@ pub struct DriverBuilder {
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
-    /// Test-only: what a simulation installed before `start()`.
-    #[cfg(feature = "dst")]
-    pub probe: Option<super::HostEventProbe>,
 }
 
 impl DriverBuilder {
+    /// A session of `agent` with `config` and nothing else: no provider, leg, node or history.
+    pub fn new(
+        agent: String,
+        time: Timebase,
+        spawner: Arc<dyn Spawner>,
+        config: DriverConfig,
+    ) -> Self {
+        let view = crate::agent_session::SessionView {
+            launch_holds: Default::default(),
+            config: config.clone(),
+            agent: agent.clone(),
+            vad: None,
+            dtmf_reply_running: false,
+        };
+        DriverBuilder {
+            view: tokio::sync::watch::Sender::new(Arc::new(view)),
+            time,
+            spawner,
+            config,
+            agent,
+            instructions: Instructions::default(),
+            dynamic_instructions: None,
+            output_nodes: Default::default(),
+            chat_ctx: None,
+            hook_bound: None,
+            max_unrecoverable_errors: 3,
+            conn: Default::default(),
+            expressive: Default::default(),
+            resources: Default::default(),
+            llm: None,
+            tts: None,
+            tts_node: None,
+            stt: None,
+            stt_node: None,
+            keyterms: None,
+            forward_chat_context: true,
+            vad: None,
+            audio_in: None,
+            video_in: None,
+            recorder: None,
+            audio_out: None,
+            text_out: None,
+            room_events: None,
+            room_io_events: None,
+            room_link: None,
+            eot: None,
+            interruption: None,
+            video_sampler: None,
+            realtime: None,
+            toolset: Default::default(),
+            session_id: crate::agent_session::mint_session_id(),
+            storage: None,
+            journal: Default::default(),
+        }
+    }
+
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `async` because the executor opens the providers' streams first.
     pub async fn start(
@@ -208,15 +261,16 @@ impl DriverBuilder {
         let adapter = executor.stt_adapter();
         self.stt = self.stt.take().map(|stt| {
             let vad = self.vad.clone();
-            nodes.stt(super::api::stt_leg(stt, &adapter, vad, self.time.clock(), &self.conn.stt))
+            nodes.stt(stt_leg(stt, &adapter, vad, self.time.clock(), &self.conn.stt))
         });
         if let Some(stt) = &self.stt {
             stt.prewarm();
         }
         let adapter = executor.tts_adapter();
-        self.tts = self.tts.take().map(|tts| {
-            nodes.tts(super::api::tts_leg(tts, &adapter, self.time.clock(), &self.conn.tts))
-        });
+        self.tts = self
+            .tts
+            .take()
+            .map(|tts| nodes.tts(tts_leg(tts, &adapter, self.time.clock(), &self.conn.tts)));
         if let Some(tts) = &self.tts {
             tts.prewarm();
         }
@@ -491,4 +545,37 @@ struct RealtimeStart {
     disabled: bool,
     /// The turn owner before the model's refinement, which a later re-resolution compares with.
     resolved: crate::audio_recognition::TurnDetectionMode,
+}
+
+/// A host provider is attempted once per call with the leg's timeout: the engine's `Attempt`
+/// loop owns the LLM's and the TTS's retries (on `SessionShared::conn`), and two loops would
+/// multiply.
+fn one_attempt(conn: &lk_agents_abi::ApiConnectOptions) -> lk_agents_abi::ApiConnectOptions {
+    lk_agents_abi::ApiConnectOptions { max_retry: 0, ..*conn }
+}
+
+/// A host STT spends its budget in its `RetryingStt`; a recognize-only one is adapted by the
+/// executor over `vad`.
+pub fn stt_leg(
+    stt: Arc<dyn Stt>,
+    adapter: &SttAdapter,
+    vad: Option<Arc<dyn Vad>>,
+    clock: Arc<dyn lk_agents_abi::Clock>,
+    conn: &lk_agents_abi::ApiConnectOptions,
+) -> Arc<dyn Stt> {
+    adapter(stt.with_conn_options(conn).unwrap_or(stt), vad, clock)
+}
+
+pub fn llm_leg(llm: Arc<dyn Llm>, conn: &lk_agents_abi::ApiConnectOptions) -> Arc<dyn Llm> {
+    llm.with_conn_options(&one_attempt(conn)).unwrap_or(llm)
+}
+
+/// One attempt per call, adapted by the executor when it has no duplex path.
+pub fn tts_leg(
+    tts: Arc<dyn Tts>,
+    adapter: &TtsAdapter,
+    clock: Arc<dyn lk_agents_abi::Clock>,
+    conn: &lk_agents_abi::ApiConnectOptions,
+) -> Arc<dyn Tts> {
+    adapter(tts.with_conn_options(&one_attempt(conn)).unwrap_or(tts), clock, *conn)
 }

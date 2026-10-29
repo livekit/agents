@@ -5,7 +5,7 @@
 //! discovered by `build.rs`; `check.rs` is how one reports; `authored.rs` builds the recordings
 //! their examples use. `search.rs` is the campaign and `fakes/` the controlled providers.
 //!
-//! What is under test is the voice core through the API its host calls (`SessionApi`), and
+//! What is under test is the voice core through the API its host calls (`VoiceSession`), and
 //! only that: the room is the fake room, every provider a fake. The fakes are dumb: they deliver what
 //! the case chose and record what they were given, and every event at a provider boundary -- a
 //! transcript, a detector's tick, a playout report, a socket drop -- is an input the case sends,

@@ -14,8 +14,6 @@
 
 from typing import Any
 
-from ..types import NotGivenOr
-
 class JobInfo:
     """The scalar half of a `livekit.agent.Job`."""
     @property
@@ -273,29 +271,6 @@ class GetCreditCardResult:
     def expiration_date(self) -> str: ...
 
 
-def rt_server_turn_detection(
-    *,
-    caps_turn_detection: bool,
-    can_disable_turn_detection: bool,
-    vad: bool,
-    turn_detection: str | None,
-    streaming_detector: bool,
-    interruption_given: bool,
-) -> bool: ...
-def resolve_interruption_detector(
-    *,
-    stt_aligned_transcript: bool | None,
-    stt_streaming: bool | None,
-    realtime: bool,
-    rt_server_turn_detection: bool,
-    has_vad: bool,
-    turn_detection: str | None,
-    allow_interruptions: bool,
-    agent_mode: Any | None,
-    session_mode: Any | None,
-    hosted: bool,
-    dev_mode: bool,
-) -> dict[str, Any]: ...
 WARM_TRANSFER_IDENTITY: str
 TWILIO_RINGING_TIMEOUT: float
 def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
@@ -313,19 +288,6 @@ SDK_SHUTDOWN_TIMEOUT_SECONDS: float
 UPLOAD_TIMEOUT_SECONDS: int
 REDACTED_EXCEPTION: str
 REDACTED_LOG_BODY: str
-
-
-class SessionOptions:
-    """`AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
-    configuration comes back as the dict `session.options` views.
-    """
-
-    def __init__(self, kwargs: Any) -> None: ...
-    def update(self, update: Any) -> None: ...
-    def set_aec_warmup(self, duration: float | None) -> None: ...
-    def resolved(self, legs: Any) -> dict[str, Any]: ...
-    @property
-    def turn_detection_explicit(self) -> bool: ...
 
 
 class SpeechHandle:
@@ -375,276 +337,6 @@ class GetDOBResult:
 
 class SessionClock:
     def __repr__(self) -> str: ...
-
-
-class VoiceSession:
-    """`voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
-    `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
-    borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-    """
-
-    def __init__(
-        self,
-        room: Any,
-        *,
-        instructions: Any | None = None,
-        dynamic_instructions: Any | None = None,
-        agent: str = ...,
-        agent_host: Any | None = None,
-        chat_ctx: list[ChatItem] | None = None,
-        storage: Any | None = None,
-        stt: Any | None = None,
-        vad: Any | None = None,
-        llm: Any | None = None,
-        realtime: Any | None = None,
-        tts: Any | None = None,
-        on_event: Any | None = None,
-        hooks: Any | None = None,
-        participant_identity: str | None = None,
-        auto_gain_control: bool = True,
-        input_sample_rate: int = 24000,
-        output_sample_rate: int = 24000,
-        options: SessionOptions | None = None,
-        agent_turn_handling: Any | None = None,
-        agent_min_consecutive_speech_delay: float | None = None,
-        agent_use_tts_aligned_transcript: bool | None = None,
-        turn_detector: Any | None = None,
-        interruption_detector: Any | None = None,
-        text_output: bool = True,
-        room_io_config: Any | None = None,
-        tools: list[Any] | None = None,
-        tools_host: Any | None = None,
-        voice_agent: Any | None = None,
-        transcription_node: Any | None = None,
-        realtime_audio_output_node: Any | None = None,
-        llm_node: Any | None = None,
-        tts_node: Any | None = None,
-        stt_node: Any | None = None,
-        host_audio_input: Any | None = None,
-        host_audio_output: Any | None = None,
-        host_video_input: Any | None = None,
-        video_sampler: tuple[float, float] | None = None,
-        host_video_sampler: bool = False,
-        host_transcription_output: Any | None = None,
-        using_default_vad: bool = False,
-        hook_bound: float | None = None,
-        max_unrecoverable_errors: int = 3,
-        stt_context: Any | None = None,
-        keyterm_llm: Any | None = None,
-        keyterm_tools: Any | None = None,
-        agent_expressive: NotGivenOr[Any] = ...,
-        session_id: str | None = None,
-        remote_session: Any | None = None,
-        console: Any | None = None,
-        job: Any | None = None,
-    ) -> None: ...
-    @property
-    def usage(self) -> list[dict[str, Any]]: ...
-    @property
-    def session_clock(self) -> SessionClock: ...
-    @property
-    def audio_input(self) -> RoomAudioInput | None: ...
-    @property
-    def video_input(self) -> RoomVideoInput | None: ...
-    def attach_recorder(self, recorder: Any | None) -> None: ...
-    async def wait_until_ready(self) -> None: ...
-    def update_models(
-        self,
-        *,
-        llm: NotGivenOr[Any | None] = ...,
-        tts: NotGivenOr[Any | None] = ...,
-        stt: NotGivenOr[Any | None] = ...,
-        vad: NotGivenOr[Any | None] = ...,
-        llm_node: Any | None = None,
-        tts_node: Any | None = None,
-        stt_node: Any | None = None,
-    ) -> None: ...
-    async def update_agent(
-        self,
-        *,
-        instructions: Any,
-        dynamic_instructions: Any | None = None,
-        agent: str,
-        agent_host: Any | None = None,
-        tools: list[Any] | None = None,
-        tools_host: Any | None = None,
-        voice_agent: Any,
-        chat_ctx: list[ChatItem] | None = None,
-        llm: NotGivenOr[Any | None] = ...,
-        tts: NotGivenOr[Any | None] = ...,
-        stt: NotGivenOr[Any | None] = ...,
-        vad: NotGivenOr[Any | None] = ...,
-        turn_handling: Any | None = None,
-        min_consecutive_speech_delay: float | None = None,
-        use_tts_aligned_transcript: bool | None = None,
-        expressive: NotGivenOr[Any] = ...,
-        llm_node: Any | None = None,
-        tts_node: Any | None = None,
-        stt_node: Any | None = None,
-        transcription_node: Any | None = None,
-        realtime_audio_output_node: Any | None = None,
-    ) -> bool: ...
-    async def run_voice_task(
-        self,
-        *,
-        instructions: Any,
-        dynamic_instructions: Any | None = None,
-        agent: str,
-        agent_host: Any | None = None,
-        tools: list[Any] | None = None,
-        tools_host: Any | None = None,
-        voice_agent: Any,
-        chat_ctx: list[ChatItem] | None = None,
-        llm: NotGivenOr[Any | None] = ...,
-        tts: NotGivenOr[Any | None] = ...,
-        stt: NotGivenOr[Any | None] = ...,
-        vad: NotGivenOr[Any | None] = ...,
-        turn_handling: Any | None = None,
-        min_consecutive_speech_delay: float | None = None,
-        use_tts_aligned_transcript: bool | None = None,
-        expressive: NotGivenOr[Any] = ...,
-        llm_node: Any | None = None,
-        tts_node: Any | None = None,
-        stt_node: Any | None = None,
-        transcription_node: Any | None = None,
-        realtime_audio_output_node: Any | None = None,
-        origin: str | None = None,
-        opens_with_reply: bool = False,
-    ) -> Any: ...
-    def set_audio_input(self, source: Any | None) -> None: ...
-    def set_video_input(self, source: Any | None) -> None: ...
-    def set_audio_output(self, sink: Any | None) -> None: ...
-    def set_transcription_output(self, sink: Any | None) -> None: ...
-    def update_tools(
-        self,
-        tools: list[Any] | None = None,
-        *,
-        tools_host: Any | None = None,
-        voice_agent: Any | None = None,
-    ) -> None: ...
-    def update_turn_options(self, update: Any) -> None: ...
-    def set_aec_warmup(self, duration: float | None) -> None: ...
-    def resolved_options(self) -> dict[str, Any] | None: ...
-    def push_video(self, content: ChatContent) -> bool: ...
-    def generate_reply(
-        self,
-        *,
-        user_input: str | None = None,
-        instructions: str | None = None,
-        allow_interruptions: bool | None = None,
-        tool_choice: Any | None = None,
-        chat_ctx: list[ChatItem] | None = None,
-        tools: list[Any] | None = None,
-        tools_host: Any | None = None,
-        voice_agent: Any | None = None,
-        on_enter: bool = False,
-        origin: str | None = None,
-    ) -> SpeechHandle: ...
-    def ivr_start(
-        self,
-        max_silence: float = 5.0,
-        tools: list[Any] | None = None,
-        *,
-        tools_host: Any | None = None,
-    ) -> None: ...
-    def attach_amd(
-        self,
-        cfg: Any,
-        llm: Any,
-        tools: Any | None = None,
-        stt: Any | None = None,
-        participant_identity: str | None = None,
-    ) -> None: ...
-    async def aclose(self, *, reason: str = "user_initiated", drain: bool = False) -> None: ...
-    def shutdown(self, *, drain: bool = True) -> None: ...
-    @property
-    def linked_participant(self) -> str | None: ...
-    async def set_participant(self, identity: str | None) -> None: ...
-    async def unset_participant(self) -> None: ...
-    def filler_start(
-        self,
-        call_id: str,
-        speech_id: str,
-        *,
-        delay: float,
-        interval: float | None = None,
-        max_steps: int | None = None,
-        text: str | None = None,
-        source: Any | None = None,
-    ) -> int: ...
-    def filler_stop(self, id: int) -> None: ...
-    def clear_user_turn(self) -> None: ...
-    def update_instructions(self, instructions: Any) -> None: ...
-    def set_io_enabled(self, leg: str, enabled: bool) -> None: ...
-    def tool_update(self, call_id: str, report: Any) -> None: ...
-    def update_chat_ctx(self, items: list[ChatItem]) -> None: ...
-    async def interrupt(self, *, force: bool = False) -> None: ...
-    async def drain(self) -> str | None: ...
-    async def dtmf_start(
-        self,
-        *,
-        num_digits: int,
-        ask_for_confirmation: bool = False,
-        dtmf_input_timeout: float = 4.0,
-        dtmf_stop_event: str = "#",
-    ) -> dict[str, Any]: ...
-    def dtmf_reply_running(self) -> bool: ...
-    def end_call(self, speech: SpeechHandle) -> None: ...
-    def dtmf_digit(self, digit: str) -> None: ...
-    def dtmf_stop(self) -> None: ...
-    async def wait_for_idle(self, *, hold: int | None = None) -> None: ...
-    async def wait_for_idle_and_hold(self, *, origin: str | None = None) -> int: ...
-    def release_idle_hold(self, hold: int) -> None: ...
-    def claim_user_turn(self) -> None: ...
-    def release_user_turn(self) -> None: ...
-    def run(
-        self,
-        *,
-        user_input: str | None = None,
-        origin: str | None = None,
-        host: Any | None = None,
-    ) -> None: ...
-    def say(
-        self,
-        text: str,
-        *,
-        allow_interruptions: bool | None = None,
-        add_to_chat_ctx: bool = True,
-        origin: str | None = None,
-    ) -> SpeechHandle: ...
-    def say_stream(
-        self,
-        text: Any,
-        *,
-        allow_interruptions: bool | None = None,
-        add_to_chat_ctx: bool = True,
-        origin: str | None = None,
-    ) -> SpeechHandle: ...
-    def say_audio(
-        self,
-        text: str,
-        audio: Any,
-        *,
-        allow_interruptions: bool | None = None,
-        add_to_chat_ctx: bool = True,
-        origin: str | None = None,
-    ) -> SpeechHandle: ...
-    def host_metrics(self, record: Any) -> None: ...
-    def ivr_final(self, text: str) -> None: ...
-    def ivr_close(self) -> None: ...
-    def amd_listening(self) -> bool: ...
-    def amd_execute(self) -> None: ...
-    def amd_close(self) -> None: ...
-    def keyterms(self) -> list[str] | None: ...
-    def agent_chat_ctx(self) -> list[ChatItem]: ...
-    def set_static_keyterms(self, terms: list[str]) -> None: ...
-    async def commit_user_turn(
-        self,
-        *,
-        transcript_timeout: float = 2.0,
-        stt_flush_duration: float = 2.0,
-        skip_reply: bool = False,
-    ) -> str: ...
 
 
 class ChatContent:
@@ -928,10 +620,6 @@ class ChatRequest:
     def extra(self) -> dict[str, Any] | None: ...
     @property
     def inference_class(self) -> str | None: ...
-
-
-class SessionClosing(RuntimeError):
-    """`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing."""
 
 
 class StaleHandle(RuntimeError):

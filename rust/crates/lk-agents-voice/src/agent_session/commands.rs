@@ -115,11 +115,7 @@ impl std::str::FromStr for Origin {
     }
 }
 
-/// A `commit_user_turn()` superseded by a newer one; the host's future is cancelled.
-#[lk_agents_abi::host(error(kind = "asyncio.CancelledError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("superseded by a newer commit_user_turn()")]
-pub struct CommitSuperseded;
+pub use lk_agents_abi::voice::session::{CommitSuperseded, IdleRefused};
 
 /// The id a caller gives a command it awaits; the answer carries it back. `None` where a command
 /// takes one means nobody awaits the answer.
@@ -461,20 +457,6 @@ impl From<crate::tool_executor::ToolReport> for ToolUpdate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HoldId(pub u64);
-
-/// `wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing.
-#[lk_agents_abi::host(error(kind = "SessionClosing", declare = "RuntimeError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
-pub enum IdleRefused {
-    /// The session closed (or its loop ended) first: the reference's `ActivityClosedError`.
-    Closing,
-}
-
-impl std::fmt::Display for IdleRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("session is closing")
-    }
-}
 
 #[derive(Debug)]
 pub enum SayText {

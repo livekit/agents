@@ -14,7 +14,10 @@ use crate::{
 /// leg below (what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
 /// `stt_node` are opened per request in place of the provider: one completion, one segment's
 /// synthesis, one recognition stream.
-#[crate::host(native(refused = "expected an agent's nodes (`_core.AgentNodes`)"))]
+#[crate::host(native(
+    refused = "expected an agent's nodes (`_core.AgentNodes`)",
+    class = "AgentNodes"
+))]
 pub trait NodeFactory: Send + Sync {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError>;
     fn audio_node(

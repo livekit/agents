@@ -354,6 +354,8 @@ pub struct Method {
     /// An `await` declared `fn(&self, ..) -> BoxFuture<'static, T>`: called synchronously at the
     /// host's call, its future awaited after.
     pub eager: bool,
+    /// An eager await declared `Result<BoxFuture<'static, T>, E>`: `E`, raised at the call.
+    pub refused: Option<ErrorDecl>,
     /// Release the host lock while executing this synchronous native operation.
     pub detach: bool,
     /// Override the class or function group fork guard for this entry.

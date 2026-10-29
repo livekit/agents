@@ -1,58 +1,5 @@
 use super::*;
-
-pub(crate) fn kwargs(turn_detection: Option<TurnDetectionKwarg>) -> SessionKwargs {
-    SessionKwargs {
-        turn_handling: Some(TurnHandlingKwargs { turn_detection, ..Default::default() }),
-        stt_context_options: HostValue::NotGiven,
-        max_tool_steps: 3,
-        use_tts_aligned_transcript: Maybe::NotGiven,
-        tts_text_transforms: Maybe::NotGiven,
-        min_consecutive_speech_delay: 0.0,
-        expressive: Default::default(),
-        aec_warmup_duration: Maybe::NotGiven,
-        ivr_detection: false,
-        user_away_timeout: Some(15.0),
-        transcription_timeout: None,
-        session_close_transcript_timeout: 2.0,
-        conn_options: Default::default(),
-    }
-}
-
-fn legs() -> SessionLegs {
-    SessionLegs { stt: true, vad: true, llm: true, tts: true, ..SessionLegs::none() }
-}
-
-// Catches: `session.options` before `start()` missing an `update_options` or the outbound-SIP
-// warmup switch, or a detector object passed to `update_options` changing the resolved mode.
-#[test]
-fn options_read_before_start_follow_every_update() {
-    let options = HostOptions::new(kwargs(None));
-    assert!(!options.turn_detection_explicit());
-    assert_eq!(options.resolved(legs()).aec_warmup_duration, Some(3.0));
-    options.set_aec_warmup(None);
-    assert_eq!(options.resolved(legs()).aec_warmup_duration, None);
-
-    let mode = |options: &HostOptions| options.resolved(legs()).turn_detection_mode;
-    options.update(UpdateKwargs {
-        turn_detection: Maybe::Given(TurnDetectionKwarg::Mode(TurnDetection::Manual)),
-        expressive: Maybe::Given(Expressive::default()),
-        ..Default::default()
-    });
-    assert_eq!(mode(&options).as_deref(), Some("manual"));
-    options.update(UpdateKwargs {
-        turn_detection: Maybe::Given(TurnDetectionKwarg::Detector { streaming: true }),
-        ..Default::default()
-    });
-    assert_eq!(mode(&options).as_deref(), Some("manual"));
-    options.update(UpdateKwargs {
-        turn_detection: Maybe::Given(TurnDetectionKwarg::Null),
-        ..Default::default()
-    });
-    assert_ne!(mode(&options).as_deref(), Some("manual"));
-
-    let named = HostOptions::new(kwargs(Some(TurnDetectionKwarg::Mode(TurnDetection::Vad))));
-    assert!(named.turn_detection_explicit());
-}
+use lk_agents_abi::voice::session_options::InterruptionGateFunctions;
 
 // Catches: a mode the legs cannot honour kept instead of falling as `Auto` does.
 #[test]
@@ -72,7 +19,7 @@ fn gate(
     hosted: bool,
     dev_mode: bool,
 ) -> InterruptionGateVerdict {
-    resolve_interruption_detector_for_host(
+    <InterruptionGateRules as InterruptionGateFunctions>::resolve_interruption_detector(
         Some(true),
         Some(true),
         false,
@@ -105,13 +52,13 @@ fn the_interruption_gate_names_its_reason() {
 
     // No aligned streaming STT: adaptive asked for is warned about, unasked is silent.
     let cannot = |asked| {
-        resolve_interruption_detector_for_host(
+        <InterruptionGateRules as InterruptionGateFunctions>::resolve_interruption_detector(
             None,
             None,
             false,
             false,
             true,
-            Some("vad"),
+            Some("vad".to_owned()),
             true,
             asked,
             None,
@@ -124,9 +71,10 @@ fn the_interruption_gate_names_its_reason() {
     assert_eq!(warned.level.as_deref(), Some("warning"));
     assert_eq!(cannot(None).level, None);
     // A realtime model detecting turns itself leaves nothing to gatekeep with.
-    let realtime = resolve_interruption_detector_for_host(
-        None, None, true, true, true, None, true, None, None, false, true,
-    );
+    let realtime =
+        <InterruptionGateRules as InterruptionGateFunctions>::resolve_interruption_detector(
+            None, None, true, true, true, None, true, None, None, false, true,
+        );
     assert_eq!(realtime.reason.as_deref(), Some("cannot_gatekeep"));
 }
 
@@ -134,8 +82,15 @@ fn the_interruption_gate_names_its_reason() {
 // from the driver's, so the server keeps detecting turns a local VAD was asked to own.
 #[test]
 fn the_server_keeps_turn_detection_unless_a_local_vad_takes_it() {
-    let rt = |caps, vad, mode, interruption| {
-        rt_server_turn_detection_for_host(caps, true, vad, mode, false, interruption)
+    let rt = |caps, vad, mode: Option<&str>, interruption| {
+        <InterruptionGateRules as InterruptionGateFunctions>::rt_server_turn_detection(
+            caps,
+            true,
+            vad,
+            mode.map(str::to_owned),
+            false,
+            interruption,
+        )
     };
     assert!(rt(true, true, None, false));
     assert!(!rt(true, true, Some("vad"), false));

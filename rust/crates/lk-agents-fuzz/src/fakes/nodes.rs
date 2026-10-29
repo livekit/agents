@@ -9,11 +9,11 @@ use std::sync::Arc;
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
+use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamSource, Stt,
     SttSink, SttSource, TimedString, Ts, Tts, TtsSink, TtsSource,
 };
-use lk_agents_voice::agent_session::api::NodeFactory;
 use lk_agents_voice::io::{RealtimeAudioNode, TextNode};
 
 use crate::record::NodeUse;

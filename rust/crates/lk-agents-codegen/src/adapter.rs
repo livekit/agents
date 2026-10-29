@@ -389,8 +389,10 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             ));
         }
         MethodKind::Await if m.eager => {
+            let refused =
+                m.refused.as_ref().map(|e| format!(".map_err({})?", e.with)).unwrap_or_default();
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = {call}(&self.0, {});\n        crate::host::future_into_py(py, async move {{\n            let out = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = {call}(&self.0, {}){refused};\n        crate::host::future_into_py(py, async move {{\n            let out = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", "out").replace("{py}", "py")
@@ -798,6 +800,12 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Shared { rust, .. } => {
             format!("<{rust} as ::lk_agents_abi::python::ArcClass>::shared(&{v})")
         }
+        // The host's async iterable, pulled in a copy of the context the call was made in.
+        Ty::HostSource(item) => format!(
+            "crate::host::capture_context({v}.py()).and_then(|context| crate::host::stream::HostStream::open({v}.py(), &{v}, &context, |o| Ok({}?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as {})",
+            from_object("o", item, path, at)?,
+            ty.rust()
+        ),
         Ty::Proxy { rust, declared: None, .. } => {
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v})")
         }
@@ -891,6 +899,10 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Handle { class, .. } => {
             (format!("crate::handles::{class}"), format!("crate::handles::{class}::from({{}})"))
         }
+        Ty::Shared { rust, .. } => (
+            "Bound<'py, PyAny>".into(),
+            format!("<{rust} as ::lk_agents_abi::python::ArcClass>::wrap({{py}}, {{}})?"),
+        ),
         Ty::Duplex { class, .. } => (
             class.clone(),
             format!(

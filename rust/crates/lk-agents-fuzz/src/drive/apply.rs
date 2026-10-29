@@ -7,15 +7,17 @@
 //! the driver never issued is a different test from the one the case asked for.
 use std::task::{Context, Poll, Waker};
 
+use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_abi::voice::session_options::UpdateKwargs;
 use lk_agents_test_support::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
-use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused};
+use lk_agents_voice::agent_session::{
+    Command, CommitSuperseded, DrainRefused, DtmfCommand, IvrCommand,
+};
 
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
-    Llm, Tts, frame, history, instructions, patch, session_stt, tool_specs, turn_detection,
-    vad_metrics,
+    Llm, Tts, frame, history, patch, session_stt, tool_specs, turn_detection, vad_metrics,
 };
 use super::*;
 mod wait;
@@ -390,7 +392,7 @@ impl Run {
                 };
                 api.filler_start(
                     call_id,
-                    &speech.to_string(),
+                    speech.to_string(),
                     secs(*delay),
                     interval.map(secs),
                     None,
@@ -463,7 +465,7 @@ impl Run {
                 })
                 .is_ok(),
             Input::UpdateInstructions { text: AgentText(text) } => {
-                api.update_instructions(instructions(text)).is_ok()
+                api.update_instructions(text.clone()).is_ok()
             }
             Input::UpdateTools { tools } => api
                 .update_tools(
@@ -493,7 +495,7 @@ impl Run {
                 )
                 .is_ok(),
             Input::SetIoEnabled { leg, enabled } => {
-                api.set_io_enabled(io_leg(*leg), *enabled).is_ok()
+                api.set_io_enabled(io_leg(*leg).into(), *enabled).is_ok()
             }
             Input::UpdateChatCtx { items, text: AgentText(text) } => {
                 api.update_chat_ctx(history(items, text)).is_ok()
@@ -569,19 +571,17 @@ impl Run {
                     }
                 })
                 .is_ok(),
-            Input::PushVideo {} => api
-                .host_push_video(lk_agents_abi::ChatContent::Image(ImageContent {
-                    id: "img_case".into(),
-                    image: ImageSource::Frame(MediaRef::new(self.record.now().seq, &self.refs)),
-                    inference_width: None,
-                    inference_height: None,
-                    inference_detail: Default::default(),
-                    mime_type: None,
-                }))
-                .unwrap_or(false),
+            Input::PushVideo {} => api.push_video(ImageContent {
+                id: "img_case".into(),
+                image: ImageSource::Frame(MediaRef::new(self.record.now().seq, &self.refs)),
+                inference_width: None,
+                inference_height: None,
+                inference_detail: Default::default(),
+                mime_type: None,
+            }),
             Input::Close { drain } => {
                 self.record.enter_phase(Phase::Closing);
-                let Ok(closing) = api.aclose("user_initiated", *drain) else { return false };
+                let Ok(closing) = api.aclose("user_initiated".into(), *drain) else { return false };
                 // `await session.aclose()`, the room io's teardown included.
                 let mut closing: BoxFuture<'static, ()> = Box::pin(closing);
                 // The first poll is what sends the close.
@@ -603,10 +603,12 @@ impl Run {
             Input::HostMetrics {} => api.host_metrics(vad_metrics()).is_ok(),
             Input::Ivr { input, silence, text: UserText(text) } => match input {
                 IvrInput::Start => api.ivr_start(secs(*silence), None, None).is_ok(),
-                IvrInput::SeedTranscript => api.ivr_final(text).is_ok(),
-                IvrInput::Close => api.ivr_close().is_ok(),
+                IvrInput::SeedTranscript => api.ivr_final(text.clone()).is_ok(),
+                IvrInput::Close => api.send(IvrCommand::Close).is_ok(),
             },
-            Input::SetStaticKeyterms { terms } => api.set_static_keyterms(terms.clone()).is_ok(),
+            Input::SetStaticKeyterms { terms } => {
+                api.send(Command::SetStaticKeyterms(terms.clone())).is_ok()
+            }
             Input::Dtmf { input, key, digits, confirm, timeout } => match input {
                 DtmfInput::Start => api
                     .dtmf_start(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
@@ -614,14 +616,16 @@ impl Run {
                         wait(Pending::reply(reply, |wire| Answer::Dtmf(dtmf_outcome(wire))))
                     })
                     .is_ok(),
-                DtmfInput::Digit => api.dtmf_digit(key.digit().to_owned()).is_ok(),
+                DtmfInput::Digit => {
+                    api.send(DtmfCommand::Digit { digit: key.digit().to_owned() }).is_ok()
+                }
                 DtmfInput::Stop => {
-                    api.dtmf_stop();
+                    let _ = api.send(DtmfCommand::Stop);
                     self.loop_runs()
                 }
             },
             Input::Recorder { attach } => {
-                api.host_attach_recorder(
+                api.attach_recorder(
                     attach.then(|| fakes::FakeRecorder::new(registry.clone()) as _),
                 );
                 self.loop_runs()
@@ -633,7 +637,7 @@ impl Run {
                 let args = frame(&self.setup, &self.legs, &registry, agent, &instructions, &tools);
                 let origin = format!("tool:{call_id}");
                 task_from = Some(call_id);
-                api.run_voice_task(args, Some(&origin), *reply)
+                api.run_voice_task(args, Some(origin), *reply)
                     .map(|reply| {
                         wait(Pending::reply(reply, |r| Answer::VoiceTask(r.map(|v| v.id()))))
                     })
@@ -841,7 +845,7 @@ impl Run {
                 {
                     let dtmf = tool_specs(&["send_dtmf_events".to_owned()]);
                     if api.ivr_start(5.0, Some(dtmf), None).is_err()
-                        || api.ivr_final(&verdict.transcript).is_err()
+                        || api.ivr_final(verdict.transcript.clone()).is_err()
                     {
                         return false;
                     }

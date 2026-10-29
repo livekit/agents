@@ -58,10 +58,3 @@ pub trait ConsoleIo: ConsolePort + Sized + 'static {
     #[host(new)]
     fn new(env: &Self::Env, addr: String) -> Self;
 }
-
-/// Starts a native voice session with its runtime-owned queue executor.
-#[crate::host(functions)]
-pub trait VoiceSessionExecution {
-    #[host(function, name = "_core_voice_session_start")]
-    async fn start(session: crate::HostRef) -> Result<(), crate::errors::ProviderError>;
-}

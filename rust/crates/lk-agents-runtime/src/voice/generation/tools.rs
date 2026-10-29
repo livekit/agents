@@ -165,7 +165,7 @@ impl HostedCall<'_> {
     async fn ask(
         &self,
         event: impl FnOnce(lk_agents_voice::agent_session::RequestId) -> GenEvent,
-    ) -> Result<ToolGo, lk_agents_voice::agent_session::api::Unanswered> {
+    ) -> Result<ToolGo, lk_agents_voice::agent_session::Unanswered> {
         let (call, next) = self.shared.open_call(Answer::tool_go);
         self.shared.report_awaited(event(call.id), call);
         next.await

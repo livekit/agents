@@ -30,25 +30,7 @@ pub enum VoiceTaskCommand {
     Cancel { call: RequestId },
 }
 
-/// Why `VoiceTask.run()` returned no value. A task ended under its awaiter cancels the await, as
-/// the close cancels a tool's body.
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, lk_agents_abi::Vocabulary)]
-pub enum VoiceTaskEnded {
-    #[error(
-        "VoiceTask.run() must be awaited inside a tool of the agent holding the floor of a live \
-         VoiceSession"
-    )]
-    NotInTool,
-    #[error("VoiceTask.run() cannot start while the session's agent is changing or draining")]
-    AgentChanging,
-    #[error("the session closed before the VoiceTask completed")]
-    #[host(kind = "asyncio.CancelledError")]
-    Closing,
-    #[error("the VoiceTask was cancelled before it completed")]
-    #[host(kind = "asyncio.CancelledError")]
-    Cancelled,
-}
+pub use lk_agents_abi::voice::session::VoiceTaskEnded;
 
 /// How a task ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

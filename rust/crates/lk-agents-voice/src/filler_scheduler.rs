@@ -21,7 +21,6 @@ pub enum FillerAction {
 
 /// What `_FillerScheduler.__init__` raises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[lk_agents_abi::host(error(kind = "ValueError"))]
 pub enum FillerError {
     #[error("delay must be non-negative")]
     NegativeDelay,

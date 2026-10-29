@@ -23,7 +23,7 @@ use lk_agents_abi::{
     AudioFrame, EotPrediction, LlmChunk, SpeechEvent, Ts, VadEvent, errors::ProviderError,
     utils::stream::StreamSink,
 };
-use lk_agents_voice::agent_session::SessionApi;
+use lk_agents_runtime::voice::VoiceSession;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
@@ -278,7 +278,7 @@ pub struct Registry {
     /// The voice provider is down: every synthesis fails at the open until it comes back.
     voice_down: std::sync::atomic::AtomicBool,
     /// The session, once it exists: what a tool body calls, as `RunContext` does.
-    session: std::sync::OnceLock<Arc<SessionApi>>,
+    session: std::sync::OnceLock<Arc<VoiceSession>>,
     /// When each synthesis with a voice latency will hand over its first audio, until it has: work
     /// the fake owes on its own clock, which no answer of the case's releases.
     voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
@@ -314,7 +314,7 @@ impl Registry {
     }
 
     /// The session was built: what running tool bodies call.
-    pub fn attach_session(&self, session: Arc<SessionApi>) {
+    pub fn attach_session(&self, session: Arc<VoiceSession>) {
         let _ = self.session.set(session);
     }
 
@@ -323,7 +323,7 @@ impl Registry {
         self.stamps.ts()
     }
 
-    pub(super) fn session(&self) -> Option<&Arc<SessionApi>> {
+    pub(super) fn session(&self) -> Option<&Arc<VoiceSession>> {
         self.session.get()
     }
 

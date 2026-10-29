@@ -5,20 +5,62 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterable, Mapping, Sequence
+from typing import Any
 
 from datetime import date
+from livekit.agents import VAD
+from livekit.agents._core import (
+    AgentNodes,
+    ConsoleIo,
+    DuplexRealtimeModel,
+    HostRealtimeModel,
+    InterruptionDetector,
+    NativeRealtimeModel,
+    RealtimeFallbackModel,
+    SessionRecorder,
+    VoiceAgent,
+    _core_VoiceStore,
+)
+from livekit.agents._core_view import TurnDetector
 from livekit.agents.beta.workflows import _TransferHost
+from livekit.agents.job import JobContext
+from livekit.agents.llm import LLM
+from livekit.agents.stt import STT
+from livekit.agents.tts import TTS
+from livekit.agents.voice.agent_session import (
+    VoiceSession as HostVoiceSession,
+    _AgentHooks,
+    _DynamicInstructions,
+)
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
+from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
+from livekit.agents.voice.remote_session import SessionPort
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
+from livekit.rtc import AudioFrame
 
-from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, _core_RoomSession
+from .._core import (
+    ChatContent,
+    ChatItem,
+    PlaybackInfo,
+    PlaybackTracker,
+    RoomAudioInput,
+    RoomEventBus,
+    RoomVideoInput,
+    SpeechHandle,
+    _core_RoomSession,
+)
 from ..types import NotGivenOr
 from .amd import AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
+from .keyterms import STTContextOptions
+from .session_options import SessionKwargs, SessionLegs, UpdateKwargs
 from .session_wire import StartPlan
+from .tool_report import ToolReport
+from .turn import TurnHandlingOptions
+from .voice_session import UpdateAgentArgs
 from .workflows import InstructionsArg
 
 def amd_constants() -> AmdConstants:
@@ -230,9 +272,370 @@ class PlayoutLedger:
     def snapshot(self, queued: float) -> PlaybackInfo: ...
     def settle(self) -> PlaybackInfo: ...
 
+class SessionOptions:
+    """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
+    and the session layer they became (plus every `update_options` so far).
+    """
+    def __init__(self, kwargs: SessionKwargs) -> None: ...
+    def update(self, update: UpdateKwargs) -> None:
+        """`update_options(..)` before the session runs, on the same `merge` the driver uses."""
+    def resolved(self, legs: SessionLegs) -> dict[str, object]:
+        """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
+        before `start()`.
+        """
+
+class VoiceSession:
+    """`voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,
+    closed at `aclose()`; every other method is one command to its loop.
+    """
+    def __init__(
+        self,
+        room: _core_RoomSession,
+        *,
+        instructions: str | None = None,
+        dynamic_instructions: _DynamicInstructions | None = None,
+        agent: str = "",
+        agent_host: object | None = None,
+        chat_ctx: Sequence[ChatItem] | None = None,
+        storage: _core_VoiceStore | None = None,
+        stt: STT[Any] | None = None,
+        vad: VAD[Any] | None = None,
+        llm: LLM[Any] | None = None,
+        realtime: DuplexRealtimeModel | HostRealtimeModel | NativeRealtimeModel | RealtimeFallbackModel | None = None,
+        tts: TTS[Any] | None = None,
+        on_event: HostVoiceSession | None = None,
+        hooks: _AgentHooks | None = None,
+        participant_identity: str | None = None,
+        auto_gain_control: bool = True,
+        input_sample_rate: int = 24000,
+        output_sample_rate: int = 24000,
+        options: SessionOptions | None = None,
+        agent_turn_handling: TurnHandlingOptions | None = None,
+        agent_min_consecutive_speech_delay: float | None = None,
+        agent_use_tts_aligned_transcript: bool | None = None,
+        turn_detector: TurnDetector | None = None,
+        interruption_detector: InterruptionDetector | None = None,
+        text_output: bool = True,
+        room_io_config: dict[str, object] | None = None,
+        tools: Sequence[dict[str, object]] | None = None,
+        tools_host: object | None = None,
+        voice_agent: VoiceAgent | None = None,
+        transcription_node: AgentNodes | None = None,
+        realtime_audio_output_node: AgentNodes | None = None,
+        llm_node: AgentNodes | None = None,
+        tts_node: AgentNodes | None = None,
+        stt_node: AgentNodes | None = None,
+        host_audio_input: AudioInput | None = None,
+        host_audio_output: AudioOutput | None = None,
+        host_video_input: VideoInput | None = None,
+        video_sampler: tuple[float, float] | None = None,
+        host_video_sampler: bool = False,
+        host_transcription_output: TextOutput | None = None,
+        using_default_vad: bool = False,
+        hook_bound: float | None = None,
+        max_unrecoverable_errors: int = 3,
+        stt_context: STTContextOptions | None = None,
+        keyterm_llm: LLM[Any] | None = None,
+        keyterm_tools: object | None = None,
+        agent_expressive: NotGivenOr[bool | dict[str, object] | None] = ...,
+        session_id: str | None = None,
+        remote_session: SessionPort | None = None,
+        console: ConsoleIo | None = None,
+        job: JobContext | None = None,
+    ) -> None:
+        """Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
+        RTC attachment. `on_event` receives each session event, on the calling loop.
+        """
+    async def start(self) -> None:
+        """Open the providers and run the loop beside the host event drain. Resolves once the host
+        has handled the opening events.
+        """
+    @property
+    def usage(self) -> list[dict[str, object]]:
+        """`session.usage.model_usage`: the usage of every model the session was billed for."""
+    @property
+    def audio_input(self) -> RoomAudioInput | None:
+        """The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
+        handle each call over the same leg; safe before or after `start()`.
+        """
+    @property
+    def video_input(self) -> RoomVideoInput | None:
+        """The room's video leg, when `RoomIoConfig(video_input=True)` asked for one, else `None`."""
+    def attach_recorder(self, recorder: SessionRecorder | None) -> None:
+        """Record the session into `recorder`; `None` detaches. Safe before or after `start()`; the
+        file's `finish` stays the host's.
+        """
+    def update_models(
+        self,
+        *,
+        llm: NotGivenOr[LLM[Any] | None] = ...,
+        tts: NotGivenOr[TTS[Any] | None] = ...,
+        stt: NotGivenOr[STT[Any] | None] = ...,
+        vad: NotGivenOr[VAD[Any] | None] = ...,
+        llm_node: AgentNodes | None = None,
+        tts_node: AgentNodes | None = None,
+        stt_node: AgentNodes | None = None,
+    ) -> None:
+        """`Agent.update_options(stt=.., vad=.., llm=.., tts=..)` on a running agent: an in-place
+        provider swap, not a handoff. Each leg is three-state; a given one goes under the agent's
+        node when it overrides one.
+        """
+    async def update_agent(self, frame: UpdateAgentArgs) -> bool:
+        """The handoff: replace the agent, keep the session. Resolves `True` once the agent is
+        installed (`on_enter` issued, not returned), `False` when it was refused (closing).
+        """
+    async def run_voice_task(
+        self,
+        frame: UpdateAgentArgs,
+        *,
+        origin: str | None = None,
+        opens_with_reply: bool = False,
+    ) -> object:
+        """`VoiceTask.run()`: the task's agent, sent from inside a tool (`origin` is its
+        `"tool:<call_id>"`). The agent holds the floor until one of its tools completes with a
+        value the host validated, which this resolves to; the parent comes back without its hooks.
+        A cancelled await ends the task, and every task it started, and puts the parent back.
+        """
+    def set_audio_input(self, source: AudioInput | None) -> None:
+        """`session.input.audio = ..` after `start()`; `None` detaches."""
+    def set_video_input(self, source: VideoInput | None) -> None:
+        """`session.input.video = ..` after `start()`: the video pump reads the new source, or stops
+        on `None`.
+        """
+    def set_audio_output(self, sink: AudioOutput | None) -> None:
+        """Select the destination for subsequent output segments. Current work retains its admitted
+        binding, including when the same endpoint object is selected again.
+        """
+    def set_transcription_output(self, sink: TextOutput | None) -> None:
+        """`session.output.transcription = ..` after `start()`: the next reply forwards into the new
+        leg; one in flight keeps the leg it started with.
+        """
+    def update_tools(
+        self,
+        tools: Sequence[dict[str, object]] | None,
+        *,
+        tools_host: object | None,
+        voice_agent: VoiceAgent | None,
+    ) -> None:
+        """`Agent.update_tools()` on a running agent. All three parts go together: the agent hosts
+        its tools.
+        """
+    def update_turn_options(self, update: UpdateKwargs) -> None:
+        """`AgentSession.update_options(..)` on a running session: merged into its session layer and
+        re-resolved; `expressive` reaches the next reply, `keyterms` replace the user's list. A turn
+        detector object is refused: swapping the detector of a running session is not ported.
+        """
+    def resolved_options(self) -> dict[str, object] | None:
+        """The core's accepted configuration; `None` for a session built without options."""
+    def push_video(self, content: ChatContent) -> bool:
+        """`AgentActivity.push_video(frame)`: one sampled frame, on its way to the model. `False`
+        when the loop did not take it (not started or closed); a non-image part raises.
+        """
+    def generate_reply(
+        self,
+        *,
+        user_input: str | None = None,
+        instructions: str | None = None,
+        allow_interruptions: bool | None = None,
+        tool_choice: str | dict[str, object] | None = None,
+        chat_ctx: Sequence[ChatItem] | None = None,
+        tools: Sequence[dict[str, object]] | None = None,
+        tools_host: object | None = None,
+        voice_agent: VoiceAgent | None = None,
+        on_enter: bool = False,
+        origin: str | None = None,
+    ) -> SpeechHandle:
+        """`AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
+        apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
+        """
+    def ivr_start(
+        self,
+        max_silence: float = 5.0,
+        tools: Sequence[dict[str, object]] | None = None,
+        *,
+        tools_host: object | None = None,
+    ) -> None:
+        """`IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
+        `IVRActivity.tools`. A second start is journalled, not run.
+        """
+    def attach_amd(
+        self,
+        cfg: dict[str, object],
+        llm: LLM[Any],
+        tools: object | None,
+        stt: STT[Any] | None,
+        participant_identity: str | None,
+    ) -> None:
+        """`AMD._run`: the answering-machine detector over its config, classifier LLM, tools and
+        optional STT. It listens once the callee answers in the session's room; the verdict comes
+        back as `amd_result`. A second attach is refused.
+        """
+    async def aclose(self, *, reason: str = "user_initiated", drain: bool = False) -> None:
+        """`_aclose_impl`: the hooks' `closing`, the close itself, the turn-detector stream, the
+        remote session host, the room io, then the session's toolsets. Idempotent: a second call
+        waits for the first.
+        """
+    def shutdown(self, *, drain: bool = True) -> None:
+        """`AgentSession.shutdown(drain=)`: `aclose` without waiting for it."""
+    async def set_participant(self, identity: str | None) -> None:
+        """`RoomIO.set_participant(identity)`: point the audio input and the user transcript at
+        someone else. `None` unlinks.
+        """
+    def filler_start(
+        self,
+        call_id: str,
+        speech_id: str,
+        *,
+        delay: float,
+        interval: float | None = None,
+        max_steps: int | None = None,
+        text: str | None = None,
+        source: object | None = None,
+    ) -> int:
+        """`RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s
+        idle say `text` (or ask `source`), then repeat every `interval`. Returns the scope's number.
+        """
+    def filler_stop(self, id: int) -> None:
+        """`with_filler`'s exit."""
+    def clear_user_turn(self) -> None:
+        """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
+    def update_instructions(self, instructions: str) -> None:
+        """`Agent.update_instructions()` on the agent that is already driving."""
+    def set_io_enabled(self, leg: str, enabled: bool) -> None:
+        """`input.set_audio_enabled` / `output.set_audio_enabled` /
+        `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
+        `"transcription"`.
+        """
+    def tool_update(self, call_id: str, report: ToolReport) -> None:
+        """`RunContext.update()` after the first (an `update` outcome), or a detached tool's end."""
+    def update_chat_ctx(self, items: Sequence[ChatItem]) -> None:
+        """`Agent.update_chat_ctx()` on a running agent: replace the context."""
+    async def interrupt(self, *, force: bool = False) -> None:
+        """`AgentSession.interrupt(force=)`: the current and queued speeches up to the first
+        uninterruptible; answers when they are done, or with the refusal.
+        """
+    async def drain(self) -> str | None:
+        """`AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
+        speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
+        """
+    def end_call(self, speech_id: str) -> None:
+        """`EndCallTool`: close the session once the tool's speech (`speech_id`) is done, or once a
+        realtime model's own reply to the tool result is.
+        """
+    async def wait_for_idle(self, *, hold: int | None = None) -> None:
+        """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
+    async def wait_for_idle_and_hold(self, *, origin: str | None = None) -> int:
+        """`RunContext.foreground()`: wait for idle, then hold the floor until `release_idle_hold`.
+        Answers the hold's id.
+        """
+    def release_idle_hold(self, hold: int) -> None:
+        """`_wait_for_idle_and_hold`'s exit. A hold the loop no longer has is a no-op."""
+    def claim_user_turn(self) -> None:
+        """`AgentSession._claim_user_turn()`'s enter: pins the user state to `speaking` and holds
+        `wait_for_idle` open. Reentrant.
+        """
+    def release_user_turn(self) -> None:
+        """`_claim_user_turn()`'s exit: the last release re-derives the user state."""
+    def run(
+        self,
+        *,
+        user_input: str | None = None,
+        origin: str | None = None,
+        host: object | None = None,
+    ) -> None:
+        """`VoiceSession._run(user_input=)`, answered on the stream: every run event carries `host`,
+        the host's run recorder.
+        """
+    def say(
+        self,
+        text: str,
+        *,
+        allow_interruptions: bool | None = None,
+        add_to_chat_ctx: bool = True,
+        origin: str | None = None,
+    ) -> SpeechHandle:
+        """`AgentSession.say(text)`: speak these words, no LLM. The handle is the promise the loop
+        fulfils.
+        """
+    def say_stream(
+        self,
+        text: AsyncIterable[str],
+        *,
+        allow_interruptions: bool | None = None,
+        add_to_chat_ctx: bool = True,
+        origin: str | None = None,
+    ) -> SpeechHandle:
+        """`AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end."""
+    def say_audio(
+        self,
+        text: str,
+        audio: AsyncIterable[AudioFrame],
+        *,
+        allow_interruptions: bool | None = None,
+        add_to_chat_ctx: bool = True,
+        origin: str | None = None,
+    ) -> SpeechHandle:
+        """`AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
+        committed.
+        """
+    def ivr_final(self, text: str) -> None:
+        """`_start_ivr_detection(transcript)`: a final the navigator counts as if heard."""
+    def amd_listening(self) -> bool:
+        """`AMD.started`: the detector listens (the callee answered, no verdict out yet)."""
+    def amd_execute(self) -> None:
+        """`AMD.execute()`'s interrupt and `_resume_authorization()`, after its IVR hand-off."""
+    def amd_close(self) -> None:
+        """`AMD.aclose()`. Idempotent."""
+    def keyterms(self) -> list[str] | None:
+        """`session.keyterms`: the list the recogniser was last handed; `None` before any push."""
+    def agent_chat_ctx(self) -> list[ChatItem]:
+        """`Agent.chat_ctx` of the driving agent; empty before `start()`."""
+    async def commit_user_turn(
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
+    ) -> str:
+        """`AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
+        transcript. Runs whether or not awaited; a newer commit supersedes it.
+        """
+
 def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -> StartPlan:
     """The job's recording and whether this session is its primary (records) and hosts the
     remote session protocol; `another_session_is_primary` is the job's claim already taken.
+    """
+
+def rt_server_turn_detection(
+    *,
+    caps_turn_detection: bool,
+    can_disable_turn_detection: bool,
+    vad: bool,
+    turn_detection: str | None,
+    streaming_detector: bool,
+    interruption_given: bool,
+) -> bool:
+    """`AgentActivity._rt_turn_detection_enabled` from the host's reads. `turn_detection` is the
+    explicit mode string (agent over session), `None` when unsaid or a detector object;
+    `streaming_detector` says it was a streaming detector.
+    """
+
+def resolve_interruption_detector(
+    *,
+    stt_aligned_transcript: bool | None,
+    stt_streaming: bool | None,
+    realtime: bool,
+    rt_server_turn_detection: bool,
+    has_vad: bool,
+    turn_detection: str | None,
+    allow_interruptions: bool,
+    agent_mode: str | None,
+    session_mode: str | None,
+    hosted: bool,
+    dev_mode: bool,
+) -> dict[str, object]:
+    """`AgentActivity._resolve_interruption_detection`: whether to build the detector, and if not,
+    why. Constructing it stays the host's.
     """
 
 def validate_card_number(card_number: str) -> bool:
@@ -306,8 +709,6 @@ class WarmTransfer:
 class ConsoleIo:
     """`lk agent console`'s socket, opened when the session starts."""
     def __init__(self, addr: str) -> None: ...
-
-async def _core_voice_session_start(session: object) -> None: ...
 
 def _core_create_room_session(room: Room | None) -> _core_RoomSession: ...
 

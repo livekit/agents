@@ -3,7 +3,7 @@
 use super::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig};
 use lk_agents_abi::voice::rtc::TrackPublishOptions;
 
-pub(crate) fn resolve_config(
+pub fn resolve_config(
     config: Option<RoomIoConfig>,
     participant_identity: Option<String>,
     input_sample_rate: u32,

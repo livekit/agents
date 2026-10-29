@@ -524,7 +524,8 @@ type ReportRecordsImpl = <crate::Selected as super::Implementations>::ReportReco
 /// Whether recording is enabled for the job.
 #[pyfunction]
 #[pyo3(signature = (options))]
-pub fn recording_enabled(options: ::lk_agents_abi::telemetry::report::RecordingOptions) -> PyResult<bool> {
+pub fn recording_enabled(options: Bound<'_, PyAny>) -> PyResult<bool> {
+    let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
     let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::recording_enabled(options);
     Ok(out)
 }
@@ -534,7 +535,8 @@ pub fn recording_enabled(options: ::lk_agents_abi::telemetry::report::RecordingO
 /// ``disabled`` or the transcript is not recorded.
 #[pyfunction]
 #[pyo3(signature = (disabled, options, item, projected, capture_content, identity))]
-pub fn _core_session_chat_record<'py>(py: Python<'py>, disabled: bool, options: ::lk_agents_abi::telemetry::report::RecordingOptions, item: ::lk_agents_abi::ChatItem, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+pub fn _core_session_chat_record<'py>(py: Python<'py>, disabled: bool, options: Bound<'_, PyAny>, item: ::lk_agents_abi::ChatItem, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
     let projected = ::lk_agents_abi::python::value_from_py(&projected, "projected")?;
     let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity);
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::log_record_wire_to_py(py, value)?)).transpose()?)
@@ -570,8 +572,9 @@ pub struct _core_SessionReportProjection(::std::sync::Arc<_core_SessionReportPro
 impl _core_SessionReportProjection {
     #[new]
     #[pyo3(signature = (capture_content, options, project_redaction))]
-    fn new(capture_content: bool, options: ::lk_agents_abi::telemetry::report::RecordingOptions, project_redaction: bool) -> PyResult<_core_SessionReportProjection> {
+    fn new(capture_content: bool, options: Bound<'_, PyAny>, project_redaction: bool) -> PyResult<_core_SessionReportProjection> {
         ::lk_agents_abi::python::check_pid()?;
+        let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::new(capture_content, &options, project_redaction);
         Ok(_core_SessionReportProjection(::std::sync::Arc::new(out)))
     }

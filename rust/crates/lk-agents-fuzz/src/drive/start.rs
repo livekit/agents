@@ -5,6 +5,8 @@
 //! share: an agent, a history, a patch, built from the case's terms.
 use super::*;
 use lk_agents_abi::voice::console::ConsolePort;
+use lk_agents_abi::voice::room_owner::RoomSession;
+use lk_agents_abi::voice::session::VoiceSession as _;
 
 impl Run {
     /// Build a session through the host's API, over the fake room and the fakes, and start it.
@@ -62,7 +64,9 @@ impl Run {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
         });
-        let options = HostOptions::new(session_kwargs(setup));
+        let options = <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(
+            session_kwargs(setup),
+        );
         let room_io = RoomIoConfig {
             close_on_disconnect: setup.room.is_some_and(|r| r.close_on_disconnect),
             delete_room_on_close: setup.room.is_some_and(|r| r.delete_room_on_close),
@@ -120,9 +124,14 @@ impl Run {
             ))
         });
         let api = Arc::new(
-            SessionApi::host_new(
-                Arc::new(FixedRoom { rtc: room.clone(), time: time.clone(), pool: None }),
-                Some(instructions(&setup.instructions)),
+            VoiceSession::assemble(
+                tasks.clone(),
+                RoomSession(Arc::new(FixedRoom {
+                    rtc: room.clone(),
+                    time: time.clone(),
+                    pool: None,
+                })),
+                Some(setup.instructions.clone()),
                 None,
                 OPENING_AGENT.into(),
                 None,
@@ -167,7 +176,7 @@ impl Run {
                 true,
                 SAMPLE_RATE,
                 SAMPLE_RATE,
-                Some(&options),
+                Some(options),
                 None,
                 None,
                 setup.agent_aligned_transcript,
@@ -244,7 +253,6 @@ impl Run {
                     io.clone() as Arc<dyn lk_agents_abi::voice::console::ConsolePort>
                 }),
                 None,
-                tasks.clone(),
             )
             .expect("the configured voice fixture is valid"),
         );
@@ -286,11 +294,11 @@ impl Run {
             });
             api.probe(Probe { step, host_event });
         }
-        api.start(
-            Box::new(super::executor::Handover::new(cores_tx, time.clone(), tasks.clone())),
-            Box::new(lk_agents_runtime::voice::remote_session::hosting),
-            lk_agents_runtime::voice::amd::spawn,
-        )
+        api.start_with(Box::new(super::executor::Handover::new(
+            cores_tx,
+            time.clone(),
+            tasks.clone(),
+        )))
         .expect("a new session starts")
         .await
         .expect("the session started");
@@ -322,7 +330,10 @@ impl Run {
                 ivr_detection: amd.ivr_detection,
                 ..AmdConfigKwargs::default()
             };
-            api.host_attach_amd(cfg, llm, None, stt, None).expect("attach the AMD");
+            lk_agents_abi::voice::session::VoiceSession::attach_amd(
+                &*api, cfg, llm, None, stt, None,
+            )
+            .expect("attach the AMD");
         }
         let mut run = Run {
             api,
@@ -564,10 +575,6 @@ pub(super) type VadLeg = dyn lk_agents_abi::Vad;
 pub(super) type EotDet = dyn lk_agents_abi::EotDetector;
 pub(super) type VideoIn = dyn lk_agents_abi::voice::io::VideoInput;
 
-pub(super) fn instructions(common: &str) -> Instructions {
-    Instructions { common: common.into(), audio: None, text: None }
-}
-
 /// The tools advertised to the model; each is run by the controlled tool runner.
 pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
     tools.iter().map(|name| fakes::tools::tool_spec(name)).collect()
@@ -677,7 +684,7 @@ fn plain_frame(
     tools: &[String],
 ) -> UpdateAgentArgs {
     UpdateAgentArgs {
-        instructions: self::instructions(instructions),
+        instructions: instructions.into(),
         dynamic_instructions: None,
         agent: agent.into(),
         agent_host: None,

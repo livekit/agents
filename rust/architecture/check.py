@@ -483,7 +483,7 @@ def check_boundaries() -> int:
         errors.extend(ratchet(actual, baseline))
         errors.extend(check_history(root, path, baseline))
         print(f"{name}: {len(actual)} existing identities; baseline {len(baseline)}")
-    for name in ("export-placement", "export-metadata", "in-place-proxies"):
+    for name in ("export-placement", "in-place-proxies"):
         path = f"rust/crates/lk-agents-codegen/{name}-baseline.json"
         errors.extend(check_history(root, path, json.loads((root / path).read_text())))
     for error in errors:

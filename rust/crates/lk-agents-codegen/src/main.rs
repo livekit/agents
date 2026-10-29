@@ -89,15 +89,12 @@ const SOURCES: &[&str] = &[
 /// `#[host(export ..)]` / `#[host(object ..)]` files. Any core crate may appear.
 const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/voice/background_audio.rs",
-    "rust/crates/lk-agents-voice/src/agent_activity/options.rs",
     "rust/crates/lk-agents-voice/src/speech_handle.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
     "rust/crates/lk-agents-abi/src/utils/clock.rs",
-    "rust/crates/lk-agents-voice/src/agent_session/api.rs",
-    "rust/crates/lk-agents-voice/src/agent_session/api/host.rs",
     "rust/crates/lk-agents-abi/src/worker/job.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/mood.rs",
     "rust/crates/lk-agents-abi/src/llm/chat_context.rs",
@@ -114,7 +111,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/realtime.rs",
     "rust/crates/lk-agents-abi/src/tokenize/language/code.rs",
     "rust/crates/lk-agents-abi/src/media/images.rs",
-    "rust/crates/lk-agents-voice/src/agent_session/commands.rs",
     "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
     "rust/crates/lk-agents-abi/src/telemetry/policy.rs",
 ];
@@ -385,8 +381,7 @@ fn unlisted_exports(root: &Path) -> Result<(), String> {
         }
         let Ok(text) = std::fs::read_to_string(root.join(path)) else { continue };
         let exports = text.lines().map(str::trim_start).any(|l| {
-            l.starts_with("#[")
-                && ["host(export", "host(object("].iter().any(|h| l.contains(h))
+            l.starts_with("#[") && ["host(export", "host(object("].iter().any(|h| l.contains(h))
         });
         if exports {
             unlisted.push(path);

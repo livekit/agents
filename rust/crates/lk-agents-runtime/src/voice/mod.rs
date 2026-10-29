@@ -14,6 +14,7 @@ mod keyterm_detection;
 mod legs;
 mod recorder;
 pub mod remote_session;
+pub mod session;
 mod storage;
 pub mod workflows;
 
@@ -32,11 +33,14 @@ use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEff
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
 
-pub use lk_agents_voice::agent_session::{SessionApi, SessionStartPlans};
+pub use lk_agents_voice::agent_activity::options::InterruptionGateRules;
+pub use lk_agents_voice::agent_session::lifecycle::SessionStartPlans;
 pub use lk_agents_voice::amd::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
+pub use lk_agents_voice::speech_handle::SpeechHandle;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 pub use lk_agents_voice::workflows::WorkflowRules;
+pub use session::{SessionOptions, VoiceSession};
 
 pub struct Runtime {
     pub driver: Driver,
@@ -487,6 +491,3 @@ async fn read_audio(
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod api_tests;

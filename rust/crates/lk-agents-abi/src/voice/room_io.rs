@@ -20,10 +20,7 @@ const _: () = ();
 // `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_core()`,
 // writes them all, and a silent default once turned AGC off.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    name = "AudioInputOptions"
-)]
+#[python(dataclass, name = "AudioInputOptions")]
 #[binding(extract, from_items)]
 pub struct AudioInputConfig {
     // 24 kHz, as in the reference; the host's stream converts once.
@@ -92,14 +89,17 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioOutputConfig {
         const OWNER: &str = "AudioOutputConfigFromPy";
         let obj = &*obj;
         let name = match obj.get_item("track_name") {
-            Ok(v) => v.extract::<String>().map_err(|e| field_error(obj.py(), e, OWNER, "track_name"))?,
+            Ok(v) => {
+                v.extract::<String>().map_err(|e| field_error(obj.py(), e, OWNER, "track_name"))?
+            }
             Err(_) => TrackPublishOptions::default().name,
         };
         Ok(AudioOutputConfig {
             publish: TrackPublishOptions {
                 name,
                 source: item_with(obj, OWNER, "track_source", |v| {
-                    TrackSource::try_from(v.extract::<i32>()?).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                    TrackSource::try_from(v.extract::<i32>()?)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
                 })?,
                 sample_rate: item(obj, OWNER, "sample_rate")?,
                 num_channels: item(obj, OWNER, "num_channels")?,
@@ -157,10 +157,7 @@ impl Default for TextOutputConfig {
 
 // What a `NoiseCancellationSelector` is called with, host-side.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    name = "NoiseCancellationParams"
-)]
+#[python(dataclass, name = "NoiseCancellationParams")]
 pub struct NoiseCancellationParams {
     #[python(ty = "rtc.Participant", import = "livekit:rtc")]
     pub participant: crate::HostRef,
@@ -170,10 +167,7 @@ pub struct NoiseCancellationParams {
 
 // `_default_text_input_cb` is host behaviour (`voice/room_io.py`).
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    name = "TextInputOptions"
-)]
+#[python(dataclass, name = "TextInputOptions")]
 pub struct TextInputOptions {
     #[python(
         ty = "TextInputCallback",
@@ -185,19 +179,13 @@ pub struct TextInputOptions {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    name = "VideoInputOptions"
-)]
+#[python(dataclass, name = "VideoInputOptions")]
 pub struct VideoInputOptions {}
 
 // `AudioOutputOptions` as written, before the host flattens it. Only `source` of
 // `rtc.TrackPublishOptions` crosses.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    name = "AudioOutputOptions"
-)]
+#[python(dataclass, name = "AudioOutputOptions")]
 pub struct AudioOutputOptions {
     #[python(default = "24000")]
     pub sample_rate: u32,
@@ -220,6 +208,7 @@ pub struct AudioOutputOptions {
 }
 
 /// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off.
+#[crate::host(handwritten(extract, host = "dict[str, object]"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoomIoConfig {
     /// `None` links to the first acceptable one.
@@ -248,7 +237,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RoomIoConfig {
         const OWNER: &str = "RoomIoConfigFromPy";
         let obj = &*obj;
         Ok(RoomIoConfig {
-            participant_identity: item_with(obj, OWNER, "participant_identity", |v| Ok(v.extract::<Option<String>>()?.map(ParticipantIdentity)))?,
+            participant_identity: item_with(obj, OWNER, "participant_identity", |v| {
+                Ok(v.extract::<Option<String>>()?.map(ParticipantIdentity))
+            })?,
             participant_kinds: item_with(obj, OWNER, "participant_kinds", |v| {
                 v.extract::<Vec<i32>>()?
                     .into_iter()

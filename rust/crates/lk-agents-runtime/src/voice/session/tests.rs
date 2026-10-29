@@ -1,12 +1,15 @@
-//! `SessionApi` over a fake room: the host's `start()` / `aclose()` pair without a host.
+//! `VoiceSession` over a fake room: the host's `start()` / `aclose()` pair without a host.
 
+mod hooks;
 mod playback;
 
 use super::*;
 use crate::room_io::FixedRoom;
+use crate::voice::{Executor, remote_session};
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::CloseReason;
+use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::HandoffRefused;
 use lk_agents_voice::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
@@ -53,14 +56,14 @@ fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRo
 
 /// A session and the steps it journals.
 struct Recorded {
-    api: SessionApi,
+    api: VoiceSession,
 
     steps: Arc<Mutex<Vec<Step>>>,
 }
 
 impl std::ops::Deref for Recorded {
-    type Target = SessionApi;
-    fn deref(&self) -> &SessionApi {
+    type Target = VoiceSession;
+    fn deref(&self) -> &VoiceSession {
         &self.api
     }
 }
@@ -81,7 +84,7 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> Recorded {
 }
 
 /// A room-only session, every provider left out, through the host's constructor.
-fn unobserved(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
+fn unobserved(room: FixedRoom, hook_bound: Option<f64>) -> VoiceSession {
     assembled(room, hook_bound, None)
 }
 
@@ -89,18 +92,19 @@ fn unobserved(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
 fn assembled(
     room: FixedRoom,
     hook_bound: Option<f64>,
-    options: Option<&lk_agents_voice::agent_activity::options::HostOptions>,
-) -> SessionApi {
+    options: Option<SessionOptions>,
+) -> VoiceSession {
     let spawner =
         Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current()));
+    let room = lk_agents_abi::voice::room_owner::RoomSession(Arc::new(room));
     #[rustfmt::skip]
-    let api = SessionApi::host_new(
-        Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None,
+    let api = VoiceSession::assemble(
+        spawner, room, None, None, "agent".into(), None, None, None, None, None, None, None,
         None, None, None, None, true, 24_000, 24_000, options, None, None, None, None, None, true,
-        Some(lk_agents_voice::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
+        Some(lk_agents_abi::voice::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
         None, None,
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
-        None, None, None, spawner,
+        None, None, None,
     );
     api.expect("valid native room ports")
 }
@@ -117,7 +121,6 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let opening = api
         .open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
-            None,
             None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
@@ -211,7 +214,6 @@ async fn a_session_nobody_observes_keeps_no_journal() {
         .open(
             Box::new(Observing(Executor::new(api.time().clone(), api.spawner()), observed)),
             None,
-            None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
@@ -246,7 +248,6 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let opening = api
         .open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
-            None,
             None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
@@ -290,7 +291,6 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
     let opening = api
         .open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
-            None,
             None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
@@ -556,11 +556,10 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
 }
 
 /// A session opened over a host that answers every hook at once.
-async fn running(api: SessionApi) -> SessionApi {
+async fn running(api: VoiceSession) -> VoiceSession {
     let opening = api
         .open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
-            None,
             None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
@@ -612,13 +611,21 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
     assert!(invalid(api.ivr_start(-1.0, None, None)).contains("max_silence"));
     assert!(invalid(api.ivr_start(f64::NAN, None, None)).contains("max_silence"));
     let filler = |delay, interval, speech: &str| {
-        api.filler_start("call".into(), speech, delay, interval, None, Some("hm".into()), None)
+        api.filler_start(
+            "call".into(),
+            speech.into(),
+            delay,
+            interval,
+            None,
+            Some("hm".into()),
+            None,
+        )
     };
     invalid(filler(-1.0, None, "speech_1"));
     invalid(filler(f64::NAN, None, "speech_1"));
     invalid(filler(0.5, Some(-1.0), "speech_1"));
     assert!(invalid(filler(0.5, None, "nope")).contains("nope"));
-    assert!(invalid(api.set_io_enabled("microphone", true)).contains("microphone"));
+    assert!(invalid(api.set_io_enabled("microphone".into(), true)).contains("microphone"));
     assert!(invalid(api.dtmf_start(4, false, 4.0, "x".into())).contains("\"x\""));
     assert!(invalid(api.dtmf_start(4, false, -1.0, "#".into())).contains("dtmf_input_timeout"));
     use lk_agents_abi::metrics::base::{AgentMetrics, EouMetrics};
@@ -631,23 +638,24 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
         metadata: None,
     });
     assert!(invalid(api.host_metrics(eou)).contains("count it twice"));
-    assert!(api.aclose("bogus", false).is_err());
+    assert!(api.aclose("bogus".into(), false).is_err());
     // Well-formed, but nothing runs yet.
-    assert!(matches!(api.set_io_enabled("audio_input", true), Err(CommandRefused::Session(_))));
+    assert!(matches!(
+        api.set_io_enabled("audio_input".into(), true),
+        Err(CommandRefused::Session(_))
+    ));
 }
 
-// Catches: the host's rarer calls (a streamed or pre-synthesised `say`, the outbound-SIP warmup,
-// the reads `session.*` makes) refused or wrong on a running session.
+// Catches: the host's rarer calls (a streamed or pre-synthesised `say`, the reads `session.*`
+// makes) refused or wrong on a running session.
 #[tokio::test(start_paused = true)]
 async fn rare_host_calls_reach_a_running_session() {
-    use lk_agents_voice::agent_activity::options::HostOptions;
-    let options = HostOptions::new(option_kwargs());
-    let api = running(assembled(fake_room("rare-calls").1, None, Some(&options))).await;
+    let options =
+        <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
+    let api = running(assembled(fake_room("rare-calls").1, None, Some(options))).await;
 
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
-    api.set_aec_warmup(None).unwrap();
     api.interrupt(false).unwrap().await.unwrap();
-    assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
     api.update_turn_options(Default::default()).unwrap();
 
     let words = Items(["Hello ".to_owned(), "there.".to_owned()].into());
@@ -657,14 +665,11 @@ async fn rare_host_calls_reach_a_running_session() {
     let recorded = api.say_audio("Hi.".into(), Box::new(frames), None, true, None).unwrap();
     recorded.wait_until_created().await.unwrap();
     // Outside any speech: nothing to end.
-    api.end_call(&SpeechHandle::detached(String::new(), true)).unwrap();
+    api.end_call(String::new()).unwrap();
 
     assert_eq!(api.keyterms(), None);
     assert!(!api.amd_listening());
-    assert!(!api.dtmf_reply_running());
     assert!(api.usage().is_empty());
-    assert_eq!(api.linked_participant(), None);
-    api.unset_participant().await;
 
     api.shutdown(false);
     for _ in 0..20 {
@@ -676,10 +681,11 @@ async fn rare_host_calls_reach_a_running_session() {
 
 #[tokio::test(start_paused = true)]
 async fn options_view_changes_only_after_core_acceptance() {
-    use lk_agents_voice::agent_activity::options::HostOptions;
-    let options = HostOptions::new(option_kwargs());
-    let api = running(assembled(fake_room("accepted-options").1, None, Some(&options))).await;
-    api.set_aec_warmup(None).unwrap();
+    use lk_agents_voice::agent_activity::options::aec_warmup_layer;
+    let options =
+        <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
+    let api = running(assembled(fake_room("accepted-options").1, None, Some(options))).await;
+    api.send(TurnCommand::Configure(aec_warmup_layer(None))).unwrap();
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     let (call, answer) = api.call(Answer::idle).unwrap();
     let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
@@ -687,11 +693,11 @@ async fn options_view_changes_only_after_core_acceptance() {
     assert!(answer.await.unwrap().is_ok());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
     api.close(CloseReason::UserInitiated, false, None).await;
-    assert!(api.set_aec_warmup(Some(9.0)).is_err());
+    assert!(api.send(TurnCommand::Configure(aec_warmup_layer(Some(9.0)))).is_err());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
 }
 
-fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
+pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
     use lk_agents_abi::voice::session_options::{HostValue, SessionKwargs, TurnHandlingKwargs};
     SessionKwargs {
         turn_handling: Some(TurnHandlingKwargs { turn_detection: None, ..Default::default() }),
@@ -839,7 +845,7 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
             started: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         });
-        let host = Arc::new(super::remote_session::driver::RemoteSessionLink::new(
+        let host = Arc::new(remote_session::driver::RemoteSessionLink::new(
             Arc::new(UnusedRemotePort),
             transport.clone(),
             None,
@@ -854,7 +860,6 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
         .open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             Some(accepted.clone()),
-            None,
             |_| Box::pin(async {}),
         )
         .expect("the first opening is accepted");
@@ -862,12 +867,11 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
         api.open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             Some(refused.clone()),
-            None,
             |_| Box::pin(async {})
         ),
         Err(OpenRefused::AlreadyStarted),
     ));
-    api.aclose("user_initiated", false).unwrap().await;
+    api.aclose("user_initiated".into(), false).unwrap().await;
     // The still-pending startup must not reopen this host after close has returned.
     accepted.start().await.unwrap();
     refused.start().await.unwrap();

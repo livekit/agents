@@ -98,11 +98,7 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
 /// is only added by the commit that declares a record which was a `#[derive(Host)]` record (its
 /// trait impls move from the derive to the generated module), and leaves when its in-place
 /// consumers are declarations (`check_in_place`).
-pub const IN_PLACE: &[&str] = &[
-    "::lk_agents_abi::telemetry::report::RecordingOptions",
-    "::lk_agents_abi::llm::tool_executor::ToolOutcome",
-    "::lk_agents_abi::llm::tool_executor::ToolReport",
-];
+pub const IN_PLACE: &[&str] = &[];
 
 /// A record field defaulting to `None` whose type is a declared record: that record is
 /// transparent with a unit variant, the host's `None`.
@@ -535,7 +531,10 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
     let mut sets = String::new();
     for f in fields {
         if f.factory.is_some() || f.omitted.is_some() || f.skip {
-            return Err(format!("{}: {}: a typed_dict key is read or defaulted", r.rust, f.rust_name));
+            return Err(format!(
+                "{}: {}: a typed_dict key is read or defaulted",
+                r.rust, f.rust_name
+            ));
         }
         let (key, path) = (f.host_name(), format!("{}.{}", r.name, f.host_name()));
         let read = match &f.ty {
@@ -554,8 +553,11 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
                 read(ty, "(&v)", &path)?
             ),
         };
-        reads.push_str(&format!("            {}: {read},
-", f.rust_name));
+        reads.push_str(&format!(
+            "            {}: {read},
+",
+            f.rust_name
+        ));
         pattern.push(f.rust_name.clone());
         sets.push_str(&match &f.ty {
             Ty::Optional(inner) => format!(
@@ -566,8 +568,11 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
                 f.rust_name,
                 emit(inner, "x")?
             ),
-            ty => format!("        dict.set_item({key:?}, {})?;
-", emit(ty, &f.rust_name)?),
+            ty => format!(
+                "        dict.set_item({key:?}, {})?;
+",
+                emit(ty, &f.rust_name)?
+            ),
         });
     }
     let extract = format!(

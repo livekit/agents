@@ -12,6 +12,7 @@ mod native;
 mod proxy;
 mod record;
 pub(crate) use proxy::boxed_future;
+use proxy::eager_future;
 use record::{record_entry, record_target};
 
 /// Every `#[host(class)]` of the crate, in module order.
@@ -268,11 +269,11 @@ impl Resolver<'_> {
             ));
         }
         let receiver = f.sig.receiver();
-        // `fn ..(&self, ..) -> BoxFuture<'static, T>`: the call runs at once, under the host's
-        // call (a command sent in call order), and the host awaits the future it returns.
-        let eager = kind == MethodKind::Await
-            && f.sig.asyncness.is_none()
-            && proxy::boxed_future(&f.sig.output).is_some_and(|(lt, _)| lt == "'static");
+        // `fn ..(&self, ..) -> BoxFuture<'static, T>`, maybe in a `Result<_, E>`: the call runs (or
+        // refuses) at once, in host call order, and the host awaits the future it returns.
+        let eager_future = eager_future(&f.sig.output)
+            .filter(|_| kind == MethodKind::Await && f.sig.asyncness.is_none());
+        let eager = eager_future.is_some();
         let shape_ok = match kind {
             MethodKind::AsyncFunction => receiver.is_none() && f.sig.asyncness.is_some(),
             MethodKind::New | MethodKind::Function | MethodKind::StaticCall => {
@@ -398,9 +399,11 @@ impl Resolver<'_> {
         if kind == MethodKind::Getter && !params.is_empty() {
             return Err(format!("{at}: a getter takes no parameters"));
         }
-        let ret = match proxy::boxed_future(&f.sig.output).filter(|_| eager) {
-            Some((_, out)) => self.ret(&syn::parse_quote!(-> #out), &at)?,
-            None => self.ret(&f.sig.output, &at)?,
+        let (ret, refused) = match eager_future {
+            Some((out, refused)) => {
+                (self.ret(&syn::parse_quote!(-> #out), &at)?, self.ret(&refused, &at)?.err)
+            }
+            None => (self.ret(&f.sig.output, &at)?, None),
         };
         if kind == MethodKind::Setter
             && (params.iter().filter(|parameter| !parameter.ty.hidden()).count() != 1
@@ -445,6 +448,7 @@ impl Resolver<'_> {
             name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
             kind,
             eager,
+            refused,
             detach,
             pid: voc::boolean(&at, &entries, "pid")?,
             params,

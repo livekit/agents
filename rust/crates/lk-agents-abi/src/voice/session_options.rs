@@ -111,6 +111,7 @@ pub enum EndpointingMode {
     value: s.to_owned(),
     expected: "\"adaptive\" or \"vad\"",
 }))]
+#[crate::host(string)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -381,6 +382,8 @@ pub struct UserTurnLimitKwargs {
 // The `cfg_attr(doctest)` lines fence the Python sample for `cargo test --doc` only; the codegen
 // reads `///` alone, so the generated docstring is unchanged.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
+// Read by hand (below): an explicit `turn_detection=None` is not an absent key.
+#[host(handwritten(extract))]
 #[python(
     typed_dict,
     total = "False",
@@ -418,6 +421,8 @@ pub struct TurnHandlingKwargs {
 /// Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
 /// (`stt`, `llm`, `tools`, ...) are legs, not options.
 #[derive(Clone, PartialEq, Host)]
+// Read by hand (below): each option as `AgentSession.__init__` takes it.
+#[host(handwritten(extract))]
 #[python(typed_dict, module = "session_options", name = "SessionKwargs")]
 pub struct SessionKwargs {
     /// `turn_handling=`, as written. `None` is `NOT_GIVEN`.
@@ -428,10 +433,7 @@ pub struct SessionKwargs {
     )]
     #[binding(default)]
     pub turn_handling: Option<TurnHandlingKwargs>,
-    #[python(
-        ty = "NotGivenOr[STTContextOptions]",
-        type_import = ".keyterms:STTContextOptions"
-    )]
+    #[python(ty = "NotGivenOr[STTContextOptions]", type_import = ".keyterms:STTContextOptions")]
     pub stt_context_options: HostValue,
     pub max_tool_steps: i64,
     #[python(ty = "NotGivenOr[bool]")]
@@ -465,6 +467,8 @@ pub struct SessionKwargs {
 
 /// `AgentSession.update_options(..)`'s option surface.
 #[derive(Clone, Default, PartialEq, Host)]
+// Read by hand (below): an option this session cannot change is refused.
+#[host(handwritten(extract))]
 #[python(typed_dict, module = "session_options", name = "UpdateKwargs")]
 pub struct UpdateKwargs {
     #[python(
@@ -481,7 +485,10 @@ pub struct UpdateKwargs {
     )]
     #[binding(default)]
     pub turn_detection: lk_agents_abi::Maybe<TurnDetectionKwarg>,
-    #[python(ty = "NotGivenOr[bool | ExpressiveOptions]", type_import = ".expressive:ExpressiveOptions")]
+    #[python(
+        ty = "NotGivenOr[bool | ExpressiveOptions]",
+        type_import = ".expressive:ExpressiveOptions"
+    )]
     #[binding(default)]
     pub expressive: lk_agents_abi::Maybe<Expressive>,
     /// The user-defined keyterms, replaced; the detected ones stay.
@@ -665,7 +672,7 @@ pub struct ResolvedSessionOptions {
 /// `AgentActivity._resolve_interruption_detection`'s verdict: whether to build the
 /// `AdaptiveInterruptionDetector`, and if not, why. Every key is always present.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
+#[binding(emit, from_items)]
 pub struct InterruptionGateVerdict {
     pub build: bool,
     /// `"cannot_gatekeep"`, `"interruptions_disabled"`, `"asked_vad"`, `"production_default"`.
@@ -673,6 +680,42 @@ pub struct InterruptionGateVerdict {
     /// `"warning"` or `"info"`.
     pub level: Option<String>,
     pub message: Option<String>,
+}
+
+/// The host's reads behind the adaptive-interruption detector: whether to build it, and whether a
+/// realtime model's server detects turns.
+#[crate::host(functions)]
+pub trait InterruptionGateFunctions {
+    /// `AgentActivity._rt_turn_detection_enabled` from the host's reads. `turn_detection` is the
+    /// explicit mode string (agent over session), `None` when unsaid or a detector object;
+    /// `streaming_detector` says it was a streaming detector.
+    #[host(function)]
+    fn rt_server_turn_detection(
+        #[host(kw)] caps_turn_detection: bool,
+        can_disable_turn_detection: bool,
+        vad: bool,
+        turn_detection: Option<String>,
+        streaming_detector: bool,
+        interruption_given: bool,
+    ) -> bool;
+
+    /// `AgentActivity._resolve_interruption_detection`: whether to build the detector, and if not,
+    /// why. Constructing it stays the host's.
+    #[host(function)]
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_interruption_detector(
+        #[host(kw)] stt_aligned_transcript: Option<bool>,
+        stt_streaming: Option<bool>,
+        realtime: bool,
+        rt_server_turn_detection: bool,
+        has_vad: bool,
+        turn_detection: Option<String>,
+        allow_interruptions: bool,
+        agent_mode: Option<InterruptionMode>,
+        session_mode: Option<InterruptionMode>,
+        hosted: bool,
+        dev_mode: bool,
+    ) -> InterruptionGateVerdict;
 }
 
 // Declared in `telemetry::report`; re-exported so the generated `session_options` module resolves.
@@ -742,6 +785,7 @@ pub struct ExpressiveConfig {
 /// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)`, `Agent(expressive=)` and
 /// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
 /// (even an empty one) on with those options.
+#[crate::host(handwritten(extract, host = "bool | dict[str, object] | None"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expressive(pub Option<ExpressiveConfig>);
 
@@ -755,7 +799,6 @@ mod host {
     use crate::python::{MaybeNull, item, item_with};
 
     crate::python::from_host_str!(EndpointingMode);
-    crate::python::from_host_str!(InterruptionMode);
     crate::python::from_host_str!(DetectorKind);
     crate::python::from_host_str!(TurnDetection);
 
@@ -777,7 +820,8 @@ mod host {
             };
             let leg = |name: &str| -> PyResult<crate::ApiConnectOptions> {
                 let conn: crate::ApiConnectOptions = options.getattr(name)?.extract()?;
-                conn.validate().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                conn.validate()
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 Ok(conn)
             };
             Ok(SessionConnOptions {
@@ -817,7 +861,8 @@ mod host {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            TextTransformSet::from_names(&obj.extract::<Vec<String>>()?).map_err(|e| PyValueError::new_err(e.to_string()))
+            TextTransformSet::from_names(&obj.extract::<Vec<String>>()?)
+                .map_err(|e| PyValueError::new_err(e.to_string()))
         }
     }
 
@@ -831,16 +876,24 @@ mod host {
                 return Ok(TurnDetectionKwarg::Null);
             }
             if obj.is_instance_of::<PyString>() {
-                return Ok(TurnDetectionKwarg::Mode(obj.extract::<String>()?.parse().map_err(|e: UnknownLiteral| PyValueError::new_err(e.to_string()))?));
+                return Ok(TurnDetectionKwarg::Mode(
+                    obj.extract::<String>()?
+                        .parse()
+                        .map_err(|e: UnknownLiteral| PyValueError::new_err(e.to_string()))?,
+                ));
             }
-            let streaming = obj.hasattr("model")? && obj.hasattr("provider")? && obj.hasattr("stream")?;
+            let streaming =
+                obj.hasattr("model")? && obj.hasattr("provider")? && obj.hasattr("stream")?;
             Ok(TurnDetectionKwarg::Detector { streaming })
         }
     }
 
     /// `NOT_GIVEN` and `None` read as absent: a group or kwarg the caller left unsaid.
     fn unsaid(v: &Bound<'_, PyAny>) -> PyResult<bool> {
-        Ok(matches!(v.extract::<MaybeNull<Bound<'_, PyAny>>>()?, MaybeNull::NotGiven | MaybeNull::Null))
+        Ok(matches!(
+            v.extract::<MaybeNull<Bound<'_, PyAny>>>()?,
+            MaybeNull::NotGiven | MaybeNull::Null
+        ))
     }
 
     /// An explicit `turn_detection=None` is [`TurnDetectionKwarg::Null`], not an absent key.
@@ -850,11 +903,26 @@ mod host {
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             let d = obj.cast::<PyDict>()?;
             Ok(TurnHandlingKwargs {
-                endpointing: match d.get_item("endpointing")? { Some(v) => v.extract()?, None => None },
-                interruption: match d.get_item("interruption")? { Some(v) => v.extract()?, None => None },
-                turn_detection: match d.get_item("turn_detection")? { Some(v) => Some(v.extract()?), None => None },
-                preemptive_generation: match d.get_item("preemptive_generation")? { Some(v) => v.extract()?, None => None },
-                user_turn_limit: match d.get_item("user_turn_limit")? { Some(v) => v.extract()?, None => None },
+                endpointing: match d.get_item("endpointing")? {
+                    Some(v) => v.extract()?,
+                    None => None,
+                },
+                interruption: match d.get_item("interruption")? {
+                    Some(v) => v.extract()?,
+                    None => None,
+                },
+                turn_detection: match d.get_item("turn_detection")? {
+                    Some(v) => Some(v.extract()?),
+                    None => None,
+                },
+                preemptive_generation: match d.get_item("preemptive_generation")? {
+                    Some(v) => v.extract()?,
+                    None => None,
+                },
+                user_turn_limit: match d.get_item("user_turn_limit")? {
+                    Some(v) => v.extract()?,
+                    None => None,
+                },
             })
         }
     }
@@ -866,7 +934,8 @@ mod host {
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             let d = obj.cast::<PyDict>()?;
             // An option this session cannot change is refused, not dropped.
-            const KNOWN: [&str; 4] = ["endpointing_opts", "turn_detection", "expressive", "keyterms"];
+            const KNOWN: [&str; 4] =
+                ["endpointing_opts", "turn_detection", "expressive", "keyterms"];
             for key in d.keys() {
                 let key: String = key.extract()?;
                 if !KNOWN.contains(&key.as_str()) {
@@ -880,8 +949,14 @@ mod host {
                     Some(v) if !unsaid(&v)? => Some(v.extract()?),
                     _ => None,
                 },
-                turn_detection: match d.get_item("turn_detection")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
-                expressive: match d.get_item("expressive")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
+                turn_detection: match d.get_item("turn_detection")? {
+                    Some(v) => v.extract()?,
+                    None => Maybe::NotGiven,
+                },
+                expressive: match d.get_item("expressive")? {
+                    Some(v) => v.extract()?,
+                    None => Maybe::NotGiven,
+                },
                 keyterms: match d.get_item("keyterms")? {
                     Some(v) if !unsaid(&v)? => Some(v.extract()?),
                     _ => None,
@@ -920,7 +995,9 @@ mod host {
             let obj = &*obj;
             Ok(SessionKwargs {
                 turn_handling: match obj.get_item("turn_handling") {
-                    Ok(v) => item_with(obj, OWNER, "turn_handling", |_| if unsaid(&v)? { Ok(None) } else { v.extract().map(Some) })?,
+                    Ok(v) => item_with(obj, OWNER, "turn_handling", |_| {
+                        if unsaid(&v)? { Ok(None) } else { v.extract().map(Some) }
+                    })?,
                     Err(_) => None,
                 },
                 stt_context_options: item(obj, OWNER, "stt_context_options")?,
@@ -933,7 +1010,11 @@ mod host {
                 ivr_detection: item(obj, OWNER, "ivr_detection")?,
                 user_away_timeout: item(obj, OWNER, "user_away_timeout")?,
                 transcription_timeout: item(obj, OWNER, "transcription_timeout")?,
-                session_close_transcript_timeout: item(obj, OWNER, "session_close_transcript_timeout")?,
+                session_close_transcript_timeout: item(
+                    obj,
+                    OWNER,
+                    "session_close_transcript_timeout",
+                )?,
                 conn_options: item(obj, OWNER, "conn_options")?,
             })
         }

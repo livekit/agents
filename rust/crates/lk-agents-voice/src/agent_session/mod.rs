@@ -1,6 +1,6 @@
 //! `voice/agent_session.py`: the session's state, one struct per concern (`AgentSession`), and the
-//! [`SessionShared`] state its tasks read, with the host's [`SessionApi`], the commands, the host
-//! events, the driver and the clock beside it.
+//! [`SessionShared`] state its tasks read, with the commands, the host events, the driver and the
+//! clock beside it.
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) mod agent_user_state;
-pub mod api;
 pub mod builder;
+pub mod calls;
 pub(crate) mod closing;
 pub mod commands;
 pub mod driver;
@@ -31,8 +31,8 @@ pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
 pub(crate) use agent_user_state::AgentUserState;
-pub use api::*;
 pub use builder::*;
+pub use calls::*;
 pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
@@ -456,13 +456,13 @@ impl SessionShared {
     pub fn open_call<T>(
         &self,
         pick: fn(crate::agent_session::Answer) -> Option<T>,
-    ) -> (crate::agent_session::api::Call, crate::agent_session::api::Awaited<T>) {
+    ) -> (crate::agent_session::calls::Call, crate::agent_session::calls::Awaited<T>) {
         let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        crate::agent_session::api::open(crate::agent_session::RequestId::task(n), pick)
+        crate::agent_session::calls::open(crate::agent_session::RequestId::task(n), pick)
     }
 
     /// `ev`, naming `call`, with its reply.
-    pub fn report_awaited(&self, ev: GenEvent, call: crate::agent_session::api::Call) {
+    pub fn report_awaited(&self, ev: GenEvent, call: crate::agent_session::calls::Call) {
         let _ = self.queue.send(Event::Awaited(Input::Gen(ev), call));
     }
 
@@ -798,3 +798,6 @@ mod label_tests {
         assert!(arms(&eff).is_empty() && !s.aec.armed(), "{eff:?}");
     }
 }
+
+#[cfg(test)]
+mod tests;

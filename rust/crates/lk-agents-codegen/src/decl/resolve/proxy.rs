@@ -176,8 +176,9 @@ impl Resolver<'_> {
             let ty = match (voc::find(&entries, "source"), ty) {
                 (Some(source), Ty::HostSource(item)) if !by_ref => {
                     voc::only(&pat, &source.nested, &["class"])?;
-                    let class = voc::text(&pat, &source.nested, "class")?
-                        .ok_or_else(|| format!("{pat}: source(class = \"..\") names its stream class"))?;
+                    let class = voc::text(&pat, &source.nested, "class")?.ok_or_else(|| {
+                        format!("{pat}: source(class = \"..\") names its stream class")
+                    })?;
                     Ty::Source { item, class }
                 }
                 (Some(_), _) => {
@@ -396,6 +397,26 @@ pub(crate) fn boxed_future(out: &syn::ReturnType) -> Option<(String, syn::Type)>
         }
         _ => None,
     }
+}
+
+/// `BoxFuture<'static, T>` or `Result<BoxFuture<'static, T>, E>`: `T`, and the call's own
+/// return, `Result<(), E>` when the call itself may refuse.
+pub(super) fn eager_future(out: &syn::ReturnType) -> Option<(syn::Type, syn::ReturnType)> {
+    let started = |out: &syn::ReturnType| boxed_future(out).filter(|(lt, _)| lt == "'static");
+    if let Some((_, t)) = started(out) {
+        return Some((t, syn::ReturnType::Default));
+    }
+    let syn::ReturnType::Type(_, t) = out else { return None };
+    let syn::Type::Path(p) = &**t else { return None };
+    let last = p.path.segments.last().filter(|s| s.ident == "Result")?;
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None };
+    let [syn::GenericArgument::Type(ok), syn::GenericArgument::Type(err)] =
+        args.args.iter().collect::<Vec<_>>()[..]
+    else {
+        return None;
+    };
+    let (_, t) = started(&syn::parse_quote!(-> #ok))?;
+    Some((t, syn::parse_quote!(-> Result<(), #err>)))
 }
 
 /// A proxy call's argument crosses to the host: an output, or a declared proxy (`Arc<dyn ..>`,

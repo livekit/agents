@@ -1,7 +1,7 @@
 //! A real session with controlled dependencies, and one function that applies an [`Input`] to it.
 //!
 //! The only place that touches the product, and only as a host does: the session is assembled
-//! with `VoiceSession(...)` (`SessionApi::host_new`) over the fake room and the fakes, started,
+//! with `VoiceSession(...)` (`VoiceSession::host_new`) over the fake room and the fakes, started,
 //! and every call is the host method a Python `AgentSession` makes, with its argument shapes;
 //! people join and leave through the fake room, which the real room io watches. What the host
 //! cannot do it does not do: the test-only probe (the `dst` feature) only watches the journal and
@@ -29,6 +29,9 @@ use std::{
     time::Duration,
 };
 
+use lk_agents_abi::voice::nodes::NodeFactory;
+use lk_agents_abi::voice::session::UpdateAgentArgs;
+use lk_agents_abi::voice::session_effects::SessionEvents;
 use lk_agents_abi::{
     AudioFrame, BoxFuture, ChatItem, ChatMessage, ImageContent, ImageSource, Maybe, MediaRef,
     Realtime, Spawner, Ts,
@@ -44,6 +47,7 @@ use lk_agents_abi::{
 };
 use lk_agents_abi::{Launch, OwnedTask};
 use lk_agents_runtime::voice::background_audio::BackgroundAudioPlayer;
+use lk_agents_runtime::voice::session::{Probe, Pusher, SessionOptions, VoiceSession};
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind};
 use lk_agents_voice::remote_session::{
     proto,
@@ -52,17 +56,16 @@ use lk_agents_voice::remote_session::{
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
     agent_activity::options::{
-        AgentSessionOptions, Deployment, HostOptions, InterruptionGate, InterruptionGateInputs,
-        RealtimeGate, SttGate, TurnDetection, resolve_interruption_detector,
+        AgentSessionOptions, Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate,
+        SttGate, TurnDetection, resolve_interruption_detector,
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        Event, HoldId, HookId, HostEvent, IoKind, Origin, Probe, Pusher, SessionApi, SessionEvents,
-        SpeechCommand, Timebase, TurnCommand, UpdateAgentArgs, api::NodeFactory, effects::Decision,
+        Event, HoldId, HookId, HostEvent, IoKind, Origin, SpeechCommand, Timebase, TurnCommand,
+        effects::Decision,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
-    generation::Instructions,
     speech_handle::SpeechHandle,
     tool_executor::ToolOutcome,
     trace::{
@@ -621,7 +624,7 @@ impl RefRegistry for NoopRefs {
 /// A real session, the fakes behind it, and everything the run has learned.
 pub struct Run {
     /// The session, as a host holds it.
-    api: Arc<SessionApi>,
+    api: Arc<VoiceSession>,
     /// The room it is in: people join and leave it as a case says.
     room: Arc<FakeRoom>,
     /// `aclose()` then `close_io()`, once a case asked for the close, until they resolve.

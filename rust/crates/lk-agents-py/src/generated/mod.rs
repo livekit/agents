@@ -137,13 +137,15 @@ pub trait Implementations: 'static {
     type PlaybackReports: ::lk_agents_abi::voice::io::PlaybackReports;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
+    type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
+    type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<Options = Self::SessionOptions>;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
+    type InterruptionGateFunctions: ::lk_agents_abi::voice::session_options::InterruptionGateFunctions;
     type WorkflowChecks: ::lk_agents_abi::voice::workflows::WorkflowChecks;
     type DtmfResult: ::lk_agents_abi::voice::workflows::dtmf::DtmfResult;
     type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo<Result = Self::DtmfResult>;
     type WarmTransfer: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer;
     type ConsoleIo: ::lk_agents_abi::voice::console::ConsoleIo;
-    type VoiceSessionExecution: ::lk_agents_abi::voice::console::VoiceSessionExecution;
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime;
     type EndpointStream: ::lk_agents_abi::worker::endpoint_host::EndpointStream;
     type EndpointServer: ::lk_agents_abi::worker::endpoint_host::EndpointServer;
@@ -364,7 +366,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_room_disconnected, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_sip_dtmf_received, m)?)?;
     m.add_class::<voice::PlayoutLedger>()?;
+    m.add_class::<voice::SessionOptions>()?;
+    m.add_class::<voice::VoiceSession>()?;
     m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::rt_server_turn_detection, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::resolve_interruption_detector, m)?)?;
     m.add_function(wrap_pyfunction!(voice::validate_card_number, m)?)?;
     m.add_function(wrap_pyfunction!(voice::card_expired, m)?)?;
     m.add_function(wrap_pyfunction!(voice::normalize_date_of_birth, m)?)?;
@@ -377,7 +383,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::receive_dtmf, m)?)?;
     m.add_class::<voice::WarmTransfer>()?;
     m.add_class::<voice::ConsoleIo>()?;
-    m.add_function(wrap_pyfunction!(voice::_core_voice_session_start, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_avatar_join, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;

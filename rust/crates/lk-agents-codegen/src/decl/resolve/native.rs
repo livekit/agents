@@ -16,8 +16,12 @@ impl Resolver<'_> {
         if boxed {
             return Err(format!("{at}: a native-only trait crosses as `Arc<dyn {ident}>`"));
         }
-        voc::only(at, &native.nested, &["refused"])?;
-        let classes = self.native_classes(module, item, at)?;
+        voc::only(at, &native.nested, &["refused", "class"])?;
+        // A class the registration shell registers itself: no ABI declaration names it.
+        let classes = match voc::text(at, &native.nested, "class")? {
+            Some(class) => vec![format!("livekit.agents._core.{class}")],
+            None => self.native_classes(module, item, at)?,
+        };
         let refused = match voc::text(at, &native.nested, "refused")? {
             Some(refused) => refused,
             None => format!("expected native {}", classes.join(" or ")),

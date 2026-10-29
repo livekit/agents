@@ -11,9 +11,6 @@ use quote::ToTokens as _;
 use syn::{parse::Parser as _, punctuated::Punctuated, spanned::Spanned as _};
 
 const BASELINE: &str = "rust/crates/lk-agents-codegen/export-placement-baseline.json";
-// These newly checked families have their own first baseline. Keeping it separate means
-// retired exemptions from the original placement ratchet can never be transferred here.
-const METADATA_BASELINE: &str = "rust/crates/lk-agents-codegen/export-metadata-baseline.json";
 
 pub fn check(root: &Path) -> Result<(), String> {
     let output = Command::new("git")
@@ -48,11 +45,7 @@ pub fn check(root: &Path) -> Result<(), String> {
     }
     let source =
         std::fs::read_to_string(root.join(BASELINE)).map_err(|e| format!("{BASELINE}: {e}"))?;
-    let mut baseline = baseline(&source)?;
-    let metadata = std::fs::read_to_string(root.join(METADATA_BASELINE))
-        .map_err(|e| format!("{METADATA_BASELINE}: {e}"))?;
-    let metadata = metadata_baseline(&metadata)?;
-    baseline.extend(metadata);
+    let baseline = baseline(&source)?;
     validate(locations, &baseline)?;
     println!(
         "export placement: {} existing identities; baseline {}",
@@ -60,19 +53,6 @@ pub fn check(root: &Path) -> Result<(), String> {
         baseline.len()
     );
     Ok(())
-}
-
-fn metadata_baseline(source: &str) -> Result<BTreeSet<String>, String> {
-    let entries = baseline(source).map_err(|error| error.replace(BASELINE, METADATA_BASELINE))?;
-    if let Some(identity) = entries
-        .iter()
-        .find(|identity| !identity.starts_with("class|") && !identity.starts_with("binding|"))
-    {
-        return Err(format!(
-            "{METADATA_BASELINE}: only class/binding identities are allowed: {identity}"
-        ));
-    }
-    Ok(entries)
 }
 
 fn validate(locations: Vec<(String, usize)>, baseline: &BTreeSet<String>) -> Result<(), String> {
@@ -320,32 +300,5 @@ mod tests {
         }
         assert!(super::baseline("[\"same\", \"same\"]").is_err());
         assert!(super::baseline("[1]").is_err());
-    }
-
-    #[test]
-    fn placement_metadata_baseline_cannot_restore_an_old_export_exemption() {
-        let path = "rust/crates/lk-agents-voice/src/lib.rs";
-        for source in ["#[class] struct Record;", "#[binding(emit)] struct Record;"] {
-            let existing = violations(path, source).unwrap();
-            let identity = &existing[0].0;
-            let json = format!("[{identity:?}]");
-            let baseline = metadata_baseline(&json).unwrap();
-            assert!(validate(existing, &baseline).is_ok());
-            assert!(
-                validate(
-                    violations(path, &source.replace("Record", "Another")).unwrap(),
-                    &baseline
-                )
-                .is_err()
-            );
-        }
-        for source in [
-            "[\"host|retired|fn old|host(export)\"]",
-            "[\"derive(Host)|retired|struct Old|derive(Host)\"]",
-            "[\"pyclass|retired|struct Old|pyclass\"]",
-        ] {
-            let error = metadata_baseline(source).unwrap_err();
-            assert!(error.contains(METADATA_BASELINE) && error.contains("only class/binding"));
-        }
     }
 }

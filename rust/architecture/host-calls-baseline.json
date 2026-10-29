@@ -2,8 +2,6 @@
   "host-call:rust/crates/lk-agents-abi/src/python/bridge.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/buffers.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/conversion_tests.rs",
-  "host-call:rust/crates/lk-agents-abi/src/python/generated/llm.rs",
-  "host-call:rust/crates/lk-agents-abi/src/python/generated/telemetry.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/host_errors.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/host_tests.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/node.rs",

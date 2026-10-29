@@ -65,6 +65,7 @@ from .._generated.session_wire import (
     ToolExecutionUpdatedWire,
 )
 from .._generated.vad import VAD
+from .._generated.voice_session import UpdateAgentArgs
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
 from ..llm import LLM, ChatContext, FunctionCall, RealtimeModel, StopResponse, function_tool
@@ -560,7 +561,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._recorder.ready()
                 self._core.attach_recorder(self._recorder)
             job_ctx.add_shutdown_callback(lambda: self._aclose(CloseReason.JOB_SHUTDOWN))
-        await _core._core_voice_session_start(self._core)
+        await self._core.start()
         if self.options["ivr_detection"]:
             await self._start_ivr_detection()
 
@@ -761,7 +762,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         frame = self._frame(agent)
         if chat_ctx is not None:
             frame["chat_ctx"] = to_core_items(chat_ctx.items)
-        self._core.update_agent(**frame)
+        self._core.update_agent(UpdateAgentArgs(**frame))
 
     def _agent_chat_ctx(self) -> ChatContext:
         """The driving agent's own context, as the core keeps it."""
@@ -1219,7 +1220,7 @@ class VoiceTask(Generic[Output_T]):
         binding = _live_binding("VoiceTask.run()")
         session, agent = binding.session, self._agent
         reply = session._running.run_voice_task(
-            **session._frame(agent, task=True),
+            UpdateAgentArgs(**session._frame(agent, task=True)),
             origin=binding.origin,
             opens_with_reply=not agent._has_on_enter(),
         )

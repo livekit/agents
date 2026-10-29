@@ -33,6 +33,27 @@ pub use lk_agents_runtime::{inference, process, worker};
 /// The classes the generated adapters hand an implementation's own objects out as.
 pub mod handles {
     pub use crate::turn::PyThread as Thread;
+
+    /// A session's speech, handed out as the in-place `_core.SpeechHandle` it is.
+    pub struct SpeechHandle(std::sync::Arc<lk_agents_runtime::voice::SpeechHandle>);
+
+    impl From<std::sync::Arc<lk_agents_runtime::voice::SpeechHandle>> for SpeechHandle {
+        fn from(speech: std::sync::Arc<lk_agents_runtime::voice::SpeechHandle>) -> Self {
+            SpeechHandle(speech)
+        }
+    }
+
+    impl<'py> pyo3::IntoPyObject<'py> for SpeechHandle {
+        type Target = pyo3::PyAny;
+        type Output = pyo3::Bound<'py, pyo3::PyAny>;
+        type Error = pyo3::PyErr;
+
+        fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<Self::Output> {
+            <lk_agents_runtime::voice::SpeechHandle as lk_agents_abi::python::ArcClass>::wrap(
+                py, self.0,
+            )
+        }
+    }
 }
 
 /// The implementation of each declared class: a class without one, or an implementation
@@ -40,8 +61,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
-    type BackgroundAudioPlayer =
-        lk_agents_runtime::voice::background_audio::BackgroundAudio;
+    type BackgroundAudioPlayer = lk_agents_runtime::voice::background_audio::BackgroundAudio;
     type PlayState = lk_agents_runtime::voice::background_audio::PlayState;
     type LanguageFunctions = lk_agents_runtime::cores::Languages;
     type ApiErrorFunctions = lk_agents_runtime::net::http::HttpErrors;
@@ -74,7 +94,9 @@ impl generated::Implementations for Selected {
     type RtcRuntime = lk_agents_runtime::rtc::events::RoomEventBus;
 
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
-    type VoiceSessionExecution = Selected;
+    type VoiceSession = lk_agents_runtime::voice::VoiceSession;
+    type SessionOptions = lk_agents_runtime::voice::SessionOptions;
+    type InterruptionGateFunctions = lk_agents_runtime::voice::InterruptionGateRules;
     type VoiceAgent = lk_agents_runtime::voice::VoiceAgentFrame;
     type SessionStart = lk_agents_runtime::voice::SessionStartPlans;
     type WorkflowChecks = lk_agents_runtime::voice::WorkflowRules;
@@ -187,27 +209,4 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     lk_agents_runtime::process::Process::install_host_time(std::sync::Arc::new(host::HostTime));
     runtime::register_all(m)?;
     generated::register(m)
-}
-
-impl lk_agents_abi::voice::console::VoiceSessionExecution for Selected {
-    async fn start(
-        session: lk_agents_abi::HostRef,
-    ) -> Result<(), lk_agents_abi::errors::ProviderError> {
-        use lk_agents_abi::python::{HostException as _, captured};
-        let reply = Python::attach(|py| {
-            let obj = (&session).into_pyobject(py)?;
-            let api = obj.extract::<PyRef<'_, lk_agents_runtime::voice::SessionApi>>()?;
-            api.start(
-                Box::new(lk_agents_runtime::voice::Executor::new(
-                    api.time().clone(),
-                    api.spawner(),
-                )),
-                Box::new(lk_agents_runtime::voice::remote_session::hosting),
-                lk_agents_runtime::voice::amd::spawn,
-            )
-            .map_err(|e| e.to_py_err())
-        })
-        .map_err(captured)?;
-        reply.await.map_err(|e| Python::attach(|_| captured(e.to_py_err())))
-    }
 }

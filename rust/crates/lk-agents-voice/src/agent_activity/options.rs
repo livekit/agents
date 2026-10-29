@@ -274,11 +274,6 @@ pub fn session_turn_handling(kw: &SessionKwargs) -> TurnHandlingKwargs {
     kw.turn_handling.unwrap_or_default()
 }
 
-/// `"turn_detection" in turn_handling`: whether the caller named a detector, mode or `None`.
-pub fn turn_detection_explicit(kw: &SessionKwargs) -> bool {
-    session_turn_handling(kw).turn_detection.is_some()
-}
-
 /// **The session layer**: what it leaves unsaid falls to `defaults(legs)`.
 /// Past this line nothing is `f64`.
 pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
@@ -548,92 +543,6 @@ pub fn resolve_interruption_detector(inputs: &InterruptionGateInputs) -> Interru
     InterruptionGate::Build
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
-/// configuration comes back as the dict `session.options` views.
-///
-/// Before the driver holds them: the raw kwargs, the session layer they became (plus every
-/// `update_options` so far).
-#[lk_agents_abi::class(name = "SessionOptions")]
-pub struct HostOptions {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    state: std::sync::Mutex<HostOptionsState>,
-}
-
-struct HostOptionsState {
-    kwargs: SessionKwargs,
-    /// `expressive=`, then each `update_options(expressive=)`.
-    expressive: Expressive,
-    session: AgentSessionOptions,
-}
-
-impl HostOptions {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HostOptionsState> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    pub fn session(&self) -> AgentSessionOptions {
-        self.lock().session
-    }
-
-    /// `conn_options=`: each leg's retry budget and timeout.
-    pub fn conn(&self) -> lk_agents_abi::voice::session_options::SessionConnOptions {
-        self.lock().kwargs.conn_options
-    }
-
-    /// The session's `expressive=` as of now.
-    pub fn expressive(&self) -> Expressive {
-        self.lock().expressive.clone()
-    }
-}
-
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
-/// configuration comes back as the dict `session.options` views.
-#[lk_agents_abi::host(object(name = "SessionOptions"))]
-impl HostOptions {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// Read the kwargs once; keep the session layer.
-    #[host(new)]
-    pub fn new(kwargs: SessionKwargs) -> Self {
-        let session = session_layer(&kwargs);
-        let expressive = kwargs.expressive.clone();
-        HostOptions {
-            state: std::sync::Mutex::new(HostOptionsState { kwargs, expressive, session }),
-        }
-    }
-
-    /// `update_options(..)` before the session runs, on the same `merge` the driver uses.
-    #[host(method)]
-    pub fn update(&self, update: UpdateKwargs) {
-        let patch = update_layer(&update);
-        let mut state = self.lock();
-        state.session.merge(&patch);
-        if let Maybe::Given(expressive) = update.expressive {
-            state.expressive = expressive;
-        }
-    }
-
-    /// Outbound SIP before `start()`: no acoustic echo on a phone line, so the warmup is switched
-    /// off (`None`).
-    #[host(method)]
-    pub fn set_aec_warmup(&self, #[host(required)] duration: Option<f64>) {
-        self.lock().session.merge(&aec_warmup_layer(duration));
-    }
-
-    /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
-    /// before `start()`.
-    #[host(method)]
-    pub fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
-        let stack = ConfigStack { session: self.session(), agent: None };
-        resolved_session_options(&stack.resolve(&LegSet::from(legs)), &stack.session)
-    }
-
-    /// `"turn_detection" in turn_handling`.
-    #[host(getter)]
-    pub fn turn_detection_explicit(&self) -> bool {
-        turn_detection_explicit(&self.lock().kwargs)
-    }
-}
-
 /// `aec_warmup_duration` said again: the layer that says only that leaf.
 pub fn aec_warmup_layer(duration: Option<f64>) -> AgentSessionOptions {
     let mut p = AgentSessionOptions::default();
@@ -641,76 +550,73 @@ pub fn aec_warmup_layer(duration: Option<f64>) -> AgentSessionOptions {
     p
 }
 
-/// `AgentActivity._rt_turn_detection_enabled`: [`server_turn_detection_enabled`] from the host's
-/// reads. `turn_detection` is the explicit mode string (agent over session), `None` when unsaid or
-/// a detector object; `streaming_detector` says it was a streaming detector.
-///
-/// [`server_turn_detection_enabled`]: crate::agent_activity::realtime::server_turn_detection_enabled
-#[lk_agents_abi::host(export(name = "rt_server_turn_detection", kw_only))]
-pub fn rt_server_turn_detection_for_host(
-    caps_turn_detection: bool,
-    can_disable_turn_detection: bool,
-    vad: bool,
-    turn_detection: Option<&str>,
-    streaming_detector: bool,
-    interruption_given: bool,
-) -> bool {
-    let side = crate::agent_activity::realtime::SessionSide {
-        stt: false,
-        vad,
-        detection: turn_detection.and_then(|s| s.parse().ok()).unwrap_or(TurnDetection::Auto),
-        streaming_detector,
-        interruption_given,
-        turn_detection_mode: TurnDetectionMode::Manual,
-    };
-    let caps = lk_agents_abi::llm::realtime::RealtimeCapabilities {
-        turn_detection: caps_turn_detection,
-        can_disable_turn_detection,
-        ..Default::default()
-    };
-    crate::agent_activity::realtime::server_turn_detection_enabled(&caps, side)
-}
+/// The interruption detector's gates, as the host asks them.
+pub struct InterruptionGateRules;
 
-/// `AgentActivity._resolve_interruption_detection`: whether to build the
-/// detector, as `{"build", "reason", "level", "message"}`. Constructing it stays the host's.
-#[lk_agents_abi::host(export(name = "resolve_interruption_detector", kw_only))]
-#[allow(clippy::too_many_arguments)]
-pub fn resolve_interruption_detector_for_host(
-    stt_aligned_transcript: Option<bool>,
-    stt_streaming: Option<bool>,
-    realtime: bool,
-    rt_server_turn_detection: bool,
-    has_vad: bool,
-    turn_detection: Option<&str>,
-    allow_interruptions: bool,
-    agent_mode: Option<InterruptionMode>,
-    session_mode: Option<InterruptionMode>,
-    hosted: bool,
-    dev_mode: bool,
-) -> InterruptionGateVerdict {
-    let inputs = InterruptionGateInputs {
-        stt: match (stt_aligned_transcript, stt_streaming) {
-            (Some(aligned_transcript), Some(streaming)) => {
-                Some(SttGate { aligned_transcript, streaming })
-            }
-            _ => None,
-        },
-        realtime: realtime
-            .then_some(RealtimeGate { server_turn_detection: rt_server_turn_detection }),
-        has_vad,
-        // A detector object's repr, or nothing said, parses to `Auto`, as `"unset"` does.
-        turn_detection: turn_detection.and_then(|s| s.parse().ok()).unwrap_or(TurnDetection::Auto),
-        allow_interruptions,
-        asked: [agent_mode, session_mode],
-        deployment: if hosted {
-            Deployment::Hosted
-        } else if dev_mode {
-            Deployment::Dev
-        } else {
-            Deployment::Production
-        },
-    };
-    resolve_interruption_detector(&inputs).verdict()
+impl lk_agents_abi::voice::session_options::InterruptionGateFunctions for InterruptionGateRules {
+    fn rt_server_turn_detection(
+        caps_turn_detection: bool,
+        can_disable_turn_detection: bool,
+        vad: bool,
+        turn_detection: Option<String>,
+        streaming_detector: bool,
+        interruption_given: bool,
+    ) -> bool {
+        let side = crate::agent_activity::realtime::SessionSide {
+            stt: false,
+            vad,
+            detection: turn_detection.and_then(|s| s.parse().ok()).unwrap_or(TurnDetection::Auto),
+            streaming_detector,
+            interruption_given,
+            turn_detection_mode: TurnDetectionMode::Manual,
+        };
+        let caps = lk_agents_abi::llm::realtime::RealtimeCapabilities {
+            turn_detection: caps_turn_detection,
+            can_disable_turn_detection,
+            ..Default::default()
+        };
+        crate::agent_activity::realtime::server_turn_detection_enabled(&caps, side)
+    }
+
+    fn resolve_interruption_detector(
+        stt_aligned_transcript: Option<bool>,
+        stt_streaming: Option<bool>,
+        realtime: bool,
+        rt_server_turn_detection: bool,
+        has_vad: bool,
+        turn_detection: Option<String>,
+        allow_interruptions: bool,
+        agent_mode: Option<InterruptionMode>,
+        session_mode: Option<InterruptionMode>,
+        hosted: bool,
+        dev_mode: bool,
+    ) -> InterruptionGateVerdict {
+        let inputs = InterruptionGateInputs {
+            stt: match (stt_aligned_transcript, stt_streaming) {
+                (Some(aligned_transcript), Some(streaming)) => {
+                    Some(SttGate { aligned_transcript, streaming })
+                }
+                _ => None,
+            },
+            realtime: realtime
+                .then_some(RealtimeGate { server_turn_detection: rt_server_turn_detection }),
+            has_vad,
+            // A detector object's repr, or nothing said, parses to `Auto`, as `"unset"` does.
+            turn_detection: turn_detection
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(TurnDetection::Auto),
+            allow_interruptions,
+            asked: [agent_mode, session_mode],
+            deployment: if hosted {
+                Deployment::Hosted
+            } else if dev_mode {
+                Deployment::Dev
+            } else {
+                Deployment::Production
+            },
+        };
+        resolve_interruption_detector(&inputs).verdict()
+    }
 }
 
 #[cfg(test)]

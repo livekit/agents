@@ -299,10 +299,16 @@ impl FakeTools {
                 // released on the way out. Refused by the close, the wait ends all the same.
                 let origin = format!("tool:{}", call.call_id);
                 if let Some(session) = self.registry.session()
-                    && let Ok(hold) = session.wait_for_idle_and_hold(Some(&origin))
+                    && let Ok(hold) =
+                        lk_agents_abi::voice::session::VoiceSession::wait_for_idle_and_hold(
+                            &**session,
+                            Some(origin),
+                        )
                     && let Ok(hold) = hold.await
                 {
-                    session.release_idle_hold(hold);
+                    lk_agents_abi::voice::session::VoiceSession::release_idle_hold(
+                        &**session, hold,
+                    );
                 }
                 answer
             }
