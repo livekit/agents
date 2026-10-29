@@ -84,7 +84,6 @@ const SOURCES: &[&str] = &[
 
 /// `#[host(export ..)]` / `#[host(object ..)]` files. Any core crate may appear.
 const EXPORT_SOURCES: &[&str] = &[
-    "rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs",
     "rust/crates/lk-agents-voice/src/workflows/mod.rs",
     "rust/crates/lk-agents-abi/src/voice/background_audio.rs",
     "rust/crates/lk-agents-voice/src/tool_executor.rs",

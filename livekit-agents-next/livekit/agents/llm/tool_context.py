@@ -24,6 +24,7 @@ from pydantic import Field, JsonValue
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeVar
 
 from .. import _core
+from .._generated.tool_context import CONFIRM_DUPLICATE_DESCRIPTION
 from . import _provider_format
 
 if TYPE_CHECKING:
@@ -564,7 +565,7 @@ def _wrap_with_confirm_duplicate(func: Callable[..., object]) -> Callable[..., o
         resolved = dict(getattr(func, "__annotations__", {}))
 
     annotation = Annotated[
-        bool | None, Field(default=False, description=_core.confirm_duplicate_description())
+        bool | None, Field(default=False, description=CONFIRM_DUPLICATE_DESCRIPTION)
     ]
     new_annotations = {**resolved, CONFIRM_DUPLICATE_PARAM: annotation}
 

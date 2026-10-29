@@ -216,7 +216,6 @@
     "chat_message_raw_text_content",
     "chat_message_text_content",
     "compute_chat_ctx_diff",
-    "confirm_duplicate_description",
     "convert_expression_tags",
     "convert_mid_conversation_instructions",
     "cpu_count",

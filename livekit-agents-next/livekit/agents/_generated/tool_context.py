@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from typing_extensions import NotRequired, Required, TypedDict
 
@@ -55,6 +55,12 @@ class RawFunctionDescription(TypedDict):
     name: str
     description: NotRequired[str | None]
     parameters: dict[str, object]
+
+
+CONFIRM_DUPLICATE_DESCRIPTION: Final = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed."
+"""The description the model reads for that parameter. A prompt, so rewording it changes
+behaviour: it must say the user asked for the repeat.
+"""
 
 
 # --- the frozen public paths -----------------------------------------------------------------

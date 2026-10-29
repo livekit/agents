@@ -175,9 +175,12 @@ pub type DuplicateKey = (String, Option<String>);
 
 pub const CONFIRM_DUPLICATE_PARAM: &str = "lk_agents_confirm_duplicate";
 
+#[crate::host(file(module = "tool_context"))]
+const _: () = ();
+
 /// The description the model reads for that parameter. A prompt, so rewording it changes
 /// behaviour: it must say the user asked for the repeat.
-#[crate::host(export(pid = false, name = "confirm_duplicate_description"))]
+#[crate::host(constant)]
 pub const CONFIRM_DUPLICATE_DESCRIPTION: &str = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed.";
 
 #[cfg(test)]

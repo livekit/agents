@@ -103,7 +103,6 @@ from ._generated._core_classes import (
     chat_ctx_merge_plan as chat_ctx_merge_plan,
     chat_ctx_truncate_plan as chat_ctx_truncate_plan,
     chat_message_raw_text_content as chat_message_raw_text_content,
-    confirm_duplicate_description as confirm_duplicate_description,
     default_aec_warmup as default_aec_warmup,
     default_input_modality as default_input_modality,
     dtmf_code as dtmf_code,
