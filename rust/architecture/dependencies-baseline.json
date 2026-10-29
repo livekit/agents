@@ -23,11 +23,6 @@
   "dependency:lk-agents-voice:futures-task",
   "dependency:lk-agents-voice:futures-util",
   "dependency:lk-agents-voice:mio",
-  "dependency:lk-agents-voice:pyo3",
-  "dependency:lk-agents-voice:pyo3-build-config",
-  "dependency:lk-agents-voice:pyo3-ffi",
-  "dependency:lk-agents-voice:pyo3-macros",
-  "dependency:lk-agents-voice:pyo3-macros-backend",
   "dependency:lk-agents-voice:tokio",
   "dependency:lk-agents-voice:tokio-macros"
 ]
