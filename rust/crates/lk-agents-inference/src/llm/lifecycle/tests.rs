@@ -312,3 +312,38 @@ fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
     let error = finished(&effects).expect("terminal outcome").as_ref().unwrap_err();
     assert_eq!(error.phase, Some(TimeoutPhase::Total));
 }
+
+// Catches: the time to first token latched on the failed attempt's metadata-only chunk, or
+// measured from the retry instead of from the request: the caller waited through the failure and
+// the backoff before the first token.
+#[test]
+fn time_to_first_token_spans_the_retry() {
+    use lk_agents_abi::telemetry::provider::LlmMetricState;
+
+    let metadata: WireChunk = serde_json::from_value(serde_json::json!({
+        "id": "c",
+        "choices": [{"delta": {"extra_content": {"livekit": {"inference_tier_billed": "s"}}}}],
+    }))
+    .unwrap();
+    let mut fold = LlmMetricState::for_host(0.0);
+    let mut observe = |effects: Vec<LlmRequestEffect>, now: Ts| {
+        let secs = now.saturating_duration_since(at(0)).as_secs_f64();
+        for effect in effects {
+            if let LlmRequestEffect::Deliver(chunk) = effect {
+                fold.observe(&chunk, || secs);
+            }
+        }
+    };
+    let mut request = start(policy());
+    reading(&mut request, 0, at(0));
+    observe(request.handle(LlmRequestEvent::Chunk { attempt: 0, chunk: metadata }, at(10)), at(10));
+    request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(20));
+    request.handle(LlmRequestEvent::AttemptClosed { attempt: 0 }, at(20));
+    let retry = request.wake_at().unwrap();
+    assert_eq!(request.handle(LlmRequestEvent::Wake, retry), vec![started(1)]);
+    reading(&mut request, 1, retry);
+    let first = retry.saturating_add(Duration::from_millis(30));
+    observe(request.handle(LlmRequestEvent::Chunk { attempt: 1, chunk: text("hi") }, first), first);
+    let ttft = fold.ttft().expect("the retry answered");
+    assert!((ttft - 0.15).abs() < 1e-9, "ttft {ttft}");
+}

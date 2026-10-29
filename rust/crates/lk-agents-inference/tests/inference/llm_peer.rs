@@ -9,9 +9,9 @@ use std::time::Duration;
 use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::{ChatContext, Clock, Closed, RealClock};
 use lk_agents_inference::llm::LlmOptions;
+use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
 use lk_agents_inference::llm::lifecycle::RequestPolicy;
 use lk_agents_net::http::GatewayHttp;
-use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -35,6 +35,8 @@ enum Reply {
 struct Peer {
     url: String,
     requests: Arc<AtomicUsize>,
+    /// Each request's `X-LiveKit-Session-ID`, in arrival order.
+    sessions: Arc<std::sync::Mutex<Vec<String>>>,
     /// Connections the client closed while the peer was still serving them.
     released: Arc<AtomicUsize>,
 }
@@ -45,15 +47,17 @@ impl Peer {
         let url = format!("http://{}/v1", listener.local_addr().unwrap());
         let replies = Arc::new(Mutex::new(replies.into_iter()));
         let (requests, released) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-        let (req, rel) = (requests.clone(), released.clone());
+        let sessions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (req, rel, ses) = (requests.clone(), released.clone(), sessions.clone());
         tokio::spawn(async move {
             loop {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (replies, req, rel) = (replies.clone(), req.clone(), rel.clone());
-                tokio::spawn(async move { serve(socket, replies, req, rel).await });
+                let ses = ses.clone();
+                tokio::spawn(async move { serve(socket, replies, req, rel, ses).await });
             }
         });
-        Peer { url, requests, released }
+        Peer { url, requests, sessions, released }
     }
 }
 
@@ -62,6 +66,7 @@ async fn serve(
     replies: Arc<Mutex<std::vec::IntoIter<Reply>>>,
     requests: Arc<AtomicUsize>,
     released: Arc<AtomicUsize>,
+    sessions: Arc<std::sync::Mutex<Vec<String>>>,
 ) {
     // Requests on a kept-alive connection are served in turn.
     loop {
@@ -77,6 +82,12 @@ async fn serve(
             continue;
         }
         requests.fetch_add(1, Ordering::SeqCst);
+        let head = String::from_utf8_lossy(&request).into_owned();
+        let session = head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("x-livekit-session-id").then(|| value.trim().to_owned())
+        });
+        sessions.lock().unwrap().extend(session);
         let Some(reply) = replies.lock().await.next() else { return };
         let hang = |mut socket: TcpStream, released: Arc<AtomicUsize>| async move {
             let mut buf = [0u8; 64];
@@ -217,6 +228,29 @@ async fn a_rejected_attempt_is_retried_and_the_retry_answers() {
     );
     assert!(err.message.contains("bad key"), "{}", err.message);
     assert_eq!(peer.requests.load(Ordering::SeqCst), 1);
+}
+
+// Catches: a retry replaying the failed attempt's gateway session: each attempt is its own
+// session, so the gateway never joins a retry to the request it already failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_attempt_opens_a_fresh_gateway_session() {
+    let busy = Reply::Status(503, "{\"error\":{\"message\":\"busy\"}}");
+    let ok = Reply::Sse(vec![Part::Bytes(
+        b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+    )]);
+    let peer = Peer::start(vec![busy.clone(), busy, ok]).await;
+    let llm = llm(&peer);
+    let job: lk_agents_inference::headers::Headers =
+        [("X-LiveKit-Session-ID".to_owned(), "inference_job".to_owned())].into_iter().collect();
+    let mut chunks = llm
+        .chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy(2, 2_000), Some(&job))
+        .unwrap();
+    assert_eq!(text(&mut chunks).await.unwrap(), "hi");
+    let sessions = peer.sessions.lock().unwrap().clone();
+    assert_eq!(sessions.len(), 3, "{sessions:?}");
+    assert!(sessions.iter().all(|s| s.starts_with("inference_")), "{sessions:?}");
+    let distinct: std::collections::BTreeSet<_> = sessions.iter().collect();
+    assert_eq!(distinct.len(), 3, "one session per attempt: {sessions:?}");
 }
 
 // Catches: a stalled stream waited on forever, a read timeout reported without its phase or as

@@ -1,7 +1,7 @@
 use super::NativeTts;
 use base64::Engine as _;
 use lk_agents_abi::TokioSpawner;
-use lk_agents_abi::{ApiConnectOptions, Clock, Tts};
+use lk_agents_abi::{ApiConnectOptions, Clock, StreamSink as _, StreamSource as _, Tts};
 use lk_agents_inference::headers::Headers;
 use lk_agents_inference::testkit::{FakeWs, text};
 use lk_agents_inference::tts::{AUDIO_QUEUE_CAPACITY, TEXT_QUEUE_CAPACITY, TtsOptions};
@@ -310,6 +310,40 @@ async fn alignment_rides_out_on_the_next_audio_frame() {
     assert_eq!(frame.timed_transcript[0].text, "hi ", "cartesia re-adds the space");
     let last = source.next().await.unwrap().unwrap();
     assert!(last.timed_transcript.is_empty(), "already delivered");
+}
+
+// Catches: Cartesia's word timestamps losing the separator it strips (the synchronized transcript
+// read "helloworld."), their times, or request ids not derived from the connection's session.
+#[tokio::test]
+async fn cartesia_words_keep_their_separators_through_a_stream() {
+    let ws = Arc::new(FakeWs::new(vec![
+        text(json!({"type": "session.created", "session_id": "session-1"})),
+        text(json!({"type": "output_audio", "audio": pcm(4800)})),
+        text(json!({"type": "output_alignment", "words": [
+            {"word": "hello", "start": 0.0, "end": 0.2},
+            {"word": "world.", "start": 0.2, "end": 0.5},
+        ]})),
+        text(json!({"type": "done"})),
+    ]));
+    let opts = TtsOptions { extra_kwargs: map(&[("add_timestamps", json!(true))]), ..opts() };
+    let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+    let client = NativeTts::new(opts, ws, spawner);
+    let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
+        .into_iter()
+        .collect();
+    let (sink, mut source) = client.stream_identified(Some(ident)).unwrap();
+    sink.push("hello world.".to_owned()).unwrap();
+    sink.end_input();
+    let mut words = Vec::new();
+    while let Some(audio) = source.next().await.unwrap() {
+        assert!(audio.request_id.starts_with("inference_connection_tts_"), "{}", audio.request_id);
+        words
+            .extend(audio.timed_transcript.into_iter().map(|t| (t.text, t.start_time, t.end_time)));
+    }
+    assert_eq!(
+        words,
+        [("hello ".to_owned(), Some(0.0), Some(0.2)), ("world. ".to_owned(), Some(0.2), Some(0.5))]
+    );
 }
 
 // Catches: reporting a gateway `error` frame as a clean end of stream.

@@ -299,6 +299,19 @@ struct Exchange {
     request: HttpRequest,
 }
 
+impl Exchange {
+    /// Each attempt is its own gateway session: a job's session id is minted afresh per attempt.
+    fn attempt(&self) -> HttpRequest {
+        let mut request = self.request.clone();
+        for (name, value) in &mut request.headers {
+            if name.eq_ignore_ascii_case(crate::headers::HEADER_SESSION_ID) {
+                *value = crate::ids::shortuuid("inference_");
+            }
+        }
+        request
+    }
+}
+
 /// What accepts the request at its first pull.
 struct Start {
     id: LlmRequestId,
@@ -424,8 +437,7 @@ impl LlmChunks {
                     let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
                     let closed = self.reporter.clone();
                     let work = async move {
-                        send_attempt(&exchange.http, exchange.request.clone(), attempt, reporter)
-                            .await
+                        send_attempt(&exchange.http, exchange.attempt(), attempt, reporter).await
                     };
                     let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
                         if outcome == TaskOutcome::Panicked {
