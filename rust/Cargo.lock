@@ -1545,6 +1545,7 @@ dependencies = [
  "lk-agents-voice",
  "log",
  "pyo3",
+ "pyo3-async-runtimes",
  "pyo3-log",
  "serde",
  "serde_json",

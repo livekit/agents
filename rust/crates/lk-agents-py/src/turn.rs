@@ -7,11 +7,11 @@
 
 use std::sync::Arc;
 
+use lk_agents_abi::a2a::options::TurnOptions;
+use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::python::{
     HostProxy, check_pid, pyo3_async_runtimes, value_from_py, value_to_py,
 };
-use lk_agents_abi::a2a::options::TurnOptions;
-use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage as host;
 use lk_agents_abi::{Clock, RealClock};
 use lk_agents_runtime::a2a::Turn;
@@ -260,7 +260,10 @@ impl PyThread {
     /// Ends the database connection; every later call raises `StorageUnavailable`.
     fn close(&self) {
         let thread = self.inner.clone();
-        pyo3_async_runtimes::tokio::get_runtime().spawn(async move { thread.close().await });
+        match crate::host::process_handle() {
+            Ok(runtime) => drop(runtime.spawn(async move { thread.close().await })),
+            Err(error) => log::warn!("the database connection could not close: {error}"),
+        }
     }
 }
 

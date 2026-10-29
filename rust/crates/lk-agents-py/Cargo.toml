@@ -35,6 +35,9 @@ serde.workspace = true
 indexmap.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
+# `_core` coroutines resolve their asyncio futures through its generic runtime port, polled on the
+# process runtime (`host::future_into_py`). Literal version: pyo3's companion, as in lk-agents-abi.
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
 
 [dev-dependencies]
 lk-agents-test-support = { path = "../lk-agents-test-support" }

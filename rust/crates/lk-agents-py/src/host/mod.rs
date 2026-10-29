@@ -24,9 +24,9 @@ use tokio::sync::oneshot;
 
 #[cfg(test)]
 mod cancellation_tests;
+pub mod loop_monitor;
 #[cfg(test)]
 mod parentage_tests;
-pub mod loop_monitor;
 pub mod source;
 pub mod stream;
 
@@ -316,13 +316,68 @@ pub fn read<'py>(obj: &Bound<'py, PyAny>, name: &str) -> PyResult<Bound<'py, PyA
     obj.call_method0(name)
 }
 
-/// A Rust future as the awaitable a `_core` coroutine method returns.
+/// A Rust future as the awaitable a `_core` coroutine method returns: polled on the loop when
+/// virtual time applies to it, else on the process runtime (decision 88).
 pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
     T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
-    lk_agents_abi::python::future_into_py(py, fut)
+    if let Some(rt) = lk_agents_abi::python::LoopRuntime::current(py) {
+        return rt.future_into_py(py, fut);
+    }
+    process_handle()?;
+    pyo3_async_runtimes::generic::future_into_py::<ProcessRuntime, _, _>(py, fut)
+}
+
+/// The process runtime's handle; a forked child's refusal raises.
+pub fn process_handle() -> PyResult<tokio::runtime::Handle> {
+    lk_agents_runtime::process::handle()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// The process runtime as `pyo3_async_runtimes`' runtime port.
+struct ProcessRuntime;
+
+tokio::task_local! {
+    /// The loop and context a `_core` coroutine's future resolves on.
+    static LOCALS: pyo3_async_runtimes::TaskLocals;
+}
+
+impl pyo3_async_runtimes::generic::Runtime for ProcessRuntime {
+    type JoinError = tokio::task::JoinError;
+    type JoinHandle = tokio::task::JoinHandle<()>;
+
+    fn spawn<F>(fut: F) -> Self::JoinHandle
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        // `future_into_py` checked this process may run it.
+        process_handle().expect("the process runtime").spawn(fut)
+    }
+
+    fn spawn_blocking<F>(f: F) -> Self::JoinHandle
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        process_handle().expect("the process runtime").spawn_blocking(f)
+    }
+}
+
+impl pyo3_async_runtimes::generic::ContextExt for ProcessRuntime {
+    fn scope<F, R>(
+        locals: pyo3_async_runtimes::TaskLocals,
+        fut: F,
+    ) -> std::pin::Pin<Box<dyn Future<Output = R> + Send>>
+    where
+        F: Future<Output = R> + Send + 'static,
+    {
+        Box::pin(LOCALS.scope(locals, fut))
+    }
+
+    fn get_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
+        LOCALS.try_with(Clone::clone).ok()
+    }
 }
 
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).
