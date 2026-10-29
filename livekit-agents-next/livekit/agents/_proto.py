@@ -177,15 +177,14 @@ def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
 
 
 def _encode_extra(extra: Mapping[str, object]) -> dict[str, str]:
-    """The proto's ``extra`` holds strings: any other value as compact JSON, as the core writes it."""
-    return {
-        k: v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
-        for k, v in extra.items()
-    }
+    """The proto's ``extra`` holds strings: every value as its compact JSON, a string quoted, so
+    it reads back exactly, as the core writes it."""
+    return {k: json.dumps(v, separators=(",", ":"), ensure_ascii=False) for k, v in extra.items()}
 
 
 def _decode_extra(extra: Mapping[str, str]) -> dict[str, JsonValue]:
-    """``extra`` as the core reads it: JSON values decoded, any other string kept."""
+    """``extra`` as the core reads it: JSON values decoded; a value that is not JSON, a string an
+    earlier row stored raw, kept as is."""
     decoded: dict[str, JsonValue] = {}
     for k, v in extra.items():
         try:

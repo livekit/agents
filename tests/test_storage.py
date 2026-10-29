@@ -25,12 +25,12 @@ from livekit.agents.a2a.extension import (
     MERGED_INTO,
     REASON,
 )
-from livekit.agents.llm import ChatItem, FunctionToolCall
+from livekit.agents.llm import ChatItem, ChatMessage, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import Storage
 from livekit.agents.storage.context import A2ASessionContext, _Handler, _TurnHost
 from livekit.agents.storage.errors import RunRejected
-from livekit.agents.storage.protocol import payload_to_item
+from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 from livekit.agents.storage.resolve import Thread, _resolve_thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -133,6 +133,17 @@ async def run_outcomes(storage: Storage, thread_id: str) -> list[str]:
 
 
 # -- the thin slice --
+
+
+def test_a_stored_items_extra_reads_back_exactly() -> None:
+    """Decision 117 (Q29): ``extra`` crosses the proto losslessly, so a string that looks like
+    JSON stays a string; a raw string an earlier row stored still reads as that string."""
+    extra = {"json_like": '{"a": 1}', "number_like": "42", "text": "é", "object": {"a": 1}}
+    message = ChatMessage(role="user", content=["hi"], extra=extra)
+    payload = item_to_payload(message)
+    assert payload_to_item(payload).extra == extra
+    payload["message"]["extra"] = {"text": "asked"}
+    assert payload_to_item(payload).extra == {"text": "asked"}
 
 
 async def test_two_workers_share_one_session(thread_storages: Workers) -> None:

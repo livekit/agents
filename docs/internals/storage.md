@@ -496,7 +496,10 @@ again: messages and their text, function calls with their `extra`, function
 call outputs. It does not keep image or audio content, `group_id`,
 a tool output's `reply_required`, or the message ids an inbox batch merged
 into one user message (those are on the tasks, as `livekit/mergedInto`). A
-row in any other shape fails the load.
+row in any other shape fails the load. Each `extra` value (the protobuf's
+string map) is stored as its JSON text, a string as a quoted JSON string, so it
+reads back exactly; a value that is not JSON, as rows written before stored a
+string, reads as that string.
 
 A task row is the A2A `Task`: `id` is `task_id`, `contextId` the thread id,
 `status` is `status`, `status_message` and `updated_at`, and `data` holds

@@ -49,16 +49,10 @@ pub fn encode_metrics(m: &MetricsReport) -> proto::MetricsReport {
     }
 }
 
-/// `{k: str(v) ...}` (`_proto.py:88`), but compact JSON rather than Python `str(dict)`. `extra` does
-/// not round-trip in either implementation.
+/// Each value as its JSON text, a string included (`"text"` in quotes), so a string that looks
+/// like JSON reads back a string.
 fn encode_extra(extra: &Extra) -> impl Iterator<Item = (String, String)> + '_ {
-    extra.iter().map(|(k, v)| {
-        let s = match v {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        (k.clone(), s)
-    })
+    extra.iter().map(|(k, v)| (k.clone(), v.to_string()))
 }
 
 /// `encode_chat_item` (`_proto.py:80`).
@@ -138,6 +132,8 @@ fn time(at: Option<pbjson_types::Timestamp>) -> Result<SystemTime, String> {
         .ok_or_else(|| "chat timestamp out of range".into())
 }
 
+/// [`encode_extra`]'s JSON text; a value that is not JSON is a string, as rows written before
+/// it stored a string raw.
 fn native_extra(
     values: impl IntoIterator<Item = (String, String)>,
 ) -> serde_json::Map<String, Value> {
@@ -237,4 +233,27 @@ pub fn decode_chat_item(item: proto::chat_context::ChatItem) -> Result<ChatItem,
             tools: None,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Decision 117 (Q29): `extra` crosses the proto losslessly; a raw string an earlier row
+    /// stored still reads as it did.
+    #[test]
+    fn extra_keeps_a_string_that_looks_like_json_a_string() {
+        let extra: Extra = serde_json::from_value(serde_json::json!({
+            "json_like": "{\"a\": 1}", "number_like": "42", "text": "asked",
+            "object": {"a": 1}, "number": 42,
+        }))
+        .unwrap();
+        let encoded: Vec<(String, String)> = encode_extra(&extra).collect();
+        assert_eq!(native_extra(encoded), extra);
+        let old = [("text".to_owned(), "asked".to_owned()), ("n".to_owned(), "42".to_owned())];
+        assert_eq!(
+            native_extra(old),
+            serde_json::json!({"text": "asked", "n": 42}).as_object().unwrap().clone()
+        );
+    }
 }
