@@ -681,8 +681,7 @@ impl Driver {
             self.release_speech(now, id, out);
         }
         if admitted && kind.scheduled() {
-            out.machine()
-                .push(crate::agent_session::effects::Effect::SpeechScheduled(Arc::clone(&handle)));
+            handle.mark_scheduled();
         }
         if let Some(info) = &spec.end_of_turn {
             self.emit_eou_metrics(info, Some(id), out);

@@ -75,7 +75,6 @@ impl Runtime {
             }
             E::CloseRealtimePlayers => self.realtime_players.clear(),
             E::CancelSpeech(handle) => handle.cancel_tasks(),
-            E::SpeechScheduled(handle) => handle.mark_scheduled(),
             E::AttachRecorder { recorder, output: _ } => {
                 self.recorder_observers.detach(&self.shared, None);
                 let tap = lk_agents_voice::recorder_io::RecorderTap::new(
