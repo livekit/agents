@@ -29,7 +29,7 @@ from livekit.agents.llm import ChatItem, ChatMessage, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import Storage
 from livekit.agents.storage.context import A2ASessionContext, _Handler, _TurnHost
-from livekit.agents.storage.errors import RunRejected
+from livekit.agents.storage.errors import RunRejected, TooLarge
 from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 from livekit.agents.storage.resolve import Thread, _resolve_thread
 
@@ -169,6 +169,47 @@ async def test_two_workers_share_one_session(thread_storages: Workers) -> None:
     items = await history_items(b, sid, LANE)
     assert [i.text_content for i in items] == ["hello", "seen 1", "again", "seen 2"]
     assert await run_outcomes(b, sid) == ["completed", "completed"]
+
+
+@dataclass
+class Notes:
+    text: str = ""
+
+
+@dataclass
+class NotesContext:
+    notes: Notes = persisted(default_factory=Notes)
+
+
+async def test_a_save_over_64_kib_raises_too_large_and_commits_nothing(
+    thread_storage: Storage,
+) -> None:
+    """docs/internals/storage.md "What is saved": state is under 64 KiB; a larger save raises
+    ``TooLarge`` and the turn's saved fields stay as they were."""
+    sid = await new_session(thread_storage, LANE)
+    raised: list[BaseException] = []
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        app = NotesContext()
+        await ctx.store.load_context(app)
+        app.notes.text = "small"
+        await ctx.store.save_context(app)
+        app.notes.text = "x" * (64 * 1024)
+        try:
+            await ctx.store.save_context(app)
+        except TooLarge as e:
+            raised.append(e)
+        return "ok"
+
+    async def reader(ctx: A2ASessionContext) -> str:
+        app = NotesContext()
+        await ctx.store.load_context(app)
+        return app.notes.text
+
+    await run_turn(thread_storage, sid, LANE, a2a("save", "m1"), "queue", handler)
+    read = await run_turn(thread_storage, sid, LANE, a2a("read", "m2"), "queue", reader)
+    assert len(raised) == 1
+    assert read.output == "small"
 
 
 async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
