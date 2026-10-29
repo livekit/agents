@@ -603,6 +603,14 @@ impl RoomIo {
         }
     }
 
+    /// `closing`, given what is left of `deadline`.
+    async fn within(&self, deadline: Ts, closing: impl Future<Output = Closed>) -> Closed {
+        let remaining = deadline.saturating_duration_since(self.clock.now());
+        lk_agents_abi::timeout(self.clock.as_ref(), remaining, closing)
+            .await
+            .unwrap_or(Closed::TimedOut)
+    }
+
     async fn close(&self, deadline: Ts) -> Closed {
         loop {
             let started = self.started.notified();
@@ -628,76 +636,23 @@ impl RoomIo {
             outcome = outcome.and(Closed::TimedOut);
         }
         if let Some(pc) = &self.pre_connect {
-            outcome = outcome.and(
-                lk_agents_abi::timeout(
-                    self.clock.as_ref(),
-                    deadline.saturating_duration_since(self.clock.now()),
-                    pc.aclose(),
-                )
-                .await
-                .unwrap_or(Closed::TimedOut),
-            );
+            outcome = outcome.and(self.within(deadline, pc.aclose()).await);
         }
         if let Some(input) = &self.audio_input {
-            outcome = outcome.and(
-                lk_agents_abi::timeout(
-                    self.clock.as_ref(),
-                    deadline.saturating_duration_since(self.clock.now()),
-                    input.aclose(),
-                )
-                .await
-                .unwrap_or(Closed::TimedOut),
-            );
+            outcome = outcome.and(self.within(deadline, input.aclose()).await);
         }
         if let Some(video) = &self.video_input {
             // `aclose` makes a waiting `next_frame` return `None`.
-            outcome = outcome.and(
-                lk_agents_abi::timeout(
-                    self.clock.as_ref(),
-                    deadline.saturating_duration_since(self.clock.now()),
-                    video.aclose(),
-                )
-                .await
-                .unwrap_or(Closed::TimedOut),
-            );
+            outcome = outcome.and(self.within(deadline, video.aclose()).await);
         }
         // Each owned performer keeps retiring after its waiter reaches the common deadline.
-        if let Some(user_tr) = &self.user_tr {
-            outcome = outcome.and(
-                match lk_agents_abi::timeout(
-                    self.clock.as_ref(),
-                    deadline.saturating_duration_since(self.clock.now()),
-                    user_tr.aclose(),
-                )
-                .await
-                {
-                    Ok(Ok(())) => Closed::Clean,
-                    Ok(Err(_)) => Closed::Failed,
-                    Err(_) => Closed::TimedOut,
-                },
-            );
-        }
-        if let Some(agent_tr) = &self.agent_tr {
-            outcome = outcome.and(
-                match lk_agents_abi::timeout(
-                    self.clock.as_ref(),
-                    deadline.saturating_duration_since(self.clock.now()),
-                    agent_tr.aclose(),
-                )
-                .await
-                {
-                    Ok(Ok(())) => Closed::Clean,
-                    Ok(Err(_)) => Closed::Failed,
-                    Err(_) => Closed::TimedOut,
-                },
-            );
+        for tr in [&self.user_tr, &self.agent_tr].into_iter().flatten() {
+            let closed =
+                async { if tr.aclose().await.is_ok() { Closed::Clean } else { Closed::Failed } };
+            outcome = outcome.and(self.within(deadline, closed).await);
         }
         if let Some(out) = &self.audio_output {
-            let remaining = deadline.saturating_duration_since(self.clock.now());
-            let closed = lk_agents_abi::timeout(self.clock.as_ref(), remaining, out.aclose())
-                .await
-                .unwrap_or(Closed::TimedOut);
-            outcome = outcome.and(closed);
+            outcome = outcome.and(self.within(deadline, out.aclose()).await);
         }
         outcome
     }
