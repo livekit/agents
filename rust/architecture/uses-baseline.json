@@ -1,5 +1,4 @@
 {
-  "pyo3-use:rust/crates/lk-agents-abi/src/errors/api.rs:api_error_to_py:pyo3::PyErr": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/errors/host.rs:impl<'py> pyo3::IntoPyObject<'py> for CapturedError::into_pyobject:pyo3::Bound": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/errors/host.rs:impl<'py> pyo3::IntoPyObject<'py> for CapturedError::into_pyobject:pyo3::PyAny": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/errors/host.rs:impl<'py> pyo3::IntoPyObject<'py> for CapturedError::into_pyobject:pyo3::PyResult": 1,
@@ -128,8 +127,6 @@
   "pyo3-use:rust/crates/lk-agents-abi/src/llm/realtime.rs:impl<'py> pyo3::IntoPyObject<'py> for &UpdateTools:pyo3::IntoPyObject": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/llm/realtime.rs:impl<'py> pyo3::IntoPyObject<'py> for &UpdateTools:pyo3::PyErr": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/llm/realtime.rs:impl<'py> pyo3::IntoPyObject<'py> for &UpdateTools:pyo3::types::PyDict": 2,
-  "pyo3-use:rust/crates/lk-agents-abi/src/llm/realtime_native.rs:configuration_error_to_py:pyo3::PyErr": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/llm/realtime_native.rs:configuration_error_to_py:pyo3::exceptions::PyValueError::new_err": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/metrics/usage/records.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage::extract:pyo3::Borrowed": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/metrics/usage/records.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage::extract:pyo3::PyAny": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/metrics/usage/records.rs:impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage::extract:pyo3::PyResult": 2,

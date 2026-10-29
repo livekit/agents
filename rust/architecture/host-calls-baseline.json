@@ -9,7 +9,6 @@
   "host-call:rust/crates/lk-agents-abi/src/python/host_tests.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/node.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/values.rs",
-  "host-call:rust/crates/lk-agents-abi/src/storage/mod.rs",
   "host-call:rust/crates/lk-agents-abi/src/tts/timed.rs",
   "host-call:rust/crates/lk-agents-abi/src/tts/tts.rs",
   "host-call:rust/crates/lk-agents-abi/src/utils/audio.rs",
