@@ -364,9 +364,8 @@ def run_agent(name: str) -> None:
     from livekit.agents import AgentServer, cli
 
     # the scripted calls are the only load: a busy machine must not turn them away
-    server = AgentServer(agent_name=name)
+    server = AgentServer(agent_name=name, _load_fnc=lambda: 0.0)
     server._update_options(port=0)
-    server._load_fnc = lambda: 0.0
     server.rtc_session()(entry)
     sys.argv = [sys.argv[0], "start"]
     cli.run_app(server)

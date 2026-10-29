@@ -140,7 +140,7 @@ class AgentHandler:
 
 def _core_options(given: dict[str, Any]) -> ServerOptions:
     """The server options given by name, as the core takes them; the core has the defaults."""
-    skip = ("self", "__class__", "storage", "preload_modules", "setup_fnc")
+    skip = ("self", "__class__", "storage", "preload_modules", "setup_fnc", "_load_fnc")
     options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
     if "job_executor_type" in options:
         options["job_executor_type"] = options["job_executor_type"].value
@@ -169,6 +169,7 @@ class AgentServer(AgentHandler):
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         preload_modules: Sequence[str] = (),
         setup_fnc: Callable[[JobProcess], None] | None = None,
+        _load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
     ) -> None:
         options = _core_options({**locals(), "version": __version__})
         AgentHandler.__init__(self)
@@ -176,7 +177,7 @@ class AgentServer(AgentHandler):
         self._storage = storage
         self._preload_modules = preload_module_names(preload_modules)
         self._setup_fnc = validate_setup_fnc(setup_fnc)
-        self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
+        self._load_fnc = _load_fnc
         self._on_started: list[Callable[[], Any]] = []
         self._rtc: RtcDoor | None = None
         # HTTP routes served alongside the agent through the LiveKit server at

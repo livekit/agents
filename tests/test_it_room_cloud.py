@@ -515,9 +515,8 @@ class _Toning(tts.ChunkedStream):
 
 
 # a busy test machine must not mark the worker full
-server = AgentServer(num_idle_processes=2)
+server = AgentServer(num_idle_processes=2, _load_fnc=lambda: 0.0)
 server._update_options(port=0)
-server._load_fnc = lambda: 0.0
 
 
 @server.rtc_session()
