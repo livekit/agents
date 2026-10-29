@@ -1,7 +1,7 @@
 //! Task summaries through the real SDK HTTP adapter and the generated Storage contract.
 
 use lk_agents_abi::storage::{Storage, StorageError, TaskState};
-use lk_agents_net::env::Standalone;
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_storage::host::HostStorage;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -67,7 +67,8 @@ impl Drop for Peer {
 #[tokio::test]
 async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_unknown_states() {
     let mut peer = Peer::tasks().await;
-    let storage = HostStorage::<Standalone>::new(
+    let storage = HostStorage::new(
+        &ProcessEnv::current_runtime(),
         None,
         Some(peer.url.clone()),
         Some("key".into()),

@@ -41,8 +41,7 @@ extern crate lk_agents_voice as _;
 pub use lk_agents_inference as inference;
 /// The shared transport, A2A credentials and the delegation client, wired the same way.
 pub use lk_agents_net as net;
-/// Thread storage over AgentDB and local SQLite; the extension selects its `HostStorage` with
-/// this process.
+/// Thread storage over AgentDB and local SQLite, wired the same way.
 pub use lk_agents_storage as storage;
 
 pub mod a2a;

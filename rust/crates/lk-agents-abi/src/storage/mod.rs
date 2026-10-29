@@ -94,6 +94,10 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_VoiceStore"))]
     type VoiceStore: Send + Sync + 'static;
 
+    /// What the hosting process lends the constructor.
+    #[host(env)]
+    type Env;
+
     #[host(await)]
     async fn _core_voice_store(
         &self,
@@ -107,6 +111,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         #[host(kw, default = None)] directory: Option<String>,
         #[host(default = None)] url: Option<String>,
         #[host(default = None)] api_key: Option<String>,

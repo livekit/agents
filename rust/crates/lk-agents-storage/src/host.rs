@@ -16,7 +16,7 @@ use lk_agents_abi::storage::{
     Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem, ThreadItemPage,
     ThreadPage, ThreadTask,
 };
-use lk_agents_net::env::Env;
+use lk_agents_net::env::ProcessEnv;
 use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 use tokio_util::task::TaskTracker;
@@ -59,12 +59,11 @@ impl Backend {
 }
 
 /// A storage namespace: a local directory, or the Cloud project of a key pair.
-pub struct HostStorage<E> {
+pub struct HostStorage {
     config: Config,
     backend: OnceCell<Backend>,
     streams: OnceCell<Arc<QueuedStreams>>,
     a2a_tasks: TaskTracker,
-    env: std::marker::PhantomData<fn() -> E>,
 }
 
 /// The holder of a read-only handle: it never takes a lease.
@@ -72,7 +71,7 @@ const READER: &str = "reader";
 /// A local items page when the caller names no limit.
 const LOCAL_PAGE: i64 = 100;
 
-impl<E> HostStorage<E> {
+impl HostStorage {
     async fn backend(&self) -> Result<&Backend, StorageError> {
         self.backend
             .get_or_try_init(|| async {
@@ -107,7 +106,7 @@ impl<E> HostStorage<E> {
     }
 }
 
-impl<E: Env> host::StorageNamespace for HostStorage<E> {}
+impl host::StorageNamespace for HostStorage {}
 
 fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration, StorageError> {
     match value {
@@ -236,11 +235,12 @@ async fn local_tasks(
     }
 }
 
-impl<E: Env> HostStorageClass for HostStorage<E> {
+impl HostStorageClass for HostStorage {
     type Thread = Thread;
     type Streams = Arc<QueuedStreams>;
     type ContextActivation = ContextStore;
     type VoiceStore = VoiceStore;
+    type Env = ProcessEnv;
 
     async fn _core_voice_store(
         &self,
@@ -253,6 +253,7 @@ impl<E: Env> HostStorageClass for HostStorage<E> {
     }
 
     fn new(
+        env: &ProcessEnv,
         directory: Option<String>,
         url: Option<String>,
         api_key: Option<String>,
@@ -276,7 +277,7 @@ impl<E: Env> HostStorageClass for HostStorage<E> {
                 let mut opts = AgentDbOptions::new(&url);
                 opts.lease = lease;
                 {
-                    let runtime = E::runtime()
+                    let runtime = (env.runtime)()
                         .map_err(|e| StorageError::Unavailable(format!("storage runtime: {e}")))?;
                     Config::Cloud(AgentDbStorage::new(
                         opts,
@@ -297,7 +298,6 @@ impl<E: Env> HostStorageClass for HostStorage<E> {
             backend: OnceCell::new(),
             streams: OnceCell::new(),
             a2a_tasks: TaskTracker::new(),
-            env: std::marker::PhantomData,
         })
     }
 

@@ -25,7 +25,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::a2a::Turn;
-use crate::process::Process;
 use stream::Sender;
 
 const RESPONSE_CAPACITY: usize = 64;
@@ -44,7 +43,7 @@ pub struct Door {
 /// first use.
 enum Store {
     Open(Arc<dyn Storage>),
-    Namespace(Arc<HostStorage<Process>>),
+    Namespace(Arc<HostStorage>),
 }
 
 struct Inner {
@@ -107,7 +106,7 @@ impl A2ADoor for Door {
         host: Arc<dyn TurnHost>,
     ) -> Result<Self, StorageError> {
         let storage: Arc<dyn Any + Send + Sync> = storage;
-        let storage = storage.downcast::<HostStorage<Process>>().map_err(|_| {
+        let storage = storage.downcast::<HostStorage>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
         let runtime = crate::process::caller_handle()

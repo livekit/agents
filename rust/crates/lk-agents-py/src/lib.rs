@@ -203,8 +203,7 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_runtime::inference::llm::parse::CompletionWire;
-    type Storage =
-        lk_agents_runtime::storage::host::HostStorage<lk_agents_runtime::process::Process>;
+    type Storage = lk_agents_runtime::storage::host::HostStorage;
 }
 
 #[pymodule]
