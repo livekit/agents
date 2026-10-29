@@ -19,7 +19,7 @@ use lk_agents_abi::worker::server_host::{
 };
 use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
 
-use crate::endpoint_host::{Endpoints, NativeStream};
+use crate::endpoint::host::{Endpoints, NativeStream};
 use crate::env::Env;
 use crate::io::WorkerIo;
 use crate::server::{self, ServerHost, ServerPhase, ServerSettings, ServerStart};

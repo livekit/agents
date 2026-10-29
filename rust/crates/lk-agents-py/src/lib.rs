@@ -139,10 +139,10 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::worker::ipc::ProcessPool<lk_agents_runtime::process::Process>;
     type WorkerJobRun = lk_agents_runtime::worker::ipc::JobRun<lk_agents_runtime::process::Process>;
     type WorkerCli = lk_agents_runtime::worker::cli::Commands;
-    type EndpointStream = lk_agents_runtime::worker::endpoint_host::NativeStream;
-    type EndpointServer = lk_agents_runtime::worker::endpoint_host::Endpoints;
-    type AsgiReceive = lk_agents_runtime::worker::endpoint_host::ReceiveCall;
-    type AsgiSend = lk_agents_runtime::worker::endpoint_host::SendCall;
+    type EndpointStream = lk_agents_runtime::worker::endpoint::host::NativeStream;
+    type EndpointServer = lk_agents_runtime::worker::endpoint::host::Endpoints;
+    type AsgiReceive = lk_agents_runtime::worker::endpoint::host::ReceiveCall;
+    type AsgiSend = lk_agents_runtime::worker::endpoint::host::SendCall;
     type ServerConfig = lk_agents_runtime::worker::server_host::Configuration;
     type ServerRuntime =
         lk_agents_runtime::worker::server_host::AgentRuntime<lk_agents_runtime::process::Process>;

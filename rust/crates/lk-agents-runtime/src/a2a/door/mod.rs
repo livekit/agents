@@ -4,7 +4,7 @@
 pub(crate) mod stream;
 
 use lk_agents_abi::worker::endpoint::EndpointLimits;
-use lk_agents_worker::endpoint_budget::EndpointBudget;
+use lk_agents_worker::endpoint::budget::EndpointBudget;
 use std::any::Any;
 use std::sync::{Arc, Mutex as StdMutex};
 

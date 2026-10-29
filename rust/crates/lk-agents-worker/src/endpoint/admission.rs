@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use super::WsExchange;
 
-use crate::endpoint_budget::{EndpointBudget, EndpointOccupancy, EndpointPayloadBudget};
+use super::budget::{EndpointBudget, EndpointOccupancy, EndpointPayloadBudget};
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 
 #[derive(Clone)]
@@ -129,7 +129,7 @@ impl Registry {
     }
 
     /// Logical payload and admission observations for this worker's endpoint interface.
-    pub fn occupancy(&self) -> crate::endpoint_budget::EndpointOccupancy {
+    pub fn occupancy(&self) -> super::budget::EndpointOccupancy {
         self.admission.occupancy()
     }
 

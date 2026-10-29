@@ -1,6 +1,6 @@
 //! An endpoint exchange served with an ASGI application: one stream after its preamble is either
 //! one HTTP/1.1 exchange or, after a `101`, a WebSocket. The codecs and the outcome reporting are
-//! here; the application is behind [`AsgiApp`] (`endpoint_host` calls the host's).
+//! here; the application is behind [`AsgiApp`] ([`host`] calls the host's).
 //!
 //! Every outcome is reported the way the data plane expects: a reset code before any response
 //! byte, `x-lk-completion`/`x-lk-error` trailers after (chunked responses only), FIN on success.
@@ -23,11 +23,11 @@ use crate::LOG;
 use crate::transport::HttpStreamResetCode as Reset;
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 
-#[path = "endpoint_admission.rs"]
 mod admission;
+pub mod budget;
+pub mod host;
 use admission::{EndpointAdmission, EndpointReservation, MessageAdmission, MessageReservation};
 
-#[path = "endpoint_request.rs"]
 mod request;
 use request::{Head, HeadError, find, parse_head, read_head, scope_base};
 
@@ -1041,9 +1041,7 @@ async fn serve_ws(
 }
 
 #[cfg(test)]
-#[path = "endpoint_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "endpoint_profile.rs"]
 mod profile;
