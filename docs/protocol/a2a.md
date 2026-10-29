@@ -29,6 +29,17 @@ Every endpoint publishes `<endpoint>/.well-known/agent-card.json`:
 | skills           | one, `delegate`; its description is the endpoint's `description=`, what another agent reads to decide whether to call |
 | `capabilities.extensions` | optional: `https://livekit.io/a2a/ext/agents/v1`, a capability hint that the endpoint reads LiveKit fields; it grants nothing |
 
+The extension entry may carry `params` declaring the tool a caller's model
+sees for the endpoint; `RemoteAgent(url).as_tool()` reads them:
+
+| Param | Type and contract |
+| --- | --- |
+| `toolName` | string: the tool's name; absent, the card's `name` |
+| `inputSchema` | JSON Schema object for the tool's arguments; absent, `{"request": string}` (required), sent as the message's text. With it, the arguments go as the message's first part, a `DataPart` |
+
+A LiveKit endpoint lists the entry without `params`. Spelling and case are
+significant; other `params` keys are ignored.
+
 Every endpoint requires a token: a project token or a thread grant. `auth=`
 is the developer's own check on top: a function of the request, sync or async,
 run on every request; `False` refuses it with 401.
