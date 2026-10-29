@@ -80,10 +80,10 @@ pub(super) async fn voice_leg(
         rx,
     };
     let interrupted = pump.run().await?;
-    if !gate.wait(shared, handle).await && gate.at.is_none() {
+    if !gate.wait(shared, handle).await && gate.state.at.is_none() {
         return Ok(None);
     }
-    if let Some(authorized_at) = gate.at {
+    if let Some(authorized_at) = gate.state.at {
         acc.set_reply_started_at(authorized_at);
     }
     Ok(Some(Spoken { acc, interrupted }))
@@ -94,31 +94,39 @@ pub(super) struct Spoken {
     pub(super) interrupted: bool,
 }
 
-/// Authorization belongs to a whole generation step, not to each synthesis segment.
+/// Waits for the authorization effect without owning the generation's playback policy.
 #[derive(Default)]
 pub(super) struct PlaybackGate {
-    pub(super) at: Option<std::time::SystemTime>,
-    pub(super) audio_enabled: bool,
-    pub(super) text_enabled: bool,
+    pub(super) state: lk_agents_voice::generation::forward::PlaybackGate,
 }
 
 impl PlaybackGate {
     pub(super) async fn wait(&mut self, shared: &SessionShared, handle: &SpeechHandle) -> bool {
-        if self.at.is_some() {
-            return !handle.interrupted();
+        use lk_agents_voice::generation::forward::{PlaybackEffect, PlaybackEvent};
+        let mut effect =
+            self.state.handle(PlaybackEvent::Observe { interrupted: handle.interrupted() });
+        if matches!(effect, PlaybackEffect::Wait) {
+            let event = tokio::select! {
+                biased;
+                () = handle.wait_for_interrupted() => PlaybackEvent::Interrupted,
+                _ = handle.wait_for_authorization() => PlaybackEvent::Authorized {
+                    at: shared.time.wall(),
+                    audio_enabled: shared.audio_enabled(),
+                    text_enabled: shared.transcription_enabled(),
+                },
+            };
+            effect = self.state.handle(event);
         }
-        let ready = tokio::select! {
-            biased;
-            () = handle.wait_for_interrupted() => false,
-            _ = handle.wait_for_authorization() => true,
-        };
-        if ready {
-            handle.clear_authorization();
-            self.at = Some(shared.time.wall());
-            self.audio_enabled = shared.audio_enabled();
-            self.text_enabled = shared.transcription_enabled();
+        match effect {
+            PlaybackEffect::Play { consume_authorization } => {
+                if consume_authorization {
+                    handle.clear_authorization();
+                }
+                true
+            }
+            PlaybackEffect::Refuse => false,
+            PlaybackEffect::Wait => unreachable!("a playback observation has arrived"),
         }
-        ready
     }
 }
 
@@ -186,9 +194,9 @@ impl Pump<'_> {
     ) -> Result<Heard, DriverError> {
         let shared = self.shared;
         // A swap since authorization re-targets this segment, audio and words together.
-        if self.gate.at.is_some() {
-            self.audio_enabled = self.gate.audio_enabled;
-            self.text_enabled = self.gate.text_enabled;
+        if self.gate.state.at.is_some() {
+            self.audio_enabled = self.gate.state.audio_enabled;
+            self.text_enabled = self.gate.state.text_enabled;
         }
         let Some(mut binding) = super::output::OutputBinding::acquire(shared, self.handle).await?
         else {
@@ -206,7 +214,7 @@ impl Pump<'_> {
         // One transcript leg per segment: its flush is once-only and the next segment gets its own.
         // Before authorization a synthesised segment's words queue behind its audio.
         let (tx, rx) = mpsc::unbounded_channel();
-        let deferred = (synthesis && self.gate.at.is_none()).then_some(&tx);
+        let deferred = (synthesis && self.gate.state.at.is_none()).then_some(&tx);
         let leg = (synthesis || text.is_some())
             .then(|| TextLeg::new(text.clone(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();

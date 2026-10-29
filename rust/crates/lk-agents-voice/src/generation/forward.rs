@@ -38,3 +38,46 @@ impl TurnAccumulator {
         }
     }
 }
+
+/// Authorization belongs to a generation step, including all its synthesis segments.
+#[derive(Default)]
+pub struct PlaybackGate {
+    pub at: Option<std::time::SystemTime>,
+    pub audio_enabled: bool,
+    pub text_enabled: bool,
+}
+
+pub enum PlaybackEvent {
+    Observe { interrupted: bool },
+    Authorized { at: std::time::SystemTime, audio_enabled: bool, text_enabled: bool },
+    Interrupted,
+}
+
+pub enum PlaybackEffect {
+    Wait,
+    Play { consume_authorization: bool },
+    Refuse,
+}
+
+impl PlaybackGate {
+    pub fn handle(&mut self, event: PlaybackEvent) -> PlaybackEffect {
+        match event {
+            PlaybackEvent::Observe { interrupted: true } | PlaybackEvent::Interrupted => {
+                PlaybackEffect::Refuse
+            }
+            PlaybackEvent::Observe { interrupted: false } => {
+                if self.at.is_some() {
+                    PlaybackEffect::Play { consume_authorization: false }
+                } else {
+                    PlaybackEffect::Wait
+                }
+            }
+            PlaybackEvent::Authorized { at, audio_enabled, text_enabled } => {
+                self.at = Some(at);
+                self.audio_enabled = audio_enabled;
+                self.text_enabled = text_enabled;
+                PlaybackEffect::Play { consume_authorization: true }
+            }
+        }
+    }
+}
