@@ -20,6 +20,7 @@ from livekit.plugins import ai_coustics
 
 from clinic import Clinic
 from phone import outbound_line, ring
+from playout_hold import hold_playout
 from receptionist import (
     BACKEND_MODEL,
     GREETING,
@@ -46,6 +47,7 @@ SILENT_GOODBYE = (
 )
 
 server = AgentServer()
+hold_playout()
 
 
 @server.rtc_session(agent_name=AGENT_NAME, on_simulation_end=on_simulation_end)
