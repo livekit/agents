@@ -22,7 +22,7 @@ impl Rule for SynthesizedSpeechIsPlayed {
     const CONTRACT: Contract = Contract {
         id: "synthesized_speech_is_played",
         guarantee: "A speech that requested synthesis of real text and completed normally had audio played.",
-        examples: &[requested_and_played, interrupted_before_playing],
+        examples: &[requested_and_played, interrupted_before_playing, room_closed_before_playing],
         counterexamples: &[requested_never_played],
         probe: None,
     };
@@ -70,7 +70,25 @@ impl Rule for SynthesizedSpeechIsPlayed {
                         | Step::Playout(PlayoutStep::PlaybackFinished { speech: s, interrupted: true, .. })
                             if s.0 == speech.id)
             });
-            if reset || cut_by_output {
+            // The room's output plays only once the caller subscribes and ends with the room, as
+            // real RTC does (`_ParticipantAudioOutput.capture_frame` awaits the subscription): a
+            // room closed before the audio found its listener closed the only output.
+            let room_closed = inputs.accepted().any(|a| {
+                a.at <= done
+                    && matches!(
+                        a.input,
+                        crate::input::Input::Room { event: crate::input::RoomIn::Closed }
+                    )
+                    && !inputs.accepted().any(|b| {
+                        b.at > a.at
+                            && b.at < asked
+                            && matches!(
+                                b.input,
+                                crate::input::Input::SetAudioOutput { attach: true }
+                            )
+                    })
+            });
+            if reset || cut_by_output || room_closed {
                 continue;
             }
             check.expect(
@@ -109,6 +127,18 @@ fn interrupted_before_playing() -> Recording {
         .speech(1, Handle::finished().interrupted())
         .journal(requested(2))
         .journal(played(2))
+        .speech(2, Handle::finished())
+        .done()
+}
+
+/// The room closed while the speech's audio waited for a listener: its output is gone.
+fn room_closed_before_playing() -> Recording {
+    Authored::new()
+        .journal(requested(1))
+        .journal(played(1))
+        .speech(1, Handle::finished())
+        .journal(requested(2))
+        .sent(crate::input::Input::Room { event: crate::input::RoomIn::Closed })
         .speech(2, Handle::finished())
         .done()
 }
