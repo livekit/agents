@@ -6,7 +6,7 @@
 use super::*;
 use lk_agents_abi::voice::console::ConsolePort;
 use lk_agents_runtime::inference::fallback::IgnoreEvents;
-use lk_agents_runtime::inference::fallback::realtime::{RealtimeChild, RealtimeFallbackModel};
+use lk_agents_runtime::inference::fallback::realtime::{ChainModel, RealtimeFallbackModel};
 
 impl Run {
     /// Build a session through the host's API, over the fake room and the fakes, and start it.
@@ -169,9 +169,9 @@ impl Run {
                         return fake(server.seed, connect);
                     }
                     let children = vec![
-                        RealtimeChild::Native(fake(server.seed, connect)),
+                        ChainModel::Native(fake(server.seed, connect)),
                         // The fallback is a healthy model, connecting at once.
-                        RealtimeChild::Native(fake(server.seed.rotate_left(17), Duration::ZERO)),
+                        ChainModel::Native(fake(server.seed.rotate_left(17), Duration::ZERO)),
                     ];
                     // The adapter's defaults: a 10 s cooldown, a swap asking for the cut reply.
                     let model = RealtimeFallbackModel::new(
