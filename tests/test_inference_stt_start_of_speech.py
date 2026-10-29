@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 import livekit.agents.inference.stt as inference_stt
-from livekit.agents import NOT_GIVEN, APIConnectOptions
+from livekit.agents import APIConnectOptions
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.stt import SpeechStream as InferenceSpeechStream
 from livekit.agents.stt import SpeechEventType
@@ -34,7 +34,7 @@ def _stream() -> InferenceSpeechStream:
     stream._speech_duration = 0.0
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._pending_extra = None
-    stream._opts = SimpleNamespace(language="en", model="auto", fallback=NOT_GIVEN)
+    stream._opts = SimpleNamespace(language="en", model="auto")
     return stream
 
 
@@ -183,27 +183,19 @@ def test_eos_reports_provider_speech_end_time(timing, end_time):
         assert endpoint.alternatives[0].end_time == pytest.approx(end_time)
 
 
-@pytest.mark.parametrize(
-    ("model", "words"),
-    [
-        ("deepgram/nova-3", [{"end": 1.4}]),
-        ("soniox/stt-rt-v5", []),
-        ("speechmatics/linden-1", []),
-    ],
-)
-async def test_eos_preserves_transcription_delay_in_stt_turn_detection(monkeypatch, model, words):
+async def test_eos_preserves_transcription_delay_in_stt_turn_detection(monkeypatch):
     now = 1_700_000_010.0
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     stream = _stream()
-    stream._opts.model = model
+    stream._opts.model = "deepgram/nova-3"
     stream.start_time_offset = 8.0
     stream._process_transcript(
-        {"transcript": "hello", "start": 0.0, "duration": 1.4, "words": words},
+        {"transcript": "hello", "start": 0.0, "duration": 1.4, "words": [{"end": 1.4}]},
         is_final=True,
     )
     assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
     recognition = _make_recognition(vad=None, input_started_at=now - 10.0, mode="stt")
-    recognition._stt_aligned_transcript = bool(words)
+    recognition._stt_aligned_transcript = True
 
     while True:
         try:
@@ -221,42 +213,6 @@ async def test_eos_preserves_transcription_delay_in_stt_turn_detection(monkeypat
         now=now,
     )
     assert metrics.transcription_delay == pytest.approx(0.6)
-
-
-@pytest.mark.parametrize(
-    ("model", "fallback", "timed"),
-    [
-        ("soniox/stt-rt", NOT_GIVEN, True),
-        ("soniox/stt-rt-v4", NOT_GIVEN, True),
-        ("soniox/stt-rt-v5", NOT_GIVEN, True),
-        ("speechmatics/linden-1", NOT_GIVEN, True),
-        ("soniox/stt-rt-v5", [{"model": "speechmatics/linden-1"}], True),
-        ("soniox/stt-rt-v5", [{"model": "cartesia/ink-2"}], False),
-        ("cartesia/ink-2", [{"model": "soniox/stt-rt-v5"}], False),
-        ("soniox/stt-rt-v5", [{"model": "auto"}], False),
-        ("soniox/stt-rt-v5", [{"model": "unknown/model"}], False),
-        ("auto", NOT_GIVEN, False),
-        ("unknown/model", NOT_GIVEN, False),
-    ],
-)
-def test_eos_uses_duration_only_when_every_configured_model_reports_utterance_timing(
-    model, fallback, timed
-):
-    stream = _stream()
-    stream._opts.model = model
-    stream._opts.fallback = fallback
-    stream.start_time_offset = 8.5
-    stream._process_transcript(
-        {"transcript": "hello", "start": 1.0, "duration": 1.4, "words": []}, is_final=True
-    )
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.START_OF_SPEECH
-    assert stream._event_ch.recv_nowait().type == SpeechEventType.FINAL_TRANSCRIPT
-    endpoint = stream._event_ch.recv_nowait()
-    assert endpoint.type == SpeechEventType.END_OF_SPEECH
-    if timed:
-        assert endpoint.alternatives[0].end_time == pytest.approx(10.9)
-    else:
-        assert endpoint.alternatives == []
 
 
 async def test_eos_without_utterance_timing_uses_arrival_time(monkeypatch):

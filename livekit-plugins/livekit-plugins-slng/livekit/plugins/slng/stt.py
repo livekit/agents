@@ -1137,10 +1137,7 @@ class SpeechStream(stt.SpeechStream):
                     if is_final:
                         speech_started = False
                         self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.END_OF_SPEECH,
-                                alternatives=event.alternatives if end_time > 0 else [],
-                            )
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                         )
                         emit_recognition_usage()
                         recover_primary_if_ready()

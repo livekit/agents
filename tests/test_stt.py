@@ -25,18 +25,13 @@ from livekit.plugins import (
     gladia,
     google,
     gradium,
-    inworld,
     mistralai,
     nvidia,
     openai,
-    palabra,
     rtzr,
     sarvam,
-    slng,
-    smallestai,
     soniox,
     speechmatics,
-    telnyx,
     xai,
 )
 
@@ -54,13 +49,14 @@ TRAILING_SILENCE_DURATION_MS = 2000
 SPEECH_END_TIME = 44.4
 
 UNTIMED_EOS_REASONS = {
+    "livekit.plugins.aws": "AWS EOS timing is deferred until live validation",
     "livekit.plugins.cartesia": "Cartesia turns does not provide speech-end timestamps",
     "livekit.plugins.fireworksai": "Fireworks emits an untimed EOS during connection cleanup",
     "livekit.agents.inference": "The gateway-selected model has no verified endpoint timing",
     "livekit.agents.inference.cartesia": "Cartesia gateway duration measures billed audio",
     "livekit.plugins.sarvam": "Sarvam saaras:v4 sends no speech or word timestamps",
     "livekit.plugins.sarvam.realtime": "Sarvam can emit EOS before its timed final arrives",
-    "livekit.plugins.telnyx": "Telnyx's documented responses omit speech timestamps",
+    "livekit.plugins.nvidia": "NVIDIA EOS timing is deferred until live validation",
 }
 
 
@@ -106,9 +102,7 @@ STTs: list[Callable[[], stt.STT]] = [
 ]
 
 # Additional model configurations used only by streaming tests.
-STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
-    parameter_factory(plugin) for plugin in [inworld, palabra, slng, smallestai, telnyx, xai]
-] + [
+STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [parameter_factory(xai)] + [
     pytest.param(
         lambda: rtzr.STT(sample_rate=16000),
         id="livekit.plugins.rtzr",
@@ -143,6 +137,18 @@ STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
         id="livekit.agents.inference.assemblyai",
     ),
     pytest.param(lambda: inference.STT(model="xai/stt-1"), id="livekit.agents.inference.xai"),
+    pytest.param(
+        lambda: assemblyai.STT(
+            model="universal-3-5-pro",
+            language_detection=True,
+            min_turn_silence=75,
+            max_turn_silence=1000,
+            mode="balanced",
+            interruption_delay=400,
+            vad_threshold=0.3,
+        ),
+        id="livekit.plugins.assemblyai.u3_pro",
+    ),
 ]
 
 

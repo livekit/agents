@@ -16,7 +16,7 @@ pytestmark = pytest.mark.plugin("slng")
 
 
 @pytest.mark.parametrize("end_time", [0.4, 0.0, None])
-async def test_endpoint_preserves_word_timing(monkeypatch, end_time):
+async def test_transcript_timing_includes_connection_offset(monkeypatch, end_time):
     messages = asyncio.Queue()
     message = {"type": "final_transcript", "transcript": "hello"}
     if end_time is not None:
@@ -43,28 +43,28 @@ async def test_endpoint_preserves_word_timing(monkeypatch, end_time):
         )
         async with asyncio.timeout(2):
             async for event in stream:
-                if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                     if end_time:
                         assert stream.start_time_offset > 6.0
                         assert event.alternatives[0].end_time == pytest.approx(
                             stream.start_time_offset + 0.4
                         )
                     else:
-                        assert event.alternatives == []
+                        assert event.alternatives[0].end_time == 0.0
                     break
             else:
-                pytest.fail("missing endpoint")
+                pytest.fail("missing final transcript")
     finally:
         await stream.aclose()
         await provider.aclose()
 
 
-async def _next_endpoint(stream):
+async def _next_transcript_end_time(stream):
     async with asyncio.timeout(2):
         async for event in stream:
-            if event.type == stt.SpeechEventType.END_OF_SPEECH:
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                 return event.alternatives[0].end_time
-    pytest.fail("missing endpoint")
+    pytest.fail("missing final transcript")
 
 
 @pytest.mark.no_concurrent
@@ -89,7 +89,7 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
                 "words": [{"start": 0.1, "end": 0.4}],
             }
         )
-        assert await _next_endpoint(stream) == pytest.approx(17.4)
+        assert await _next_transcript_end_time(stream) == pytest.approx(17.4)
     finally:
         await stream.aclose()
         await provider.aclose()
@@ -144,7 +144,7 @@ async def test_replayed_audio_keeps_its_original_timestamp(monkeypatch, replay_f
                 "words": [{"start": 0.0, "end": 1.0}],
             }
         )
-        assert await _next_endpoint(stream) == pytest.approx(8.0)
+        assert await _next_transcript_end_time(stream) == pytest.approx(8.0)
 
         clock.now = 1001.2
         stream.push_frame(rtc.AudioFrame.create(16000, 1, 3200))
@@ -161,7 +161,7 @@ async def test_replayed_audio_keeps_its_original_timestamp(monkeypatch, replay_f
                 "words": [{"start": 0.0, "end": 0.2}],
             }
         )
-        assert await _next_endpoint(stream) == pytest.approx(8.2)
+        assert await _next_transcript_end_time(stream) == pytest.approx(8.2)
     finally:
         await stream.aclose()
         await provider.aclose()

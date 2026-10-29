@@ -310,15 +310,8 @@ class SpeechStream(stt.RecognizeStream):
                     alternatives=[_speech_data(ev)],
                 )
             )
-            source = utt.source if ev.is_translation and utt.source is not None else ev
             self._event_ch.send_nowait(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    request_id=request_id,
-                    alternatives=[_speech_data(source)]
-                    if source.end_time is not None and source.end_time > 0
-                    else [],
-                )
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=request_id)
             )
             # Keep the finished entry on purpose.
             # The server can resend this id: segment updates, extra translation targets.
