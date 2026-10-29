@@ -24,7 +24,7 @@ Every endpoint publishes `<endpoint>/.well-known/agent-card.json`:
 | ---------------- | ----- |
 | `name`           | the endpoint's name |
 | interface        | one, `JSONRPC` (JSON-RPC 2.0 over HTTP, server-sent events for the streams) at `https://<project>.livekit.cloud/agents/<agent>/<deployment>/<endpoint>/v1` |
-| `version`        | the deployment's, or `a2a_session(version=)` |
+| `version`        | `a2a_session(version=)`, else the deployment the worker registered under (`LIVEKIT_AGENT_DEPLOYMENT`); a local worker registered under none uses `LIVEKIT_AGENT_VERSION`, else `1.0.0` |
 | security schemes | `livekit`, a bearer JWT (a LiveKit project token or a thread grant), always listed and required |
 | skills           | one, `delegate`; its description is the endpoint's `description=`, what another agent reads to decide whether to call |
 | `capabilities.extensions` | optional: `https://livekit.io/a2a/ext/agents/v1`, a capability hint that the endpoint reads LiveKit fields; it grants nothing |

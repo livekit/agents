@@ -12,16 +12,24 @@ from livekit.agents.storage import SQLiteStorage
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("override,expected", [(None, "deployment-42"), ("2.4.8", "2.4.8")])
+@pytest.mark.parametrize(
+    "override,deployment,expected",
+    [(None, None, "local-42"), (None, "staging", "staging"), ("2.4.8", "staging", "2.4.8")],
+)
 async def test_card_publishes_registered_endpoint_identity_and_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     override: str | None,
+    deployment: str | None,
     expected: str,
 ) -> None:
+    """docs/protocol/a2a.md: the card's version is the deployment's, or ``version=``; a local
+    worker with no deployment falls back to ``LIVEKIT_AGENT_VERSION``."""
     for name in ("LIVEKIT_URL", "LIVEKIT_AGENT_NAME_OVERRIDE", "LIVEKIT_AGENT_DEPLOYMENT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LIVEKIT_AGENT_VERSION", "deployment-42")
+    if deployment:
+        monkeypatch.setenv("LIVEKIT_AGENT_DEPLOYMENT", deployment)
+    monkeypatch.setenv("LIVEKIT_AGENT_VERSION", "local-42")
     credentials = Credentials("card-key", "a-secret-of-at-least-thirty-two-bytes")
     storage = SQLiteStorage(directory=str(tmp_path))
     server = AgentServer(

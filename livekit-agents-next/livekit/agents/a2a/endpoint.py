@@ -48,7 +48,8 @@ class A2ASessionOptions(TypedDict, total=False):
     storage: Storage | None
     """This endpoint's storage when it is not the server's."""
     version: str | None
-    """The card's version; ``LIVEKIT_AGENT_VERSION`` by default."""
+    """The card's version; by default the deployment the worker registered under, else
+    ``LIVEKIT_AGENT_VERSION`` for a local worker."""
 
 
 def a2a_session(
@@ -90,7 +91,7 @@ class A2AEndpoint:
             policy=dict(inbox) if isinstance(inbox, Mapping) else inbox,
             debounce=_seconds(debounce),
         )
-        self.version = version or os.environ.get("LIVEKIT_AGENT_VERSION") or "1.0.0"
+        self.version = version or ""
         self.lane = lane
         self._storage = storage
         self._service: A2AService | None = None
@@ -112,6 +113,11 @@ class A2AEndpoint:
             )
 
         self._deployment = config.deployment
+        # the card's version is the deployment's; a local worker, registered under none, falls
+        # back to LIVEKIT_AGENT_VERSION
+        self.version = (
+            self.version or config.deployment or os.environ.get("LIVEKIT_AGENT_VERSION") or "1.0.0"
+        )
         own = self.lane
         self._service = A2AService(
             self,
