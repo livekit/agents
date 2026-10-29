@@ -72,6 +72,12 @@ pub fn pcm_bytes(pcm: &[i16]) -> Vec<u8> {
     out
 }
 
+/// Little-endian bytes as interleaved `i16`, the inverse of [`pcm_bytes`]; an odd trailing byte
+/// is dropped.
+pub fn pcm_samples(bytes: &[u8]) -> Vec<i16> {
+    bytes.as_chunks::<2>().0.iter().copied().map(i16::from_le_bytes).collect()
+}
+
 /// Interleaved PCM averaged to mono, truncating toward zero like the recorder's sample conversion.
 /// A zero channel header is treated as mono; an incomplete channel group is discarded.
 pub fn downmix_mono(samples: &[i16], num_channels: u16) -> Vec<i16> {

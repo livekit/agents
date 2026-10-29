@@ -111,7 +111,7 @@ impl EotTransport for LocalTransport {
     }
 
     fn push_frame(&self, frame: &AudioFrame) {
-        let pcm: Vec<i16> = frame.data.as_chunks::<2>().0.iter().copied().map(i16::from_le_bytes).collect();
+        let pcm = lk_agents_media::pcm_samples(&frame.data);
         self.buf.lock().expect("ring buffer mutex").push(&pcm);
     }
 

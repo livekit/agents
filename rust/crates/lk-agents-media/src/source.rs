@@ -198,13 +198,8 @@ impl Target {
         let format = AudioFormat::new(rate, self.num_channels);
         // Ten milliseconds of source PCM bounds conversion and resampling scratch space.
         for chunk in bytes.chunks((source.sample_rate as usize / 100).max(1) * width) {
-            let samples = chunk
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|b| i16::from_le_bytes([b[0], b[1]]))
-                .collect::<Vec<_>>();
-            let samples = remix(&samples, source.num_channels, self.num_channels)?;
+            let samples =
+                remix(&crate::pcm_samples(chunk), source.num_channels, self.num_channels)?;
             match &mut resampler {
                 Some(resampler) => {
                     output(format, resampler.push(&samples).map_err(resample_error)?)?

@@ -556,9 +556,7 @@ impl<E: OggOpusEncoder> Recorder<E> {
 
 impl PcmFrame {
     pub fn from_audio_frame(frame: &AudioFrame) -> PcmFrame {
-        let samples =
-            frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
-        PcmFrame::new(samples, frame.sample_rate, frame.num_channels)
+        PcmFrame::new(crate::pcm_samples(&frame.data), frame.sample_rate, frame.num_channels)
     }
 }
 

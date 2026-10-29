@@ -519,11 +519,7 @@ impl MixerState {
                                 source.pending = None;
                                 match result {
                                     Ok(Some(frame)) => Some((
-                                        frame
-                                            .data
-                                            .chunks_exact(2)
-                                            .map(|b| i16::from_le_bytes([b[0], b[1]]))
-                                            .collect(),
+                                        lk_agents_media::pcm_samples(&frame.data),
                                         frame.sample_rate,
                                         frame.num_channels,
                                     )),
@@ -646,11 +642,7 @@ impl FileInput {
             }
         }
         match self.decoder.as_mut().unwrap().next().await {
-            Ok(Some(frame)) => Some(Ok(frame
-                .data
-                .chunks_exact(2)
-                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
-                .collect())),
+            Ok(Some(frame)) => Some(Ok(lk_agents_media::pcm_samples(&frame.data))),
             Ok(None) => None,
             Err(error) => Some(Err(error.to_string())),
         }

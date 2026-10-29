@@ -29,10 +29,6 @@ const LOG: &str = "livekit.agents";
 
 use lk_agents_abi::unix_now as now;
 
-fn samples(frame: &AudioFrame) -> Vec<i16> {
-    frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
-}
-
 fn pcm_frame(pcm: Vec<i16>, rate: u32, channels: u16) -> AudioFrame {
     let per_channel = (pcm.len() / usize::from(channels.max(1))) as u32;
     AudioFrame::new(lk_agents_media::pcm_bytes(&pcm), rate, channels, per_channel)
@@ -229,7 +225,7 @@ impl EotStream {
             Some(_) => {}
         }
         let out = match inner.resampler.as_mut() {
-            Some(r) => match r.push(&samples(&frame)) {
+            Some(r) => match r.push(&lk_agents_media::pcm_samples(&frame.data)) {
                 Ok(s) if !s.is_empty() => {
                     Some(pcm_frame(s.to_vec(), self.rate, frame.num_channels))
                 }
@@ -247,7 +243,7 @@ impl EotStream {
             if let Some(shell) = &inner.shell {
                 shell.transport.push_frame(&frame);
             } else {
-                inner.replacement_audio.push(&samples(&frame));
+                inner.replacement_audio.push(&lk_agents_media::pcm_samples(&frame.data));
             }
         }
     }

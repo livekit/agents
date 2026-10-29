@@ -96,9 +96,7 @@ impl FrameResampler {
             }
         }
         let stream = self.stream.as_mut().expect("built above, or at construction");
-        let pcm: Vec<i16> =
-            frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
-        let resampled = stream.resampler.push(&pcm)?;
+        let resampled = stream.resampler.push(&crate::pcm_samples(&frame.data))?;
         out.extend(to_frame(resampled, self.output_rate, stream.input.num_channels));
         Ok(out)
     }
@@ -151,14 +149,11 @@ mod tests {
         AudioFrame::new(crate::pcm_bytes(&pcm), rate, channels, samples_per_channel as u32)
     }
 
-    fn samples(frame: &AudioFrame) -> Vec<i16> {
-        frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
-    }
-
     /// Output lengths of a bare resampler over `pushes`, then its flush.
     fn lengths(from: u32, to: u32, channels: u32, pushes: &[&AudioFrame]) -> (Vec<usize>, usize) {
         let mut r = crate::new_resampler(from, to, channels, Quality::Medium).unwrap();
-        let out = pushes.iter().map(|f| r.push(&samples(f)).unwrap().len()).collect();
+        let out =
+            pushes.iter().map(|f| r.push(&crate::pcm_samples(&f.data)).unwrap().len()).collect();
         (out, r.flush().unwrap().len())
     }
 

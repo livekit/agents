@@ -330,14 +330,7 @@ fn chunks(frame: &AudioFrame, block: f64) -> impl Iterator<Item = PcmFrame> + '_
     let samples = (f64::from(frame.sample_rate) * block).round().max(1.) as usize;
     let bytes = samples.saturating_mul(usize::from(frame.num_channels)).saturating_mul(2);
     frame.data.chunks(bytes).map(move |chunk| {
-        PcmFrame::new(
-            chunk
-                .chunks_exact(2)
-                .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
-                .collect(),
-            frame.sample_rate,
-            frame.num_channels,
-        )
+        PcmFrame::new(crate::pcm_samples(chunk), frame.sample_rate, frame.num_channels)
     })
 }
 

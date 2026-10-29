@@ -74,10 +74,7 @@ impl AudioWindow {
             self.shift(overflow);
         }
 
-        let interleaved: Vec<i16> = frame.data[..expected]
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]))
-            .collect();
+        let interleaved = lk_agents_media::pcm_samples(&frame.data[..expected]);
         for i in 0..samples {
             // Floor division, like numpy's `//` (Rust's `/` truncates toward zero).
             let mut sum: i32 = 0;
