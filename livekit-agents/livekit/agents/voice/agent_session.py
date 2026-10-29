@@ -1322,7 +1322,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ),
     ) -> None:
         async with self._lock:
-            if not self._started:
+            if not self._started and self._activity is None:
+                # never started, or already closed. a start() that failed mid bring-up
+                # has published an activity but not set _started: close it as well
                 return
 
             # the whole close as one bar under agent_session: activity teardown, the close

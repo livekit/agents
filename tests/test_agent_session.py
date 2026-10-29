@@ -46,10 +46,16 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
+from livekit.agents.voice.events import (
+    AgentState,
+    CloseReason,
+    FunctionToolsExecutedEvent,
+    UserState,
+)
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
+from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -3031,3 +3037,50 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+async def test_failed_start_tears_down_partial_session() -> None:
+    """aclose() must clean up a session whose start() failed mid bring-up.
+
+    start() publishes the activity before the realtime provider connects. When
+    bring-up fails, _started was never set, so aclose() used to return early and
+    leave the provider session open with the agent still holding its activity;
+    reusing the agent then raised "an activity is already running".
+    """
+    model = FakeRealtimeModel()
+    model.bring_up_error = RuntimeError("provider connect failed")
+    agent = Agent(instructions="hello")
+    session = AgentSession(llm=model)
+
+    closes: list[CloseReason] = []
+    session.on("close", lambda ev: closes.append(ev.reason))
+
+    with pytest.raises(RuntimeError, match="provider connect failed"):
+        await asyncio.wait_for(session.start(agent), timeout=SESSION_TIMEOUT)
+
+    # the activity was published before the provider failed to bring up
+    activity = session._activity
+    assert activity is not None
+    assert agent._activity is activity
+    assert len(model.created_sessions) == 1
+    rt_session = model.created_sessions[0]
+    assert not rt_session.closed
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert closes == [CloseReason.USER_INITIATED]
+    assert activity._closed
+    assert session._activity is None
+    assert agent._activity is None
+    assert rt_session.closed
+
+    # closing twice and reusing the agent in a fresh session are both safe
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert closes == [CloseReason.USER_INITIATED]
+
+    retry = AgentSession(llm=FakeRealtimeModel())
+    try:
+        await asyncio.wait_for(retry.start(agent), timeout=SESSION_TIMEOUT)
+        assert retry._started
+    finally:
+        await asyncio.wait_for(retry.aclose(), timeout=SESSION_TIMEOUT)
