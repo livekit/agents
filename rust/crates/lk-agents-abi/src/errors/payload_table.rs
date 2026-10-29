@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
+// `release` runs in `Drop`, where a panic aborts, and no critical section can leave a container
+// inconsistent: a poisoned lock is taken anyway.
+use std::sync::PoisonError;
 
 use super::RefRegistry;
 
@@ -26,22 +29,18 @@ struct Store<T> {
 
 impl<T: Send + 'static> RefRegistry for Store<T> {
     fn release(&self, id: u64) {
-        // Called from `Drop`: recover a poisoned lock rather than panic (which would abort).
-        let mut queue = lock(&self.pending);
+        let mut queue = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
         queue.push(id);
         self.pending_len.store(queue.len(), Ordering::Release);
     }
 
     /// Does not drain; `pending` is a subset of `entries`.
     fn outstanding(&self) -> usize {
-        let pending = lock(&self.pending);
-        let entries = lock(&self.entries);
+        let pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         entries.len().saturating_sub(pending.len())
     }
 }
-
-// The critical sections cannot leave the containers inconsistent.
-use crate::lock;
 
 /// Keep it for the process: keys hold a `Weak` to its registry.
 pub struct PayloadTable<T> {
@@ -77,19 +76,19 @@ impl<T: Send + 'static> PayloadTable<T> {
     pub fn insert(&self, payload: T) -> u64 {
         self.drain_if_pending();
         let id = self.store.next_id.fetch_add(1, Ordering::Relaxed);
-        lock(&self.store.entries).insert(id, payload);
+        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).insert(id, payload);
         id
     }
 
     pub fn resolve<R>(&self, id: u64, f: impl FnOnce(&T) -> R) -> Option<R> {
         self.drain_if_pending();
-        lock(&self.store.entries).get(&id).map(f)
+        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).get(&id).map(f)
     }
 
     /// The binding's half of `CapturedError::take`.
     pub fn take(&self, id: u64) -> Option<T> {
         self.drain_if_pending();
-        lock(&self.store.entries).remove(&id)
+        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).remove(&id)
     }
 
     fn drain_if_pending(&self) {
@@ -102,14 +101,14 @@ impl<T: Send + 'static> PayloadTable<T> {
     pub fn drain(&self) -> usize {
         let store = &self.store;
         let ids = {
-            let mut queue = lock(&store.pending);
+            let mut queue = store.pending.lock().unwrap_or_else(PoisonError::into_inner);
             store.pending_len.store(0, Ordering::Release);
             std::mem::take(&mut *queue)
         };
 
         // Drop after the guard: a finaliser can run host code that interns into `entries`.
         let removed: Vec<T> = {
-            let mut entries = lock(&store.entries);
+            let mut entries = store.entries.lock().unwrap_or_else(PoisonError::into_inner);
             ids.iter().filter_map(|id| entries.remove(id)).collect()
         };
         let n = removed.len();
@@ -123,7 +122,7 @@ impl<T: Send + 'static> PayloadTable<T> {
 
     pub fn len_after_drain(&self) -> usize {
         self.drain();
-        lock(&self.store.entries).len()
+        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).len()
     }
 }
 

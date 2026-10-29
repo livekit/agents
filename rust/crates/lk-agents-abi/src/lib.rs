@@ -130,7 +130,6 @@ pub use utils::clock::{
 };
 pub use utils::filters::FilterError;
 pub use utils::frame::FrameId;
-pub use utils::lock;
 pub use utils::maybe::Maybe;
 pub use utils::timer::{TimerId, TimerSet};
 
