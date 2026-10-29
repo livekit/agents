@@ -89,7 +89,8 @@ impl Run {
                 .applied()
                 .iter()
                 .filter(|a| a.accepted)
-                // This session's: a dropped connection or a swap took the person's turn along.
+                // This session's: a dropped connection or a swap (a fatal error the fallback
+                // answers with a fresh session) took the person's turn along.
                 .filter_map(|a| match &a.input {
                     Input::RealtimeEvent { socket: s, event: RtEvent::SpeechStarted }
                         if s.nth == socket =>
@@ -98,7 +99,7 @@ impl Run {
                     }
                     Input::RealtimeEvent {
                         socket: s,
-                        event: RtEvent::SpeechStopped | RtEvent::Disconnected,
+                        event: RtEvent::SpeechStopped | RtEvent::Disconnected | RtEvent::FatalError,
                     } if s.nth == socket => Some(false),
                     _ => None,
                 })
