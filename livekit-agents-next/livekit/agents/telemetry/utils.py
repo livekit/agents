@@ -21,9 +21,10 @@ _FALSY = ("0", "false", "no", "off")
 def allow_pii_from_env() -> bool | None:
     """The ``LIVEKIT_TELEMETRY_ALLOW_PII`` setting, or ``None`` when unset.
 
-    For integrators who let the framework adopt the ambient OpenTelemetry provider (a
-    NodeSDK-style setup) and so have nowhere to pass ``allow_pii``. Set it to ``0`` to
-    withhold conversational content from third-party exporters.
+    ``set_tracer_provider(allow_pii=)`` when the call omits it, and the ambient provider's when
+    the framework adopts it. ``False`` filters nothing: the framework warns once per provider
+    that it cannot filter application processors. What a destination exports is decided by its
+    ``RedactingSpanExporter`` / ``RedactingLogExporter``.
     """
     raw = os.environ.get(_ALLOW_PII_ENV_VAR)
     if raw is None:
@@ -32,15 +33,13 @@ def allow_pii_from_env() -> bool | None:
 
 
 def redaction_enabled(span_attributes: Mapping[str, object] | None = None) -> bool:
-    """Whether the project has mandated PII redaction.
+    """Whether the project mandated PII redaction for the current job.
 
-    Set in the LiveKit Cloud dashboard (or per session with
-    ``record={"redaction": True}``) and never weakened from here — when it is on, PII is
-    stripped for every destination, LiveKit Cloud included. ``span_attributes`` lets a
-    span ended off the job's thread resolve from the flag stamped on it at span start.
-
-    Stripping PII for *third-party* exporters is not this flag: that is the default, and
-    is lifted per provider with ``set_tracer_provider(..., allow_pii=True)``.
+    Set in the LiveKit Cloud dashboard, or per session with ``record={"redaction": True}``.
+    ``span_attributes`` resolves it for a span ended off the job's thread, from the flag stamped
+    on it at span start. Read by the framework's log handlers and the session report upload to
+    filter what they send; application exporters are filtered only through the destination
+    wrappers, which honour the stamped flag.
     """
     if span_attributes and span_attributes.get(ATTRIBUTE_REDACTION_ENABLED):
         return True
