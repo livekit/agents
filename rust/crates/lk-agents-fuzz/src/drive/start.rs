@@ -234,7 +234,7 @@ impl Run {
         registry.attach_session(api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
-        let host: Arc<Mutex<Vec<(Observed, Host)>>> = Arc::default();
+        let host: Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>> = Arc::default();
         let livelock: Arc<Mutex<Option<String>>> = Arc::default();
         let (runtime_tx, runtime_rx) = oneshot::channel();
         {
@@ -258,14 +258,21 @@ impl Run {
                 }
                 steps.lock().unwrap().push((at, step.clone()));
             });
-            let (host, stamps) = (host.clone(), stamps.clone());
+            let (host, stamps, session) = (host.clone(), stamps.clone(), Arc::downgrade(&api));
             let host_event = Box::new(move |event: &HostEvent| {
                 let seen = match event {
                     HostEvent::Session(event) => Host::Session(event.clone()),
                     HostEvent::Hook(call) => hook_of(call),
                     HostEvent::Room(event) => Host::Room(event.clone()),
+                    HostEvent::SpeechRetired(_) => return,
                 };
-                host.lock().unwrap().push((stamps.next(), seen));
+                let handle = match &seen {
+                    Host::Session(SessionEvent::SpeechCreated { speech, .. }) => {
+                        session.upgrade().and_then(|session| session.speech(*speech))
+                    }
+                    _ => None,
+                };
+                host.lock().unwrap().push((stamps.next(), seen, handle));
             });
             api.probe(Probe { step, host_event });
         }

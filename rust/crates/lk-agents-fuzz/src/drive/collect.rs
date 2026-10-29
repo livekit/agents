@@ -26,10 +26,10 @@ impl Run {
         }
         let from_host = self.record.host().len();
         let host = std::mem::take(&mut *self.host.lock().unwrap());
-        for (at, seen) in host {
+        for (at, seen, handle) in host {
             // The handle is kept, not just recorded: `AwaitSpeech` needs the real object.
-            if let Host::Session(SessionEvent::SpeechCreated { speech, .. }) = &seen
-                && let Some(handle) = self.api.speech(*speech)
+            if let (Host::Session(SessionEvent::SpeechCreated { speech, .. }), Some(handle)) =
+                (&seen, handle)
             {
                 self.handles.entry(speech.0).or_insert(handle);
             }

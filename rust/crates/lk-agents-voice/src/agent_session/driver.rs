@@ -420,6 +420,7 @@ impl Driver {
         )));
         self.session.trace.speech_ended(id, state.view());
         self.outbox.extend(unqueued_speech(id, state));
+        self.activity.speech_scheduler.retire_later(id);
         // The host stream still exists, so the speech is announced and ended on it like every other.
         let kind = if what == "say" {
             crate::agent_activity::scheduling::SpeechKind::Say

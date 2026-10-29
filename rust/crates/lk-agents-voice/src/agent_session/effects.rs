@@ -741,6 +741,11 @@ impl Driver {
             effects.push(Effect::SessionView(Arc::clone(&self.view)));
         }
         effects.append(&mut self.outbox);
+        // Last, behind every event of the step that names them.
+        let (runs, tools) = (&self.session.runs, &self.activity.tools);
+        let named = |speech| runs.names(speech) || tools.live(speech).next().is_some();
+        let retired = self.activity.speech_scheduler.take_retired(named);
+        effects.extend(retired.into_iter().map(|id| Effect::Host(HostEvent::SpeechRetired(id))));
         effects
     }
 

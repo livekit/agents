@@ -102,6 +102,8 @@ mod speech_scheduler {
         preemptive_generation_count: u32,
         /// What released speeches published last, then their release, until taken.
         released: Vec<(SpeechId, SpeechUpdate)>,
+        /// Released speeches something may still name (a run's verdict, a tool still running).
+        retiring: std::collections::BTreeSet<SpeechId>,
     }
 
     impl Default for SpeechScheduler {
@@ -123,6 +125,7 @@ mod speech_scheduler {
                 preflight: None,
                 preemptive_generation_count: 0,
                 released: Vec::new(),
+                retiring: Default::default(),
             }
         }
 
@@ -158,6 +161,18 @@ mod speech_scheduler {
 
         pub fn speech_mut(&mut self, speech: SpeechId) -> Option<&mut SpeechState> {
             self.speeches.get_mut(&speech).map(|e| &mut e.state)
+        }
+
+        /// A speech the loop never queued, ended as it was created: it retires like a released one.
+        pub fn retire_later(&mut self, speech: SpeechId) {
+            self.retiring.insert(speech);
+        }
+
+        /// The released speeches `named` no longer names: nothing will refer to them again.
+        pub fn take_retired(&mut self, named: impl Fn(SpeechId) -> bool) -> Vec<SpeechId> {
+            let mut retired = Vec::new();
+            self.retiring.retain(|speech| named(*speech) || (retired.push(*speech), false).1);
+            retired
         }
 
         /// What every speech published since the last call, released ones first.
@@ -348,6 +363,7 @@ mod speech_scheduler {
             let mut entry = self.speeches.remove(&speech)?;
             let last = entry.state.take_updates().into_iter().chain([SpeechUpdate::Released]);
             self.released.extend(last.map(|u| (speech, u)));
+            self.retiring.insert(speech);
             // A preemptive generation that wound down on its own before the turn committed.
             if self.preemptive_generation.as_ref().is_some_and(|(held, _)| *held == speech) {
                 self.preemptive_generation = None;

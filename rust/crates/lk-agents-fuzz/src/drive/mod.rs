@@ -68,7 +68,6 @@ use lk_agents_voice::{
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
-
     tool_executor::ToolOutcome,
     trace::{
         CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,
@@ -655,7 +654,9 @@ pub struct Run {
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
     /// Host events the probe stamped as the session's drain handed them over.
-    host: Arc<Mutex<Vec<(Observed, Host)>>>,
+    /// What the host received, with the live handle of a speech it was told of, taken as the
+    /// event was delivered (the session lets it go once nothing names it).
+    host: Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>>,
     /// Set by the observer when it stopped a step for journaling without bound at one instant.
     livelock: Arc<Mutex<Option<String>>>,
     pending: BTreeMap<u32, Pending>,

@@ -82,12 +82,13 @@ impl Runs {
         }
         self.next += 1;
         let run = RunRef { id: RunId(self.next), host: spec.host.clone() };
-        self.open = Some(OpenRun {
-            run: run.clone(),
-            owned: BTreeSet::new(),
-            last: None,
-        });
+        self.open = Some(OpenRun { run: run.clone(), owned: BTreeSet::new(), last: None });
         Ok(run)
+    }
+
+    /// The open run's verdict will name `speech` when it settles.
+    pub(super) fn names(&self, speech: SpeechId) -> bool {
+        self.open.as_ref().and_then(|r| r.last).is_some_and(|(last, _)| last == speech)
     }
 
     /// The open run, as its events name it.
@@ -106,7 +107,11 @@ impl Runs {
     }
 
     /// Release `what`; an ended speech (and whether it failed) becomes the verdict speech.
-    pub(super) fn release(&mut self, what: Owned, ended: Option<(SpeechId, bool)>) -> Option<RunId> {
+    pub(super) fn release(
+        &mut self,
+        what: Owned,
+        ended: Option<(SpeechId, bool)>,
+    ) -> Option<RunId> {
         let r = self.open.as_mut()?;
         if !r.owned.remove(&what) {
             return None;

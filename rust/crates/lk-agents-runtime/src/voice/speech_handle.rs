@@ -421,8 +421,8 @@ impl SpeechHandle {
     }
 }
 
-/// A session's speeches by id, from the host's call (or the core's creation) to the session's
-/// end: events and runs name a speech after the loop let it go.
+/// A session's speeches by id, from the host's call (or the core's creation) until the core
+/// retires the speech: events, runs and running tools name a speech after the loop let it go.
 #[derive(Default)]
 pub struct Speeches(Mutex<BTreeMap<SpeechId, Arc<SpeechHandle>>>);
 
@@ -435,6 +435,17 @@ impl Speeches {
 
     pub fn get(&self, id: SpeechId) -> Option<Arc<SpeechHandle>> {
         lock(&self.0).get(&id).cloned()
+    }
+
+    /// Nothing names `id` any more: the session lets its handle go (the host keeps its own).
+    pub fn retire(&self, id: SpeechId) {
+        lock(&self.0).remove(&id);
+    }
+
+    /// How many speeches the session holds.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        lock(&self.0).len()
     }
 
     /// The host's object for `id`; a speech the session never held reads as a fresh one.

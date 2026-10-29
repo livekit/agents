@@ -102,6 +102,9 @@ pub enum HostEvent {
     Room(crate::room_io::RoomIoEvent),
     /// On this stream, so its order against the other events is a fact.
     Hook(HookCall),
+    /// Nothing will name the speech again: the host's object for it is let go once every event
+    /// before this one has been delivered.
+    SpeechRetired(SpeechId),
 }
 
 impl HostEvent {
@@ -124,7 +127,7 @@ impl HostEvent {
                 }
                 crate::room_io::RoomIoEvent::KeyPressed => return None,
             },
-            HostEvent::Hook(_) => return None,
+            HostEvent::Hook(_) | HostEvent::SpeechRetired(_) => return None,
         })
     }
 }

@@ -8,6 +8,7 @@ use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 
 use super::*;
 use crate::room_io::FixedRoom;
+use crate::voice::speech_handle::SpeechHandle;
 use crate::voice::{Executor, remote_session};
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ProviderError;
@@ -20,7 +21,6 @@ use lk_agents_voice::agent_session::host_events::{HookCall, HookKind};
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
-use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::Step;
 use std::future::Future as _;
 use std::sync::Mutex;
@@ -137,7 +137,9 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
                             HostEvent::Session(SessionEvent::Close { .. }) => {
                                 saw.store(true, Ordering::SeqCst);
                             }
-                            HostEvent::Session(_) | HostEvent::Room(_) => {}
+                            HostEvent::Session(_)
+                            | HostEvent::Room(_)
+                            | HostEvent::SpeechRetired(_) => {}
                         }
                     }
                     ended.store(true, Ordering::SeqCst);
@@ -884,4 +886,21 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
     assert!(!accepted_started, "closing during opening lost the accepted remote host");
     assert!(refused_started, "a refused opening closed a host the session never owned");
     assert!(refused_transport.closed.load(Ordering::SeqCst));
+}
+
+// Catches: the session holding every speech's live handle (its items, generations and the host's
+// object) until it ends, which a long call grows without bound.
+#[tokio::test(start_paused = true)]
+async fn a_finished_speech_leaves_the_sessions_registry() {
+    let api = running(unobserved(fake_room("retired-speeches").1, None)).await;
+    api.set_audio_output(None).unwrap();
+    for _ in 0..8 {
+        let speech = api.say("Done.".into(), None, true, None).unwrap();
+        settle().await;
+        api.time().advance(Duration::from_secs(1));
+        settle().await;
+        assert!(speech.done(), "the say never finished");
+    }
+    assert_eq!(api.speeches.len(), 0, "finished speeches stayed in the session's registry");
+    api.close(CloseReason::UserInitiated, false, None).await;
 }

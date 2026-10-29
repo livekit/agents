@@ -883,6 +883,7 @@ impl Driver {
         for update in crate::agent_session::unqueued_speech(id, state) {
             out.machine().push(update);
         }
+        self.activity.speech_scheduler.retire_later(id);
         self.answer_speech(call);
     }
 

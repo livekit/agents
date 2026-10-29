@@ -966,6 +966,8 @@ impl SessionRunner {
                 let text = t.ev.best_alternative().map(|a| a.text.as_str()).unwrap_or_default();
                 let _ = self.room_io.on_user_input_transcribed(text, t.is_final).await;
             }
+            // Every event naming it was wired before this one.
+            HostEvent::SpeechRetired(speech) => self.speeches.retire(*speech),
             _ => {}
         }
         Some(ev)
