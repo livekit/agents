@@ -1,8 +1,6 @@
-//! A held lease: its fence, the renewal task that keeps it, and its observed loss, with the
-//! timing decisions on supplied time: when a held lease is renewed and when a failing renewal
-//! means the lease is lost ([`Renewal`]), and how a waiter paces its acquire attempts
-//! ([`LanePoll`]). The renewal task holds only the database and the fence, never the lease
-//! itself, so dropping the last [`Lease`] handle stops it.
+//! A held lease: its fence, the renewal task that keeps it, and its observed loss. The renewal
+//! task holds only the database and the fence, never the lease itself, so dropping the last
+//! [`Lease`] handle stops it. A waiter paces its acquire attempts with [`LanePoll`].
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +10,7 @@ use lk_agents_net::task::TokioSpawner;
 use tokio::sync::watch;
 
 use crate::db::EventWrite;
-use crate::engine::Thread;
+use crate::engine::{LeaseTiming, Thread};
 use crate::schema::{ExtendLease, InsertRunEnded, ReleaseLease, ReleaseLeaseIfDrained};
 use crate::sql::{Bind, SqlValue};
 use crate::{Fence, StorageError};
@@ -56,35 +54,39 @@ impl Lease {
         &self.inner.fence.holder
     }
 
-    /// Extends the lease on the core's schedule until [`Lease::stop`] or the last handle drops.
-    /// An extend that changes no row, or failures that outlast the lease, mark it lost.
+    /// Extends the lease every `renew_interval`, each extend bounded by the interval, until
+    /// [`Lease::stop`] or the last handle drops. An extend that changes no row marks the lease
+    /// lost, and so do failures once they outlast `ttl - renew_interval`: the lease may have
+    /// lapsed by then.
     pub fn keep_alive(&self) {
         let (db, fence, lost) =
             (self.inner.db.clone(), self.inner.fence.clone(), self.inner.lost.clone());
         let work = async move {
-            let timing = db.timing;
-            let epoch = tokio::time::Instant::now();
-            let mut renewal = Renewal::new(timing.ttl, timing.renew_interval, epoch.elapsed());
+            let LeaseTiming { ttl, renew_interval: interval } = db.timing;
+            let mut extended_at = tokio::time::Instant::now();
             loop {
-                tokio::time::sleep_until(epoch + renewal.wake_at()).await;
-                let extend = db.exec(extend(&fence, timing.secs()));
-                let outcome = match tokio::time::timeout(renewal.attempt_timeout(), extend).await {
-                    Ok(Ok(rows)) => Ok(rows > 0),
-                    Ok(Err(e)) => Err(e),
-                    Err(_) => Err(StorageError::Unavailable("the extend timed out".into())),
+                tokio::time::sleep(interval).await;
+                let extend = db.exec(extend(&fence, db.timing.secs()));
+                let outcome = tokio::time::timeout(interval, extend).await.unwrap_or_else(|_| {
+                    Err(StorageError::Unavailable("the extend timed out".into()))
+                });
+                let now = tokio::time::Instant::now();
+                let reason = match outcome {
+                    Ok(rows) if rows > 0 => {
+                        extended_at = now;
+                        continue;
+                    }
+                    Ok(_) => "the lease was taken or released".to_owned(),
+                    Err(e) if e.retryable() && now - extended_at < ttl.saturating_sub(interval) => {
+                        log::debug!(target: "livekit.agents", lane = fence.lane.as_str(); "lease extend failed, retrying: {e}");
+                        continue;
+                    }
+                    Err(e) => format!("lease renewal failed: {e}"),
                 };
-                match renewal.on_extend(epoch.elapsed(), outcome.as_ref().map(|r| *r)) {
-                    Renewed::Extended => {}
-                    Renewed::Retry => {
-                        log::debug!(target: "livekit.agents", lane = fence.lane.as_str(); "lease extend failed, retrying: {:?}", outcome.err());
-                    }
-                    Renewed::Lost(reason) => {
-                        let reason = format!("lease on lane {}: {reason}", fence.lane);
-                        log::warn!(target: "livekit.agents", lane = fence.lane.as_str(); "{reason}");
-                        lost.send_replace(Some(reason));
-                        return;
-                    }
-                }
+                let reason = format!("lease on lane {}: {reason}", fence.lane);
+                log::warn!(target: "livekit.agents", lane = fence.lane.as_str(); "{reason}");
+                lost.send_replace(Some(reason));
+                return;
             }
         };
         let task = TokioSpawner::current().spawn(work);
@@ -153,92 +155,9 @@ pub fn lease_secs(ttl: Duration) -> i64 {
     (ttl.as_secs() + u64::from(ttl.subsec_nanos() > 0)) as i64
 }
 
-/// What an extend attempt means for the lease.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Renewed {
-    /// The lease runs another TTL from now.
-    Extended,
-    /// A retryable failure while the lease cannot have lapsed yet: try again at the next wake.
-    Retry,
-    /// The lease is gone: another holder took it, it was released, or renewal kept failing
-    /// until it could have lapsed. Stop admission and cancel the run.
-    Lost(String),
-}
-
-/// The renewal schedule of one held lease: an extend every `interval`, each bounded by
-/// `interval`, and the lease counted lost once failures outlast `ttl - interval`.
-#[derive(Debug, Clone)]
-pub struct Renewal {
-    ttl: Duration,
-    interval: Duration,
-    extended_at: Duration,
-    next: Duration,
-}
-
-impl Renewal {
-    /// A lease taken at `acquired_at`.
-    pub fn new(ttl: Duration, interval: Duration, acquired_at: Duration) -> Self {
-        Self { ttl, interval, extended_at: acquired_at, next: acquired_at + interval }
-    }
-
-    /// When the next extend is sent.
-    pub fn wake_at(&self) -> Duration {
-        self.next
-    }
-
-    /// How long one extend may take before it counts as failed.
-    pub fn attempt_timeout(&self) -> Duration {
-        self.interval
-    }
-
-    /// The extend sent at the wake answered at `now`: `Ok(true)` when it changed the lease row,
-    /// `Ok(false)` when the token is no longer the lane's, `Err` when it failed or timed out.
-    pub fn on_extend(&mut self, now: Duration, outcome: Result<bool, &StorageError>) -> Renewed {
-        self.next = now + self.interval;
-        match outcome {
-            Ok(true) => {
-                self.extended_at = now;
-                Renewed::Extended
-            }
-            Ok(false) => Renewed::Lost("the lease was taken or released".into()),
-            Err(e)
-                if e.retryable()
-                    && now.saturating_sub(self.extended_at)
-                        < self.ttl.saturating_sub(self.interval) =>
-            {
-                Renewed::Retry
-            }
-            Err(e) => Renewed::Lost(format!("lease renewal failed: {e}")),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn unavailable() -> StorageError {
-        StorageError::Unavailable("the node is draining".into())
-    }
-
-    #[test]
-    fn failing_extends_are_retried_until_the_lease_could_have_lapsed() {
-        let t0 = Duration::from_secs(100);
-        let s = Duration::from_secs;
-        let mut r = Renewal::new(s(10), s(3), t0);
-        assert_eq!(r.wake_at(), t0 + s(3));
-        assert_eq!(r.on_extend(t0 + s(3), Ok(true)), Renewed::Extended);
-        assert_eq!(r.wake_at(), t0 + s(6));
-        assert_eq!(r.on_extend(t0 + s(6), Err(&unavailable())), Renewed::Retry);
-        assert_eq!(r.on_extend(t0 + s(9), Err(&unavailable())), Renewed::Retry);
-        // 7 s since the last extend: one more interval and the lease may have lapsed
-        assert!(matches!(r.on_extend(t0 + s(10), Err(&unavailable())), Renewed::Lost(_)));
-        let mut r = Renewal::new(s(10), s(3), t0);
-        assert!(matches!(r.on_extend(t0 + s(3), Ok(false)), Renewed::Lost(_)));
-        let mut r = Renewal::new(s(10), s(3), t0);
-        let fatal = StorageError::Unauthorized("key".into());
-        assert!(matches!(r.on_extend(t0 + s(3), Err(&fatal)), Renewed::Lost(_)));
-    }
 
     #[test]
     fn the_poll_backs_off_to_a_second_and_stops_at_its_deadline() {
