@@ -16,7 +16,7 @@ use std::time::Duration;
 
 pub use lk_agents_voice::background_audio::{
     AUDIO_SOURCE_BUFFER_MS, AudioConfig, BuiltinAudioClip, LoopingStreamError, Playback,
-    TRACK_NAME, apply_gain, select_sound,
+    PlayerPhase, TRACK_NAME, ThinkingSound, apply_gain, plan_play, select_sound, thinking_sound,
 };
 
 pub use lk_agents_abi::voice::background_audio::{
@@ -249,26 +249,26 @@ impl BackgroundAudioPlayer {
         thinking: bool,
         choose: bool,
     ) -> Result<(), PlaybackError> {
-        // `_agent_state_changed`. Re-entering "thinking" while the clip still plays must not layer
-        // a second copy; `stop()` on a finished handle is a no-op. Unstarted or closing, the
-        // reference is not listening yet or any more.
-        if sounds.is_empty()
-            || !self.started.load(Ordering::Acquire)
-            || self.closing.load(Ordering::Acquire)
-            || self.closed.load(Ordering::Acquire)
-        {
-            return Ok(());
-        }
         let mut handle = self.thinking.lock().unwrap();
-        match (thinking, handle.as_ref()) {
-            (true, Some(h)) if !h.done() => {}
-            (true, _) => *handle = Some(self.play(sounds, choose, false, false, draw)?),
-            (false, Some(h)) => {
-                h.stop();
+        let last_done = handle.as_ref().map(|h| h.done());
+        match thinking_sound(self.phase(), !sounds.is_empty(), thinking, last_done) {
+            ThinkingSound::Keep => {}
+            ThinkingSound::Start => *handle = Some(self.play(sounds, choose, false, false, draw)?),
+            ThinkingSound::Stop => {
+                if let Some(h) = handle.as_ref() {
+                    h.stop();
+                }
             }
-            (false, None) => {}
         }
         Ok(())
+    }
+
+    fn phase(&self) -> PlayerPhase {
+        PlayerPhase {
+            started: self.started.load(Ordering::Acquire),
+            closing: self.closing.load(Ordering::Acquire),
+            closed: self.closed.load(Ordering::Acquire),
+        }
     }
 
     pub fn play(
@@ -279,25 +279,12 @@ impl BackgroundAudioPlayer {
         ambient: bool,
         draw: f64,
     ) -> Result<Arc<PlaybackHandle>, PlaybackError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(PlaybackError::Closed);
-        }
-        if !self.started.load(Ordering::Acquire) {
-            return Err(PlaybackError::NotStarted);
-        }
-        let configs: Vec<_> = sounds.iter().map(|sound| sound.config.clone()).collect();
-        let index =
-            if choose { select_sound(&configs, draw) } else { (!sounds.is_empty()).then_some(0) };
-        let Some(index) = index else {
+        let Some((index, looping)) =
+            plan_play(self.phase(), &sounds, choose, looping, ambient, draw)?
+        else {
             return Ok(PlaybackHandle::already_done());
         };
-        let sound = sounds.into_iter().nth(index).unwrap();
-        // `loop_ambient = isinstance(cfg.source, str)`: files and builtins loop, iterators don't.
-        let is_stream = matches!(sound.input, PlaybackInput::Stream(_));
-        let looping = looping || (ambient && !is_stream);
-        if looping && is_stream {
-            return Err(LoopingStreamError.into());
-        }
+        let sound = sounds.into_iter().nth(index).expect("the plan names one of the sounds");
         let handle = PlaybackHandle::new(sound.config.fade_out);
         let input = match sound.input {
             PlaybackInput::File(path) => {

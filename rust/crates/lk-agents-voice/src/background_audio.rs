@@ -1,6 +1,7 @@
 //! Background sound selection and per-frame fade progression.
 
 pub use lk_agents_abi::voice::background_audio::{AudioConfig, LoopingStreamError};
+use lk_agents_abi::voice::background_audio::{PlaybackError, PlaybackInput, Sound};
 use std::f64::consts::PI;
 
 // Kept small because `clear_queue()` would cut ambient sounds abruptly: a sound removed from the
@@ -65,6 +66,75 @@ pub fn select_sound(sounds: &[AudioConfig], draw: f64) -> Option<usize> {
     }
     // Float error can leave `r` above the final sum: the last entry wins.
     Some(sounds.len() - 1)
+}
+
+/// The player's lifecycle, as `play` and the agent-state listener read it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerPhase {
+    pub started: bool,
+    /// `aclose()` is stopping the sounds.
+    pub closing: bool,
+    pub closed: bool,
+}
+
+/// `play(audio, loop)`: which of `sounds` starts and whether it loops, or `None` when the draw
+/// chose silence. `choose` draws by probability; otherwise the first sound plays. An ambient file
+/// loops (`loop_ambient = isinstance(cfg.source, str)`); a looping stream is refused.
+pub fn plan_play(
+    phase: PlayerPhase,
+    sounds: &[Sound],
+    choose: bool,
+    looping: bool,
+    ambient: bool,
+    draw: f64,
+) -> Result<Option<(usize, bool)>, PlaybackError> {
+    if phase.closed {
+        return Err(PlaybackError::Closed);
+    }
+    if !phase.started {
+        return Err(PlaybackError::NotStarted);
+    }
+    let index = if choose {
+        let configs: Vec<_> = sounds.iter().map(|sound| sound.config.clone()).collect();
+        select_sound(&configs, draw)
+    } else {
+        (!sounds.is_empty()).then_some(0)
+    };
+    let Some(index) = index else { return Ok(None) };
+    let is_stream = matches!(sounds[index].input, PlaybackInput::Stream(_));
+    let looping = looping || (ambient && !is_stream);
+    if looping && is_stream {
+        return Err(LoopingStreamError.into());
+    }
+    Ok(Some((index, looping)))
+}
+
+/// What an agent state change does to the thinking sound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingSound {
+    Keep,
+    Start,
+    Stop,
+}
+
+/// `_agent_state_changed`: entering "thinking" starts the sound unless it still plays (never a
+/// second copy), leaving it stops the sound. Unstarted or closing, nothing listens.
+/// `last_done` is whether the last thinking sound is done, when there was one.
+pub fn thinking_sound(
+    phase: PlayerPhase,
+    has_sounds: bool,
+    thinking: bool,
+    last_done: Option<bool>,
+) -> ThinkingSound {
+    if !has_sounds || !phase.started || phase.closing || phase.closed {
+        return ThinkingSound::Keep;
+    }
+    match (thinking, last_done) {
+        (true, Some(false)) => ThinkingSound::Keep,
+        (true, _) => ThinkingSound::Start,
+        (false, Some(_)) => ThinkingSound::Stop,
+        (false, None) => ThinkingSound::Keep,
+    }
 }
 
 /// `None` when no change is needed, else one value per sample with volume and the equal-power fade
