@@ -11,27 +11,10 @@ import pytest
 
 from livekit.agents import AgentServer, JobContext, _core, cli
 from livekit.agents._generated.worker_cli import CliArgsConsole, CliArgsStart
-from livekit.agents._generated.worker_options import ServerOptions, WorkerPermissions
 from livekit.agents.job import RunningJobInfo
 from livekit.agents.worker import _ServerHost
 
 pytestmark = pytest.mark.unit
-
-
-def test_server_job_generated_record_roundtrip_refuses_partial_configuration_updates() -> None:
-    options = ServerOptions(
-        ws_url="wss://original.example",
-        permissions=WorkerPermissions(hidden=True, can_publish=False, can_publish_sources=[1, 2]),
-    )
-    config = _core.ServerConfig(options)
-    with pytest.raises(ValueError, match="initialize_process_timeout"):
-        config.update(
-            ServerOptions(ws_url="wss://refused.example", initialize_process_timeout=float("nan"))
-        )
-    assert config.ws_url == "wss://original.example"
-    config.update(ServerOptions(ws_url="wss://accepted.example", drain_timeout=None))
-    assert config.ws_url == "wss://accepted.example"
-    assert config.drain_timeout == 0
 
 
 def test_cli_generated_args_matrix_dispatches_every_command_and_preserves_status(

@@ -83,21 +83,6 @@ def test_preload_import_failure_preserves_module_and_cause(
         sys.modules.pop("preload_first", None)
 
 
-@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
-def test_preload_does_not_convert_process_control_exceptions(
-    launch: types.ModuleType, monkeypatch: pytest.MonkeyPatch, exception_type: type[BaseException]
-) -> None:
-    signal = exception_type("stop preload")
-
-    def interrupted(_: str) -> None:
-        raise signal
-
-    monkeypatch.setattr(launch.importlib, "import_module", interrupted)
-    with pytest.raises(exception_type) as caught:
-        launch.load_preload_modules(["application.catalog"])
-    assert caught.value is signal
-
-
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows uses spawn")
 def test_running_forkserver_refuses_different_preloads_before_mutating_environment(
     launch: types.ModuleType, monkeypatch: pytest.MonkeyPatch

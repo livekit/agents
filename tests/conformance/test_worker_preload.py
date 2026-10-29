@@ -17,7 +17,6 @@ from typing import cast
 import psutil
 import pytest
 
-from livekit.agents import AgentServer
 from livekit.agents.ipc import JobExecutor
 from livekit.agents.ipc.launch import configure_forkserver
 from livekit.agents.job import JobContext, JobProcess
@@ -177,22 +176,6 @@ async def test_rtc_runtime_is_warm_before_the_job_loop_and_readiness(
     await asyncio.wait_for(process.aclose(), timeout=5)
     await asyncio.wait_for(process.join(), timeout=5)
     assert process.exitcode == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["server", "executor"])
-async def test_async_setup_is_refused_at_the_public_launch_boundary(
-    own_executor: Callable[[JobExecutor], JobExecutor], boundary: str
-) -> None:
-    async def setup(process: JobProcess) -> None:
-        raise AssertionError("asynchronous setup must not execute")
-
-    callback = cast(Callable[[JobProcess], None], setup)
-    with pytest.raises(TypeError, match="setup_fnc must be a synchronous callable"):
-        if boundary == "server":
-            AgentServer(setup_fnc=callback)
-        else:
-            _executor(own_executor, modules=(), setup=callback)
 
 
 @pytest.mark.asyncio

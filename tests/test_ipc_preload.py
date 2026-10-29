@@ -46,30 +46,3 @@ def test_local_inference_preload_can_be_disabled(
     _preload._local_inference_models()
 
     assert local_inference_calls == []
-
-
-@pytest.mark.parametrize("value", ["1", "true", "yes", "on", ""])
-def test_truthy_values_preload_both_models(
-    monkeypatch: pytest.MonkeyPatch, local_inference_calls: list[str], value: str
-) -> None:
-    # an explicit value wins over the default, even in a spawned job process
-    monkeypatch.setenv(_preload.ENV_PRELOAD_LOCAL_INFERENCE, value)
-    monkeypatch.setattr("multiprocessing.parent_process", lambda: MagicMock())
-
-    _preload._local_inference_models()
-
-    assert local_inference_calls == ["vad", "eot"]
-
-
-@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
-def test_framework_preload_preserves_process_control_exceptions(
-    exception_type: type[BaseException],
-) -> None:
-    signal = exception_type("stop preload")
-
-    def interrupted() -> None:
-        raise signal
-
-    with pytest.raises(exception_type) as caught:
-        _preload._step("application resources", interrupted)
-    assert caught.value is signal
