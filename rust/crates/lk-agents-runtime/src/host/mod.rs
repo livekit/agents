@@ -12,12 +12,15 @@
 
 use std::collections::BTreeMap;
 
+use futures_util::StreamExt as _;
+use futures_util::stream::FuturesUnordered;
 use lk_agents_abi::agent::{HostContext, Invocation};
 use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal, Scope};
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{BoxFuture, FunctionCall};
-use tokio::task::JoinSet;
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 
 /// Runs `call` through `entry` in a copy of the host context `scope` captured; dropping the
 /// future cancels the host side, which still settles. A refused call resolves to the entry's
@@ -76,13 +79,19 @@ pub struct HostInvoker {
     entry: Invocation,
     next_operation: u64,
     live: BTreeMap<u64, Invocation>,
-    tasks: JoinSet<u64>,
+    /// Each callback's task; dropping the invoker cancels them.
+    tasks: FuturesUnordered<OwnedTask<u64>>,
 }
 
 impl HostInvoker {
     /// `entry` is captured where the owning operation was created; its `operation` is unused.
     pub fn new(entry: Invocation) -> Self {
-        HostInvoker { entry, next_operation: 0, live: BTreeMap::new(), tasks: JoinSet::new() }
+        HostInvoker {
+            entry,
+            next_operation: 0,
+            live: BTreeMap::new(),
+            tasks: FuturesUnordered::new(),
+        }
     }
 
     /// Runs `call` with a new invocation derived from the entry. The returned id names it for
@@ -103,13 +112,10 @@ impl HostInvoker {
         let invocation = Invocation { operation, function_call, approval, ..self.entry.clone() };
         self.live.insert(operation, invocation.clone());
         let work = call(invocation);
-        self.tasks.spawn_on(
-            async move {
-                work.await;
-                operation
-            },
-            runtime,
-        );
+        self.tasks.push(TokioSpawner::new(runtime.clone()).spawn(async move {
+            work.await;
+            operation
+        }));
         operation
     }
 
@@ -127,7 +133,7 @@ impl HostInvoker {
     /// it held). Pending forever while none is in flight.
     pub async fn settled(&mut self) -> u64 {
         loop {
-            match self.tasks.join_next().await {
+            match self.tasks.next().await {
                 Some(Ok(operation)) => {
                     self.live.remove(&operation);
                     return operation;
