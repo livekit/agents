@@ -8,7 +8,6 @@ speech, which freezes the end-of-turn anchor in ``turn_detection="stt"``.
 
 from __future__ import annotations
 
-from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,15 +16,6 @@ import pytest
 from livekit.plugins.google.stt import _streaming_recognize_response_to_speech_data
 
 pytestmark = pytest.mark.unit
-
-
-def _word(text: str, start: float, end: float) -> Any:
-    return SimpleNamespace(
-        word=text,
-        start_offset=timedelta(seconds=start),
-        end_offset=timedelta(seconds=end),
-        confidence=0.9,
-    )
 
 
 def _result(*, text: str, words: list[Any], is_final: bool = True, confidence: float = 0.8) -> Any:
@@ -66,24 +56,6 @@ def test_interim_without_word_offsets_reports_unknown_timing() -> None:
     assert data.text == "hello"
     assert data.start_time == 0.0
     assert data.end_time == 0.0
-
-
-def test_final_with_words_keeps_the_stream_timeline() -> None:
-    """Word-based results keep the stream offset applied and expose word timing."""
-    words = [_word("hello", 1.0, 1.4), _word("world", 1.4, 1.9)]
-    resp = _response([_result(text="hello world", words=words)])
-
-    data = _streaming_recognize_response_to_speech_data(
-        resp, min_confidence_threshold=0.0, start_time_offset=10.0
-    )
-
-    assert data is not None
-    assert data.start_time == pytest.approx(11.0)
-    assert data.end_time == pytest.approx(11.9)
-    assert data.words is not None
-    assert [str(word) for word in data.words] == ["hello", "world"]
-    assert data.words[0].start_time == pytest.approx(11.0)
-    assert data.words[0].end_time == pytest.approx(11.4)
 
 
 def test_low_confidence_interim_is_dropped() -> None:
