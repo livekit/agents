@@ -22,9 +22,9 @@ pub struct RunSpec {
     pub user_input: Option<String>,
     /// `output_type is not None`: a run ending without output is re-prompted.
     pub expects_output: bool,
-    /// `RunOutputOptions.max_retries` (default 2; `output_options=None` is 0).
+    /// The run's output budget (`retries["output"]`): re-prompts before the run fails.
     pub max_retries: u32,
-    /// `RunOutputOptions.retry_instructions`: the per-turn system message of the re-prompt.
+    /// The per-turn system message of the re-prompt.
     pub retry_instructions: String,
     /// The host's own object for the run (its `RunResult`), handed back on every run event.
     pub host: Option<HostRef>,

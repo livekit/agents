@@ -11,7 +11,6 @@ pub mod io;
 pub mod nodes;
 pub mod room_io;
 pub mod rtc;
-pub mod run_result;
 pub mod session_effects;
 pub mod session_options;
 pub mod workflows;

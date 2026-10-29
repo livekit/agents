@@ -56,7 +56,6 @@ const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/provider_format/image.rs",
     "rust/crates/lk-agents-abi/src/turn/keyterms.rs",
     "rust/crates/lk-agents-abi/src/llm/tool_executor.rs",
-    "rust/crates/lk-agents-abi/src/voice/run_result.rs",
     "rust/crates/lk-agents-abi/src/turn/eot.rs",
     "rust/crates/lk-agents-abi/src/worker/job.rs",
     "rust/crates/lk-agents-abi/src/types/connect.rs",
