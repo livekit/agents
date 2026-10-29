@@ -10,6 +10,7 @@ pub mod console;
 mod effects;
 pub mod generation;
 mod legs;
+mod ivr;
 mod recorder;
 pub mod remote_session;
 mod storage;
@@ -124,6 +125,8 @@ impl Runtime {
             predictions: Vec::new(),
             interruption,
         };
+        let ivr_detection = runtime.shared.view.borrow().config.effective.turn.ivr_detection();
+        ivr::start(runtime.peer.clone(), ivr_detection);
         if let Some(room_io) = room_io {
             let io_queue = runtime.reports.clone();
             let rtc_queue = runtime.reports.clone();

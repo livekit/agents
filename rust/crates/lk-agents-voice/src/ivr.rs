@@ -1,8 +1,8 @@
-use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap};
+use crate::agent_session::{IvrCommand, SpeechCommand, SystemTap};
 use crate::events::SessionEvent;
 use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step, TimerName};
+use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
-use lk_agents_abi::{SpawnerExt, Ts};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -148,8 +148,13 @@ struct Navigator {
     max_silence: Duration,
 }
 
+pub enum IvrEffect {
+    Journal(Step),
+    Reply(SpeechCommand),
+}
+
 pub struct IvrSystem {
-    peer: PeerHandle,
+    effects: Vec<IvrEffect>,
     nav: Option<Navigator>,
     /// The (agent, user) labels last seen (`IVRActivity._current_agent_state/_current_user_state`);
     /// `initializing` counts as quiet.
@@ -161,45 +166,42 @@ pub struct IvrSystem {
 }
 
 impl IvrSystem {
-    /// The system, subscribed to the feed and navigating now if `ivr_detection`.
-    pub fn spawn(peer: PeerHandle, ivr_detection: bool) {
-        let rx = peer.subscribe();
-        let mut system = IvrSystem {
-            peer,
+    pub fn new(now: Ts, ivr_detection: bool) -> Self {
+        let mut system = Self {
+            effects: Vec::new(),
             nav: None,
             states: (AgentState::Initializing, UserState::Listening),
             deadline: None,
             closed: false,
         };
         if ivr_detection {
-            system.start(system.peer.time.now(), IVR_MAX_SILENCE);
+            system.start(now, IVR_MAX_SILENCE);
         }
-        let spawner = system.peer.spawner.clone();
-        spawner.spawn_unboxed(system.run(rx));
+        system
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    /// The loop: a due deadline fires before same-instant feed items; ends at close.
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>) {
-        let time = self.peer.time.clone();
-        let api = self.peer.queue.clone();
-        while !self.closed {
-            let deadline = self.deadline;
-            if deadline.is_some_and(|at| at <= time.now()) {
-                self.on_timer(time.now());
-                continue;
-            }
-            tokio::select! {
-                biased;
-                () = time.wait_until_opt(deadline) => self.on_timer(time.now()),
-                item = rx.recv() => match item {
-                    Some(item) => self.on_watched(time.now(), item),
-                    None => break,
-                },
-                () = api.closed() => break,
-            }
+    pub fn wake_at(&self) -> Option<Ts> {
+        self.deadline
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    pub fn take_effects(&mut self) -> Vec<IvrEffect> {
+        std::mem::take(&mut self.effects)
+    }
+
+    pub fn handle(&mut self, now: Ts, item: Option<SystemTap>) -> Vec<IvrEffect> {
+        match item {
+            Some(item) => self.on_watched(now, item),
+            None => self.on_timer(now),
         }
+        self.take_effects()
+    }
+
+    fn journal(&mut self, step: Step) {
+        self.effects.push(IvrEffect::Journal(step));
     }
 
     fn on_watched(&mut self, now: Ts, item: SystemTap) {
@@ -236,15 +238,14 @@ impl IvrSystem {
     /// Start the navigator; one already running stands.
     fn start(&mut self, now: Ts, max_silence: Duration) {
         if self.nav.is_some() {
-            self.peer
-                .journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::AlreadyStarted)));
+            self.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::AlreadyStarted)));
             return;
         }
         if self.closed {
             return;
         }
         self.nav = Some(Navigator { detector: TfidfLoopDetector::default(), max_silence });
-        self.peer.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::Started)));
+        self.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::Started)));
         // Both sides already quiet counts as the transition.
         self.quiet_edge(now);
     }
@@ -257,7 +258,7 @@ impl IvrSystem {
         if self.deadline.is_some() {
             self.cancel_silence();
         }
-        self.peer.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::Closed)));
+        self.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::Closed)));
     }
 
     /// Count one final (the only kind that counts toward a loop); a completed loop is nudged and
@@ -284,8 +285,7 @@ impl IvrSystem {
             (true, false) => {
                 let at = now.saturating_add(nav.max_silence);
                 self.deadline = Some(at);
-                self.peer
-                    .journal(Step::Core(CoreStep::TimerArmed { timer: TimerName::IvrSilence, at }));
+                self.journal(Step::Core(CoreStep::TimerArmed { timer: TimerName::IvrSilence, at }));
             }
             (false, true) => self.cancel_silence(),
             (true, true) | (false, false) => {}
@@ -294,7 +294,7 @@ impl IvrSystem {
 
     fn cancel_silence(&mut self) {
         self.deadline = None;
-        self.peer.journal(Step::Core(CoreStep::TimerCancelled(TimerName::IvrSilence)));
+        self.journal(Step::Core(CoreStep::TimerCancelled(TimerName::IvrSilence)));
     }
 
     /// The countdown elapsed: `_on_silence_detected`.
@@ -302,26 +302,23 @@ impl IvrSystem {
         if self.deadline.take().is_none() {
             return;
         }
-        self.peer.journal(Step::Core(CoreStep::TimerFired(TimerName::IvrSilence, now)));
+        self.journal(Step::Core(CoreStep::TimerFired(TimerName::IvrSilence, now)));
         self.reply(IvrReplyOrigin::Silence, true);
     }
 
     /// `generate_reply(allow_interruptions=..)` with no input, under the navigator's origin; nobody
     /// awaits the handle, as in the reference.
     fn reply(&mut self, origin: IvrReplyOrigin, allow_interruptions: bool) {
-        self.peer.journal(Step::Detector(DetectorStep::IvrTriggered { origin }));
-        let _ = self.peer.send(
-            Origin::Ivr,
-            SpeechCommand::GenerateReply {
-                user_input: None,
-                instructions: None,
-                allow_interruptions: Some(allow_interruptions),
-                tool_choice: None,
-                chat_ctx: None,
-                toolset: None,
-                on_enter: false,
-                call: None,
-            },
-        );
+        self.journal(Step::Detector(DetectorStep::IvrTriggered { origin }));
+        self.effects.push(IvrEffect::Reply(SpeechCommand::GenerateReply {
+            user_input: None,
+            instructions: None,
+            allow_interruptions: Some(allow_interruptions),
+            tool_choice: None,
+            chat_ctx: None,
+            toolset: None,
+            on_enter: false,
+            call: None,
+        }));
     }
 }

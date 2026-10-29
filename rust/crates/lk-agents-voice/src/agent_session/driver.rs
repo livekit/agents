@@ -858,7 +858,3 @@ pub enum DriverError {
     Missing(&'static str),
 }
 
-/// The IVR navigator, when the session detects IVRs; the AMD is the host's to start.
-pub fn start_ivr(peer: &PeerHandle, ivr_detection: bool) {
-    crate::ivr::IvrSystem::spawn(peer.clone(), ivr_detection);
-}

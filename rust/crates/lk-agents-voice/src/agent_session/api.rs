@@ -10,7 +10,7 @@ use crate::agent_session::commands::{
     AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText,
     SpeechCall, SpeechCommand,
 };
-use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
+use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::nodes::{Nodes, OutputNodes};
 use crate::agent_session::time::Timebase;
@@ -169,13 +169,11 @@ impl SessionApi {
             let tts_adapter = executor.tts_adapter();
             let stt_adapter = executor.stt_adapter();
             let (cores, handle) = builder.start(&mut *executor).await?;
-            let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
+            let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection: _, speech_ids } =
                 handle;
             #[cfg(feature = "dst")]
             let host_event = probe;
             let mut owner = executor.own(cores);
-            // The IVR navigator's task, subscribed before the opening cycle.
-            start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
             owner.open(time.read());
