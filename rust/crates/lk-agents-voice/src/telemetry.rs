@@ -34,6 +34,7 @@ use crate::agent_session::{HookId, HookKind};
 use crate::events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle};
 use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::metrics::base::{AgentMetrics, LlmMetrics, Metadata};
+use lk_agents_abi::telemetry::attrs;
 use lk_agents_core::telemetry::gen_ai::provider_name;
 use lk_agents_abi::voice::events::{
     AgentState, SpanEndedWire, SpanEvent, SpanMetric, SpanStartedWire, UserState,
@@ -140,7 +141,8 @@ pub(crate) struct SessionTrace {
     closing: Option<String>,
     updating: Option<Open>,
     user_turn: Option<Open>,
-    user_speaking: Option<Open>,
+    /// With the attributes the overlap's verdict leaves for its end.
+    user_speaking: Option<(Open, Attrs)>,
     eou_wait: Option<Open>,
     /// The `agent_speaking` span and the turn it is in.
     agent_speaking: Option<(Open, Option<SpeechId>)>,
@@ -463,8 +465,8 @@ impl SessionTrace {
             SessionEvent::UserStateChanged { old, new, at } => {
                 let at = wall(*at);
                 if *old == UserState::Speaking {
-                    if let Some(open) = self.user_speaking.take() {
-                        self.end(open, at, out);
+                    if let Some((open, attrs)) = self.user_speaking.take() {
+                        self.end_with(open, at, attrs, None, Default::default(), out);
                     }
                     // The end of speech starts the wait for the turn's decision.
                     if let (Some(turn), None) = (&self.user_turn, &self.eou_wait) {
@@ -476,8 +478,8 @@ impl SessionTrace {
                     self.end_eou_wait(at, "user_resumed", out);
                     self.open_user_turn(at, out);
                     let parent = self.user_turn.as_ref().map(|t| t.id.clone());
-                    self.user_speaking =
-                        Some(self.start("user_speaking", parent, at, Attrs::new(), out));
+                    let open = self.start("user_speaking", parent, at, Attrs::new(), out);
+                    self.user_speaking = Some((open, Attrs::new()));
                 }
             }
             SessionEvent::AgentStateChanged { old, new } => {
@@ -518,8 +520,8 @@ impl SessionTrace {
             }
             SessionEvent::UserTurnCompleted(e) => {
                 self.end_eou_wait(now, "committed", out);
-                if let Some(open) = self.user_speaking.take() {
-                    self.end(open, now, out);
+                if let Some((open, attrs)) = self.user_speaking.take() {
+                    self.end_with(open, now, attrs, None, Default::default(), out);
                 }
                 if let Some(open) = self.user_turn.take() {
                     let attrs = Attrs::new()
@@ -597,6 +599,17 @@ impl SessionTrace {
             SessionEvent::MetricsCollected { metrics, speech: Some(speech) } => {
                 if let Some(parent) = self.turn(*speech) {
                     self.inference(metrics, parent, out);
+                }
+            }
+            // The overlap's verdict describes the speech it was made on.
+            SessionEvent::OverlappingSpeech(e) => {
+                if let Some((_, verdict)) = &mut self.user_speaking {
+                    *verdict = Attrs::new()
+                        .set(attrs::IS_INTERRUPTION, e.is_interruption.to_string())
+                        .set(attrs::INTERRUPTION_PROBABILITY, e.probability)
+                        .set(attrs::INTERRUPTION_TOTAL_DURATION, e.total_duration)
+                        .set(attrs::INTERRUPTION_PREDICTION_DURATION, e.prediction_duration)
+                        .set(attrs::INTERRUPTION_DETECTION_DELAY, e.detection_delay);
                 }
             }
             SessionEvent::Close { .. } => self.close(now, out),
@@ -866,5 +879,39 @@ mod tests {
         let SessionEvent::SpanEnded(wait) = &out[0] else { panic!("{out:?}") };
         assert_eq!(wait.attributes["lk.eou.outcome"], "user_resumed");
         assert_eq!(wait.attributes["lk.eou.wait_duration"], 1.0);
+    }
+
+    // Catches: the adaptive interruption verdict missing from `user_speaking` (1.x parity).
+    #[test]
+    fn an_overlap_verdict_describes_the_user_speaking_span() {
+        let mut t = opened();
+        let mut out = Vec::new();
+        let edge = |old, new| SessionEvent::UserStateChanged { old, new, at: Ts::ZERO };
+        t.observe(3.0, &|_| 3.0, "a", &edge(UserState::Listening, UserState::Speaking), &mut out);
+        let verdict = lk_agents_abi::voice::events::OverlappingSpeechEvent {
+            created_at: 3.5,
+            detected_at: 3.5,
+            is_interruption: true,
+            agent_ended: false,
+            total_duration: 0.2,
+            prediction_duration: 0.05,
+            detection_delay: 0.4,
+            overlap_started_at: Some(3.1),
+            speech_input: None,
+            probabilities: None,
+            probability: 0.9,
+            num_requests: 1,
+        };
+        let ev = SessionEvent::OverlappingSpeech(Arc::new(verdict));
+        t.observe(3.5, &|_| 3.5, "a", &ev, &mut out);
+        out.clear();
+        t.observe(4.0, &|_| 4.0, "a", &edge(UserState::Speaking, UserState::Listening), &mut out);
+        let SessionEvent::SpanEnded(speaking) = &out[0] else { panic!("{out:?}") };
+        assert_eq!(speaking.span_id, "user_speaking_4");
+        assert_eq!(speaking.attributes["lk.is_interruption"], "true");
+        assert_eq!(speaking.attributes["lk.interruption.probability"], 0.9);
+        assert_eq!(speaking.attributes["lk.interruption.total_duration"], 0.2);
+        assert_eq!(speaking.attributes["lk.interruption.prediction_duration"], 0.05);
+        assert_eq!(speaking.attributes["lk.interruption.detection_delay"], 0.4);
     }
 }
