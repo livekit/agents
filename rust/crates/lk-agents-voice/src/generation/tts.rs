@@ -100,7 +100,7 @@ pub enum TranscriptEffect {
 
 /// Stamped words own an aligned transcript after the first stamp. An unstamped segment falls back
 /// to generated text. Closing flushes the transcript exactly once.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AlignedTranscript {
     pub words: String,
     pub stamped: bool,
@@ -210,5 +210,191 @@ impl SynthesisMetrics {
             self.metrics.finish(now, self.started_at, text, 0, 0, 0.0, false, context)?;
         record.speech_id = Some(speech_id.to_owned());
         Some(lk_agents_abi::metrics::base::AgentMetrics::Tts(record))
+    }
+}
+
+/// The outcome of synthesis that did not produce a completed segment.
+pub struct Lost {
+    pub failure: Option<crate::agent_session::DriverError>,
+    pub lost: bool,
+    pub opening: Visible,
+    pub synchronized: Option<String>,
+    pub played: bool,
+}
+
+/// The accumulated input of a synthesis attempt, preserved for a retry.
+pub struct SynthesisAttempt {
+    pub retry: super::Attempt,
+    pub opening: Visible,
+    pub input_done: bool,
+    synchronized: Option<String>,
+    produced: bool,
+}
+
+pub enum AttemptFailure {
+    Retry(ProviderError),
+    Stop(Lost),
+}
+
+pub enum RetryOutcome {
+    Again,
+    Interrupted,
+    Exhausted,
+}
+
+impl SynthesisAttempt {
+    pub fn new(options: lk_agents_abi::ApiConnectOptions, opening: Visible) -> Self {
+        Self {
+            retry: super::Attempt::new(options),
+            opening,
+            input_done: false,
+            synchronized: None,
+            produced: false,
+        }
+    }
+
+    pub fn before_open(&self, interrupted: bool, closing: bool) -> Option<Lost> {
+        (interrupted || closing).then(|| self.stopped())
+    }
+
+    pub fn stream_failed(
+        &mut self,
+        opening: Visible,
+        input_done: bool,
+        synchronized: Option<String>,
+    ) {
+        self.opening = opening;
+        self.input_done = input_done;
+        self.synchronized = synchronized;
+    }
+
+    pub fn failed(
+        &mut self,
+        error: crate::agent_session::DriverError,
+        produced: bool,
+    ) -> AttemptFailure {
+        self.produced = produced;
+        match error {
+            crate::agent_session::DriverError::Provider(error) => {
+                if produced {
+                    self.retry.produced_output();
+                }
+                AttemptFailure::Retry(error)
+            }
+            error => AttemptFailure::Stop(Lost {
+                failure: Some(error),
+                lost: false,
+                opening: self.opening.clone(),
+                synchronized: self.synchronized.clone(),
+                played: produced,
+            }),
+        }
+    }
+
+    pub fn after_retry(&self, outcome: RetryOutcome) -> Option<Lost> {
+        match outcome {
+            RetryOutcome::Again => None,
+            RetryOutcome::Interrupted => Some(self.stopped()),
+            RetryOutcome::Exhausted => Some(Lost {
+                failure: None,
+                lost: true,
+                opening: self.opening.clone(),
+                synchronized: self.synchronized.clone(),
+                played: self.produced,
+            }),
+        }
+    }
+
+    fn stopped(&self) -> Lost {
+        Lost {
+            failure: None,
+            lost: false,
+            opening: self.opening.clone(),
+            synchronized: None,
+            played: false,
+        }
+    }
+}
+
+/// How a lost synthesis settles the rest of its segment.
+#[derive(Default)]
+pub struct SynthesisLoss {
+    pending: Option<LossText>,
+}
+
+enum LossText {
+    Unheard,
+    Stamped(String),
+    Generated { played: bool, synchronized: Option<String> },
+}
+
+pub enum LossEvent {
+    Failed { lost: Lost, aligned: Option<AlignedTranscript> },
+    Drained(Visible),
+}
+
+pub enum LossEffect {
+    Fail(crate::agent_session::DriverError),
+    ReleaseVoice,
+    CutShort,
+    Capture(String),
+    Drain { opening: Visible, forward_text: bool },
+    Heard(crate::transcription::Heard),
+}
+
+impl SynthesisLoss {
+    pub fn handle(&mut self, event: LossEvent) -> Vec<LossEffect> {
+        match event {
+            LossEvent::Failed { lost, aligned } => {
+                if let Some(error) = lost.failure {
+                    return vec![LossEffect::Fail(error)];
+                }
+                if !lost.lost {
+                    self.pending = Some(LossText::Unheard);
+                    return vec![LossEffect::Drain { opening: lost.opening, forward_text: false }];
+                }
+                let mut effects = vec![LossEffect::ReleaseVoice, LossEffect::CutShort];
+                match aligned {
+                    Some(aligned) if aligned.stamped => {
+                        // Once stamps were accepted, model text can never become their fallback.
+                        self.pending = Some(LossText::Stamped(aligned.words));
+                        effects
+                            .push(LossEffect::Drain { opening: lost.opening, forward_text: false });
+                    }
+                    aligned => {
+                        if aligned.is_some_and(|a| !a.closed) {
+                            effects.push(LossEffect::Capture(lost.opening.text.clone()));
+                        }
+                        self.pending = Some(LossText::Generated {
+                            played: lost.played,
+                            synchronized: lost.synchronized,
+                        });
+                        effects
+                            .push(LossEffect::Drain { opening: lost.opening, forward_text: true });
+                    }
+                }
+                effects
+            }
+            LossEvent::Drained(words) => {
+                let Some(pending) = self.pending.take() else {
+                    return Vec::new();
+                };
+                let text = match pending {
+                    LossText::Unheard => {
+                        return vec![LossEffect::Heard(crate::transcription::Heard::default())];
+                    }
+                    LossText::Stamped(text) => text,
+                    LossText::Generated { played: true, synchronized } => {
+                        synchronized.unwrap_or(words.text)
+                    }
+                    LossText::Generated { played: false, .. } => String::new(),
+                };
+                vec![LossEffect::Heard(crate::transcription::Heard {
+                    text,
+                    complete: true,
+                    ..Default::default()
+                })]
+            }
+        }
     }
 }

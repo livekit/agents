@@ -5,7 +5,7 @@ use super::llm::{SegEvent, extend};
 use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
-use super::tts::{Aligned, Lost, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
+use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -15,6 +15,7 @@ use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
+use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::PlayoutStep;
@@ -261,42 +262,29 @@ impl Pump<'_> {
                         *idx += 1;
                         heard
                     }
-                    // Cut before a frame played: nothing was heard, the words are dropped.
-                    Err(Lost { failure: Some(error), .. }) => return Err(error),
-                    Err(Lost { lost: false, opening, .. }) => {
-                        drain_segment_text(rx, opening, None).await;
-                        unheard()
-                    }
-                    // The voice is gone for the rest of the step; the words are forwarded as text,
-                    // and the item reads as cut short (`interrupted=... or out.tts_failed`).
-                    Err(Lost { lost: true, opening, synchronized, played, .. }) => {
-                        self.voice = Voice::Silent;
-                        self.acc.cut_short();
-                        match aligned.as_ref().filter(|a| a.state.stamped) {
-                            // Stamps were already forwarded: the aligned stream never falls back,
-                            // so the rest (never heard) is drained and the words are the stamps.
-                            Some(a) => {
-                                let words = a.state.words.clone();
-                                drain_segment_text(rx, opening, None).await;
-                                silent(words, true)
-                            }
-                            // `opening` holds what the failed synthesiser was fed. The item is what
-                            // the synchroniser says was heard of it, else every word forwarded;
-                            // nothing when none of its audio played (`forward_generation` leaves
-                            // such a segment "skipped").
-                            None => {
-                                // On the aligned path none of the model's text went out: with no
-                                // stamp it stands in, as `_aligned_transcript_or_text` falls back.
-                                if aligned.as_ref().is_some_and(|a| !a.state.closed) {
-                                    capture(text_out, &opening.text).await;
+                    Err(lost) => {
+                        let mut state = SynthesisLoss::default();
+                        let mut effects: std::collections::VecDeque<_> = state
+                            .handle(LossEvent::Failed {
+                                lost,
+                                aligned: aligned.as_ref().map(|a| a.state.clone()),
+                            })
+                            .into();
+                        loop {
+                            match effects
+                                .pop_front()
+                                .expect("synthesis loss settles after draining")
+                            {
+                                LossEffect::Fail(error) => return Err(error),
+                                LossEffect::ReleaseVoice => self.voice = Voice::Silent,
+                                LossEffect::CutShort => self.acc.cut_short(),
+                                LossEffect::Capture(text) => capture(text_out, &text).await,
+                                LossEffect::Drain { opening, forward_text } => {
+                                    let text = if forward_text { text_out } else { None };
+                                    let drained = drain_segment_text(rx, opening, text).await;
+                                    effects.extend(state.handle(LossEvent::Drained(drained)));
                                 }
-                                let words = drain_segment_text(rx, opening, text_out).await.text;
-                                let heard = if played {
-                                    synchronized.unwrap_or(words)
-                                } else {
-                                    String::new()
-                                };
-                                silent(heard, true)
+                                LossEffect::Heard(heard) => break heard,
                             }
                         }
                     }

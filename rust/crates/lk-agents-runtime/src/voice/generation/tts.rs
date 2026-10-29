@@ -9,11 +9,13 @@ use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
+pub(super) use lk_agents_voice::generation::tts::Lost;
 use lk_agents_voice::generation::tts::{
     AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics, TextEffect,
     TranscriptEffect,
 };
-use lk_agents_voice::generation::{Attempt, GenEvent, TurnAccumulator};
+use lk_agents_voice::generation::tts::{AttemptFailure, RetryOutcome, SynthesisAttempt};
+use lk_agents_voice::generation::{GenEvent, TurnAccumulator};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Heard;
@@ -21,18 +23,6 @@ use lk_agents_voice::transcription::Visible;
 use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-/// `opening` is the text so far, still the item's. `lost`: the TTS failed for good; otherwise the
-/// speech was interrupted or closing before the synthesiser was asked, and no leg is opened.
-/// `synchronized`: the synchroniser's words up to where the failed synthesis played. `played`:
-/// the failed synthesis produced audio; with none, none of its words were heard.
-pub(super) struct Lost {
-    pub(super) failure: Option<DriverError>,
-    pub(super) lost: bool,
-    pub(super) opening: Visible,
-    pub(super) synchronized: Option<String>,
-    pub(super) played: bool,
-}
 
 /// One failed duplex stream: the error, whether audio came first, the words fed, and the
 /// synchroniser's words up to where its audio played.
@@ -58,28 +48,17 @@ pub(super) async fn perform_tts_inference(
     mut aligned: Option<&mut Aligned<'_>>,
     playback: &mut SynthesisPlayout<'_>,
 ) -> Result<Heard, Lost> {
-    let mut attempt = Attempt::new(shared.conn.tts);
-    // The segment's words so far and whether its text has ended: what a retried open replays.
-    let mut text = first;
-    let mut input_done = false;
-    let mut synchronized = None;
+    let mut state = SynthesisAttempt::new(shared.conn.tts, first);
     loop {
-        // Never open for a speech that is over or a closing session.
-        if handle.interrupted() || *shared.closing.borrow() {
-            return Err(Lost {
-                failure: None,
-                lost: false,
-                opening: text,
-                synchronized: None,
-                played: false,
-            });
+        if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
+            return Err(lost);
         }
         // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex open's
         // `Err` is a failed attempt, never a downgrade. What the words leg already closed is fed at
         // the open, so a preemptive generation's whole segment goes in at authorization; a live
         // segment streams the rest.
-        if !input_done {
-            input_done = take_text(rx, &mut text, text_out, false).await;
+        if !state.input_done {
+            state.input_done = take_text(rx, &mut state.opening, text_out, false).await;
         }
         let (error, produced) = match tts.stream().await {
             Err(error) => (DriverError::Provider(error), false),
@@ -118,56 +97,33 @@ pub(super) async fn perform_tts_inference(
                     rx,
                     text_out,
                     transforms: None,
-                    state: StreamingTts::new(text.clone(), input_done),
+                    state: StreamingTts::new(state.opening.clone(), state.input_done),
                     tts_data,
                     aligned,
                 };
                 match synthesize(shared, handle, streaming, playback).await {
                     (Ok(heard), _) => return Ok(heard),
                     (Err(failed), done) => {
-                        (text, input_done, synchronized) =
-                            (failed.words, done, failed.synchronized);
+                        state.stream_failed(failed.words, done, failed.synchronized);
                         (failed.error, failed.produced)
                     }
                 }
             }
         };
-        let error = match error {
-            DriverError::Provider(error) => error,
-            error => {
-                return Err(Lost {
-                    failure: Some(error),
-                    lost: false,
-                    opening: text,
-                    synchronized,
-                    played: produced,
-                });
-            }
+        let error = match state.failed(error, produced) {
+            AttemptFailure::Retry(error) => error,
+            AttemptFailure::Stop(lost) => return Err(lost),
         };
-        if produced {
-            attempt.produced_output();
-        }
         let failed = |e, r| tts.failed(e, r);
-        match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error, &failed).await {
-            Retried::Again => {}
-            Retried::Interrupted => {
-                return Err(Lost {
-                    failure: None,
-                    lost: false,
-                    opening: text,
-                    synchronized: None,
-                    played: false,
-                });
-            }
-            Retried::GiveUp => {
-                return Err(Lost {
-                    failure: None,
-                    lost: true,
-                    opening: text,
-                    synchronized,
-                    played: produced,
-                });
-            }
+        let outcome =
+            match retry(shared, handle, &mut state.retry, ProviderKind::Tts, &error, &failed).await
+            {
+                Retried::Again => RetryOutcome::Again,
+                Retried::Interrupted => RetryOutcome::Interrupted,
+                Retried::GiveUp => RetryOutcome::Exhausted,
+            };
+        if let Some(lost) = state.after_retry(outcome) {
+            return Err(lost);
         }
     }
 }
