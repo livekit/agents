@@ -3,17 +3,14 @@ from __future__ import annotations
 import os
 import traceback
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
+
+from livekit import rtc
 
 from .. import _core
 from ..types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
 from . import trace_types
-
-if TYPE_CHECKING:
-    pass
-
 
 _, REDACTED_EXCEPTION_MESSAGE = _core._core_TelemetryPolicy(False, False, False).attribute_action(
     None, "exception.message", True
@@ -37,7 +34,7 @@ def allow_pii_from_env() -> bool | None:
     return raw.strip().lower() not in _FALSY
 
 
-def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
+def redaction_enabled(span_attributes: Mapping[str, object] | None = None) -> bool:
     """Whether the project has mandated PII redaction.
 
     Set in the LiveKit Cloud dashboard (or per session with
@@ -57,10 +54,8 @@ def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
     return job_ctx is not None and job_ctx._redaction_enabled
 
 
-def participant_attributes(participant: Any) -> dict[str, Any]:
+def participant_attributes(participant: rtc.Participant) -> dict[str, str]:
     """Span attributes identifying a room participant (identity is tagged ``lk.pii``)."""
-    from livekit import rtc
-
     return {
         trace_types.ATTR_PARTICIPANT_ID: participant.sid,
         trace_types.ATTR_PARTICIPANT_IDENTITY: participant.identity,
