@@ -43,7 +43,7 @@ pub enum LlmRequestEvent {
         attempt: u32,
         chunk: WireChunk,
     },
-    /// The `[DONE]` sentinel, or the body's clean end.
+    /// The `[DONE]` sentinel.
     Ended {
         attempt: u32,
     },

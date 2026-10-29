@@ -288,6 +288,20 @@ async fn a_malformed_stream_fails_the_request() {
     assert!(err.message.contains("malformed"), "{}", err.message);
 }
 
+// Catches: a body cut before `[DONE]` read as a complete answer (the provider contract ends every
+// completion with the sentinel).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_ending_without_done_fails_the_request() {
+    let peer = Peer::start(vec![Reply::Sse(vec![Part::Bytes(
+        b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hal\"}}]}\n\n",
+    )])])
+    .await;
+    let llm = llm(&peer);
+    let err = text(&mut open(&llm, policy(0, 2_000))).await.unwrap_err();
+    assert_eq!(err.kind, ApiErrorKind::Connection);
+    assert!(err.message.contains("[DONE]"), "{}", err.message);
+}
+
 // Catches: a consumer that stops waiting (its pull dropped) or closes the stream at any await
 // point leaving the attempt's connection open, close reporting Clean before the transport is
 // released, or a dropped pull losing what was already received.

@@ -523,7 +523,8 @@ async fn send_attempt(
     }
 }
 
-/// Decodes the event stream into chunk events; `None` once the response ended cleanly.
+/// Decodes the event stream into chunk events; `None` once `[DONE]` ended the response. A body that
+/// ends without it was cut short.
 async fn read_events(
     response: reqwest::Response,
     attempt: u32,
@@ -534,13 +535,10 @@ async fn read_events(
     let mut events = Vec::new();
     loop {
         let Some(chunk) = bytes.next().await else {
-            return match decoder.finish() {
-                Ok(()) => {
-                    reporter.report(LlmRequestEvent::Ended { attempt }).await;
-                    None
-                }
-                Err(err) => Some(AttemptFailure::Malformed(err.to_string())),
-            };
+            return Some(match decoder.finish() {
+                Ok(()) => AttemptFailure::Connection("the stream ended before [DONE]".into()),
+                Err(err) => AttemptFailure::Malformed(err.to_string()),
+            });
         };
         let chunk = match chunk {
             Ok(chunk) => chunk,
