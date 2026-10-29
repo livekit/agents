@@ -1166,10 +1166,11 @@ impl SessionOptions {
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[pyo3(signature = (legs))]
-    fn resolved(&self, legs: ::lk_agents_abi::voice::session_options::SessionLegs) -> PyResult<::lk_agents_abi::voice::session_options::ResolvedSessionOptions> {
+    fn resolved<'py>(&self, py: Python<'py>, legs: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
+        let legs = crate::generated::records::session_options::session_legs_from_py(&legs)?;
         let out = <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::resolved(&self.0, legs);
-        Ok(out)
+        Ok(crate::generated::records::session_options::resolved_session_options_to_py(py, out)?)
     }
 }
 
@@ -1385,10 +1386,10 @@ impl VoiceSession {
     }
 
     /// The core's accepted configuration; `None` for a session built without options.
-    fn resolved_options(&self) -> PyResult<::std::option::Option<::lk_agents_abi::voice::session_options::ResolvedSessionOptions>> {
+    fn resolved_options<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::resolved_options(&self.0);
-        Ok(out)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::session_options::resolved_session_options_to_py(py, value)?)).transpose()?)
     }
 
     /// `AgentActivity.push_video(frame)`: one sampled frame, on its way to the model. `False`
@@ -1725,10 +1726,10 @@ pub fn rt_server_turn_detection(caps_turn_detection: bool, can_disable_turn_dete
 /// why. Constructing it stays the host's.
 #[pyfunction]
 #[pyo3(signature = (*, stt_aligned_transcript, stt_streaming, realtime, rt_server_turn_detection, has_vad, turn_detection, allow_interruptions, agent_mode, session_mode, hosted, dev_mode))]
-pub fn resolve_interruption_detector(stt_aligned_transcript: ::std::option::Option<bool>, stt_streaming: ::std::option::Option<bool>, realtime: bool, rt_server_turn_detection: bool, has_vad: bool, turn_detection: ::std::option::Option<::std::string::String>, allow_interruptions: bool, agent_mode: ::std::option::Option<::lk_agents_abi::voice::session_options::InterruptionMode>, session_mode: ::std::option::Option<::lk_agents_abi::voice::session_options::InterruptionMode>, hosted: bool, dev_mode: bool) -> PyResult<::lk_agents_abi::voice::session_options::InterruptionGateVerdict> {
+pub fn resolve_interruption_detector<'py>(py: Python<'py>, stt_aligned_transcript: ::std::option::Option<bool>, stt_streaming: ::std::option::Option<bool>, realtime: bool, rt_server_turn_detection: bool, has_vad: bool, turn_detection: ::std::option::Option<::std::string::String>, allow_interruptions: bool, agent_mode: ::std::option::Option<::lk_agents_abi::voice::session_options::InterruptionMode>, session_mode: ::std::option::Option<::lk_agents_abi::voice::session_options::InterruptionMode>, hosted: bool, dev_mode: bool) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
     let out = <InterruptionGateFunctionsImpl as ::lk_agents_abi::voice::session_options::InterruptionGateFunctions>::resolve_interruption_detector(stt_aligned_transcript, stt_streaming, realtime, rt_server_turn_detection, has_vad, turn_detection, allow_interruptions, agent_mode, session_mode, hosted, dev_mode);
-    Ok(out)
+    Ok(crate::generated::records::session_options::interruption_gate_verdict_to_py(py, out)?)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.

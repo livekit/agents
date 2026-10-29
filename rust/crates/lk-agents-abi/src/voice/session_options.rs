@@ -44,11 +44,7 @@ pub enum TurnDetection {
 }
 
 /// Picks the endpointing base and the turn machine's countdown arm.
-#[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
-    what: "detector kind",
-    value: s.to_owned(),
-    expected: "\"streaming\" or None",
-}))]
+#[crate::host(record(module = "session_options", extract))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum DetectorKind {
     Streaming,
@@ -424,7 +420,7 @@ pub struct TurnHandlingKwargs {
 #[derive(Clone, PartialEq, Host)]
 // Read by hand (below): each option as `AgentSession.__init__` takes it.
 #[host(handwritten(extract))]
-#[python(typed_dict, module = "session_options", name = "SessionKwargs")]
+#[python(typed_dict, typed_dict_from = "typing", module = "session_options", name = "SessionKwargs")]
 pub struct SessionKwargs {
     /// `turn_handling=`, as written. `None` is `NOT_GIVEN`.
     #[python(
@@ -470,7 +466,7 @@ pub struct SessionKwargs {
 #[derive(Clone, Default, PartialEq, Host)]
 // Read by hand (below): an option this session cannot change is refused.
 #[host(handwritten(extract))]
-#[python(typed_dict, module = "session_options", name = "UpdateKwargs")]
+#[python(typed_dict, typed_dict_from = "typing", module = "session_options", name = "UpdateKwargs")]
 pub struct UpdateKwargs {
     #[python(
         ty = "NotGivenOr[EndpointingOptions]",
@@ -557,9 +553,8 @@ debug_record!(UpdateKwargs {
 });
 
 /// `LegSet` as the host states it before `start()`, so `session.options` can resolve early.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[python(typed_dict, module = "session_options", name = "SessionLegs")]
-#[binding(extract, from_items)]
+#[crate::host(record(module = "session_options", typed_dict, extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionLegs {
     pub stt: bool,
     pub vad: bool,
@@ -569,10 +564,8 @@ pub struct SessionLegs {
     pub tts: bool,
     // The LLM is a realtime model (its socket may own turn detection).
     pub realtime: bool,
-    /// `"streaming"` or `None`.
-    // An end-of-turn detector was built, and which protocol it speaks.
-    #[python(ty = "Literal[\"streaming\", \"batch\"] | None")]
-    pub detector: Option<lk_agents_abi::voice::session_options::DetectorKind>,
+    /// An end-of-turn detector was built, and which protocol it speaks.
+    pub detector: Option<DetectorKind>,
     // The host's eight-condition gate said yes.
     pub adaptive_detector: bool,
     pub audio_enabled: bool,
@@ -601,9 +594,8 @@ impl SessionLegs {
 }
 
 /// The resolved `endpointing` group, seconds as `f64`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(typed_dict, module = "session_options", name = "ResolvedEndpointing")]
-#[binding(emit)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedEndpointing {
     pub mode: String,
     pub min_delay: f64,
@@ -612,13 +604,11 @@ pub struct ResolvedEndpointing {
 }
 
 /// The resolved `interruption` group. `mode` is absent when the session picks.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(typed_dict, module = "session_options", name = "ResolvedInterruption")]
-#[binding(emit)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedInterruption {
     pub enabled: bool,
-    #[python(ty = "str")]
-    #[binding(skip_if_none)]
+    #[host(default = None)]
     pub mode: Option<String>,
     pub discard_audio_if_uninterruptible: bool,
     pub min_duration: f64,
@@ -629,9 +619,8 @@ pub struct ResolvedInterruption {
 }
 
 /// The resolved `preemptive_generation` group.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(typed_dict, module = "session_options", name = "ResolvedPreemptiveGeneration")]
-#[binding(emit)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPreemptiveGeneration {
     pub enabled: bool,
     pub preemptive_tts: bool,
@@ -640,35 +629,32 @@ pub struct ResolvedPreemptiveGeneration {
 }
 
 /// The resolved `user_turn_limit` group.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(typed_dict, module = "session_options", name = "ResolvedUserTurnLimit")]
-#[binding(emit)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedUserTurnLimit {
     pub max_words: Option<u32>,
     pub max_duration: Option<f64>,
 }
 
 /// The session layer's sparse endpointing (`AgentSessionOptions.endpointing_overrides`).
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(typed_dict, total = "False", module = "session_options", name = "EndpointingOverrides")]
-#[binding(emit, skip_if_none)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EndpointingOverrides {
-    #[python(ty = "str")]
+    #[host(default = None)]
     pub mode: Option<String>,
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub min_delay: Option<f64>,
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub max_delay: Option<f64>,
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub alpha: Option<f64>,
 }
 
 /// The resolved `AgentSessionOptions` as the host reads it: every public option of
 /// `session.options`, seconds as `f64`. Built only by `resolved_session_options`, whose exhaustive
 /// destructure keeps it complete.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(typed_dict, module = "session_options", name = "ResolvedSessionOptions")]
-#[binding(emit)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedSessionOptions {
     pub endpointing: ResolvedEndpointing,
     pub interruption: ResolvedInterruption,
@@ -690,8 +676,8 @@ pub struct ResolvedSessionOptions {
 
 /// `AgentActivity._resolve_interruption_detection`'s verdict: whether to build the
 /// `AdaptiveInterruptionDetector`, and if not, why. Every key is always present.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, from_items)]
+#[crate::host(record(module = "session_options", typed_dict, emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterruptionGateVerdict {
     pub build: bool,
     /// `"cannot_gatekeep"`, `"interruptions_disabled"`, `"asked_vad"`, `"production_default"`.
@@ -818,7 +804,6 @@ mod host {
     use crate::python::{MaybeNull, item, item_with};
 
     crate::python::from_host_str!(EndpointingMode);
-    crate::python::from_host_str!(DetectorKind);
     crate::python::from_host_str!(TurnDetection);
 
     impl<'a, 'py> FromPyObject<'a, 'py> for Instructions {

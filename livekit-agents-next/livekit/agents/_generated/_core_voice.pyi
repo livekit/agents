@@ -30,7 +30,13 @@ from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .room_io import _StreamInfo
-from .session_options import SessionKwargs, SessionLegs, UpdateKwargs
+from .session_options import (
+    InterruptionGateVerdict,
+    ResolvedSessionOptions,
+    SessionKwargs,
+    SessionLegs,
+    UpdateKwargs,
+)
 from .session_wire import StartPlan
 from .tool_report import ToolReport
 from .voice_session import UpdateAgentArgs, VoiceSessionArgs
@@ -388,7 +394,7 @@ class SessionOptions:
     def __init__(self, kwargs: SessionKwargs) -> None: ...
     def update(self, update: UpdateKwargs) -> None:
         """`update_options(..)` before the session runs, on the same `merge` the driver uses."""
-    def resolved(self, legs: SessionLegs) -> dict[str, object]:
+    def resolved(self, legs: SessionLegs) -> ResolvedSessionOptions:
         """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
         before `start()`.
         """
@@ -486,7 +492,7 @@ class VoiceSession:
         re-resolved; `expressive` reaches the next reply, `keyterms` replace the user's list. A turn
         detector object is refused: swapping the detector of a running session is not ported.
         """
-    def resolved_options(self) -> dict[str, object] | None:
+    def resolved_options(self) -> ResolvedSessionOptions | None:
         """The core's accepted configuration; `None` for a session built without options."""
     def push_video(self, content: ChatContent) -> bool:
         """`AgentActivity.push_video(frame)`: one sampled frame, on its way to the model. `False`
@@ -694,7 +700,7 @@ def resolve_interruption_detector(
     session_mode: str | None,
     hosted: bool,
     dev_mode: bool,
-) -> dict[str, object]:
+) -> InterruptionGateVerdict:
     """`AgentActivity._resolve_interruption_detection`: whether to build the detector, and if not,
     why. Constructing it stays the host's.
     """

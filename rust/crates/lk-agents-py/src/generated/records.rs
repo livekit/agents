@@ -2422,6 +2422,146 @@ pub mod recorder {
     }
 }
 
+pub mod session_options {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn detector_kind_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::DetectorKind> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "streaming" => Ok(::lk_agents_abi::voice::session_options::DetectorKind::Streaming),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("DetectorKind: {other:?} is not one of 'streaming'"))),
+            }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn session_legs_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::session_options::SessionLegs> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::voice::session_options::SessionLegs {
+                stt: { let v = obj.get_item("stt")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.stt"))?; ((&v).extract::<bool>())? },
+                vad: { let v = obj.get_item("vad")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.vad"))?; ((&v).extract::<bool>())? },
+                using_default_vad: { let v = obj.get_item("using_default_vad")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.using_default_vad"))?; ((&v).extract::<bool>())? },
+                llm: { let v = obj.get_item("llm")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.llm"))?; ((&v).extract::<bool>())? },
+                tts: { let v = obj.get_item("tts")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.tts"))?; ((&v).extract::<bool>())? },
+                realtime: { let v = obj.get_item("realtime")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.realtime"))?; ((&v).extract::<bool>())? },
+                detector: { let v = obj.get_item("detector")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.detector"))?; (if (&v).is_none() { Ok(None) } else { (crate::generated::records::session_options::detector_kind_from_py((&v))).map(Some) })? },
+                adaptive_detector: { let v = obj.get_item("adaptive_detector")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.adaptive_detector"))?; ((&v).extract::<bool>())? },
+                audio_enabled: { let v = obj.get_item("audio_enabled")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_enabled"))?; ((&v).extract::<bool>())? },
+                audio_output: { let v = obj.get_item("audio_output")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.audio_output"))?; ((&v).extract::<bool>())? },
+                sink_can_pause: { let v = obj.get_item("sink_can_pause")?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err("SessionLegs.sink_can_pause"))?; ((&v).extract::<bool>())? },
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn resolved_endpointing_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::ResolvedEndpointing) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::ResolvedEndpointing { mode, min_delay, max_delay, alpha } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("mode", ::pyo3::IntoPyObjectExt::into_bound_py_any(mode, py)?)?;
+            dict.set_item("min_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(min_delay, py)?)?;
+            dict.set_item("max_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_delay, py)?)?;
+            dict.set_item("alpha", ::pyo3::IntoPyObjectExt::into_bound_py_any(alpha, py)?)?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn resolved_interruption_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::ResolvedInterruption) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::ResolvedInterruption { enabled, mode, discard_audio_if_uninterruptible, min_duration, min_words, resume_false_interruption, false_interruption_timeout, backchannel_boundary } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("enabled", ::pyo3::IntoPyObjectExt::into_bound_py_any(enabled, py)?)?;
+            if let Some(x) = mode {
+                dict.set_item("mode", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            dict.set_item("discard_audio_if_uninterruptible", ::pyo3::IntoPyObjectExt::into_bound_py_any(discard_audio_if_uninterruptible, py)?)?;
+            dict.set_item("min_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(min_duration, py)?)?;
+            dict.set_item("min_words", ::pyo3::IntoPyObjectExt::into_bound_py_any(min_words, py)?)?;
+            dict.set_item("resume_false_interruption", ::pyo3::IntoPyObjectExt::into_bound_py_any(resume_false_interruption, py)?)?;
+            dict.set_item("false_interruption_timeout", match false_interruption_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("backchannel_boundary", match backchannel_boundary { None => py.None().into_bound(py), Some(x) => { let (x0, x1,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?])?.into_any() } })?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn resolved_preemptive_generation_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration { enabled, preemptive_tts, max_speech_duration, max_retries } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("enabled", ::pyo3::IntoPyObjectExt::into_bound_py_any(enabled, py)?)?;
+            dict.set_item("preemptive_tts", ::pyo3::IntoPyObjectExt::into_bound_py_any(preemptive_tts, py)?)?;
+            dict.set_item("max_speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_speech_duration, py)?)?;
+            dict.set_item("max_retries", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_retries, py)?)?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn resolved_user_turn_limit_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::ResolvedUserTurnLimit) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::ResolvedUserTurnLimit { max_words, max_duration } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("max_words", match max_words { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("max_duration", match max_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn endpointing_overrides_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::EndpointingOverrides) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::EndpointingOverrides { mode, min_delay, max_delay, alpha } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            if let Some(x) = mode {
+                dict.set_item("mode", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            if let Some(x) = min_delay {
+                dict.set_item("min_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            if let Some(x) = max_delay {
+                dict.set_item("max_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            if let Some(x) = alpha {
+                dict.set_item("alpha", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            }
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn resolved_session_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::ResolvedSessionOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::ResolvedSessionOptions { endpointing, interruption, preemptive_generation, user_turn_limit, turn_detection_mode, endpointing_overrides, max_tool_steps, min_consecutive_speech_delay, use_tts_aligned_transcript, tts_text_transforms, ivr_detection, user_away_timeout, transcription_timeout, aec_warmup_duration, session_close_transcript_timeout } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("endpointing", crate::generated::records::session_options::resolved_endpointing_to_py(py, endpointing)?)?;
+            dict.set_item("interruption", crate::generated::records::session_options::resolved_interruption_to_py(py, interruption)?)?;
+            dict.set_item("preemptive_generation", crate::generated::records::session_options::resolved_preemptive_generation_to_py(py, preemptive_generation)?)?;
+            dict.set_item("user_turn_limit", crate::generated::records::session_options::resolved_user_turn_limit_to_py(py, user_turn_limit)?)?;
+            dict.set_item("turn_detection_mode", match turn_detection_mode { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("endpointing_overrides", crate::generated::records::session_options::endpointing_overrides_to_py(py, endpointing_overrides)?)?;
+            dict.set_item("max_tool_steps", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_tool_steps, py)?)?;
+            dict.set_item("min_consecutive_speech_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(min_consecutive_speech_delay, py)?)?;
+            dict.set_item("use_tts_aligned_transcript", match use_tts_aligned_transcript { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("tts_text_transforms", match tts_text_transforms { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
+            dict.set_item("ivr_detection", ::pyo3::IntoPyObjectExt::into_bound_py_any(ivr_detection, py)?)?;
+            dict.set_item("user_away_timeout", match user_away_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("transcription_timeout", match transcription_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("aec_warmup_duration", match aec_warmup_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("session_close_transcript_timeout", ::pyo3::IntoPyObjectExt::into_bound_py_any(session_close_transcript_timeout, py)?)?;
+            Ok(dict.into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
+
+    pub fn interruption_gate_verdict_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::session_options::InterruptionGateVerdict) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::session_options::InterruptionGateVerdict { build, reason, level, message } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("build", ::pyo3::IntoPyObjectExt::into_bound_py_any(build, py)?)?;
+            dict.set_item("reason", match reason { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("level", match level { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            dict.set_item("message", match message { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            Ok(dict.into_any())
+    }
+}
+
 pub mod session_wire {
     use pyo3::prelude::*;
 
