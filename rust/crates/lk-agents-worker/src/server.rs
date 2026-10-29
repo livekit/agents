@@ -165,6 +165,9 @@ pub struct ServerRuntime {
     outcome: Outcome,
     cleanup_outcome: Outcome,
     drain_outcome: Outcome,
+    /// The lifecycle task `run` starts. Every clone shares it, the task's own included, so it
+    /// ends with the server's stop rather than with a cancelled `run` caller.
+    serving: Arc<std::sync::Mutex<Option<OwnedTask>>>,
 }
 
 impl ServerRuntime {
@@ -187,6 +190,7 @@ impl ServerRuntime {
             outcome: watch::channel(None).0,
             cleanup_outcome: watch::channel(None).0,
             drain_outcome: watch::channel(None).0,
+            serving: Arc::default(),
         }
     }
 
@@ -207,9 +211,9 @@ impl ServerRuntime {
         self.publish(&state, effects);
         self.snapshot.send_modify(|snapshot| snapshot.has_rtc = start.has_rtc);
         let runtime = self.clone();
-        // Detached: the server's lifecycle runs until its stop; `outcome` reports its end.
-        TokioSpawner::current()
-            .spawn_detached(async move { runtime.serve(start, receiver, state, origin).await });
+        let serving = TokioSpawner::current()
+            .spawn(async move { runtime.serve(start, receiver, state, origin).await });
+        *self.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(serving);
         wait_outcome(&self.outcome).await
     }
 
