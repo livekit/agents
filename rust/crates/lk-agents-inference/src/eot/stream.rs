@@ -83,6 +83,9 @@ pub struct EotStream {
     swaps: watch::Sender<u64>,
     settled: watch::Sender<bool>,
     id: ProviderId,
+    /// The stream's run, which holds the stream until it ends: it outlives a close while model
+    /// construction is still settling.
+    runner: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
 }
 
 impl EotStream {
@@ -120,6 +123,7 @@ impl EotStream {
             swaps: watch::channel(0).0,
             settled: watch::channel(false).0,
             id,
+            runner: std::sync::OnceLock::new(),
         });
         let owner = Arc::clone(&stream);
         let settled = stream.settled.clone();
@@ -127,8 +131,7 @@ impl EotStream {
             owner.run().await;
             settled.send_replace(true);
         };
-        // The owner must outlive close if model construction is still settling.
-        lk_agents_abi::SpawnerExt::spawn_unboxed(spawner, run);
+        let _ = stream.runner.set(lk_agents_abi::SpawnerExt::spawn(spawner, run));
         DetectorStream(stream)
     }
 

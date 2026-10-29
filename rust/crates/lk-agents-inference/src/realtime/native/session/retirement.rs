@@ -1,7 +1,7 @@
 //! One admitted disposal owner per realtime session, independent of socket/control dispatch.
 
 use super::{Pump, Shared};
-use lk_agents_abi::{Clock, SpawnerExt};
+use lk_agents_abi::Clock;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use tokio::sync::{Notify, watch};
@@ -25,7 +25,7 @@ impl Pump {
             let label = self.label.clone();
             let events = self.events.clone();
             let workers = self.shared.workers;
-            let _owner = self.spawner.spawn_unboxed(async move {
+            self.shared.disposal.spawn(self.spawner.as_ref(), "realtime retirement", async move {
                 run(
                     shared,
                     wake,

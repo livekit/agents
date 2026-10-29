@@ -12,6 +12,7 @@ pub mod wire;
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
     to_ws_url, within,
@@ -19,9 +20,9 @@ use lk_agents_net::transport::{
 
 use base64::Engine as _;
 use lifecycle::{SttEffect, SttEvent, SttProtocol};
+use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
-use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
@@ -112,6 +113,8 @@ pub struct SttShared {
     keyterms_unsupported_warned: std::sync::atomic::AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
+    /// Stream pumps: each ends on its own once its handles are gone.
+    tasks: Arc<TaskSet>,
     clock: Arc<dyn Clock>,
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
     vad: Mutex<Option<Arc<dyn crate::abi::Vad>>>,
@@ -134,6 +137,7 @@ impl NativeStt {
             keyterms_unsupported_warned: Default::default(),
             ws,
             spawner,
+            tasks: Arc::default(),
             clock: Arc::new(RealClock::new()),
             vad: Mutex::new(None),
             live: Mutex::new(Vec::new()),
@@ -377,7 +381,7 @@ impl NativeStt {
             ended: ended_rx,
             accepted: self.clock.now(),
         };
-        self.spawner.spawn_unboxed(async move {
+        self.tasks.spawn(self.spawner.as_ref(), "stt stream", async move {
             pump.run().await;
             let _ = done.send(());
         });

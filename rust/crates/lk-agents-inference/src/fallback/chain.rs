@@ -10,15 +10,16 @@ use std::time::Duration;
 
 use super::machine::{ChainEffect, ChainEvent, ChainRequest, FallbackPolicy, Modality};
 use async_trait::async_trait;
-use lk_agents_abi::AbortHandle;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
+use lk_agents_abi::OwnedTask;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiErrorKind;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_net::task::{TaskId, TaskSet};
 use tokio::sync::{oneshot, watch};
 
 use crate::fallback::{ChainPolicy, conn_options_for_attempt};
@@ -109,11 +110,27 @@ struct ChainState {
     backends: Vec<Status>,
 }
 
-/// A recovery probe in flight. `done` resolves when its task ends, finished or dropped.
+/// A recovery probe or attempt in flight; it settles when its work ends, finished or dropped.
 #[derive(Debug)]
 struct Probe {
-    handle: AbortHandle,
-    done: oneshot::Receiver<()>,
+    task: OwnedTask,
+}
+
+/// A request stream's task in its chain's [`TaskSet`].
+pub(crate) struct StreamTask {
+    streams: Arc<TaskSet>,
+    id: TaskId,
+}
+
+impl StreamTask {
+    #[cfg(test)]
+    pub(crate) fn new(streams: Arc<TaskSet>, id: TaskId) -> Self {
+        StreamTask { streams, id }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.streams.cancel(self.id);
+    }
 }
 
 /// `ValueError("at least one … instance must be provided.")`.
@@ -144,6 +161,9 @@ pub struct FallbackChain<B: Backend> {
     closed: AtomicBool,
     /// Every probe's `stop`; see [`Backend::recover`].
     stop: watch::Sender<bool>,
+    /// The request streams' tasks: a dropped stream only signals its task to stop, which then
+    /// closes its member and settles under the chain.
+    streams: Arc<TaskSet>,
 }
 
 impl<B: Backend> FallbackChain<B> {
@@ -183,7 +203,17 @@ impl<B: Backend> FallbackChain<B> {
             attempts: AtomicU64::new(0),
             closed: AtomicBool::new(false),
             stop: watch::channel(false).0,
+            streams: Arc::default(),
         })
+    }
+
+    #[track_caller]
+    pub(crate) fn spawn_stream(
+        &self,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> StreamTask {
+        let id = self.streams.spawn(self.spawner.as_ref(), "fallback stream", work);
+        StreamTask { streams: Arc::clone(&self.streams), id }
     }
 
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {
@@ -420,9 +450,7 @@ impl<B: Backend> FallbackChain<B> {
                     let attempt_fn = attempt.clone();
                     let (stop_tx, stop_rx) = watch::channel(false);
                     let (result_tx, result_rx) = oneshot::channel();
-                    let (done_tx, done) = oneshot::channel();
-                    let handle = self.spawner.spawn_unboxed(async move {
-                        let _done = done_tx;
+                    let task = self.spawner.spawn(async move {
                         // Admission can outlive its authorization while the executor is busy.
                         let now = clock.now();
                         let outcome = if *stop_rx.borrow() || *closed.borrow() {
@@ -466,8 +494,8 @@ impl<B: Backend> FallbackChain<B> {
                     {
                         let mut statuses = self.status.lock().expect("chain status");
                         let active = &mut statuses.backends[index].active;
-                        active.retain(|probe| !probe.handle.is_finished());
-                        active.push(Probe { handle, done });
+                        active.retain(|probe| !probe.task.is_finished());
+                        active.push(Probe { task });
                     }
                     active = Some((
                         id,
@@ -511,7 +539,7 @@ impl<B: Backend> FallbackChain<B> {
             if status.closed {
                 return;
             }
-            if status.recovery[slot as usize].as_ref().is_some_and(|p| !p.handle.is_finished()) {
+            if status.recovery[slot as usize].as_ref().is_some_and(|p| !p.task.is_finished()) {
                 return;
             }
             s.health.probe_generation(status.resource)
@@ -525,11 +553,7 @@ impl<B: Backend> FallbackChain<B> {
         let status_for_task = Arc::clone(&self.status);
         let mut closed = self.stop.subscribe();
         let clock = self.clock.clone();
-        let (done_tx, done) = oneshot::channel::<()>();
-
-        let handle = self.spawner.spawn_unboxed(async move {
-            // Dropped with the task, however it ends.
-            let _done = done_tx;
+        let task = self.spawner.spawn(async move {
             if *closed.borrow() || deadline.is_some_and(|at| clock.now() >= at) {
                 return;
             }
@@ -595,9 +619,9 @@ impl<B: Backend> FallbackChain<B> {
         });
         if let Some(status) = s.backends.get_mut(index) {
             if stale {
-                status.active.push(Probe { handle, done });
+                status.active.push(Probe { task });
             } else {
-                status.recovery[slot as usize] = Some(Probe { handle, done });
+                status.recovery[slot as usize] = Some(Probe { task });
             }
         }
     }
@@ -621,29 +645,36 @@ impl<B: Backend> FallbackChain<B> {
 
     /// Idempotent: signal all active and recovery work; spawned tasks retain cleanup ownership.
     pub fn aclose(&self) {
-        let _ = self.begin_close();
+        let probes = self.begin_close();
+        self.retain(probes);
+    }
+
+    /// The chain keeps owning probes that were told to stop; they settle on their own.
+    fn retain(&self, probes: Vec<Probe>) {
+        let mut s = self.status.lock().expect("chain status");
+        if let Some(status) = s.backends.first_mut() {
+            status.active.extend(probes.into_iter().filter(|p| !p.task.is_finished()));
+        }
     }
 
     /// The host's `aclose()` (`cancel_and_wait` on each recovery task): every probe closes what it
     /// opened, awaited up to the teardown deadline. Late cleanup remains owned by its task.
     pub async fn close(&self) {
-        let probes = self.begin_close();
-        let (handles, dones): (Vec<_>, Vec<_>) =
-            probes.into_iter().map(|p| (p.handle, p.done)).unzip();
+        let mut probes = self.begin_close();
         let closed = lk_agents_abi::Closed::bounded(
             self.clock.as_ref(),
             self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
-            async move {
-                for done in dones {
-                    let _ = done.await;
+            async {
+                for probe in &mut probes {
+                    let _ = (&mut probe.task).await;
                 }
             },
         )
         .await;
         if closed == lk_agents_abi::Closed::TimedOut {
             log::error!("fallback cleanup incomplete; tasks retain ownership until settlement");
+            self.retain(probes);
         }
-        drop(handles);
     }
 
     fn observe_result(&self, index: usize, result: Result<(), &ProviderError>) -> bool {

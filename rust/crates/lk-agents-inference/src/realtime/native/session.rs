@@ -302,6 +302,7 @@ impl NativeRealtime {
             context_ready: tokio::sync::Notify::new(),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
             workers: self.workers,
+            disposal: Arc::default(),
         });
         let commands = Arc::new(super::queue::Ingress {
             commands: cmd_tx,
@@ -325,18 +326,13 @@ impl NativeRealtime {
             images: self.images.clone(),
             spawner: self.spawner.clone(),
         };
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-        let abort = self.spawner.spawn_unboxed(async move {
-            pump.run(cmd_rx).await;
-            drop(done_tx);
-        });
+        let pump = self.spawner.spawn(pump.run(cmd_rx));
 
         SessionHandle {
             shared,
             commands,
             events: Mutex::new(ev_rx),
-            abort,
-            done: std::sync::Mutex::new(Some(done_rx)),
+            pump: std::sync::Mutex::new(Some(pump)),
             clock: self.clock.clone(),
             ids: self.ids.clone(),
         }
@@ -356,6 +352,8 @@ pub(super) struct Shared {
     caps: std::sync::Mutex<RealtimeCapabilities>,
     /// Decoding and context retirement run on the process's admitted workers.
     workers: WorkerPool,
+    /// Socket closes and context retirement, which outlive their caller's budget.
+    disposal: Arc<lk_agents_net::task::TaskSet>,
 }
 
 impl Shared {
@@ -389,9 +387,8 @@ pub struct SessionHandle {
     commands: Arc<super::queue::Ingress>,
     /// One consumer is the contract.
     events: Mutex<super::queue::EventReceiver>,
-    abort: lk_agents_abi::AbortHandle,
-    /// Resolves (closed) when the pump has ended.
-    done: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    /// Taken by the first close.
+    pump: std::sync::Mutex<Option<lk_agents_abi::OwnedTask>>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
 }
@@ -449,16 +446,19 @@ impl SessionHandle {
         }));
         self.commands.send(Cmd::Close);
         self.shared.closing.notify_one();
-        let done = self.done.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(done) = done
-            && lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done)
-                .await
-                .is_err()
-        {
-            let generation = self.shared.machine.lock().await.connection_generation();
-            self.shared.incomplete_cleanup(generation, &self.commands.label);
+        let pump = self.pump.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(mut pump) = pump {
+            let settled = lk_agents_abi::timeout(
+                &*self.clock,
+                lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
+                &mut pump,
+            )
+            .await;
+            if settled.is_err() {
+                let generation = self.shared.machine.lock().await.connection_generation();
+                self.shared.incomplete_cleanup(generation, &self.commands.label);
+            }
         }
-        self.abort.abort();
         self.commands.events.finish();
     }
 }
@@ -822,7 +822,7 @@ impl Pump {
         let (settled, done) = tokio::sync::oneshot::channel();
         // The executor retains this one resource cleanup even if its caller's budget expires.
         // An incomplete cleanup stops this session rather than accumulating more sockets.
-        let _owner = self.spawner.spawn_unboxed(async move {
+        self.shared.disposal.spawn(self.spawner.as_ref(), "realtime socket close", async move {
             sender.close().await;
             let _ = settled.send(());
         });

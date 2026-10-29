@@ -21,17 +21,18 @@ use crate::abi::{
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
+use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
     WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url,
 };
 
 use futures_util::future::{Either, select};
+use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
 use lk_agents_abi::tts::text::{SpeechTextProcessors, TranscriptProcessor};
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
-use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::connection_pool::ConnectionPool;
 use std::collections::HashMap;
 use std::pin::pin;
@@ -108,6 +109,8 @@ pub struct TtsShared {
     expressive: AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
+    /// Prewarms and stream pumps: each ends on its own (a pump once its handles are gone).
+    tasks: Arc<TaskSet>,
     /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
     clock: Arc<lk_agents_abi::BoundClock>,
     connections: Arc<Mutex<Connections>>,
@@ -186,6 +189,7 @@ impl NativeTts {
             expressive: AtomicBool::new(false),
             ws,
             spawner,
+            tasks: Arc::default(),
             clock: lk_agents_abi::BoundClock::new(),
             connections: Arc::default(),
         };
@@ -239,7 +243,7 @@ impl NativeTts {
         let create_frame = wire::session_create(&opts);
         let headers = headers.into_vec();
         let configuration = connection_configuration(&create_frame, &headers);
-        self.spawner.spawn_unboxed(async move {
+        self.tasks.spawn(self.spawner.as_ref(), "tts prewarm", async move {
             let opened = open_ws(
                 ws.as_ref(),
                 &url,
@@ -398,7 +402,7 @@ impl NativeTts {
             markup: (self.speech.markup)(wire::markup_provider_key(&pump.opts.model)),
             sentences: (self.speech.sentence_splitter)(Some(&pump.provider), expressive),
         };
-        self.spawner.spawn_unboxed(pump.run());
+        self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 
         Ok((
             TtsSinkHandle { text: text_tx, prep: Mutex::new(prep) },

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::inference::InvalidPayload;
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{
     ChatRequest, Closed, Extra, HostRef, Llm, LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
 };
@@ -80,7 +80,6 @@ impl Backend for LlmBackend {
 /// A host-constructed chain runs on the executor and clock its env lends.
 pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
-    spawner: Arc<dyn Spawner>,
 }
 
 impl FallbackLlm {
@@ -93,8 +92,8 @@ impl FallbackLlm {
     ) -> Result<Self, NoBackends> {
         let entries =
             llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
-        let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)?;
-        Ok(FallbackLlm { chain: Arc::new(chain), spawner })
+        let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
+        Ok(FallbackLlm { chain: Arc::new(chain) })
     }
 
     pub fn chain(&self) -> &Arc<FallbackChain<LlmBackend>> {
@@ -241,7 +240,7 @@ impl Llm for FallbackLlm {
             };
 
             let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-            let handle = self.spawner.spawn_unboxed(async move {
+            let handle = self.chain.spawn_stream(async move {
                 let mut tx = tx;
                 let result = chain
                     .run_cancellable(

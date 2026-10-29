@@ -13,7 +13,7 @@ use lk_agents_abi::{
     AlignedTranscript, AudioFrame, StreamSink, Stt, SttCapabilities, SttSink, SttSource,
 };
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 
 use lk_agents_abi::llm::inference::InvalidPayload;
@@ -583,7 +583,7 @@ impl Stt for FallbackStt {
             let tee_for_task = Arc::clone(&tee);
 
             let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-            let handle = self.spawner.spawn_unboxed(async move {
+            let handle = self.chain.spawn_stream(async move {
                 let mut tx = tx;
                 let result = chain
                     .run_cancellable(

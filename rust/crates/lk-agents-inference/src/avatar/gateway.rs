@@ -27,7 +27,7 @@ use tokio::sync::{mpsc, oneshot};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
-use lk_agents_net::task::TokioSpawner;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 
 const LOG: &str = "livekit.agents";
 
@@ -70,6 +70,8 @@ pub struct GatewayAvatar {
     /// One message per host call, so the queue is bounded by the calls in flight.
     inputs: mpsc::UnboundedSender<Input>,
     callers: AtomicU64,
+    /// The driver's owner; dropping the instance does not cancel it.
+    _driver: Arc<TaskSet>,
 }
 
 impl GatewayAvatar {
@@ -106,8 +108,13 @@ impl GatewayAvatar {
             queued: Vec::new(),
         };
         // Self-owned: see the module docs.
-        runtime.spawn(driver.run(rx, observed));
-        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1) }
+        let tasks = Arc::new(TaskSet::default());
+        tasks.spawn(
+            &TokioSpawner::new(runtime.clone()),
+            "avatar gateway driver",
+            driver.run(rx, observed),
+        );
+        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1), _driver: tasks }
     }
 
     pub fn provider(&self) -> &str {

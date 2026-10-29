@@ -13,9 +13,10 @@ use lk_agents_abi::metrics::base::InterruptionMetrics;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{Clock, HostRef};
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::attempts::RequestPolicy;
+use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
-use tokio::task::JoinHandle;
 
 use crate::headers::HeaderProvider;
 use crate::interruption::core::{
@@ -153,7 +154,7 @@ impl AdaptiveInterruptionDetector {
             bytes: Arc::new(Semaphore::new(INPUT_BYTES)),
             failure: input_failure,
         };
-        let task = tokio::spawn(main_task(ctx, input_rx));
+        let task = TokioSpawner::current().spawn(main_task(ctx, input_rx));
         InterruptionStream { input_tx: Some(input_tx), event_rx, reconnect, closed, task }
     }
 }
@@ -320,7 +321,7 @@ pub struct InterruptionStream {
     event_rx: mpsc::UnboundedReceiver<StreamEvent>,
     reconnect: Arc<Notify>,
     closed: Arc<AtomicBool>,
-    task: JoinHandle<Result<(), ApiError>>,
+    task: OwnedTask<Result<(), ApiError>>,
 }
 
 /// `RuntimeError("... is closed")` / `RuntimeError("... input ended")`.
@@ -401,7 +402,7 @@ impl InterruptionStream {
     /// `aclose()` -- cancel immediately, without waiting for the gateway to close back.
     pub async fn aclose(mut self) -> Result<(), ApiError> {
         self.input_tx = None;
-        self.task.abort();
+        self.task.cancel();
         join_task(self.task).await.map(|_| ())
     }
 }
@@ -409,11 +410,11 @@ impl InterruptionStream {
 /// Joining settles the task separately from the provider's operation result. `finish`
 /// retrieves that result; `aclose` only owns cancellation and settlement.
 async fn join_task(
-    task: JoinHandle<Result<(), ApiError>>,
+    task: OwnedTask<Result<(), ApiError>>,
 ) -> Result<Result<(), ApiError>, ApiError> {
     match task.await {
         Ok(result) => Ok(result),
-        Err(error) if error.is_cancelled() => Ok(Ok(())),
+        Err(TaskError::Cancelled) => Ok(Ok(())),
         Err(error) => Err(ApiError::new(format!("interruption stream task panicked: {error}"))),
     }
 }
@@ -505,8 +506,12 @@ async fn run_once(
     let (data_tx, data_rx) = mpsc::unbounded_channel();
     // `closing_ws`: per connection, reset on reconnect; tells an orderly shutdown from a hang-up.
     let closing = Arc::new(AtomicBool::new(false));
-    let mut send_task =
-        tokio::spawn(send_task(core.clone(), Arc::clone(&sink), data_rx, closing.clone()));
+    let mut send_task = TokioSpawner::current().spawn(send_task(
+        core.clone(),
+        Arc::clone(&sink),
+        data_rx,
+        closing.clone(),
+    ));
     let mut send_finished = false;
     let mut input_open = true;
     let mut data_tx = Some(data_tx);
@@ -585,7 +590,7 @@ async fn run_once(
         }
     };
 
-    send_task.abort();
+    send_task.cancel();
     if !send_finished {
         let _ = send_task.await;
     }

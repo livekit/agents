@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use lk_agents_abi::AbortHandle;
+use crate::fallback::chain::StreamTask;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -134,7 +134,7 @@ pub(crate) async fn drain_probe<T, S: StreamSource<T> + ?Sized>(
 
 pub(crate) struct ChannelSource<T> {
     pub(crate) rx: mpsc::Receiver<Result<T, ProviderError>>,
-    pub(crate) task: Option<AbortHandle>,
+    pub(crate) task: Option<StreamTask>,
     pub(crate) chain: ChainTask,
 }
 
@@ -174,9 +174,9 @@ impl<T: Send + 'static> StreamSource<T> for ChannelSource<T> {
                 }
             })
             .await;
-            if let Some(h) = self.task.take() {
-                // Finished tasks ignore the abort; a wedged one is cut here.
-                h.abort();
+            if let Some(task) = self.task.take() {
+                // Finished tasks ignore the cancel; a wedged one is cut here.
+                task.cancel();
             }
             closed
         })

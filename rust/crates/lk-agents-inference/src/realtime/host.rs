@@ -106,7 +106,10 @@ pub struct HostRealtimeLeg {
     requests: Arc<std::sync::Mutex<Requests>>,
     events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Event>>,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
-    tasks: std::sync::Mutex<Vec<lk_agents_abi::AbortHandle>>,
+    tasks: std::sync::Mutex<Vec<lk_agents_abi::OwnedTask>>,
+    /// The host's event pump, apart from `tasks`: it runs until the host reports the end, so a
+    /// close loses no event.
+    forward: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
 }
 
 impl HostRealtimeLeg {
@@ -126,13 +129,14 @@ impl HostRealtimeLeg {
             events: tokio::sync::Mutex::new(events),
             spawner: Arc::clone(spawner),
             tasks: Default::default(),
+            forward: Default::default(),
         });
         let weak = Arc::downgrade(&leg);
-        // Not among `tasks`: it runs until the host reports the end, so a close loses no event.
-        let _ = lk_agents_abi::SpawnerExt::spawn_unboxed(
+        let forward = lk_agents_abi::SpawnerExt::spawn(
             &**spawner,
             Self::forward(weak.clone(), host, anchor, events_tx.clone()),
         );
+        let _ = leg.forward.set(forward);
         leg.spawn(Self::run_lane(weak, lane_rx, events_tx));
         leg
     }
@@ -141,7 +145,7 @@ impl HostRealtimeLeg {
         use lk_agents_abi::SpawnerExt;
         let mut tasks = self.tasks.lock().unwrap();
         tasks.retain(|t| !t.is_finished());
-        tasks.push(self.spawner.spawn_unboxed(f));
+        tasks.push(self.spawner.spawn(f));
     }
 
     /// The host's events, in order; a server-started generation is drained instead.
@@ -281,9 +285,7 @@ impl RealtimeSession for HostRealtimeLeg {
         Box::pin(async move {
             // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
             // session closes.
-            for task in std::mem::take(&mut *self.tasks.lock().unwrap()) {
-                task.abort();
-            }
+            drop(std::mem::take(&mut *self.tasks.lock().unwrap()));
             self.host.aclose().await;
         })
     }

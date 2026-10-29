@@ -12,7 +12,7 @@ use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, HostRealtimeError, RealtimeCapabilities, RealtimeError,
     RealtimeModelError,
 };
-use lk_agents_abi::{AbortHandle, AudioFrame, Realtime, Spawner, SpawnerExt};
+use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt};
 use tokio::sync::mpsc;
 
 use super::session::{DuplexHost, DuplexHostSession, NativeDuplexModel};
@@ -152,7 +152,7 @@ struct HostSession {
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<Option<DuplexEvent>>>,
     tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
     spawner: Arc<dyn Spawner>,
-    tasks: Mutex<Vec<AbortHandle>>,
+    tasks: Mutex<Vec<OwnedTask>>,
 }
 
 impl HostSession {
@@ -180,7 +180,7 @@ impl HostSession {
     fn spawn(&self, f: impl std::future::Future<Output = ()> + Send + 'static) {
         let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
         tasks.retain(|t| !t.is_finished());
-        tasks.push(self.spawner.spawn_unboxed(f));
+        tasks.push(self.spawner.spawn(f));
     }
 
     /// The session callbacks' events, until the view reports the end.
@@ -316,9 +316,8 @@ impl DuplexHostSession for HostSession {
     }
 
     async fn aclose(&self) {
-        for task in std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())) {
-            task.abort();
-        }
+        // Cancelled, not awaited.
+        drop(std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())));
         self.view.aclose().await;
     }
 }

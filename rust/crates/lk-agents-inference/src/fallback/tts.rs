@@ -11,7 +11,7 @@ use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::tts::text::SpeechTextProcessors;
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 
@@ -332,7 +332,6 @@ pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
 #[derive(Clone)]
 pub struct FallbackTts {
     chain: Arc<FallbackChain<TtsBackend>>,
-    spawner: Arc<dyn Spawner>,
     capabilities: TtsCapabilities,
     sample_rate: u32,
     num_channels: u16,
@@ -366,11 +365,10 @@ impl FallbackTts {
         }
         let entry_rates: Vec<u32> = entries.iter().map(|b| b.inner.sample_rate()).collect();
         let (target, needs_resampling) = resampling_plan(&entry_rates, sample_rate);
-        let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)
+        let chain = FallbackChain::new(entries, policy, clock, spawner, observer)
             .map_err(|NoBackends| TtsChainError::NoBackends)?;
         Ok(FallbackTts {
             chain: Arc::new(chain),
-            spawner,
             capabilities,
             sample_rate: target,
             num_channels,
@@ -410,7 +408,7 @@ impl FallbackTts {
         // the first attempt's that handed text to a provider, kept across a failover.
         let started: Arc<Mutex<Option<f64>>> = Arc::default();
         let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-        let handle = self.spawner.spawn_unboxed(async move {
+        let handle = self.chain.spawn_stream(async move {
             // Dropped with the task, so an aborted request still releases its probes.
             let _finish = FinishOnDrop(log.clone());
             let mut tx = tx;

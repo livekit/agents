@@ -48,6 +48,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
         workers: crate::testkit::workers,
+        disposal: Arc::default(),
     });
     let (events, receiver) = super::super::queue::events();
     let pump = Pump {

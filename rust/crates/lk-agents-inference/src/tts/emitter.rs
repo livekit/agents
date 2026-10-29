@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
-use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, TimedString, Ts};
+use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString, Ts};
 use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::workers::MediaWorkers;
@@ -39,7 +39,12 @@ struct Inner {
     machine: Mutex<Machine>,
     outbox: Mutex<Outbox>,
     decode: OnceLock<Decode>,
-    timer: Mutex<Option<AbortHandle>>,
+    /// When the drift flush is due; one timer task, started by the first arm, follows it (the
+    /// machine re-arms on every frame sent).
+    drift_at: watch::Sender<Option<Ts>>,
+    timer: Mutex<Option<OwnedTask>>,
+    /// The container decoder's queue server; it holds the emitter until the queue drains.
+    serving: OnceLock<OwnedTask>,
     /// The first failure off the calling thread, reported by the calls after it and by `join`.
     failure: Mutex<Option<EmitterError>>,
     ended: AtomicBool,
@@ -116,7 +121,9 @@ impl AudioEmitter {
             machine: Mutex::new(machine),
             outbox: Mutex::default(),
             decode: OnceLock::new(),
+            drift_at: watch::channel(None).0,
             timer: Mutex::new(None),
+            serving: OnceLock::new(),
             failure: Mutex::new(None),
             ended: AtomicBool::new(false),
             closed: AtomicBool::new(false),
@@ -203,25 +210,17 @@ impl Inner {
 
     /// The drift flush, on the host's clock.
     fn arm(self: &Arc<Self>, delay: Duration) {
-        self.disarm();
-        let at = self.env.clock.now().saturating_add(delay);
-        let clock = self.env.clock.clone();
-        let emitter = Arc::downgrade(self);
-        let timer = self.env.spawner.spawn_unboxed(async move {
-            clock.wait_until(at).await;
-            let Some(emitter) = emitter.upgrade() else { return };
-            log::debug!(target: "livekit.agents", "flush audio emitter due to slow audio generation");
-            if let Err(error) = emitter.run(|m, now, eff| m.on_drift(now, eff)) {
-                emitter.fail(error);
-            }
-        });
-        *locked(&self.timer) = Some(timer);
+        self.drift_at.send_replace(Some(self.env.clock.now().saturating_add(delay)));
+        let mut timer = locked(&self.timer);
+        if timer.is_none() {
+            let (emitter, due) = (Arc::downgrade(self), self.drift_at.subscribe());
+            *timer =
+                Some(self.env.spawner.spawn(drift_timer(emitter, due, self.env.clock.clone())));
+        }
     }
 
     fn disarm(&self) {
-        if let Some(timer) = locked(&self.timer).take() {
-            timer.abort();
-        }
+        self.drift_at.send_replace(None);
     }
 
     /// PCM to frame for `data`, from the WAV decoder when there is one.
@@ -460,10 +459,11 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         }
         if let Some(Decode::Container(_)) = me.decode.get() {
             let emitter = me.clone();
-            me.env.spawner.spawn_unboxed(async move {
+            let serving = me.env.spawner.spawn(async move {
                 let Some(Decode::Container(queue)) = emitter.decode.get() else { return };
                 emitter.clone().serve(queue).await;
             });
+            let _ = me.serving.set(serving);
         }
         Ok(())
     }
@@ -550,6 +550,46 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
 
     fn output_closed(&self) -> Result<bool, EmitterError> {
         self.0.output.closed().map_err(|error| EmitterError::Unavailable(error.to_string()))
+    }
+}
+
+/// Fires the drift flush when the armed instant passes unchanged; ends with the emitter.
+async fn drift_timer(
+    emitter: std::sync::Weak<Inner>,
+    mut due: watch::Receiver<Option<Ts>>,
+    clock: Arc<dyn Clock>,
+) {
+    loop {
+        let Some(at) = *due.borrow_and_update() else {
+            if due.changed().await.is_err() {
+                return;
+            }
+            continue;
+        };
+        tokio::select! {
+            biased;
+            changed = due.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                continue;
+            }
+            () = clock.wait_until(at) => {}
+        }
+        let Some(emitter) = emitter.upgrade() else { return };
+        // Disarmed or re-armed while the wait ended: not this deadline's flush.
+        if emitter.drift_at.send_if_modified(|due| {
+            let fire = *due == Some(at);
+            if fire {
+                *due = None;
+            }
+            fire
+        }) {
+            log::debug!(target: "livekit.agents", "flush audio emitter due to slow audio generation");
+            if let Err(error) = emitter.run(|m, now, eff| m.on_drift(now, eff)) {
+                emitter.fail(error);
+            }
+        }
     }
 }
 
