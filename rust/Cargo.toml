@@ -83,13 +83,11 @@ pyo3         = "0.29"
 # every marked item from one call instead of a hand-kept list. Only the bindings may use it, and
 # `lk-agents-inference::local_models`, where a native provider of the local models registers.
 inventory    = "0.3"
-# MCP is the official Rust SDK, not a port. `lk-agents-inference::mcp` only. No `server`,
-# `macros` or `schemars` (we are a client); streamable HTTP over the workspace's reqwest and
-# rustls, and the child process for stdio. The legacy SSE transport rmcp does not ship is
-# `mcp::session::connect_sse`, over `sse-stream`, the parser rmcp's own HTTP client uses.
+# MCP's SDK owns protocol and session state; runtime supplies HTTP/SSE through lk-agents-net
+# and uses the SDK's child-process transport for stdio.
 rmcp         = { version = "3.1", default-features = false, features = [
     "client",
-    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-client",
     "transport-child-process",
 ] }
 
