@@ -48,6 +48,13 @@ pub fn accepted_kinds(config: &RoomIoConfig) -> &[ParticipantKind] {
     }
 }
 
+/// Whether the agent transcript follows audio playout: `sync_transcription` unset (`NOT_GIVEN`)
+/// means yes when there is an audio output.
+pub fn wants_transcript_sync(config: &RoomIoConfig, has_audio_output: bool) -> bool {
+    let Some(text) = &config.text_output else { return false };
+    text.sync_transcription != Some(false) && has_audio_output
+}
+
 /// `RecorderIO._write_task`'s `WRITE_INTERVAL`, on the session clock.
 pub const RECORDER_FLUSH: Duration = Duration::from_millis(2500);
 

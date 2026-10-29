@@ -188,13 +188,11 @@ impl RoomIo {
         self.agent_tr.clone().map(|a| a as Arc<dyn TextOutput>)
     }
 
-    /// `NOT_GIVEN` means yes if there is an audio output (`has_external_audio_output`).
     pub fn wants_transcript_sync(&self, has_external_audio_output: bool) -> bool {
-        let Some(t) = &self.config.text_output else { return false };
-        if t.sync_transcription == Some(false) {
-            return false;
-        }
-        self.audio_output.is_some() || has_external_audio_output
+        lk_agents_voice::room_io::wants_transcript_sync(
+            &self.config,
+            self.audio_output.is_some() || has_external_audio_output,
+        )
     }
 
     pub fn linked_participant(&self) -> Option<ParticipantIdentity> {
