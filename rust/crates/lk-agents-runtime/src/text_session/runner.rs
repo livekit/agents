@@ -29,25 +29,19 @@ impl TextSessionRunner for Runner {
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
     ) -> Result<Self, InvalidRun> {
-        let mut definitions = BTreeMap::new();
-        let mut resources = BTreeMap::new();
-        for agent in agents {
-            let name = agent.definition.name.clone();
-            definitions.insert(
-                name.clone(),
-                SessionAgent {
-                    definition: agent.definition.clone(),
-                    llm: Some(LlmRef { id: ResourceId(0), provider: agent.llm.id() }),
-                    output_type_explicit: agent.output_type_explicit,
-                    agent_tools: agent.agent_tools.clone(),
-                },
-            );
-            if resources.insert(name.clone(), agent).is_some() {
-                return Err(InvalidRun(format!("duplicate session agent: {name}")));
-            }
-        }
-        let config = TextSessionConfig { root_agent, agents: definitions, max_depth };
-        config.validate().map_err(|e| InvalidRun(e.to_string()))?;
+        let config = TextSessionConfig::from_agents(
+            root_agent,
+            agents.iter().map(|agent| SessionAgent {
+                definition: agent.definition.clone(),
+                llm: Some(LlmRef { id: ResourceId(0), provider: agent.llm.id() }),
+                output_type_explicit: agent.output_type_explicit,
+                agent_tools: agent.agent_tools.clone(),
+            }),
+            max_depth,
+        )
+        .map_err(|e| InvalidRun(e.to_string()))?;
+        let resources =
+            agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
         Ok(Self { config, agents: resources, control: Mutex::new(None) })
     }
 

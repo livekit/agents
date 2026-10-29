@@ -32,6 +32,24 @@ impl TextSessionConfig {
         Self { root_agent, agents, max_depth: 8 }
     }
 
+    /// A validated configuration from the session's agents; each name appears once.
+    pub fn from_agents(
+        root_agent: String,
+        agents: impl IntoIterator<Item = SessionAgent>,
+        max_depth: usize,
+    ) -> Result<Self, RoutingError> {
+        let mut by_name = BTreeMap::new();
+        for agent in agents {
+            let name = agent.definition.name.clone();
+            if by_name.insert(name.clone(), agent).is_some() {
+                return Err(RoutingError::InvalidState(format!("duplicate session agent: {name}")));
+            }
+        }
+        let config = Self { root_agent, agents: by_name, max_depth };
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn validate(&self) -> Result<(), RoutingError> {
         if self.max_depth == 0 {
             return Err(RoutingError::MaxDepth { max_depth: 0 });
