@@ -925,6 +925,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
+        self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -950,7 +951,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         from .agent_activity import _SpeechHandleContextVar
 
         speech_handle = _SpeechHandleContextVar.get(None)
-        if speech_handle:
+        # an error raised into an awaiter that is still running inside its own speech is the
+        # awaiter's to handle, so it isn't also that speech's run output
+        awaiter = self.__awaiter
+        raised_into_awaiter = (
+            isinstance(result, Exception)
+            and awaiter is not None
+            and speech_handle is awaiter[0]
+            and not awaiter[1].done()
+        )
+        if speech_handle and not raised_into_awaiter:
             speech_handle._maybe_run_final_output = result
 
         activity = self._activity
@@ -992,6 +1002,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_agent = old_activity.agent
         session = old_activity.session
         self._old_agent = old_agent
+        self.__awaiter = (speech_handle, current_task)
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
