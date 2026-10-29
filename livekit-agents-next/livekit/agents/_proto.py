@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, Protocol, TypeVar
 
 from google.protobuf.message import Message
 from google.protobuf.timestamp_pb2 import Timestamp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.protocol.agent_pb import agent_session as _pb
 
+from ._generated.chat_items import MetricsReport
 from .metrics import (
     AgentSessionUsage,
     EOTModelUsage,
@@ -26,10 +28,20 @@ from .metrics import (
 
 if TYPE_CHECKING:
     from .llm import ChatItem
+    from .llm.chat_context import ChatRole
 
 _ProtoT = TypeVar("_ProtoT", bound=Message)
 
-ROLES = {
+_METRICS: TypeAdapter[MetricsReport] = TypeAdapter(MetricsReport)
+
+
+class _Timestamped(Protocol):
+    @property
+    def created_at(self) -> Timestamp: ...
+    def HasField(self, field_name: Literal["created_at"], /) -> bool: ...
+
+
+ROLES: dict[ChatRole, int] = {
     "developer": _pb.DEVELOPER,
     "system": _pb.SYSTEM,
     "user": _pb.USER,
@@ -54,17 +66,17 @@ def encode_timestamp(created_at: float) -> Timestamp:
     return ts
 
 
-def encode_by_name(msg_type: type[_ProtoT], src: Any, **overrides: Any) -> _ProtoT:
+def encode_by_name(msg_type: type[_ProtoT], src: object, **overrides: object) -> _ProtoT:
     """Build ``msg_type`` by copying same-named entries off ``src``, a mapping or an object.
 
     Only fields the proto declares are read, and a field ``src`` has nothing for is
     left unset. Seconds-since-epoch floats fill Timestamp fields.
     """
 
-    def lookup(name: str) -> Any:
+    def lookup(name: str) -> object:
         return src.get(name) if isinstance(src, Mapping) else getattr(src, name, None)
 
-    kwargs: dict[str, Any] = dict(overrides)
+    kwargs: dict[str, object] = dict(overrides)
     for fd in msg_type.DESCRIPTOR.fields:
         if fd.name in kwargs:
             continue
@@ -72,12 +84,14 @@ def encode_by_name(msg_type: type[_ProtoT], src: Any, **overrides: Any) -> _Prot
         if value is None:
             continue
         if fd.message_type is not None and fd.message_type.full_name == "google.protobuf.Timestamp":
+            if not isinstance(value, (int, float)):
+                raise TypeError(f"{fd.name} must be seconds since the epoch")
             value = encode_timestamp(value)
         kwargs[fd.name] = value
     return msg_type(**kwargs)
 
 
-def encode_metrics(metrics: Mapping[str, Any] | None) -> _pb.MetricsReport:
+def encode_metrics(metrics: Mapping[str, object] | None) -> _pb.MetricsReport:
     return encode_by_name(_pb.MetricsReport, metrics or {})
 
 
@@ -136,7 +150,7 @@ def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
                 m.transcript_confidence if m.HasField("transcript_confidence") else None
             ),
             extra=_decode_extra(m.extra),
-            metrics=cast(Any, _decode_fields(m.metrics)),
+            metrics=_METRICS.validate_python(_decode_fields(m.metrics)),
             **_created_at(m),
         )
     if kind == "function_call":
@@ -179,7 +193,7 @@ def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
     raise ValueError("a chat item without an item")
 
 
-def _encode_extra(extra: Mapping[str, Any]) -> dict[str, str]:
+def _encode_extra(extra: Mapping[str, object]) -> dict[str, str]:
     """The proto's ``extra`` holds strings: any other value as compact JSON, as the core writes it."""
     return {
         k: v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
@@ -187,9 +201,9 @@ def _encode_extra(extra: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def _decode_extra(extra: Mapping[str, str]) -> dict[str, Any]:
+def _decode_extra(extra: Mapping[str, str]) -> dict[str, JsonValue]:
     """``extra`` as the core reads it: JSON values decoded, any other string kept."""
-    decoded: dict[str, Any] = {}
+    decoded: dict[str, JsonValue] = {}
     for k, v in extra.items():
         try:
             decoded[k] = json.loads(v)
@@ -198,13 +212,13 @@ def _decode_extra(extra: Mapping[str, str]) -> dict[str, Any]:
     return decoded
 
 
-def _created_at(msg: Any) -> dict[str, float]:
+def _created_at(msg: _Timestamped) -> dict[str, float]:
     return (
         {"created_at": msg.created_at.ToNanoseconds() / 1e9} if msg.HasField("created_at") else {}
     )
 
 
-def _decode_fields(msg: Message) -> dict[str, Any]:
+def _decode_fields(msg: Message) -> dict[str, object]:
     """The fields ``msg`` has set, Timestamps as seconds since the epoch."""
     return {
         fd.name: v.ToNanoseconds() / 1e9 if isinstance(v, Timestamp) else v
