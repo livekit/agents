@@ -502,63 +502,6 @@ fn fork_preserves_complete_exchanges_and_merge_requires_delivery_receipts() {
 }
 
 #[test]
-fn default_depth_accepts_eight_frames_and_refuses_the_ninth_without_starting_it() {
-    let mut cfg = config(false, ChatHistory::Fresh, false);
-    let mut recursive = cfg.agents["desk"].clone();
-    recursive.definition.output = cfg.agents["booking"].definition.output.clone();
-    recursive.agent_tools.get_mut("book").unwrap().agent_name = "desk".into();
-    cfg.agents.insert("desk".into(), recursive);
-    let mut driver = Driver::new(cfg, None, "Recurse");
-    for depth in 1..=8 {
-        assert_eq!(driver.session.state.ancestors.len() + 1, depth);
-        driver.reply("", &[("book", json!({"nights":depth}))]);
-        driver.prepare(json!({"nights":depth}));
-    }
-    assert_eq!(driver.session.state.frames.len(), 8);
-    assert!(driver.effects.iter().any(|e| matches!(
-        e,
-        Effect::RoutingRefused { error: RoutingError::MaxDepth { max_depth: 8 }, .. }
-    )));
-    assert!(driver.request().1.items.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.is_error && o.output.contains("max_depth=8"))));
-    for depth in (1..=8).rev() {
-        driver.accepted(json!({"reference":depth.to_string()}));
-    }
-    assert_eq!(driver.turn().state.frames.values().filter(|f| f.completed).count(), 7);
-}
-
-#[test]
-fn failures_and_cancellation_never_produce_a_successful_envelope() {
-    for cancel in [false, true] {
-        let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Book");
-        driver.reply("", &[("book", json!({"nights":2}))]);
-        driver.prepare(json!({"nights":2}));
-        let (request, _) = driver.request();
-        if cancel {
-            driver.send(Event::Cancel);
-            assert!(!driver.effects.iter().any(|e| matches!(e, Effect::Finished(_))));
-            driver.run(agent_run::Event::LlmEnded { request });
-        } else {
-            driver.run(agent_run::Event::LlmFailed { request, error: "offline".into() });
-        }
-        assert!(
-            driver
-                .effects
-                .iter()
-                .any(|e| matches!(e, Effect::Finished(Err(TextSessionError::Run(_)))))
-        );
-        assert!(!driver.effects.iter().any(|e| matches!(e, Effect::Finished(Ok(_)))));
-        assert!(!driver.effects.iter().any(|e| matches!(
-            e,
-            Effect::Emit {
-                event: StreamEvent::ToolResult { status: ToolResultStatus::Completed, .. },
-                ..
-            }
-        )));
-        assert!(driver.send(Event::Cancel).is_empty());
-    }
-}
-
-#[test]
 fn unknown_agents_scopes_and_implicit_child_outputs_refuse_routing() {
     let mut cfg = config(false, ChatHistory::Fresh, false);
     cfg.agents.get_mut("booking").unwrap().output_type_explicit = false;

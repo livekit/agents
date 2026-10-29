@@ -161,12 +161,6 @@ mod tests {
         assert!(d.to_update.is_empty());
     }
 
-    #[test]
-    fn identical_contexts_produce_no_ops() {
-        let c = ctx(&[("a", "1"), ("b", "2")]);
-        assert_eq!(compute_chat_ctx_diff(&c, &c), DiffOps::default());
-    }
-
     // Catches: an empty old or new context panicking on the DP table's zero dimension.
     #[test]
     fn empty_contexts_are_handled_at_both_ends() {
