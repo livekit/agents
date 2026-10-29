@@ -1,9 +1,11 @@
 """What a tool on a call reads from its ``RunContext`` (agents.md "RunContext")."""
 
+import asyncio
+
 import pytest
 
 from livekit.agents import Agent, RunContext, VoiceSession
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import FunctionToolCall, Toolset, function_tool
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -90,3 +92,72 @@ async def test_a_delegated_run_adds_to_the_call_usage() -> None:
         await session._run(user_input="hello")
         await session._run(user_input="again")
     assert requests == [1, 1]
+
+
+async def test_a_duplicate_call_on_a_call_is_refused_with_the_agents_template() -> None:
+    agent = Agent(
+        instructions="Check.",
+        name="desk",
+        tool_handling={"async_options": {"duplicate_reject_template": "{function_name} runs"}},
+    )
+    runs: list[str] = []
+
+    @agent.tool(on_duplicate="reject")
+    async def check(ctx: RunContext) -> str:
+        """Check the caller's request."""
+        runs.append(ctx.function_call.call_id)
+        await asyncio.sleep(0.05)
+        return "checked"
+
+    calls = [FunctionToolCall(name="check", arguments="{}", call_id=f"c{n}") for n in range(2)]
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="", ttft=0, duration=0, tool_calls=calls),
+            FakeLLMResponse(input="checked", content="done", ttft=0, duration=0),
+            FakeLLMResponse(input="check runs", content="done", ttft=0, duration=0),
+        ]
+    )
+    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+        await session.start(agent)
+        await session._run(user_input="hello")
+        outputs = {
+            item.call_id: item.output
+            for item in session.history.items
+            if item.type == "function_call_output"
+        }
+    assert runs == ["c0"]
+    assert outputs == {"c0": "checked", "c1": "check runs"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the voice frame's definition is built before the agent's toolsets set up: tools a "
+    "toolset lists in setup() (MCP, RemoteAgent) lose their policies and expert identity",
+)
+async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call() -> None:
+    runs: list[str] = []
+
+    @function_tool(on_duplicate="reject")
+    async def check(ctx: RunContext) -> str:
+        """Check the caller's request."""
+        runs.append(ctx.function_call.call_id)
+        await asyncio.sleep(0.05)
+        return "checked"
+
+    class Listed(Toolset):
+        async def setup(self) -> "Listed":
+            self._tools = [check]
+            return self
+
+    agent = Agent(instructions="Check.", name="desk", tools=[Listed(id="listed")])
+    calls = [FunctionToolCall(name="check", arguments="{}", call_id=f"c{n}") for n in range(2)]
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="", ttft=0, duration=0, tool_calls=calls),
+            FakeLLMResponse(input="checked", content="done", ttft=0, duration=0),
+        ]
+    )
+    async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
+        await session.start(agent)
+        await session._run(user_input="hello")
+    assert runs == ["c0"]
