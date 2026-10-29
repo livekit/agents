@@ -1,7 +1,7 @@
 //! `perform_tts_inference`: one segment's duplex synthesis, retried, and its buffered playout.
 
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
-use super::llm::{Retried, SegEvent, extend, report_metrics, retry};
+use super::llm::{Retried, SegEvent, report_metrics, retry};
 use super::pipeline_reply::teardown_deadline;
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use lk_agents_abi::errors::ProviderError;
@@ -11,6 +11,9 @@ use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::generation::tts::{
+    AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, TextEffect, TranscriptEffect,
+};
 use lk_agents_voice::generation::{Attempt, GenEvent, TurnAccumulator};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
@@ -19,10 +22,6 @@ use lk_agents_voice::transcription::Visible;
 use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-/// Backpressure speculative synthesis after about five seconds of 20 ms frames (reads pause; no
-/// frame is dropped).
-const MAX_BUFFERED_TTS_FRAMES: usize = 256;
 
 /// `opening` is the text so far, still the item's. `lost`: the TTS failed for good; otherwise the
 /// speech was interrupted or closing before the synthesiser was asked, and no leg is opened.
@@ -115,10 +114,7 @@ pub(super) async fn perform_tts_inference(
                     rx,
                     text_out,
                     transforms: None,
-                    words: text.clone(),
-                    input_done,
-                    ended: false,
-                    send_err: None,
+                    state: StreamingTts::new(text.clone(), input_done),
                     tts_data,
                     aligned,
                 };
@@ -183,19 +179,20 @@ async fn synthesize(
 ) -> (Result<Heard, Failed>, bool) {
     let sink = streaming.sink;
     // Post-transform, like the chunked path: the journal says what the synthesiser was given.
-    let text = transformed(shared, &streaming.words.raw);
+    let text = transformed(shared, &streaming.state.words.raw);
     let segment = streaming.tts_data.segment as u32;
     shared.trace(GenerationStep::TtsRequested { speech: handle.id(), segment, text });
     streaming.transforms =
         (!shared.tts_transforms.is_empty()).then(|| Pipeline::new(&shared.tts_transforms));
     // The words in hand (first chunk, or a failed attempt's feed) go in first.
-    streaming.send_err = push_text(sink, &mut streaming.transforms, &streaming.words.raw).err();
-    if streaming.input_done && streaming.send_err.is_none() {
+    let error = push_text(sink, &mut streaming.transforms, &streaming.state.words.raw).err();
+    if streaming.state.opening_pushed(error) {
         end_input(sink, &mut streaming.transforms);
     }
     let heard = playback.run(shared, handle, &mut streaming).await;
     streaming.tts_data.take_calls(shared, handle, &mut streaming.source, true);
-    let Streaming { words, input_done, source, rx, tts_data, aligned, .. } = streaming;
+    let Streaming { state, source, rx, tts_data, aligned, .. } = streaming;
+    let StreamingTts { words, input_done, .. } = state;
     // Always: `end_input` before teardown (a second call is a no-op).
     sink.end_input();
     let fed = transformed(shared, &words.raw);
@@ -255,12 +252,7 @@ struct Streaming<'a, 'b> {
     rx: &'a mut mpsc::UnboundedReceiver<SegEvent>,
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,
-    /// `raw` fed to the synthesiser, `text` for the item.
-    words: Visible,
-    input_done: bool,
-    /// The provider's last frame was seen: the next `next` is `End` without asking the socket.
-    ended: bool,
-    send_err: Option<ProviderError>,
+    state: StreamingTts,
     tts_data: TtsGenerationData,
     aligned: Option<&'a mut Aligned<'b>>,
 }
@@ -271,40 +263,42 @@ impl Segment for Streaming<'_, '_> {
     }
 
     async fn next(&mut self) -> Result<Next, DriverError> {
-        if self.ended {
-            return Ok(Next::End);
+        match self.state.before_read() {
+            Read::End => return Ok(Next::End),
+            Read::Failed(error) => return Err(DriverError::from(error)),
+            Read::Provider => {}
         }
-        if let Some(e) = self.send_err.take() {
-            return Err(DriverError::from(e));
-        }
-        let Streaming {
-            sink, source, rx, text_out, transforms, words, input_done, send_err, ..
-        } = self;
+        let Streaming { sink, source, rx, text_out, transforms, state, .. } = self;
         let chunk = {
             let mut pending = Box::pin(source.next());
             loop {
-                if *input_done {
-                    // Nothing more to feed: wait on the provider alone.
+                if state.input_done {
                     break pending.await;
                 }
                 tokio::select! {
                     biased;
-                    ev = rx.recv() => match ev {
-                        Some(SegEvent::Chunk(more)) => {
-                            // The transcript gets the delta just given to the synthesiser, in order.
-                            capture(*text_out, &more.text).await;
-                            extend(words, &more);
-                            if let Err(e) = push_text(sink, transforms, &more.raw) {
-                                *send_err = Some(e);
-                                *input_done = true;
+                    event = rx.recv() => {
+                        let chunk = match event {
+                            Some(SegEvent::Chunk(chunk)) => Some(chunk),
+                            Some(SegEvent::End) | None => None,
+                        };
+                        let mut effects: std::collections::VecDeque<_> = state.text(chunk).into();
+                        while let Some(effect) = effects.pop_front() {
+                            match effect {
+                                TextEffect::Capture(chunk) => {
+                                    capture(*text_out, &chunk.text).await;
+                                    effects.push_front(state.captured(chunk));
+                                }
+                                TextEffect::Push(raw) => {
+                                    if let Err(error) = push_text(sink, transforms, &raw) {
+                                        state.push_failed(error);
+                                    }
+                                }
+                                TextEffect::EndInput => end_input(sink, transforms),
+                                TextEffect::FlushText => {
+                                    if let Some(out) = text_out { out.flush(); }
+                                }
                             }
-                        }
-                        Some(SegEvent::End) | None => {
-                            end_input(sink, transforms);
-                            if let Some(out) = text_out {
-                                out.flush();
-                            }
-                            *input_done = true;
                         }
                     },
                     got = &mut pending => break got,
@@ -315,9 +309,9 @@ impl Segment for Streaming<'_, '_> {
         let chunk = match chunk {
             Ok(Some(chunk)) => chunk,
             Ok(None) => {
-                self.ended = true;
+                self.state.source_ended();
                 if let Some(a) = self.aligned.as_deref_mut() {
-                    a.ended(&self.words.text).await;
+                    a.ended(&self.state.words.text).await;
                 }
                 return Ok(Next::End);
             }
@@ -328,10 +322,9 @@ impl Segment for Streaming<'_, '_> {
             a.chunk(&chunk).await;
         }
         // An `is_final` frame ends the segment's audio; a pooled connection never closes.
-        if chunk.is_final && self.input_done {
-            self.ended = true;
+        if self.state.frame(chunk.is_final) {
             if let Some(a) = self.aligned.as_deref_mut() {
-                a.ended(&self.words.text).await;
+                a.ended(&self.state.words.text).await;
             }
         }
         Ok(Next::Frame(chunk.frame))
@@ -339,8 +332,8 @@ impl Segment for Streaming<'_, '_> {
 
     fn text(&self) -> String {
         match self.aligned.as_deref() {
-            Some(a) => a.words.clone(),
-            None => self.words.text.clone(),
+            Some(a) => a.state.words.clone(),
+            None => self.state.words.text.clone(),
         }
     }
 }
@@ -581,40 +574,41 @@ impl Segment for SynthesizedSegment<'_, '_> {
 /// stamped by the audio's end, the model's text is forwarded whole.
 pub(super) struct Aligned<'a> {
     pub(super) leg: Option<&'a TextLeg<'a>>,
-    pub(super) words: String,
-    /// A stamp arrived: the fallback is off for good.
-    pub(super) stamped: bool,
-    pub(super) closed: bool,
+    pub(super) state: AlignedTranscript,
 }
 
 impl Aligned<'_> {
     async fn chunk(&mut self, chunk: &SynthesizedAudio) {
         for word in &chunk.timed_transcript {
-            self.stamped = true;
-            self.words.push_str(&word.text);
-            if let Some(leg) = self.leg {
-                leg.capture_timed(word).await;
-            }
+            let effect = self.state.word(word);
+            self.apply(effect).await;
         }
     }
 
-    /// Closes the leg's segment before the playout, so a synchroniser is not left with open text
-    /// input.
     async fn ended(&mut self, fallback: &str) {
-        if std::mem::replace(&mut self.closed, true) {
-            return;
+        for effect in self.state.end(fallback) {
+            self.apply(effect).await;
         }
-        if !self.stamped {
-            log::warn!(
+    }
+
+    async fn apply(&self, effect: TranscriptEffect) {
+        match effect {
+            TranscriptEffect::CaptureTimed(word) => {
+                if let Some(leg) = self.leg {
+                    leg.capture_timed(&word).await;
+                }
+            }
+            TranscriptEffect::Capture(text) => capture(self.leg, &text).await,
+            TranscriptEffect::WarnUnaligned => log::warn!(
                 target: "livekit.agents",
                 "no aligned transcript was returned from tts, forwarding the generated text \
                  without word timings"
-            );
-            self.words.push_str(fallback);
-            capture(self.leg, fallback).await;
-        }
-        if let Some(leg) = self.leg {
-            leg.flush();
+            ),
+            TranscriptEffect::Flush => {
+                if let Some(leg) = self.leg {
+                    leg.flush();
+                }
+            }
         }
     }
 }

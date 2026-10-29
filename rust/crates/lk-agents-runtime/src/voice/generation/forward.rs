@@ -228,7 +228,7 @@ impl Pump<'_> {
             _ => false,
         };
         let mut aligned =
-            aligned_path.then(|| Aligned { leg: text_out, words: String::new(), stamped: false, closed: false });
+            aligned_path.then(|| Aligned { leg: text_out, state: Default::default() });
         let deltas = if aligned_path { None } else { text_out };
         // The segment's first delta; every other one is forwarded where it is consumed.
         capture(deltas, &first.text).await;
@@ -283,11 +283,11 @@ impl Pump<'_> {
                     Err(Lost { lost: true, opening, synchronized, played, .. }) => {
                         self.voice = Voice::Silent;
                         self.acc.cut_short();
-                        match aligned.as_ref().filter(|a| a.stamped) {
+                        match aligned.as_ref().filter(|a| a.state.stamped) {
                             // Stamps were already forwarded: the aligned stream never falls back,
                             // so the rest (never heard) is drained and the words are the stamps.
                             Some(a) => {
-                                let words = a.words.clone();
+                                let words = a.state.words.clone();
                                 drain_segment_text(rx, opening, None).await;
                                 silent(words, true)
                             }
@@ -298,7 +298,7 @@ impl Pump<'_> {
                             None => {
                                 // On the aligned path none of the model's text went out: with no
                                 // stamp it stands in, as `_aligned_transcript_or_text` falls back.
-                                if aligned.as_ref().is_some_and(|a| !a.closed) {
+                                if aligned.as_ref().is_some_and(|a| !a.state.closed) {
                                     capture(text_out, &opening.text).await;
                                 }
                                 let words = drain_segment_text(rx, opening, text_out).await.text;

@@ -2,6 +2,7 @@
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
 pub mod forward;
+pub mod tts;
 pub mod realtime;
 pub mod playout;
 
