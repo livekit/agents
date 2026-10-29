@@ -47,7 +47,6 @@ def asking(*questions: str, answer: str, heard: list[tuple[str, str]]) -> Callab
     return handler
 
 
-@pytest.mark.xfail(strict=True, reason="R38: a pipeline call forces the tool through a model step")
 @pytest.mark.rule("R38")
 async def test_the_answer_goes_to_the_tool_that_asked_with_no_model_step(
     expert: Callable[..., A2ADelegate],
