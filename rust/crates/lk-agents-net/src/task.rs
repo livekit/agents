@@ -199,6 +199,11 @@ impl TaskSet {
         Some(TaskId(id))
     }
 
+    /// Whether the task has not left the set yet.
+    pub fn contains(&self, id: TaskId) -> bool {
+        self.inner.lock().expect("task table").tasks.contains_key(&id.0)
+    }
+
     /// Cancels one task; a finished one is ignored.
     pub fn cancel(&self, id: TaskId) {
         if let Some((_, Some(task))) = self.inner.lock().expect("task table").tasks.get(&id.0) {
