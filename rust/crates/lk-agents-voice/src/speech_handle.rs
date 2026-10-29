@@ -86,7 +86,6 @@ pub enum SpeechError {
     NotDoneYet,
 }
 
-
 /// What the core publishes about a speech, in order; the runtime's handle applies each.
 #[derive(Debug, Clone)]
 pub enum SpeechUpdate {
@@ -128,6 +127,45 @@ impl SpeechView {
             num_steps: 1,
             generations: Vec::new(),
         }
+    }
+
+    /// The host's `interrupt(force)` against this view, `requested` already or not: whether it
+    /// records a new request for the core, in the reference's order (`speech_handle.py:185`).
+    /// Interrupted or done already, it is a no-op; disallowed, it raises unless forced.
+    pub fn host_interrupt(&self, requested: bool, force: bool) -> Result<bool, SpeechError> {
+        if requested || self.interrupted || self.done {
+            return Ok(false);
+        }
+        if !force && !self.allow_interruptions {
+            return Err(SpeechError::InterruptionsNotAllowed);
+        }
+        Ok(true)
+    }
+
+    /// The host's `allow_interruptions = allow`: refused once the speech is (being) interrupted.
+    pub fn host_set_allow_interruptions(
+        &self,
+        allow: bool,
+        requested: bool,
+    ) -> Result<(), SpeechError> {
+        if !allow && (requested || self.interrupted) {
+            return Err(SpeechError::AlreadyInterrupted);
+        }
+        Ok(())
+    }
+
+    /// The host's `_hold_interruptions`: refused once the speech is interrupted.
+    pub fn host_hold_interruptions(&self) -> Result<(), SpeechError> {
+        if self.interrupted {
+            return Err(SpeechError::AlreadyInterrupted);
+        }
+        Ok(())
+    }
+
+    /// `interrupted` as the host reads it: from its own request until the speech is done, and
+    /// once the core interrupted the speech.
+    pub fn host_interrupted(&self, requested: bool) -> bool {
+        self.interrupted || (requested && !self.done)
     }
 
     /// The user may cut it now: not interrupted already, and interruptions allowed.

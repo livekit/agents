@@ -438,8 +438,9 @@ impl Speeches {
     pub fn apply(&self, id: SpeechId, update: SpeechUpdate, api: &Tx) {
         let handle = {
             let mut speeches = lock(&self.0);
-            let entry =
-                speeches.entry(id).or_insert_with(|| Arc::new(SpeechHandle::new(id, true, api.clone())));
+            let entry = speeches
+                .entry(id)
+                .or_insert_with(|| Arc::new(SpeechHandle::new(id, true, api.clone())));
             Arc::clone(entry)
         };
         handle.apply(id, update);
@@ -508,9 +509,8 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     /// interrupted the speech for any reason (an interruption, a supersede, the close). A done
     /// speech reads the loop's verdict: a request that arrived after its end changed nothing.
     fn interrupted(&self) -> bool {
-        let inner = lock(&self.inner);
         let requested = self.interrupt_requested.load(Ordering::Acquire);
-        inner.view.interrupted || (requested && !inner.view.done)
+        lock(&self.inner).view.host_interrupted(requested)
     }
 
     fn done(&self) -> bool {
@@ -524,9 +524,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     fn set_allow_interruptions(&self, value: bool) -> Result<(), HostRefused> {
         let mut inner = lock(&self.inner);
         let requested = self.interrupt_requested.load(Ordering::Acquire);
-        if !value && (requested || inner.view.interrupted) {
-            return Err(refused(SpeechError::AlreadyInterrupted));
-        }
+        inner.view.host_set_allow_interruptions(value, requested).map_err(refused)?;
         // A detached handle's setter is its own, with no loop to tell.
         if *self.creation.borrow() == Creation::Detached {
             inner.view.allow_interruptions = value;
@@ -536,10 +534,9 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         let Some(speech) = self.created().or(self.reserved) else {
             return Err(refused(SpeechRefused::Detached));
         };
-        let _ = self.api.send(Command::from(SpeechCommand::SetAllowInterruptions {
-            speech,
-            allow: value,
-        }));
+        let _ = self
+            .api
+            .send(Command::from(SpeechCommand::SetAllowInterruptions { speech, allow: value }));
         Ok(())
     }
 
@@ -554,16 +551,11 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     fn interrupt(&self, force: bool) -> Result<(), HostRefused> {
         // Under the lock `answered` takes, so a creation racing this call sends it once.
         let mut inner = lock(&self.inner);
-        let created = self.created();
-        let view = &inner.view;
-        let already = self.interrupt_requested.load(Ordering::Acquire)
-            || (created.is_some() && (view.interrupted || view.done));
-        if already {
+        let requested = self.interrupt_requested.load(Ordering::Acquire);
+        if !inner.view.host_interrupt(requested, force).map_err(refused)? {
             return Ok(());
         }
-        if !force && !view.allow_interruptions {
-            return Err(refused(SpeechError::InterruptionsNotAllowed));
-        }
+        let created = self.created();
         self.interrupt_requested.store(true, Ordering::Release);
         match (created, *self.creation.borrow()) {
             (Some(speech), _) => self.send_interrupt(speech, force),
@@ -575,10 +567,9 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
 
     fn hold_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached().map_err(refused)?;
-        if self.interrupted() {
-            return Err(refused(SpeechError::AlreadyInterrupted));
-        }
-        let _ = self.api.send(Command::from(SpeechCommand::HoldInterruptions { speech, hold: true }));
+        lock(&self.inner).view.host_hold_interruptions().map_err(refused)?;
+        let _ =
+            self.api.send(Command::from(SpeechCommand::HoldInterruptions { speech, hold: true }));
         Ok(())
     }
 

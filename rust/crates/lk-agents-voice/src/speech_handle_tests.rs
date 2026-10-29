@@ -77,8 +77,27 @@ fn every_change_is_published_after_the_creation() {
     let mut speech = SpeechState::new(true);
     speech.mark_scheduled();
     let updates = speech.take_updates();
-    assert!(matches!(updates[..], [SpeechUpdate::Created, SpeechUpdate::View(ref v)] if v.scheduled));
+    assert!(
+        matches!(updates[..], [SpeechUpdate::Created, SpeechUpdate::View(ref v)] if v.scheduled)
+    );
     assert!(speech.take_updates().is_empty(), "nothing changed since");
     speech.interrupt_refused();
     assert!(matches!(speech.take_updates()[..], [SpeechUpdate::InterruptRefused]));
+}
+
+// Catches: a host `interrupt()` that raises on a speech already interrupted or done (the
+// reference returns), or that a disallowed speech lets through unforced.
+#[test]
+fn a_host_interrupt_is_a_no_op_once_settled_and_raises_only_when_disallowed() {
+    let mut speech = SpeechState::new(false);
+    let view = speech.view().clone();
+    assert_eq!(view.host_interrupt(false, false), Err(SpeechError::InterruptionsNotAllowed));
+    assert_eq!(view.host_interrupt(false, true), Ok(true));
+    assert_eq!(view.host_interrupt(true, false), Ok(false), "asked already");
+    assert_eq!(
+        view.host_set_allow_interruptions(false, true),
+        Err(SpeechError::AlreadyInterrupted)
+    );
+    speech.mark_done(None);
+    assert_eq!(speech.view().host_interrupt(false, false), Ok(false), "done already");
 }
