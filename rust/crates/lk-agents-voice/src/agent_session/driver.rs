@@ -769,6 +769,7 @@ impl Driver {
                 // A realtime request the server never answered: the machine settles it.
                 Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),
                 Timer::Filler(id) => self.on_filler_timer(now, id, out),
+                Timer::LaneRelease(speech) => self.lane_release_due(speech, out),
                 Timer::EotPredictionTimeout
                 | Timer::EndpointingDelay
                 | Timer::TranscriptionTimeout

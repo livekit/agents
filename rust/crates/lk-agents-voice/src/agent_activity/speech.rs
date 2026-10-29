@@ -683,6 +683,7 @@ impl Driver {
         let admitted =
             self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, out);
         if admitted && !past_edge && !self.session.storage.lost {
+            self.storage_started(id);
             out.machine().push(crate::agent_session::effects::Effect::SpeechStart {
                 handle: Arc::clone(&handle),
                 context: Box::new(ctx),
@@ -1103,6 +1104,7 @@ impl Driver {
         // The handle leaves with the queue's entry (`speech_finished`, below); `speech_frames`
         // keeps its entry: a call and output can land after the speech is done.
         self.activity.finished.insert(speech);
+        self.storage_speech_released(now, speech, out);
         self.publish_activity();
         self.speech_finished(now, speech, out);
         self.voice_task_speech_released(now, speech, out);

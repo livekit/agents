@@ -511,6 +511,8 @@ pub enum Timer {
     InterruptionTimeout(SpeechId),
     /// `min_consecutive_speech_delay` ran out.
     ConsecutiveSpeechDelay,
+    /// A speech that ended without reporting its turn: past it, its lane is released.
+    LaneRelease(SpeechId),
 }
 
 /// The journal's record of a call on a provider (`InputStep::ProviderCalled`).

@@ -261,7 +261,8 @@ impl AudioRecognition {
             | Timer::DtmfDebounce
             | Timer::EndCallReply
             | Timer::InterruptionTimeout(_)
-            | Timer::ConsecutiveSpeechDelay => {}
+            | Timer::ConsecutiveSpeechDelay
+            | Timer::LaneRelease(_) => {}
         }
         eff
     }

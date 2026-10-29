@@ -1,14 +1,20 @@
 //! Storage receipts precede model reads and reply settlement; I/O stays in the executor.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use lk_agents_abi::{ChatItem, Ts};
 
 use super::Driver;
-use super::effects::{Effect, Out};
+use super::effects::{Effect, Out, Timer};
 use crate::agent_activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use crate::generation::TurnOutcome;
+
+/// How long a speech that ended without reporting its turn (its tasks aborted by the
+/// interruption watchdog or `cancel_tasks`) may still report it before its lane is released
+/// (voice-session.md: "within 30 seconds").
+pub(crate) const LANE_RELEASE_BOUND: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(crate) struct StorageTurns {
@@ -16,6 +22,8 @@ pub(crate) struct StorageTurns {
     pub lost: bool,
     failures: BTreeMap<SpeechId, Box<lk_agents_abi::errors::ProviderError>>,
     pending: BTreeMap<SpeechId, (TurnOutcome, bool)>,
+    /// The started speeches holding the lane until their turn is committed or abandoned.
+    holding: BTreeSet<SpeechId>,
 }
 
 impl StorageTurns {
@@ -33,6 +41,34 @@ impl Driver {
         });
     }
 
+    /// A started speech takes the lane: it holds it until its turn is committed or abandoned.
+    pub(crate) fn storage_started(&mut self, speech: SpeechId) {
+        if self.session.storage.enabled {
+            self.session.storage.holding.insert(speech);
+        }
+    }
+
+    /// The speech reported its turn, or the lane is lost: it no longer holds the lane.
+    fn storage_reported(&mut self, speech: SpeechId, out: &mut Out) -> bool {
+        self.disarm(Timer::LaneRelease(speech), out);
+        self.session.storage.holding.remove(&speech)
+    }
+
+    /// The speech left the loop: one that never reported its turn releases the lane within
+    /// [`LANE_RELEASE_BOUND`].
+    pub(crate) fn storage_speech_released(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+        if self.session.storage.holding.contains(&speech) {
+            out.machine().arm(Timer::LaneRelease(speech), now.saturating_add(LANE_RELEASE_BOUND));
+        }
+    }
+
+    /// The bound passed with the turn still unreported: it is abandoned.
+    pub(crate) fn lane_release_due(&mut self, speech: SpeechId, out: &mut Out) {
+        if self.session.storage.holding.remove(&speech) {
+            out.machine().push(Effect::StorageAbort(speech));
+        }
+    }
+
     pub(crate) fn storage_settle(
         &mut self,
         speech: SpeechId,
@@ -40,6 +76,7 @@ impl Driver {
         interrupted: bool,
         out: &mut Out,
     ) {
+        self.storage_reported(speech, out);
         self.session.storage.pending.insert(speech, (outcome, interrupted));
         out.machine().push(Effect::StorageCommit {
             speech,
@@ -63,6 +100,7 @@ impl Driver {
         error: Box<lk_agents_abi::errors::ProviderError>,
         out: &mut Out,
     ) {
+        self.storage_reported(speech, out);
         self.session.storage.failures.insert(speech, error);
         out.machine().push(Effect::StorageAbort(speech));
     }
@@ -75,6 +113,7 @@ impl Driver {
 
     pub(crate) fn storage_lost(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         self.session.storage.lost = true;
+        self.storage_reported(speech, out);
         self.end_live_tools(now, speech, out);
         if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
             out.machine().push(Effect::CancelSpeech(handle.clone()));

@@ -183,6 +183,39 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
     assert_eq!(correction.created_at, source_time);
 }
 
+// Catches (voice-session.md "releases the lane within 30 seconds"): a speech whose tasks were
+// aborted (the interruption watchdog, `cancel_tasks`) reports neither done nor failed, so its
+// lane was never released and the store renewed its lease until the call closed.
+#[tokio::test(start_paused = true)]
+async fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
+    use crate::agent_session::effects::Effect;
+    use crate::agent_session::storage::LANE_RELEASE_BOUND;
+    use crate::agent_session::time::Now;
+    use lk_agents_abi::Ts;
+
+    let api = unobserved(fake_room("aborted-speech-lane").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed(None)) else {
+        panic!("session must be ready");
+    };
+    let (mut cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();
+    let driver = &mut cores.driver;
+    driver.session.storage.enabled = true;
+    let speech = SpeechId(7);
+    driver.storage_started(speech);
+    let mut out = driver.out();
+    driver.release_speech(Ts::ZERO, speech, &mut out);
+    let released = driver.settle_step(out);
+    assert!(!released.iter().any(|e| matches!(e, Effect::StorageAbort(_))));
+    let wall = std::time::UNIX_EPOCH;
+    let due = Ts::ZERO.saturating_add(LANE_RELEASE_BOUND);
+    assert_eq!(driver.wake_at(), Some(due), "the release is bounded");
+    let effects = driver.handle(None, Now { at: due, wall });
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::StorageAbort(s) if *s == speech)),
+        "the lane was never released: {effects:?}"
+    );
+}
+
 /// A fake room on a virtual clock, and the same room as a session's.
 fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRoom) {
     let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
