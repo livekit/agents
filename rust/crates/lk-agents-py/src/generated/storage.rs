@@ -62,7 +62,8 @@ impl Storage {
     #[pyo3(signature = (*, directory = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None))]
     fn new(directory: ::std::option::Option<::std::string::String>, url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_storage_new_lease_ttl)] lease_ttl: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_storage_new_renew_interval)] renew_interval: ::std::option::Option<f64>) -> PyResult<Storage> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::new(directory, url, api_key, api_secret, lease_ttl, renew_interval).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, directory, url, api_key, api_secret, lease_ttl, renew_interval).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(Storage(::std::sync::Arc::new(out)))
     }
 
