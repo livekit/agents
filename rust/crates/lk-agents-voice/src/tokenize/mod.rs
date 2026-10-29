@@ -23,6 +23,8 @@ pub use word::{
 };
 
 pub mod blingfire;
+mod host;
+pub use host::{BufferedTokenStream, HostTokenizer};
 
 /// The host's text tokenization functions (`tokenize.basic`, `tokenize.utils`).
 pub struct SpeechTokenizer;

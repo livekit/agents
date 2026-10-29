@@ -3,11 +3,9 @@
 
 use std::sync::Arc;
 
+use super::{Span, TokenBuffer, TokenBufferOptions, TokenBufferStep, spans_from_tokens, xml};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::tokenize::bindings::{BufferedTokens, HostTokenization, TokenizerCallback};
-use lk_agents_voice::tokenize::{
-    Span, TokenBuffer, TokenBufferOptions, TokenBufferStep, spans_from_tokens, xml,
-};
 
 pub struct HostTokenizer;
 

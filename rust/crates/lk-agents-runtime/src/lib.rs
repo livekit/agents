@@ -16,7 +16,8 @@ pub mod cores {
     pub use lk_agents_core::telemetry::policy::DestinationPolicy;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_voice::tokenize::{
-        BasicSentenceTokenizer, BasicWordTokenizer, SpeechTokenizer,
+        BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,
+        SpeechTokenizer,
     };
     pub use lk_agents_voice::tts::markup::{
         ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper,
@@ -66,7 +67,5 @@ mod avatar_runner_host;
 /// Runtime room execution over the ABI-declared SDK capabilities.
 pub mod room_io;
 pub mod rtc;
-/// Tokenization through the application's tokenizer callbacks.
-pub mod tokenize;
 #[cfg(test)]
 pub(crate) use lk_agents_test_support::rtc as test_support_rtc;
