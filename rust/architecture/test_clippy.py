@@ -24,7 +24,7 @@ class ClippyContracts(unittest.TestCase):
 
     def test_pool_diagnostics_do_not_hide_a_policed_macro_caller(self):
         pool = {
-            "file_name": "crates/lk-agents-media/src/workers.rs",
+            "file_name": "crates/lk-agents-media/src/pool.rs",
             "line_start": 1,
             "column_start": 1,
             "is_primary": True,
@@ -184,7 +184,7 @@ class ClippyContracts(unittest.TestCase):
             ]
             with self.assertRaisesRegex(ValueError, "unmapped core policy"):
                 clippy.compiler_locations([message], alias)
-            message["spans"][0]["file_name"] = "crates/lk-agents-media/src/workers.rs"
+            message["spans"][0]["file_name"] = "crates/lk-agents-media/src/pool.rs"
             self.assertEqual(clippy.compiler_locations([message], alias), [])
 
     def test_empty_partial_and_failed_compiler_transcripts_fail(self):
@@ -379,7 +379,7 @@ class CompilerLocationContracts(unittest.TestCase):
                 "expansion": expansion,
             }
 
-        worker = span("crates/lk-agents-media/src/workers.rs")
+        worker = span("crates/lk-agents-media/src/pool.rs")
         core = span("crates/lk-agents-core/src/lib.rs")
         message = {
             "code": {"code": "clippy::disallowed_types"},

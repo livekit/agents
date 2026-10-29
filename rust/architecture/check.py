@@ -17,8 +17,8 @@ CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media")}
 PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
 UNRESTRICTED = (
-    "rust/crates/lk-agents-media/src/workers.rs",
-    "rust/crates/lk-agents-media/src/workers/",
+    "rust/crates/lk-agents-media/src/pool.rs",
+    "rust/crates/lk-agents-media/src/pool/",
 )
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.
