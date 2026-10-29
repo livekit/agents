@@ -41,8 +41,8 @@ impl Rule for SpeechIsHeard {
     const CONTRACT: Contract = Contract {
         id: "speech_is_heard",
         guarantee: "A speech plays within a bound of its creation, ends, or waits on something that still holds: an unanswered provider, tool or hook, the floor held by a playing speech or the developer, authorization held, the person speaking, the close.",
-        examples: &[played_in_time, waited_on_the_model],
-        counterexamples: &[silent_behind_a_paused_speech],
+        examples: &[played_in_time, waited_on_the_model, waited_behind_the_persons_utterance],
+        counterexamples: &[silent_behind_a_paused_speech, silent_after_the_persons_utterance],
         probe: None,
     };
 
@@ -419,9 +419,22 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
         }
         vad_speaking = speaking;
     }
+    // The recogniser's view: an utterance it opened and has not ended. Without a VAD the session
+    // never reports the person speaking (the reference takes the recogniser's onset only when it
+    // detects turns), yet that utterance is what pauses the speech playing (seed 8893).
+    let mut stt_speaking = false;
+    for a in r.applied().iter().filter(|a| a.accepted && before(&a.at)) {
+        match a.input {
+            Input::SttStart { .. } => stt_speaking = true,
+            Input::SttEnd { .. } => stt_speaking = false,
+            _ => {}
+        }
+    }
     let allowance = super::pause_resolves::allowance_ms(r.journal(), deadline);
     if paused
-        && (vad_speaking || quiet_since.is_some_and(|quiet| deadline <= quiet + allowance))
+        && (vad_speaking
+            || stt_speaking
+            || quiet_since.is_some_and(|quiet| deadline <= quiet + allowance))
     {
         return Some("paused for the person's speech");
     }
@@ -460,8 +473,7 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
             return Some("the floor held by a speech that plays");
         }
         let quiet = last_quiet(&journal);
-        let allowance = super::pause_resolves::allowance_ms(r.journal(), deadline);
-        if quiet.is_some_and(|q| deadline <= q + allowance) {
+        if stt_speaking || quiet.is_some_and(|q| deadline <= q + allowance) {
             return Some("the floor held by a speech paused for the person");
         }
     }
@@ -500,8 +512,27 @@ fn waited_on_the_model() -> Recording {
 
 /// A reply queued behind a speech paused for the person's voice, the person long quiet.
 fn silent_behind_a_paused_speech() -> Recording {
+    behind_a_paused_speech(Authored::new())
+}
+
+/// The same, the recogniser still hearing the person at the bound: the reply waits on them.
+fn waited_behind_the_persons_utterance() -> Recording {
+    use crate::input::Ref;
+    behind_a_paused_speech(Authored::new().sent(Input::SttStart { stt: Ref::new(0) }))
+}
+
+/// The same, the recogniser's utterance ended long before the bound.
+fn silent_after_the_persons_utterance() -> Recording {
+    use crate::input::Ref;
+    let heard = Authored::new()
+        .sent(Input::SttStart { stt: Ref::new(0) })
+        .sent(Input::SttEnd { utterance: Ref::new(0) });
+    behind_a_paused_speech(heard)
+}
+
+fn behind_a_paused_speech(case: Authored) -> Recording {
     use lk_agents_voice::agent_activity::scheduling::SpeechKind;
-    Authored::new()
+    case
         // The case's own speaker, not the room's: nobody need subscribe.
         .opens(Kind::Output, crate::record::Detail::Output { audio: true })
         .speech_created(3, SpeechKind::Realtime)
