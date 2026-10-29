@@ -307,6 +307,7 @@ class SpeechHandle:
         self._item_added_callbacks.add(callback)
 
     def _remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+        """Stop notifying the callback when this speech records a chat item."""
         self._item_added_callbacks.discard(callback)
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
