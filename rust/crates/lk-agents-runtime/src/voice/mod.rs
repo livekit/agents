@@ -83,8 +83,8 @@ pub struct Runtime {
     predictions: Vec<TaskId>,
     interruption:
         Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
-    /// The executor's tasks: readers, drains, pumps, provider calls and closes. Each ends on its
-    /// own (most at `Closing`); dropping the runtime cancels none of them.
+    /// The executor's tasks: readers, drains, pumps, provider calls and closes. Most end at
+    /// `Closing`; the run drains them within the cleanup bound and cancels the rest.
     tasks: Arc<TaskSet>,
 }
 
@@ -192,6 +192,14 @@ impl Runtime {
         self.queue.close();
         let undelivered = std::iter::from_fn(|| self.queue.try_recv().ok()).collect();
         self.finish(undelivered);
+        // The session's tasks end at `Closing`; what is still running at the cleanup bound is
+        // cancelled and reported.
+        let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        let late = self.tasks.drain(time.clock().as_ref(), deadline).await;
+        if !late.is_empty() {
+            log::error!(target: "livekit.agents", tasks = late.join(", ").as_str();
+                "voice session tasks missed the cleanup deadline and were cancelled");
+        }
     }
 
     pub fn open(&mut self, now: Now) {
