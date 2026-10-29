@@ -145,21 +145,31 @@ pub fn one_question_pending(record: &Record) -> Vec<Violation> {
 }
 
 /// A committed run's terminal rows end as its commit wrote them, unless a client canceled one: no
-/// other turn overwrites them. (A write storage refuses fails the turn `Invalid`, which
-/// [`answer_is_an_outcome`] rejects.)
+/// other turn overwrites them. A request its committed run answered reads its answer settled:
+/// no write of the run's settlement was dropped on its way to the database. (A write storage
+/// refuses fails the turn `Invalid`, which [`answer_is_an_outcome`] rejects.)
 pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
-    record
-        .ledger
-        .staged_terminal
-        .iter()
-        .filter_map(|(commit, task_id, staged)| {
+    let overwritten =
+        record.ledger.staged_terminal.iter().filter_map(|(commit, task_id, staged)| {
             let now = record.tasks.get(task_id).map(|t| t.status);
             (now != Some(*staged) && now != Some(TaskState::Canceled)).then(|| Violation {
                 subject: "Run",
                 text: format!("commit {commit}: wrote {task_id} {staged:?}, it is {now:?}"),
             })
+        });
+    let unsettled = record.requests.iter().filter_map(|r| {
+        let Some(Ok(answer)) = &r.answer else { return None };
+        let task = &answer.task;
+        let settled = task.terminal() || task.status == TaskState::InputRequired;
+        (answer.run_id.is_some() && !settled).then(|| Violation {
+            subject: subject_of(r),
+            text: format!(
+                "{} answered by its run with {} {:?}",
+                r.message_id, task.task_id, task.status
+            ),
         })
-        .collect()
+    });
+    overwritten.chain(unsettled).collect()
 }
 
 /// A request whose worker lived is answered: no task is watched or waited on forever.
@@ -346,6 +356,16 @@ mod tests {
         let mut r = record();
         r.ledger.most_pending = vec!["AST_1".into(), "AST_2".into()];
         assert!(!one_question_pending(&r).is_empty());
+    }
+
+    #[test]
+    fn an_answer_its_run_left_unsettled_is_rejected() {
+        let mut r = record();
+        let q =
+            r.requests.iter_mut().find(|q| matches!(&q.answer, Some(Ok(a)) if a.run_id.is_some()));
+        let Some(Ok(answer)) = &mut q.unwrap().answer else { unreachable!() };
+        answer.task.status = TaskState::Working;
+        assert!(!commit_is_what_the_run_staged(&r).is_empty());
     }
 
     #[test]
