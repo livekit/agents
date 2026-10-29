@@ -351,6 +351,19 @@ pub fn got(
     }
 }
 
+/// What a client's cancel writes on `row`: its metadata with the caller's `reason` merged in;
+/// `None` for a terminal row, which stays as it is.
+pub fn cancellation(row: &TaskRow, reason: Option<String>) -> Option<Map<String, Value>> {
+    if row.status.is_terminal() {
+        return None;
+    }
+    let mut metadata = row.data.metadata.clone();
+    if let Some(reason) = reason {
+        metadata.insert(REASON_KEY.into(), Value::String(reason));
+    }
+    Some(metadata)
+}
+
 /// `CancelTask`'s answer from the row after the cancel: canceled, else not cancelable.
 pub fn canceled(id: JsonRpcId, task: &TaskRef, row: Option<&TaskRow>) -> DoorFrame {
     match row {

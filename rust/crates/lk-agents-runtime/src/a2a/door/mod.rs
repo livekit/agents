@@ -18,10 +18,8 @@ use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::host::HostStorage;
-use lk_agents_storage::run::REASON_KEY;
 use lk_agents_storage::schema::TaskRow;
 use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
-use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -323,14 +321,10 @@ impl Inner {
         reason: Option<String>,
     ) -> Result<Option<TaskRow>, StorageError> {
         let Some(row) = thread.task(&task.id).await? else { return Ok(None) };
-        if row.status.is_terminal() {
-            return Ok(Some(row));
+        match rpc::cancellation(&row, reason) {
+            Some(metadata) => thread.lane(&row.lane).cancel_task(&task.id, metadata).await,
+            None => Ok(Some(row)),
         }
-        let mut metadata = row.data.metadata.clone();
-        if let Some(reason) = reason {
-            metadata.insert(REASON_KEY.into(), Value::String(reason));
-        }
-        thread.lane(&row.lane).cancel_task(&task.id, metadata).await
     }
 
     /// The thread a message is for: the one it names, else a new one in the grant's scope;
