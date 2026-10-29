@@ -6,7 +6,11 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::llm::realtime::{self as rt, Event, Modalities};
 use std::time::Duration;
 
-#[derive(Default)]
+/// How many of a speech's events its player holds ahead of the playout: the server sends a
+/// reply faster than it plays, so this is a whole reply (minutes of the smallest audio deltas).
+/// A full player is overrun: the runtime stops delivering to it and its speech ends on what it
+/// holds.
+pub const PLAYER_CAPACITY: usize = 8192;
 pub struct RealtimePlayout {
     current: Option<usize>,
     segments: Vec<String>,
@@ -15,7 +19,8 @@ pub struct RealtimePlayout {
     messages: Vec<Message>,
     audio: Duration,
     received: bool,
-    pub finished: bool,
+    finished: bool,
+    heard: Heard,
     segment_start: usize,
     has_audio_output: bool,
 }
@@ -44,6 +49,7 @@ pub enum RealtimeControl {
 }
 
 pub struct RealtimeTranscript {
+    pub heard: Heard,
     pub segments: Vec<String>,
     pub response_id: Option<String>,
     pub message_id: Option<String>,
@@ -58,7 +64,52 @@ struct Message {
     done: bool,
 }
 
+impl Default for RealtimePlayout {
+    fn default() -> Self {
+        Self {
+            current: None,
+            segments: Vec::new(),
+            response_id: None,
+            message_id: None,
+            messages: Vec::new(),
+            audio: Duration::ZERO,
+            received: false,
+            finished: false,
+            heard: Heard::complete(String::new(), Duration::ZERO, 0),
+            segment_start: 0,
+            has_audio_output: false,
+        }
+    }
+}
+
 impl RealtimePlayout {
+    /// A refused binding ends the reply on what its preceding bindings played.
+    pub fn binding_refused(&mut self) {
+        self.heard.complete = false;
+    }
+
+    /// Each binding contributes its receipt once, including a failed forwarding's partial receipt.
+    pub fn played(&mut self, part: Heard) {
+        self.heard.text.push_str(&part.text);
+        self.heard.position += part.position;
+        self.heard.played += part.played;
+        self.heard.frames += part.frames;
+        self.heard.complete &= part.complete;
+    }
+
+    pub fn finished(&self) -> bool {
+        self.finished
+    }
+
+    /// No later message is admitted after a cut, provider completion or speech interruption.
+    pub fn stop_playout(&self, interrupted: bool) -> bool {
+        !self.heard.complete || self.finished || interrupted
+    }
+
+    pub fn interrupted(&self, interrupted: bool) -> bool {
+        !self.heard.complete || interrupted
+    }
+
     /// An admitted binding freezes its output facts until the message settles.
     pub fn bind(&mut self, has_audio_output: bool) {
         self.has_audio_output = has_audio_output;
@@ -87,6 +138,7 @@ impl RealtimePlayout {
 
     pub fn into_transcript(self) -> RealtimeTranscript {
         RealtimeTranscript {
+            heard: self.heard,
             segments: self.segments,
             response_id: self.response_id,
             message_id: self.message_id,
@@ -233,13 +285,14 @@ impl RealtimePlayout {
     }
 
     /// A failure settles the server's transcript at the last observed playback position.
-    pub fn heard_until(&self, heard: &mut Heard) -> Vec<rt::Truncate> {
-        heard.complete = false;
-        self.cuts(heard)
+    pub fn heard_until(&mut self) -> Vec<rt::Truncate> {
+        self.heard.complete = false;
+        self.cuts()
     }
 
     /// Keep complete audio messages; cut partial audio and text to what the person heard.
-    pub fn cuts(&self, heard: &Heard) -> Vec<rt::Truncate> {
+    pub fn cuts(&self) -> Vec<rt::Truncate> {
+        let heard = &self.heard;
         let mut words = heard.text.as_str();
         let mut cuts = Vec::new();
         for (index, message) in self.messages.iter().enumerate() {

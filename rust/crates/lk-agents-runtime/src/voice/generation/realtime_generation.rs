@@ -29,11 +29,7 @@ use tokio::sync::mpsc;
 /// because a tool follow-up arrives on it.
 pub(crate) type RealtimePlayer = mpsc::Receiver<Event>;
 
-/// How many of a speech's events its player holds ahead of the playout: the server sends a
-/// reply faster than it plays, so this is a whole reply (minutes of the smallest audio deltas).
-/// A full player is overrun: the runtime stops delivering to it and its speech ends on what it
-/// holds.
-pub const PLAYER_CAPACITY: usize = 8192;
+pub use lk_agents_voice::generation::realtime::PLAYER_CAPACITY;
 
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;
 /// the speech ends when its last frame has played.
@@ -81,14 +77,13 @@ pub(crate) async fn realtime_generation_task(
         backlog: std::collections::VecDeque::new(),
         leg: None,
     };
-    let mut heard = crate::voice::generation::playout::silent(String::new(), true);
     loop {
         let Some(mut binding) = super::output::OutputBinding::acquire(shared, handle).await? else {
-            heard.complete = false;
+            generation.state.binding_refused();
             break;
         };
         if !binding.activate().await? {
-            heard.complete = false;
+            generation.state.binding_refused();
             break;
         }
         let audio_out = binding.audio();
@@ -130,29 +125,22 @@ pub(crate) async fn realtime_generation_task(
             Ok(part) => part,
             Err(failed) => {
                 if let Some(part) = failed.heard {
-                    heard.text.push_str(&part.text);
-                    heard.position += part.position;
-                    heard.played += part.played;
-                    heard.frames += part.frames;
+                    generation.state.played(part);
                 }
-                return Err(heard_until(&mut generation, &mut heard, wake, handle, failed.error));
+                return Err(heard_until(&mut generation, wake, handle, failed.error));
             }
         };
         if generation.state.end_unvoiced(&part, generation.text_out.is_some()) {
             let output = audio_out.as_deref().expect("the binding has an audio output");
             end_unvoiced(shared, handle.id(), output);
         }
-        heard.text.push_str(&part.text);
-        heard.position += part.position;
-        heard.played += part.played;
-        heard.frames += part.frames;
-        heard.complete &= part.complete;
+        generation.state.played(part);
         if let Err(error) = text_result {
-            return Err(heard_until(&mut generation, &mut heard, wake, handle, error));
+            return Err(heard_until(&mut generation, wake, handle, error));
         }
         // Its final report has settled before selection can activate the following segment.
         drop(binding);
-        if !heard.complete || generation.state.finished || handle.interrupted() {
+        if generation.state.stop_playout(handle.interrupted()) {
             break;
         }
         // A binding is for a message: the server may end the generation instead of sending one.
@@ -167,20 +155,21 @@ pub(crate) async fn realtime_generation_task(
             })
             .await;
         }
-        if generation.state.finished || handle.interrupted() {
+        if generation.state.stop_playout(handle.interrupted()) {
             break;
         }
     }
-    let interrupted = !heard.complete || handle.interrupted();
+    let interrupted = generation.state.interrupted(handle.interrupted());
     if interrupted {
         // What the server holds of its reply is cut to what the caller heard; a message they heard
         // none of is gone (`truncate`, after `_realtime_generation_task`'s playout).
         generation.drain_started();
-        let cuts = generation.state.cuts(&heard);
+        let cuts = generation.state.cuts();
         let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
     }
     let Generation { state, .. } = generation;
     let lk_agents_voice::generation::realtime::RealtimeTranscript {
+        heard,
         segments,
         received,
         response_id,
@@ -231,13 +220,12 @@ pub(crate) async fn realtime_generation_task(
 /// The step failed: the server keeps only what the person heard of it before the failure.
 fn heard_until(
     generation: &mut Generation<'_>,
-    heard: &mut lk_agents_voice::transcription::Heard,
     wake: &Tx,
     handle: &SpeechHandle,
     error: DriverError,
 ) -> DriverError {
     generation.drain_started();
-    let cuts = generation.state.heard_until(heard);
+    let cuts = generation.state.heard_until();
     let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
     error
 }
@@ -429,7 +417,7 @@ impl Segment for Generation<'_> {
         // The first next-media event stays in the existing backlog until its binding is admitted.
         let mut deferred_media = false;
         std::future::poll_fn(|cx| {
-            if self.state.finished || deferred_media {
+            if self.state.finished() || deferred_media {
                 return std::task::Poll::Ready(());
             }
             let event = match self.backlog.pop_front() {
@@ -452,7 +440,7 @@ impl Segment for Generation<'_> {
                 }
                 None => {}
             }
-            if self.state.finished || deferred_media {
+            if self.state.finished() || deferred_media {
                 return std::task::Poll::Ready(());
             }
             cx.waker().wake_by_ref();
