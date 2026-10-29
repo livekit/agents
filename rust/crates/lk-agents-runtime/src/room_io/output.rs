@@ -1,7 +1,7 @@
 //! `voice/room_io/_output.py`: `_ParticipantAudioOutput`, the agent's audio on its published track,
 //! and its host object; the transcription output is [`transcription`].
 
-use lk_agents_abi::voice::io::{AudioOutput, PlaybackFinished, PlaybackSegment, PlaybackTracker};
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackSegment, PlaybackTracker};
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::room_io::AudioOutputConfig;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
@@ -452,18 +452,8 @@ impl ParticipantAudioOutput {
                 let mut st = self.shared.lock();
                 if let Some(Err(error)) = st.publication.outcome() {
                     drop(st);
-                    // capture_frame may already have opened a segment for this refused frame.
-                    if let Some(segment) = self.shared.tracker.current_segment() {
-                        self.shared.tracker.note_flush();
-                        self.shared.tracker.playback_finished(
-                            segment,
-                            PlaybackFinished {
-                                playback_position: Duration::ZERO,
-                                interrupted: true,
-                                synchronized_transcript: None,
-                            },
-                        );
-                    }
+                    let open = self.shared.tracker.current_segment();
+                    self.shared.report(Playback::capture_refused(open));
                     return Err(error);
                 }
                 match st.playback.capture(segment, frame) {

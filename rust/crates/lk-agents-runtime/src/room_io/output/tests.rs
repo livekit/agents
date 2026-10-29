@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_support_rtc::FakeRtc;
 use lk_agents_abi::TokioSpawner;
+use lk_agents_abi::voice::io::PlaybackFinished;
 use lk_agents_abi::voice::rtc::RtcError;
 
 #[tokio::test]

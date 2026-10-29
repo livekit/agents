@@ -534,6 +534,19 @@ impl Playback {
         reports
     }
 
+    /// A capture the failed publication refused: the segment the capture may already have
+    /// opened finishes interrupted at 0.
+    pub fn capture_refused(open: Option<PlaybackSegment>) -> Option<PlaybackReport> {
+        Some(PlaybackReport::Finished {
+            segment: open?,
+            event: PlaybackFinished {
+                playback_position: Duration::ZERO,
+                interrupted: true,
+                synchronized_transcript: None,
+            },
+        })
+    }
+
     pub fn close_finished(&mut self) -> Option<PlaybackReport> {
         let segment = self.segment.take()?;
         Some(PlaybackReport::Finished {
