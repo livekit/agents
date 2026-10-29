@@ -294,7 +294,6 @@ impl SessionApi {
             chat_ctx,
             storage,
             hook_bound: hook_bound.map(Duration::from_secs_f64),
-            capture_run: None,
             max_unrecoverable_errors,
             conn,
             expressive,
@@ -356,11 +355,8 @@ impl SessionApi {
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Open the providers through the injected executor and run it beside the host event drain.
-    ///
-    /// `capture_run` opens the run before the opening agent's handoff and `on_enter`.
     pub fn start(
         &self,
-        capture_run: bool,
         executor: Box<dyn crate::agent_session::SessionExecutor>,
         hosting: super::RemoteHostingFactory,
         amd_factory: crate::amd::AmdFactory,
@@ -380,7 +376,7 @@ impl SessionApi {
         let spawner = Arc::clone(&self.spawner);
         // The drain: one event per call, in driver order; a hook call handed to the host loop in
         // that order, then awaited on its own task.
-        let opening = self.open(capture_run, executor, remote.clone(), Some(amd_factory), move |mut runner: SessionRunner| {
+        let opening = self.open(executor, remote.clone(), Some(amd_factory), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let mut running: Vec<lk_agents_abi::AbortHandle> = Vec::new();
                 while let Some(ev) = runner.next_host_event().await {
@@ -418,7 +414,7 @@ impl SessionApi {
                                 &mut usage.lock().unwrap_or_else(|p| p.into_inner()),
                                 &wire,
                             );
-                            for mut wire in std::iter::once(wire).chain(updated) {
+                            for wire in std::iter::once(wire).chain(updated) {
                                 match (&forwarding, &events, &wire) {
                                     (Some(remote), Some(events), HostWire::Error(error)) => {
                                         // The host's record of the error, else the error's own text.
@@ -432,7 +428,6 @@ impl SessionApi {
                                     (None, ..) => {}
                                 }
                                 if let Some(events) = &events {
-                                    agents.resolve(&mut wire);
                                     events.event(wire);
                                 }
                             }
@@ -1156,21 +1151,16 @@ impl SessionApi {
     #[host(method(send = SpeechCommand::ReleaseUserTurn))]
     pub fn release_user_turn(&self);
 
-    /// `AgentSession.run(user_input=, output_type=, retries=)`, answered on the stream: every run
-    /// event carries `host`, the host's `RunResult`. `tool_retries`/`output_retries`: the run's
-    /// budgets, resolved over the current agent's.
+    /// `VoiceSession._run(user_input=)`, answered on the stream: every run event carries `host`,
+    /// the host's run recorder. Its replies spend the current agent's retry budgets.
     #[host(method(kw_only))]
-    #[allow(clippy::too_many_arguments)]
     pub fn run(
         &self,
         user_input: Option<String>,
-        tool_retries: u32,
-        output_retries: u32,
         origin: Option<&str>,
         host: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), CommandRefused> {
-        let retries = lk_agents_abi::agent::Retries { tools: tool_retries, output: output_retries };
-        let spec = crate::run_result::RunSpec { user_input, retries: Some(retries), host };
+        let spec = crate::run_result::RunSpec { user_input, host };
         Ok(self.send_from(origin_of(origin)?, Command::Run(Box::new(spec)))?)
     }
 

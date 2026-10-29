@@ -79,7 +79,6 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     );
     let api = api.unwrap();
     api.open(
-        false,
         Box::new(crate::voice::Executor::new(api.time().clone(), api.spawner())),
         None,
         None,

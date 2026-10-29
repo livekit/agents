@@ -269,7 +269,7 @@ class RunContext(Generic[Context_T]):
             return self._run.usage
         from .run_result import RunUsage
 
-        return RunUsage.from_session_usage(self._call().usage)
+        return RunUsage._from_session_usage(self._call().usage)
 
     @property
     def execution_id(self) -> str:

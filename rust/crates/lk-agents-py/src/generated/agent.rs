@@ -66,7 +66,7 @@ fn _extract_run_events_failure_index(obj: &Bound<'_, PyAny>) -> PyResult<::std::
     if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<usize>(&obj, "index")).map(Some) }
 }
 
-/// The observed events of one invocation and the position `next_event` reads from. Each call
+/// The observed events (items) of one invocation and the position `next_event` reads from. Each call
 /// returns the index of the event it matched.
 #[pyclass(name = "RunEvents", module = "livekit.agents._core")]
 pub struct RunEvents(RunEventsImpl);
@@ -75,9 +75,8 @@ pub struct RunEvents(RunEventsImpl);
 impl RunEvents {
     #[new]
     #[pyo3(signature = (events))]
-    fn new(events: Bound<'_, PyAny>) -> PyResult<RunEvents> {
+    fn new(events: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<RunEvents> {
         ::lk_agents_abi::python::check_pid()?;
-        let events = events.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::agent_run::observed_event_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::new(events);
         Ok(RunEvents(out))
     }

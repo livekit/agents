@@ -605,11 +605,10 @@ impl Driver {
         self.activity.note_speech_agent(id, kind);
 
         // A model reply runs as one `AgentRun`, which names its first step's message and adds
-        // the tools its output takes; the open run's own replies spend its budgets.
+        // the tools its output takes.
         let realtime = matches!(spec.source, ReplySource::Realtime);
         let opened = if is_reply || realtime {
-            let budgets = (kind.user_initiated().then(|| self.session.runs.budgets()).flatten())
-                .unwrap_or_else(|| self.activity.retries());
+            let budgets = self.activity.retries();
             let invocation_id = handle.speech_id().to_owned();
             let kind = (realtime, self.activity.voice_tasks.running());
             self.open_reply_run(id, invocation_id, &turn_toolset, budgets, &plan, kind, out)

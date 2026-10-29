@@ -1,4 +1,4 @@
-//! `AgentSession.run()`: the run open on the session, what it owns, and its verdict.
+//! `VoiceSession._run()`: the run open on the session, what it owns, and its verdict.
 
 use crate::agent::Source;
 use crate::agent_activity::handoff::HandoffId;
@@ -10,20 +10,16 @@ use crate::events::{
 };
 use crate::speech_handle::SpeechHandle;
 use crate::trace::HandoffStep;
-use lk_agents_abi::agent::Retries;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::{HostRef, Ts};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-/// `session.run(user_input=, output_type=, ..)` or `start(capture_run=True)`.
+/// `session._run(user_input=)`: the remote session's typed input and the voice test harness.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSpec {
     /// The run's opening reply; `None` owns whatever follows (e.g. `on_enter`).
     pub user_input: Option<String>,
-    /// The run's budgets (`run(retries=)` over the agent's), which its replies spend; `None`
-    /// spends the agent's.
-    pub retries: Option<Retries>,
     /// The host's own object for the run (its `RunResult`), handed back on every run event.
     pub host: Option<HostRef>,
 }
@@ -57,7 +53,6 @@ struct OpenRun {
     owned: BTreeSet<Owned>,
     /// `__last_speech_handle`: its error and output decide the verdict.
     last: Option<Arc<SpeechHandle>>,
-    budgets: Option<Retries>,
 }
 
 pub(super) enum Decided {
@@ -93,7 +88,6 @@ impl Runs {
             run: run.clone(),
             owned: BTreeSet::new(),
             last: None,
-            budgets: spec.retries,
         });
         Ok(run)
     }
@@ -101,11 +95,6 @@ impl Runs {
     /// The open run, as its events name it.
     pub(super) fn current(&self) -> Option<RunRef> {
         self.open.as_ref().map(|r| r.run.clone())
-    }
-
-    /// The open run's budgets, which the speeches it owns spend.
-    pub(crate) fn budgets(&self) -> Option<Retries> {
-        self.open.as_ref().and_then(|r| r.budgets)
     }
 
     pub(super) fn owns(&self, what: Owned) -> bool {
@@ -172,7 +161,7 @@ impl Runs {
 
 /// The open run's ownership, as the driver records it while the run is open.
 impl Driver {
-    /// `Command::Run`: `AgentSession.run()` / `start(capture_run=True)`.
+    /// `Command::Run`: `VoiceSession._run()`.
     pub(crate) fn on_run(&mut self, now: Ts, spec: RunSpec, out: &mut Out) {
         let closing = self.session.closing.is_some();
         let run = match self.session.runs.open(&spec, closing) {

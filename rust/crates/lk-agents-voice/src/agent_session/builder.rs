@@ -132,9 +132,6 @@ pub struct DriverBuilder {
     /// `Some(bound)`: the hooks the sequence needs wait up to `bound`; an overrun is journalled and
     /// skipped. `None`: each hook is finished in place.
     pub hook_bound: Option<Duration>,
-    /// Opened before the opening agent's handoff record, so that record and the opening `on_enter`
-    /// are the run's.
-    pub capture_run: Option<crate::run_result::RunSpec>,
     /// Consecutive unrecoverable errors of one leg tolerated before closing (default `3`).
     pub max_unrecoverable_errors: u32,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
@@ -306,7 +303,6 @@ impl DriverBuilder {
             now: time.read(),
             built_at: built,
             journalled: journal.is_on(),
-            capture_run: self.capture_run.take(),
             forward_chat_context,
             keyterms,
         });

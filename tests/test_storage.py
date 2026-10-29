@@ -788,7 +788,7 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(thread_storages: 
     async with VoiceSession(llm=llm, context=app, thread=thread) as session:
         await session.start(agent)
         assert session.thread is thread
-        await session.run(user_input="hello")
+        await session._run(user_input="hello")
         await asyncio.sleep(0.05)  # the turn's commit is chained behind the speech
         items = await history_items(text_worker, sid, "desk")
         assert [i.text_content for i in items if i.type == "message"] == ["hello", "hi there"]
@@ -814,7 +814,7 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(thread_storages: 
         )
         # the next voice turn's acquire returns a newer version: the call reloads once, before
         # the reply is generated, so the turn is over the texted history by the time it returns
-        result = await session.run(user_input="still there?")
+        result = await session._run(user_input="still there?")
         assert result.output == "yes, and I read your text"
         texts = [i.text_content for i in session.history.items if i.type == "message"]
         assert texts[:4] == ["hello", "hi there", "a text", "texted back"]

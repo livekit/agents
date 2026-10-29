@@ -229,8 +229,6 @@ impl SessionEvent {
                     agent: agent.clone(),
                     visibility: visibility.as_str().to_owned(),
                     run: run.as_ref().and_then(|r| r.host.clone()),
-                    old_agent_host: None,
-                    new_agent_host: None,
                 })
             }
             // The host moves these ids between its context projections; no item crosses.

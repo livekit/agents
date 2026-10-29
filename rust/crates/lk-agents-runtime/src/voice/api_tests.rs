@@ -115,7 +115,6 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let (saw, ended) = (Arc::clone(&saw_close), Arc::clone(&drain_ended));
     let opening = api
         .open(
-            false,
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             None,
             None,
@@ -209,7 +208,6 @@ async fn a_session_nobody_observes_keeps_no_journal() {
     let observed = journal.clone();
     let opening = api
         .open(
-            false,
             Box::new(Observing(Executor::new(api.time().clone(), api.spawner()), observed)),
             None,
             None,
@@ -246,7 +244,6 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let api = room_only(fixed, None);
     let opening = api
         .open(
-            false,
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             None,
             None,
@@ -291,7 +288,6 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
     let opening = api
         .open(
-            false,
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             None,
             None,
@@ -563,7 +559,6 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
 async fn running(api: SessionApi) -> SessionApi {
     let opening = api
         .open(
-            false,
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             None,
             None,
@@ -865,7 +860,6 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
     let (refused, refused_transport) = make_host();
     let opening = api
         .open(
-            false,
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             Some(accepted.clone()),
             None,
@@ -874,7 +868,6 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
         .expect("the first opening is accepted");
     assert!(matches!(
         api.open(
-            false,
             Box::new(Executor::new(api.time().clone(), api.spawner())),
             Some(refused.clone()),
             None,

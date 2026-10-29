@@ -62,11 +62,9 @@ from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
 from .agent import (
     Agent,
-    AgentRetries,
     ModelSettings,
     Output_T,
     _BindingContextVar,
-    _retries,
     _VoiceBinding,
 )
 from .agent_run import run_error
@@ -94,7 +92,7 @@ from .room_io import (
     TextInputCallback,
     TextInputEvent,
 )
-from .run_result import VoiceRunResult
+from .run_result import _VoiceRun
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -120,7 +118,6 @@ TextTransforms = Literal["filter_markdown", "filter_emoji"]
 """A transform the core applies to the text it sends to the TTS."""
 
 Userdata_T = TypeVar("Userdata_T", default=Any)
-Run_T = TypeVar("Run_T")
 
 # the hook running in this context, for `generate_reply(on_enter=)`
 _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
@@ -415,7 +412,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room | None] = NOT_GIVEN,
         room_options: NotGivenOr[RoomOptions] = NOT_GIVEN,
         chat_ctx: llm.ChatContext | None = None,
-        capture_run: bool = False,
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
         one) with ``agent`` driving."""
@@ -541,7 +537,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._recorder.ready()
                 self._core.attach_recorder(self._recorder)
             job_ctx.add_shutdown_callback(lambda: self._aclose(CloseReason.JOB_SHUTDOWN))
-        await _core._core_voice_session_start(self._core, capture_run)
+        await _core._core_voice_session_start(self._core)
         if self.options["ivr_detection"]:
             await self._start_ivr_detection()
 
@@ -632,29 +628,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     # --- commands ------------------------------------------------------------------------
 
-    def run(
-        self,
-        *,
-        user_input: str,
-        output_type: type[Run_T] | None = None,
-        retries: int | AgentRetries | None = None,
-    ) -> VoiceRunResult[Run_T]:
-        """Reply to ``user_input`` and record what the reply did, for assertions. ``retries``
-        overrides the current agent's retry budgets for this run (``AgentRetries``)."""
-        budgets = _retries(retries, self.current_agent._retries)
-        result = VoiceRunResult[Run_T](
-            user_input=user_input,
-            output_type=output_type,
-            session=self,
-        )
-        self._running.run(
-            user_input=user_input,
-            tool_retries=budgets.tools,
-            output_retries=budgets.output,
-            origin=_origin(),
-            host=result,
-        )
-        return result
+    def _run(self, *, user_input: str) -> _VoiceRun:
+        """Reply to typed ``user_input`` and record what the reply did (the remote session's text
+        input and the voice conformance tests)."""
+        run = _VoiceRun(session=self)
+        self._running.run(user_input=user_input, origin=_origin(), host=run)
+        return run
 
     def say(
         self,
@@ -977,15 +956,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._chat_ctx.items[idx] = item
         else:
             self._chat_ctx.insert(item)
-        if (run := wire["run"]) is not None:
-            if item.type == "agent_handoff":
-                run._agent_handoff(
-                    item=item,
-                    old_agent=wire["old_agent_host"],
-                    new_agent=wire["new_agent_host"],
-                )
-            else:
-                run._item_added(item)
+        if (run := wire["run"]) is not None and item.type != "agent_handoff":
+            run._item_added(item)
         if item.type in ("message", "agent_handoff"):
             self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
 

@@ -26,6 +26,7 @@ from livekit.agents.storage import Storage
 from livekit.agents.storage.resolve import Thread
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.voice.agent_session import ExpressiveOptions
+from livekit.agents.voice.run_result import _mock_session_tools
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import new_session
@@ -125,7 +126,7 @@ async def test_agent_instructions_and_on_enter(expressive: bool | ExpressiveOpti
                 """Too late."""
                 return "x"
 
-        result = await session.run(user_input="hello")
+        result = await session._run(user_input="hello")
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
 
@@ -250,9 +251,9 @@ async def test_session_mock_tools_replace_a_tool_on_the_call() -> None:
         raise AssertionError("the real tool ran")
 
     async with VoiceSession(llm=llm) as session:
-        mock_tools(agent, {"lookup": lambda city: f"mock: {city}"}, session=session)
+        _mock_session_tools(session, agent, {"lookup": lambda city: f"mock: {city}"})
         await session.start(agent)
-        result = await session.run(user_input="weather?")
+        result = await session._run(user_input="weather?")
         result.expect.next_event().is_function_call(name="lookup", arguments={"city": "Paris"})
         result.expect.next_event().is_function_call_output(output="mock: Paris")
 
@@ -285,7 +286,7 @@ async def test_a_failed_expectation_names_the_mismatch_and_lists_the_events() ->
 
     async with VoiceSession(llm=llm) as session:
         await session.start(agent)
-        result = await session.run(user_input="weather?")
+        result = await session._run(user_input="weather?")
         with pytest.raises(AssertionError) as failed:
             result.expect.next_event().is_function_call(name="lookup", arguments={"city": "Rome"})
         message = str(failed.value)
@@ -318,13 +319,13 @@ async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
     )
     async with VoiceSession(llm=llm) as session:
         await session.start(fnol)
-        result = await session.run(user_input="my car is damaged")
+        result = await session._run(user_input="my car is damaged")
         result.expect.next_event().is_function_call(name="request_photo")
         result.expect.next_event().is_function_call_output()
         result.expect.next_event().is_message(role="assistant")  # the question, word for word
         result.expect.no_more_events()  # no tool reply: the turn waits
 
-        result = await session.run(user_input="here it is")
+        result = await session._run(user_input="here it is")
         result.expect.next_event().is_message(role="assistant")
 
     history = session.history.items
@@ -534,7 +535,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
         assert session.context is app
         await session.start(agent)
         await session.store.load_context(app)
-        result = await session.run(user_input="go")
+        result = await session._run(user_input="go")
         result.expect.contains_function_call(name="note")
         assert result.output == "ok"
 
@@ -727,7 +728,6 @@ def test_the_dropped_execution_surface_is_refused() -> None:
     import livekit.agents as agents
     from livekit.agents import llm as agents_llm
     from livekit.agents.llm import ToolFlag, Working
-    from livekit.agents.voice.run_result import VoiceRunResult
 
     for module in (agents, agents_llm):
         assert not hasattr(module, "Transition")
@@ -736,5 +736,4 @@ def test_the_dropped_execution_surface_is_refused() -> None:
         InputRequired("Which day?", timeout=None)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         Working(tool=None)  # type: ignore[call-arg]
-    for name in ("interrupted", "pending_call", "events", "final_output", "done"):
-        assert not hasattr(VoiceRunResult, name)
+    assert not hasattr(VoiceSession, "run")  # decision 106: tests run agent.run

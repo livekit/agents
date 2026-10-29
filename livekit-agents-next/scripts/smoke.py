@@ -2454,8 +2454,8 @@ async def main() -> int:
     room.speak(frames=40)
     await settle(room, 6)
 
-    print("== session.run(), asserted")
-    result = session.run(user_input="what's the weather like?")
+    print("== a reply, asserted")
+    result = session._run(user_input="what's the weather like?")
     await settle(room, 4)
     assert result.done(), "the run did not settle"
     result.expect.next_event().is_function_call(name="get_weather")

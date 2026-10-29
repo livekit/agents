@@ -675,7 +675,7 @@ inputs! {
     /// The answering-machine detector's host calls (`amd_start_*`, `amd_settle`, `execute()`,
     /// `aclose()`), which reach its own system rather than the driver: no command leaf.
     Amd { input: AmdInput };
-    Run { user_input: Option<UserText>, retries: Count } leaf command::Run;
+    Run { user_input: Option<UserText> } leaf command::Run;
 
     // --- what the case feeds into a stream a call opened --------------------------------------
     FeedText { stream: Ref<Stream>, text: AgentText };

@@ -3,7 +3,7 @@
 //! A failure names the expectation and lists the events with the one it concerns marked.
 
 use lk_agents_abi::ChatItem;
-use lk_agents_abi::agent::assertions::{AssertionFailure, EventExpectation, ObservedEvent};
+use lk_agents_abi::agent::assertions::{AssertionFailure, EventExpectation};
 use serde_json::Value;
 
 use crate::approval::python_repr;
@@ -11,12 +11,12 @@ use crate::approval::python_repr;
 /// The observed events and the position `next_event` reads from.
 #[derive(Debug, Clone)]
 pub struct RunEvents {
-    events: Vec<ObservedEvent>,
+    events: Vec<ChatItem>,
     position: usize,
 }
 
 impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
-    fn new(events: Vec<ObservedEvent>) -> Self {
+    fn new(events: Vec<ChatItem>) -> Self {
         RunEvents { events, position: 0 }
     }
 
@@ -46,7 +46,7 @@ impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
             let index = self.current()?;
             self.position += 1;
             match &expected {
-                Some(expected) if !same_kind(&self.events[index].item, expected) => continue,
+                Some(expected) if !same_kind(&self.events[index], expected) => continue,
                 Some(expected) => return self.check(index, expected),
                 None => return Ok(index),
             }
@@ -76,7 +76,7 @@ impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
         match self.events.get(self.position) {
             None => Ok(()),
             Some(event) => Err(self.fail(
-                &format!("Expected no more events, but found: {}", event_name(&event.item)),
+                &format!("Expected no more events, but found: {}", event_name(event)),
                 None,
             )),
         }
@@ -127,7 +127,7 @@ impl RunEvents {
     fn check(&self, index: usize, expected: &EventExpectation) -> Result<usize, AssertionFailure> {
         let event = &self.events[index];
         let fail = |message: String| Err(self.fail(&message, Some(index)));
-        match (expected, &event.item) {
+        match (expected, event) {
             (EventExpectation::Message { role }, ChatItem::Message(message)) => {
                 if let Some(role) = role
                     && role != message.role.as_str()
@@ -191,14 +191,6 @@ impl RunEvents {
                     ));
                 }
             }
-            (EventExpectation::AgentHandoff { new_agent_type }, ChatItem::AgentHandoff(_)) => {
-                if let Some(expected) = new_agent_type
-                    && !event.new_agent_types.contains(expected)
-                {
-                    let got = event.new_agent_types.first().map_or("", String::as_str);
-                    return fail(format!("Expected new_agent '{expected}', got '{got}'"));
-                }
-            }
             (expected, _) => return fail(format!("Expected {}", kind_name(expected))),
         }
         Ok(index)
@@ -211,7 +203,6 @@ fn same_kind(item: &ChatItem, expected: &EventExpectation) -> bool {
         (EventExpectation::Message { .. }, ChatItem::Message(_))
             | (EventExpectation::FunctionCall { .. }, ChatItem::FunctionCall(_))
             | (EventExpectation::FunctionCallOutput { .. }, ChatItem::FunctionCallOutput(_))
-            | (EventExpectation::AgentHandoff { .. }, ChatItem::AgentHandoff(_))
     )
 }
 
@@ -220,7 +211,6 @@ fn kind_name(expected: &EventExpectation) -> &'static str {
         EventExpectation::Message { .. } => "ChatMessageEvent",
         EventExpectation::FunctionCall { .. } => "FunctionCallEvent",
         EventExpectation::FunctionCallOutput { .. } => "FunctionCallOutputEvent",
-        EventExpectation::AgentHandoff { .. } => "AgentHandoffEvent",
     }
 }
 
@@ -235,9 +225,9 @@ fn event_name(item: &ChatItem) -> &'static str {
 }
 
 /// One line of the failure context: the event's kind and the fields an assertion reads.
-fn describe(event: &ObservedEvent) -> String {
-    let name = event_name(&event.item);
-    match &event.item {
+fn describe(event: &ChatItem) -> String {
+    let name = event_name(event);
+    match event {
         ChatItem::Message(m) => {
             let text = m.raw_text_content().unwrap_or_default();
             format!("{name}(role={}, content={})", python_repr(m.role.as_str()), python_repr(&text))

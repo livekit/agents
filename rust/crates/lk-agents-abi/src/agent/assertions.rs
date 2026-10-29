@@ -5,15 +5,6 @@ use serde_json::Value;
 
 use crate::ChatItem;
 
-/// One event of a tested invocation, as the assertions read it.
-#[crate::host(record(module = "agent_run", extract))]
-#[derive(Debug, Clone)]
-pub struct ObservedEvent {
-    pub item: ChatItem,
-    /// For a handoff, the qualified names of the new agent's class and its bases.
-    pub new_agent_types: Vec<String>,
-}
-
 /// What an assertion expects of an event: its kind and the fields it names.
 #[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone, PartialEq)]
@@ -31,9 +22,6 @@ pub enum EventExpectation {
         output: Option<String>,
         is_error: Option<bool>,
     },
-    AgentHandoff {
-        new_agent_type: Option<String>,
-    },
 }
 
 /// A failed expectation: what was expected and the events around it.
@@ -42,12 +30,12 @@ pub enum EventExpectation {
 #[error("{0}")]
 pub struct AssertionFailure(pub String);
 
-/// The observed events of one invocation and the position `next_event` reads from. Each call
+/// The observed events (items) of one invocation and the position `next_event` reads from. Each call
 /// returns the index of the event it matched.
 #[crate::host(class(name = "RunEvents"))]
 pub trait RunEvents: Send + Sized + 'static {
     #[host(new)]
-    fn new(events: Vec<ObservedEvent>) -> Self;
+    fn new(events: Vec<ChatItem>) -> Self;
 
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[host(call)]

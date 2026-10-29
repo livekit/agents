@@ -39,7 +39,6 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
         output_nodes: Default::default(),
         chat_ctx: None,
         hook_bound: None,
-        capture_run: None,
         max_unrecoverable_errors: 3,
         conn: Default::default(),
         expressive: Default::default(),

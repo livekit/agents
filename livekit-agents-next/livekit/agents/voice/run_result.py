@@ -28,11 +28,9 @@ from .. import _core, llm
 from .._core_view import to_core_item
 from .._generated.agent_run import (
     EventExpectation,
-    EventExpectationAgentHandoff,
     EventExpectationFunctionCall,
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
-    ObservedEvent,
 )
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -44,7 +42,6 @@ if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
 
-Run_T = TypeVar("Run_T")
 Output_T = TypeVarDefault("Output_T", default=Any)
 
 
@@ -68,7 +65,7 @@ class RunUsage:
         self.tool_calls += other.tool_calls
 
     @classmethod
-    def from_session_usage(cls, usage: AgentSessionUsage) -> RunUsage:
+    def _from_session_usage(cls, usage: AgentSessionUsage) -> RunUsage:
         result = cls()
         for model_usage in usage.model_usage:
             if model_usage.type != "llm_usage":
@@ -105,6 +102,11 @@ class _Settled:
         """The supplied history plus this invocation, without instructions: the next direct
         run's ``message_history``."""
         return list(self._all_messages)
+
+    @functools.cached_property
+    def expect(self) -> RunAssert:
+        """Assertions over this invocation's events, in order (testing.md)."""
+        return RunAssert(_events(self._new_messages))
 
 
 class RunCompleted(_Settled, Generic[Output_T]):
@@ -160,35 +162,32 @@ class FunctionCallOutputEvent:
     type: Literal["function_call_output"] = "function_call_output"
 
 
-@dataclass
-class AgentHandoffEvent:
-    item: llm.AgentHandoff
-    old_agent: Agent | None
-    new_agent: Agent
-    type: Literal["agent_handoff"] = "agent_handoff"
+RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent
 
 
-RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
+def _events(items: list[llm.ChatItem]) -> list[RunEvent]:
+    """The events of an invocation's recorded items: its assistant messages, calls and outputs."""
+    events: list[RunEvent] = []
+    for item in items:
+        if item.type == "message" and item.role == "assistant":
+            events.append(ChatMessageEvent(item=item))
+        elif item.type == "function_call":
+            events.append(FunctionCallEvent(item=item))
+        elif item.type == "function_call_output":
+            events.append(FunctionCallOutputEvent(item=item))
+    return events
 
 
-class VoiceRunResult(Generic[Run_T]):
-    """What ``VoiceSession.run()`` records of a reply on a call, for assertions (testing.md).
-    Once awaited it reads as a ``RunResult``: ``status`` is ``"completed"`` with ``output``, or
-    ``"input_required"`` with ``question``."""
+class _VoiceRun:
+    """One reply on a call to typed text (the remote session's text input), recorded until it
+    settles. Once awaited it reads as a ``RunResult``: ``status`` is ``"completed"`` with
+    ``output``, or ``"input_required"`` with ``question``."""
 
-    def __init__(
-        self,
-        *,
-        user_input: str | None = None,
-        output_type: type[Run_T] | None,
-        session: VoiceSession | None = None,
-    ) -> None:
+    def __init__(self, *, session: VoiceSession) -> None:
         self._done_fut = asyncio.Future[None]()
-        self._user_input = user_input
-        self._output_type = output_type
         self._session = session
         self._recorded_items: list[RunEvent] = []
-        self._final_output: Run_T | None = None
+        self._final_output: Any = None
         self._question: dict[str, Any] | None = None
 
     @property
@@ -197,7 +196,7 @@ class VoiceRunResult(Generic[Run_T]):
         return "completed" if self._question is None else "input_required"
 
     @property
-    def output(self) -> Run_T | None:
+    def output(self) -> Any:
         """The accepted output of a completed run: what a tool completed it with, else the last
         reply's text. ``None`` when the run asks the person."""
         if self._question is not None:
@@ -206,7 +205,7 @@ class VoiceRunResult(Generic[Run_T]):
             return self._final_output
         for event in reversed(self._recorded_items):
             if isinstance(event, ChatMessageEvent) and event.item.role == "assistant":
-                return event.item.text_content  # type: ignore[return-value]
+                return event.item.text_content
         return None
 
     @property
@@ -227,37 +226,19 @@ class VoiceRunResult(Generic[Run_T]):
 
     def all_messages(self) -> list[llm.ChatItem]:
         """The history after the run, without the instructions."""
-        if self._session is not None:
-            return list(self._session.history.items)
-        return self.new_messages()
-
-    @property
-    def usage(self) -> RunUsage:
-        if self._session is not None:
-            return RunUsage.from_session_usage(self._session.usage)
-        return RunUsage()
+        return list(self._session.history.items)
 
     @functools.cached_property
     def expect(self) -> RunAssert:
         """Assertions over the events this run recorded, in order (testing.md)."""
         return RunAssert(self._recorded_items)
 
-    def __await__(self) -> Generator[None, None, VoiceRunResult[Run_T]]:
-        async def _await_impl() -> VoiceRunResult[Run_T]:
+    def __await__(self) -> Generator[None, None, _VoiceRun]:
+        async def _await_impl() -> _VoiceRun:
             await asyncio.shield(self._done_fut)
             return self
 
         return _await_impl().__await__()
-
-    def _agent_handoff(
-        self, *, item: llm.AgentHandoff, old_agent: Agent | None, new_agent: Agent
-    ) -> None:
-        if self._done_fut.done():
-            return
-
-        event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
-        index = self._find_insertion_index(created_at=event.item.created_at)
-        self._recorded_items.insert(index, event)
 
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
@@ -292,15 +273,6 @@ class VoiceRunResult(Generic[Run_T]):
         elif question is not None:
             self._question = question
             self._done_fut.set_result(None)
-        elif self._output_type and not isinstance(output, self._output_type):
-            from .._exceptions import UnexpectedModelBehavior
-
-            self._done_fut.set_exception(
-                UnexpectedModelBehavior(
-                    f"Expected output of type {self._output_type.__name__}, "
-                    f"got {type(output).__name__}"
-                )
-            )
         else:
             self._final_output = output
             self._done_fut.set_result(None)
@@ -319,18 +291,7 @@ class VoiceRunResult(Generic[Run_T]):
         return 0
 
 
-EventType = Literal["message", "function_call", "function_call_output", "agent_handoff"]
-
-
-def _type_name(cls: type) -> str:
-    return f"{cls.__module__}.{cls.__qualname__}"
-
-
-def _observed(event: RunEvent) -> ObservedEvent:
-    types = []
-    if isinstance(event, AgentHandoffEvent):
-        types = [_type_name(cls) for cls in type(event.new_agent).__mro__]
-    return ObservedEvent(item=to_core_item(event.item), new_agent_types=types)
+EventType = Literal["message", "function_call", "function_call_output"]
 
 
 def _expectation(
@@ -341,7 +302,6 @@ def _expectation(
     arguments: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     output: NotGivenOr[str] = NOT_GIVEN,
     is_error: NotGivenOr[bool] = NOT_GIVEN,
-    new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN,
 ) -> EventExpectation:
     if type == "message":
         return EventExpectationMessage(role=role if is_given(role) else None)
@@ -350,13 +310,9 @@ def _expectation(
             name=name if is_given(name) else None,
             arguments=arguments if is_given(arguments) else None,
         )
-    if type == "function_call_output":
-        return EventExpectationFunctionCallOutput(
-            output=output if is_given(output) else None,
-            is_error=is_error if is_given(is_error) else None,
-        )
-    return EventExpectationAgentHandoff(
-        new_agent_type=_type_name(new_agent_type) if is_given(new_agent_type) else None
+    return EventExpectationFunctionCallOutput(
+        output=output if is_given(output) else None,
+        is_error=is_error if is_given(is_error) else None,
     )
 
 
@@ -365,7 +321,7 @@ class RunAssert:
 
     def __init__(self, events: list[RunEvent]) -> None:
         self._events = events
-        self._core = _core.RunEvents([_observed(e) for e in events])
+        self._core = _core.RunEvents([to_core_item(e.item) for e in events])
 
     @overload
     def __getitem__(self, key: int) -> EventAssert: ...
@@ -394,9 +350,6 @@ class RunAssert:
 
     @overload
     def next_event(self, *, type: Literal["function_call_output"]) -> FunctionCallOutputAssert: ...
-
-    @overload
-    def next_event(self, *, type: Literal["agent_handoff"]) -> AgentHandoffAssert: ...
 
     def next_event(self, *, type: EventType | None = None) -> EventAssert | _Matched[Any]:
         """Advance to the next event, or to the next one of ``type``."""
@@ -427,11 +380,6 @@ class RunAssert:
         output: NotGivenOr[str] = NOT_GIVEN,
         is_error: NotGivenOr[bool] = NOT_GIVEN,
     ) -> FunctionCallOutputAssert | None: ...
-
-    @overload
-    def skip_next_event_if(
-        self, *, type: Literal["agent_handoff"], new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> AgentHandoffAssert | None: ...
 
     def skip_next_event_if(self, *, type: EventType, **expected: Any) -> _Matched[Any] | None:
         """Skip the next event only if it matches; its assertion, or ``None``."""
@@ -467,12 +415,6 @@ class RunAssert:
     ) -> FunctionCallOutputAssert:
         __tracebackhide__ = True
         return self[:].contains_function_call_output(output=output, is_error=is_error)
-
-    def contains_agent_handoff(
-        self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> AgentHandoffAssert:
-        __tracebackhide__ = True
-        return self[:].contains_agent_handoff(new_agent_type=new_agent_type)
 
 
 class EventAssert:
@@ -513,15 +455,6 @@ class EventAssert:
         __tracebackhide__ = True
         return ChatMessageAssert(self._parent, self._check("message", role=role))
 
-    def is_agent_handoff(
-        self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> AgentHandoffAssert:
-        """A handoff to an agent of ``new_agent_type``."""
-        __tracebackhide__ = True
-        return AgentHandoffAssert(
-            self._parent, self._check("agent_handoff", new_agent_type=new_agent_type)
-        )
-
 
 class EventRangeAssert:
     """``result.expect[i:j]``: the ``contains_*`` checks over a range of events."""
@@ -559,18 +492,8 @@ class EventRangeAssert:
             self._parent, self._find("function_call_output", output=output, is_error=is_error)
         )
 
-    def contains_agent_handoff(
-        self, *, new_agent_type: NotGivenOr[type[Agent]] = NOT_GIVEN
-    ) -> AgentHandoffAssert:
-        __tracebackhide__ = True
-        return AgentHandoffAssert(
-            self._parent, self._find("agent_handoff", new_agent_type=new_agent_type)
-        )
 
-
-_Event_T = TypeVar(
-    "_Event_T", ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent, AgentHandoffEvent
-)
+_Event_T = TypeVar("_Event_T", ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent)
 
 
 class _Matched(Generic[_Event_T]):
@@ -589,10 +512,6 @@ class FunctionCallAssert(_Matched[FunctionCallEvent]):
 
 
 class FunctionCallOutputAssert(_Matched[FunctionCallOutputEvent]):
-    pass
-
-
-class AgentHandoffAssert(_Matched[AgentHandoffEvent]):
     pass
 
 
@@ -662,7 +581,6 @@ _MATCHED: dict[EventType, type[_Matched[Any]]] = {
     "message": ChatMessageAssert,
     "function_call": FunctionCallAssert,
     "function_call_output": FunctionCallOutputAssert,
-    "agent_handoff": AgentHandoffAssert,
 }
 
 if TYPE_CHECKING:
@@ -671,39 +589,27 @@ _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
 _SessionMockTools: weakref.WeakKeyDictionary[VoiceSession, MockTools] = weakref.WeakKeyDictionary()
 
 
-@overload
 def mock_tools(
     agent: Agent, mocks: dict[str, Callable[..., Any]]
-) -> contextlib.AbstractContextManager[None]: ...
-
-
-@overload
-def mock_tools(
-    agent: Agent, mocks: dict[str, Callable[..., Any]], *, session: VoiceSession
-) -> None: ...
-
-
-def mock_tools(
-    agent: Agent, mocks: dict[str, Callable[..., Any]], *, session: VoiceSession | None = None
-) -> contextlib.AbstractContextManager[None] | None:
-    """Replace the bodies of ``agent``'s tools by mocks, sync or async, keyed by tool name.
-
-    Mocks intercept tool *execution* only; the model keeps seeing the real tool schemas. A mock
-    declares the subset of the real tool's parameters it wants, by name.
-
-    Without ``session``, a context manager selecting the mocks for the runs started inside it
-    and the calls they make, and for no other concurrent run::
+) -> contextlib.AbstractContextManager[None]:
+    """Replace the bodies of ``agent``'s tools by mocks, sync or async, keyed by tool name, for
+    the runs started inside the block and the calls they make, and for no other concurrent run::
 
         with mock_tools(scheduler, {"book": fake_book}):
             result = await scheduler.run("Book Monday at two.")
 
-    With ``session``, the mocks of ``agent``'s tools on that call, for its lifetime; ``{}``
-    removes them. A context's mocks take precedence over the session's.
+    Mocks intercept tool *execution* only; the model keeps seeing the real tool schemas. A mock
+    declares the subset of the real tool's parameters it wants, by name.
     """
-    if session is not None:
-        _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
-        return None
     return _mock_tools_ctx(agent, mocks)
+
+
+def _mock_session_tools(
+    session: VoiceSession, agent: Agent, mocks: dict[str, Callable[..., Any]]
+) -> None:
+    """The mocks of ``agent``'s tools on that call, for its lifetime; ``{}`` removes them. A
+    ``mock_tools`` block's mocks take precedence."""
+    _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
 
 
 @contextmanager

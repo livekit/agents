@@ -58,7 +58,7 @@ async def test_tool_progress_and_completion_reach_session_listeners() -> None:
     ) as session:
         session.on("tool_execution_updated", on_update)
         await session.start(agent)
-        await asyncio.wait_for(session.run(user_input="check my booking"), timeout=5)
+        await asyncio.wait_for(session._run(user_input="check my booking"), timeout=5)
         await asyncio.wait_for(completed.wait(), timeout=5)
 
     started = [ev.update for ev in updates if isinstance(ev.update, ToolCallStarted)]

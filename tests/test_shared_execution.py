@@ -1,5 +1,6 @@
 """Shared execution vectors (C-21): each vector runs through the direct run, a TextSession turn
-and a call's VoiceSession.run, and is asserted the same way on the invocation's events.
+and a reply on a call (the private ``VoiceSession._run`` harness), and is asserted the same way
+on the invocation's events.
 
 A vector is one scripted model conversation and one agent definition. Behavior that only a
 call has (duplicate-call policies, the floor, on_enter, playback) is not here: those vectors
@@ -40,14 +41,7 @@ from livekit.agents.llm import (
     FunctionToolCall,
     LLMStream,
 )
-from livekit.agents.voice.run_result import (
-    ChatMessageEvent,
-    FunctionCallEvent,
-    FunctionCallOutputEvent,
-    RunAssert,
-    RunEvent,
-    VoiceRunResult,
-)
+from livekit.agents.voice.run_result import RunAssert
 
 pytestmark = pytest.mark.unit
 
@@ -106,45 +100,17 @@ class Settled:
     history: list[ChatItem]
 
 
-def _events(items: list[ChatItem]) -> list[RunEvent]:
-    events: list[RunEvent] = []
-    for item in items:
-        if item.type == "message" and item.role == "assistant":
-            events.append(ChatMessageEvent(item=item))
-        elif item.type == "function_call":
-            events.append(FunctionCallEvent(item=item))
-        elif item.type == "function_call_output":
-            events.append(FunctionCallOutputEvent(item=item))
-    return events
-
-
-def _settled(
-    output: object,
-    items: list[ChatItem],
-    status: str,
-    question: str | None,
-    history: list[ChatItem],
-) -> Settled:
-    return Settled(
-        output=output,
-        expect=RunAssert(_events(items)),
-        status=status,
-        question=question,
-        history=history,
-    )
-
-
 async def _direct(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Settled:
     history: list[ChatItem] = []
     for message in messages:
         result = await agent.run(message, message_history=history, context=context)
         history = result.all_messages()
-    return _settled(
-        result.output if result.status == "completed" else None,
-        result.new_messages(),
-        result.status,
-        result.question if result.status == "input_required" else None,
-        result.all_messages(),
+    return Settled(
+        output=result.output if result.status == "completed" else None,
+        expect=result.expect,
+        status=result.status,
+        question=result.question if result.status == "input_required" else None,
+        history=result.all_messages(),
     )
 
 
@@ -154,12 +120,12 @@ async def _text_session(agent: Agent[Any, Any], *messages: str, context: Any = N
         turn = await TextSession(agent=agent).run(message, state=state, context=context)
         state = turn.state
     result = turn.result
-    return _settled(
-        result.output if result.status == "completed" else None,
-        result.new_messages(),
-        result.status,
-        result.question if result.status == "input_required" else None,
-        result.all_messages(),
+    return Settled(
+        output=result.output if result.status == "completed" else None,
+        expect=result.expect,
+        status=result.status,
+        question=result.question if result.status == "input_required" else None,
+        history=result.all_messages(),
     )
 
 
@@ -170,13 +136,13 @@ async def _voice(agent: Agent[Any, Any], *messages: str, context: Any = None) ->
         session.output.transcription = FakeTextOutput()
         await session.start(agent)
         for message in messages:
-            result: VoiceRunResult[Any] = await session.run(user_input=message)
-        return _settled(
-            result.output,
-            result.new_messages(),
-            result.status,
-            result.question,
-            result.all_messages(),
+            result = await session._run(user_input=message)
+        return Settled(
+            output=result.output,
+            expect=result.expect,
+            status=result.status,
+            question=result.question,
+            history=result.all_messages(),
         )
 
 
@@ -628,7 +594,7 @@ async def test_cancellation_before_launch_does_not_run_a_tool(run: Entrypoint) -
     if run is _voice:
         async with VoiceSession() as session:
             await session.start(agent)
-            result: VoiceRunResult[Any] = session.run(user_input="Act")
+            result = session._run(user_input="Act")
             try:
                 await entered.wait()
             finally:
@@ -745,7 +711,7 @@ async def test_text_reaches_the_consumer_before_the_model_ends(run: Entrypoint) 
         async with VoiceSession(tts=Speech()) as session:
             session.output.audio = Audio()
             await session.start(agent)
-            voice_result: VoiceRunResult[Any] = session.run(user_input="Booking")
+            voice_result = session._run(user_input="Booking")
             try:
                 await seen.wait()
                 assert not eof.is_set()
@@ -866,7 +832,7 @@ async def test_a_verbatim_voice_question_reaches_the_transcription_output() -> N
     async with VoiceSession() as session:
         session.output.transcription = output
         await session.start(agent)
-        result: VoiceRunResult[Any] = await session.run(user_input="Book")
+        result = await session._run(user_input="Book")
         assert result.status == "input_required" and result.question == "Which date?"
         await session.wait_for_idle()
         assert "".join(output._messages) == "Which date?"

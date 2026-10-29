@@ -640,9 +640,7 @@ class VoiceSession:
     def run(
         self,
         *,
-        user_input: str | None,
-        tool_retries: int,
-        output_retries: int,
+        user_input: str | None = None,
         origin: str | None = None,
         host: Any | None = None,
     ) -> None: ...

@@ -641,15 +641,9 @@ impl Run {
                     })
                     .is_ok()
             }
-            Input::Run { user_input, retries } => api
-                .run(
-                    user_input.clone().map(|UserText(t)| t),
-                    lk_agents_abi::agent::Retries::default().tools,
-                    retries.0,
-                    None,
-                    None,
-                )
-                .is_ok(),
+            Input::Run { user_input } => {
+                api.run(user_input.clone().map(|UserText(t)| t), None, None).is_ok()
+            }
             _ => unreachable!("{input:?} is not a call"),
         };
         if !sent {

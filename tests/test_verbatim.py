@@ -107,7 +107,7 @@ async def test_a_call_question_keeps_its_verbatim_request() -> None:
     )
     async with VoiceSession(llm=llm, vad=None, turn_detection="manual") as session:
         await session.start(agent)
-        result = await asyncio.wait_for(session.run(user_input="check my booking"), timeout=5)
+        result = await asyncio.wait_for(session._run(user_input="check my booking"), timeout=5)
         assert result.status == "input_required"
         assert result.question == "What is your booking reference?"
         assert result.verbatim == result.question

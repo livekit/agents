@@ -1,19 +1,15 @@
 use std::time::SystemTime;
 
 use lk_agents_abi::ChatItem;
-use lk_agents_abi::agent::assertions::{EventExpectation, ObservedEvent, RunEvents as _};
+use lk_agents_abi::agent::assertions::{EventExpectation, RunEvents as _};
 use lk_agents_abi::llm::chat_context::{ChatContent, Role};
 use serde_json::json;
 
 use super::RunEvents;
 
-fn event(item: ChatItem) -> ObservedEvent {
-    ObservedEvent { item, new_agent_types: Vec::new() }
-}
-
-fn message(role: Role, text: &str) -> ObservedEvent {
+fn message(role: Role, text: &str) -> ChatItem {
     let content = vec![ChatContent::Text(text.into())];
-    event(ChatItem::message(
+    ChatItem::message(
         "m".into(),
         role,
         content,
@@ -22,17 +18,17 @@ fn message(role: Role, text: &str) -> ObservedEvent {
         None,
         None,
         None,
-    ))
+    )
 }
 
-fn call(name: &str, arguments: &str) -> ObservedEvent {
+fn call(name: &str, arguments: &str) -> ChatItem {
     let (time, args) = (SystemTime::UNIX_EPOCH, arguments.into());
-    event(ChatItem::function_call("c".into(), "c1".into(), args, name.into(), time, None, None))
+    ChatItem::function_call("c".into(), "c1".into(), args, name.into(), time, None, None)
 }
 
-fn output(text: &str, is_error: bool) -> ObservedEvent {
+fn output(text: &str, is_error: bool) -> ChatItem {
     let time = SystemTime::UNIX_EPOCH;
-    event(ChatItem::function_call_output(
+    ChatItem::function_call_output(
         "o".into(),
         "c1".into(),
         text.into(),
@@ -40,7 +36,7 @@ fn output(text: &str, is_error: bool) -> ObservedEvent {
         time,
         None,
         true,
-    ))
+    )
 }
 
 fn expect_call(name: &str, arguments: serde_json::Value) -> EventExpectation {

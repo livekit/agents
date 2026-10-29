@@ -444,7 +444,7 @@ user state.
   under the cap.
 - **Never sent**: hook answers `Described` and `ToolsExecuted` (`apply.rs:141-148`), turn edits
   `ReplaceItems` and `UpdateUserMessage`; a completed, failed or cancelled `TaskHandle`
-  (`apply.rs:490`), tasks with `preserve_function_call_history=false` or a parent; `capture_run`.
+  (`apply.rs:490`), tasks with `preserve_function_call_history=false` or a parent.
 
 ### 5.7 Close and errors (`agent_session/closing.rs`, `agent_session/mod.rs`)
 

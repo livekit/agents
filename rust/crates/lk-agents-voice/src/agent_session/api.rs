@@ -125,7 +125,6 @@ impl SessionApi {
     /// `drain` is spawned beside the driver so `close` can abort both.
     pub fn open(
         &self,
-        capture_run: bool,
         mut executor: Box<dyn crate::agent_session::SessionExecutor>,
         remote: Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>,
         amd_factory: Option<crate::amd::AmdFactory>,
@@ -158,13 +157,6 @@ impl SessionApi {
             let Ready { mut builder, interruption } = ready;
             #[cfg(feature = "dst")]
             let probe = builder.probe.take();
-            if capture_run {
-                builder.capture_run = Some(crate::run_result::RunSpec {
-                    user_input: None,
-                    retries: None,
-                    host: None,
-                });
-            }
             if let Some(open_port) = interruption {
                 builder.interruption = Some(open_port(anchor));
             }
@@ -1076,17 +1068,6 @@ impl HostAgents {
 
     pub(crate) fn get(&self, agent: &str) -> Option<lk_agents_abi::HostRef> {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).get(agent).cloned()
-    }
-
-    /// Fills in the `Agent`s of a handoff item's wire record.
-    pub fn resolve(&self, wire: &mut lk_agents_abi::voice::events::HostWire) {
-        use lk_agents_abi::voice::events::HostWire;
-        if let HostWire::ItemAdded(w) = wire
-            && let lk_agents_abi::ChatItem::AgentHandoff(h) = &w.item
-        {
-            w.old_agent_host = h.old_agent_id.as_deref().and_then(|a| self.get(a));
-            w.new_agent_host = self.get(&h.new_agent_id);
-        }
     }
 }
 

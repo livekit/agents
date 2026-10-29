@@ -116,7 +116,6 @@ from .voice.agent_session import KeytermDetectionOptions, STTContextOptions
 from .voice.amd import AMD, AMDCategory, AMDPredictionEvent
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.run_result import (
-    AgentHandoffEvent,
     ChatMessageEvent,
     EventAssert,
     EventRangeAssert,
@@ -128,7 +127,6 @@ from .voice.run_result import (
     RunInputRequired,
     RunResult,
     RunUsage,
-    VoiceRunResult,
     mock_tools,
 )
 from .voice.run_stream import (
@@ -295,7 +293,6 @@ __all__ = [
     "RunCompleted",
     "RunInputRequired",
     "RunUsage",
-    "VoiceRunResult",
     "RunStream",
     "StreamEvent",
     "TextDeltaEvent",
@@ -307,7 +304,6 @@ __all__ = [
     "ChatMessageEvent",
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
-    "AgentHandoffEvent",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

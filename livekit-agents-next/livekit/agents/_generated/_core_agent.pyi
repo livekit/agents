@@ -11,7 +11,8 @@ from typing import Any
 from livekit.agents.llm import LLM
 from livekit.agents.voice.agent_host import AgentHost
 
-from .agent_run import AgentDefinition, EventExpectation, ObservedEvent, RunRequest, RunUpdate
+from .._core import ChatItem
+from .agent_run import AgentDefinition, EventExpectation, RunRequest, RunUpdate
 
 class VoiceAgent:
     """`_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the
@@ -25,10 +26,10 @@ class VoiceAgent:
     ) -> None: ...
 
 class RunEvents:
-    """The observed events of one invocation and the position `next_event` reads from. Each call
+    """The observed events (items) of one invocation and the position `next_event` reads from. Each call
     returns the index of the event it matched.
     """
-    def __init__(self, events: Sequence[ObservedEvent]) -> None: ...
+    def __init__(self, events: Sequence[ChatItem]) -> None: ...
     def at(self, index: int, expected: EventExpectation | None) -> int:
         """The event at `index` (from the end when negative), meeting `expected` when given."""
     def next_event(self, expected: EventExpectation | None) -> int:

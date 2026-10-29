@@ -2,14 +2,15 @@
 
 import pytest
 
-from livekit.agents import Agent, RunContext, VoiceSession, inference
+from livekit.agents import Agent, RunContext, inference
 
 pytestmark = pytest.mark.evals
 
 
 async def test_function_call_assertions_match_the_recorded_tool_effect() -> None:
     looked_up: list[str] = []
-    agent = Agent(instructions="Use lookup_weather to answer weather questions.")
+    model = inference.LLM(model="openai/gpt-4.1-mini")
+    agent = Agent(instructions="Use lookup_weather to answer weather questions.", llm=model)
 
     @agent.tool
     async def lookup_weather(ctx: RunContext, location: str) -> str:
@@ -17,12 +18,8 @@ async def test_function_call_assertions_match_the_recorded_tool_effect() -> None
         looked_up.append(location)
         return "sunny with a temperature of 70 degrees."
 
-    async with (
-        inference.LLM(model="openai/gpt-4.1-mini") as model,
-        VoiceSession(llm=model) as session,
-    ):
-        await session.start(agent=agent)
-        result = await session.run(user_input="What is the weather in San Francisco?")
+    async with model:
+        result = await agent.run("What is the weather in San Francisco?")
         result.expect.contains_function_call(
             name="lookup_weather", arguments={"location": "San Francisco"}
         )

@@ -61,6 +61,5 @@ pub trait VoiceSessionExecution {
     #[host(function, name = "_core_voice_session_start")]
     async fn start(
         session: crate::HostRef,
-        capture_run: bool,
     ) -> Result<(), crate::errors::ProviderError>;
 }

@@ -209,15 +209,6 @@ class Retries:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class ObservedEvent:
-    """One event of a tested invocation, as the assertions read it."""
-
-    item: ChatItem
-    new_agent_types: list[str]
-    """For a handoff, the qualified names of the new agent's class and its bases."""
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class EventExpectationMessage:
     """`role` is the `ChatRole` literal."""
 
@@ -238,16 +229,8 @@ class EventExpectationFunctionCallOutput:
     is_error: bool | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class EventExpectationAgentHandoff:
-    new_agent_type: str | None
-
-
 EventExpectation: TypeAlias = (
-    EventExpectationMessage
-    | EventExpectationFunctionCall
-    | EventExpectationFunctionCallOutput
-    | EventExpectationAgentHandoff
+    EventExpectationMessage | EventExpectationFunctionCall | EventExpectationFunctionCallOutput
 )
 """What an assertion expects of an event: its kind and the fields it names."""
 

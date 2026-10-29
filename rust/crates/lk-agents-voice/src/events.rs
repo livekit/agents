@@ -217,12 +217,12 @@ impl SpeechOutcome {
     }
 }
 
-/// One `session.run()` / `start(capture_run=True)`, numbered by the driver; tags what the run owns.
+/// One `session._run()`, numbered by the driver; tags what the run owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunId(pub u64);
 
-/// A run as its events name it: the driver's number and the host's own object for it (`None` for
-/// `start(capture_run=True)`, which no host call opened).
+/// A run as its events name it: the driver's number and the host's own object for it (`None` when
+/// the host passed none).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunRef {
     pub id: RunId,

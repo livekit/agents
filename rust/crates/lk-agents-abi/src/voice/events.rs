@@ -496,9 +496,6 @@ pub struct ItemAddedWire {
     /// The open run's host object when an owned speech produced it or it is the handoff
     /// record, else `None`.
     pub run: Option<crate::HostRef>,
-    /// A handoff record's two `Agent`s, as the host installed them.
-    pub old_agent_host: Option<crate::HostRef>,
-    pub new_agent_host: Option<crate::HostRef>,
 }
 
 /// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. A twin
@@ -581,7 +578,7 @@ pub struct RunItemAddedWire {
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "run_started")]
 pub struct RunStartedWire {
-    /// The host's object for the run (its `RunResult`); `None` for `start(capture_run=True)`.
+    /// The host's object for the run (its run recorder); `None` when the host passed none.
     pub run: Option<crate::HostRef>,
 }
 

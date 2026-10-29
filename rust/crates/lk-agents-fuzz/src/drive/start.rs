@@ -301,7 +301,6 @@ impl Run {
             api.probe(Probe { step, host_event });
         }
         api.start(
-            false,
             Box::new(super::executor::Handover::new(cores_tx, time.clone(), tasks.clone())),
             Box::new(lk_agents_runtime::voice::remote_session::hosting),
             lk_agents_runtime::voice::amd::spawn,

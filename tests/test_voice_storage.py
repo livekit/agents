@@ -85,7 +85,7 @@ async def test_voice_replaces_changed_transport_before_the_model_reads(
         assert texts(session.history) == [
             "application opening" if explicit_history else "stored opening"
         ]
-        await session.run(user_input="hello")
+        await session._run(user_input="hello")
         persisted_history = await thread.chat_history()
         assert texts(persisted_history)[-2:] == ["hello", "hi there"]
         hello = next(
@@ -109,7 +109,7 @@ async def test_voice_replaces_changed_transport_before_the_model_reads(
         expected = texts(await thread.chat_history()) + ["again"]
         assert "edited hello" in expected and "compacted" in expected
         assert "hello" not in expected and "hi there" not in expected
-        await session.run(user_input="again")
+        await session._run(user_input="again")
         assert texts(model.requests[-1]) == expected
         assert texts(session.history) == expected + ["read the text"]
         assert texts(session._agent_chat_ctx()) == expected + ["read the text"]
@@ -162,7 +162,7 @@ async def test_voice_explicit_save_joins_reply_commit_and_releases_the_lane(
     async with VoiceSession(llm=model, context=app, thread=thread) as session:
         await session.start(agent)
         await session.store.load_context(app)
-        await session.run(user_input="save")
+        await session._run(user_input="save")
         core = await thread_storage.open(thread_id)
         try:
             lane = await core.lane_info("desk")
@@ -189,7 +189,7 @@ async def test_storage_failure_at_voice_start_is_logged_without_ending_the_call(
     model = ObservedLLM()
     async with VoiceSession(llm=model, thread=thread) as session:
         await session.start(Agent(instructions="desk", name="desk"))
-        result = await session.run(user_input="hello")
+        result = await session._run(user_input="hello")
         assert result.output == "hi there"
         assert "the voice lane could not be loaded" in caplog.text
 
@@ -250,6 +250,6 @@ async def test_failed_voice_generation_abandons_saved_fields_before_the_next_tur
         assert not (await thread.chat_history()).items
         await session.store.load_context(app)
         assert app.draft.count == 0
-        result = await session.run(user_input="hello")
+        result = await session._run(user_input="hello")
         assert result.output == "recovered"
     assert texts(await thread.chat_history()) == ["hello", "recovered"]

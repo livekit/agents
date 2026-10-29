@@ -222,14 +222,12 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 impl lk_agents_abi::voice::console::VoiceSessionExecution for Selected {
     async fn start(
         session: lk_agents_abi::HostRef,
-        capture_run: bool,
     ) -> Result<(), lk_agents_abi::errors::ProviderError> {
         use lk_agents_abi::python::{HostException as _, captured};
         let reply = Python::attach(|py| {
             let obj = (&session).into_pyobject(py)?;
             let api = obj.extract::<PyRef<'_, lk_agents_runtime::voice::SessionApi>>()?;
             api.start(
-                capture_run,
                 Box::new(lk_agents_runtime::voice::Executor::new(
                     api.time().clone(),
                     api.spawner(),

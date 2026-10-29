@@ -38,7 +38,6 @@ pub(crate) struct InitialSession {
     pub(crate) now: Now,
     pub(crate) built_at: f64,
     pub(crate) journalled: bool,
-    pub(crate) capture_run: Option<crate::run_result::RunSpec>,
     pub(crate) forward_chat_context: bool,
     pub(crate) keyterms: Option<(crate::keyterm_detection::KeytermSetup, Option<ResourceId>)>,
 }
@@ -97,7 +96,7 @@ impl Driver {
         driver.step.set(initial.now);
         driver.publish_activity();
         driver.flush_activity();
-        driver.open_session(initial.capture_run, initial.forward_chat_context, initial.keyterms);
+        driver.open_session(initial.forward_chat_context, initial.keyterms);
         driver
     }
 }
@@ -162,7 +161,6 @@ impl Driver {
     /// socket; then the static keyterms.
     fn open_session(
         &mut self,
-        capture_run: Option<crate::run_result::RunSpec>,
         forward_chat_context: bool,
         keyterms: Option<(
             crate::keyterm_detection::KeytermSetup,
@@ -172,12 +170,6 @@ impl Driver {
         self.publish_gate();
         {
             let mut out = self.out();
-            // `start(capture_run=True)`'s run exists before the opening handoff is recorded, so the
-            // handoff and the opening `on_enter` are the run's.
-            if let Some(spec) = capture_run {
-                out.trace(CoreStep::CommandReceived { origin: Origin::Host, kind: "Command::Run" });
-                self.on_run(self.step.now, spec, &mut out);
-            }
             self.record_handoff(None, &mut out);
             if self.activity.rt_session.is_some() {
                 let opening = self.session.chat_ctx.for_realtime();

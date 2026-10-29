@@ -793,11 +793,11 @@ impl ConsoleIo {
 type VoiceSessionExecutionImpl = <crate::Selected as super::Implementations>::VoiceSessionExecution;
 
 #[pyfunction]
-#[pyo3(signature = (session, capture_run))]
-pub fn _core_voice_session_start<'py>(py: Python<'py>, session: ::lk_agents_abi::HostRef, capture_run: bool) -> PyResult<Bound<'py, PyAny>> {
+#[pyo3(signature = (session))]
+pub fn _core_voice_session_start<'py>(py: Python<'py>, session: ::lk_agents_abi::HostRef) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
     crate::host::future_into_py(py, async move {
-        let out = <VoiceSessionExecutionImpl as ::lk_agents_abi::voice::console::VoiceSessionExecution>::start(session, capture_run).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <VoiceSessionExecutionImpl as ::lk_agents_abi::voice::console::VoiceSessionExecution>::start(session).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
     })
 }

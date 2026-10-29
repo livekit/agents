@@ -5,7 +5,7 @@ import os
 import httpx2 as httpx
 import pytest
 
-from livekit.agents import Agent, RunContext, VoiceSession, function_tool, llm
+from livekit.agents import Agent, RunContext, llm
 from livekit.plugins.cerebras import LLM
 from livekit.plugins.cerebras.llm import _CerebrasClient
 
@@ -35,25 +35,29 @@ def _cerebras_llm(**kwargs) -> LLM:
     return LLM(model=CHAT_MODEL, **kwargs)
 
 
-class WeatherAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful assistant.")
+def _assistant(model: LLM) -> Agent:
+    return Agent(instructions="You are a helpful assistant.", llm=model)
 
-    @function_tool
-    async def get_weather(self, ctx: RunContext, location: str) -> str:
+
+def _weather_agent(model: LLM) -> Agent:
+    agent = _assistant(model)
+
+    @agent.tool
+    async def get_weather(ctx: RunContext, location: str) -> str:
         """Get the current weather for a location.
         Args:
             location: The city name
         """
         return f"The weather in {location} is sunny, 72°F."
 
+    return agent
+
 
 @pytest.mark.asyncio
 async def test_chat():
     """Basic chat completion returns a non-empty assistant message."""
-    async with _cerebras_llm() as model, VoiceSession(llm=model) as sess:
-        await sess.start(Agent(instructions="You are a helpful assistant."))
-        result = await sess.run(user_input="Say hello in exactly one word.")
+    async with _cerebras_llm() as model:
+        result = await _assistant(model).run("Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
 
@@ -61,9 +65,8 @@ async def test_chat():
 @pytest.mark.asyncio
 async def test_function_call():
     """LLM can invoke a tool and the result is returned."""
-    async with LLM(model=TOOL_MODEL) as model, VoiceSession(llm=model) as sess:
-        await sess.start(WeatherAgent())
-        result = await sess.run(user_input="What is the weather in Tokyo?")
+    async with LLM(model=TOOL_MODEL) as model:
+        result = await _weather_agent(model).run("What is the weather in Tokyo?")
         result.expect.next_event().is_function_call(
             name="get_weather", arguments={"location": "Tokyo"}
         )
@@ -93,9 +96,8 @@ def _cerebras_llm_with_transport(
 async def test_gzip_only_headers():
     """Gzip-only sends Content-Encoding: gzip with JSON content type."""
     model, transport = _cerebras_llm_with_transport(use_gzip=True, use_msgpack=False)
-    async with model, VoiceSession(llm=model) as sess:
-        await sess.start(Agent(instructions="You are a helpful assistant."))
-        result = await sess.run(user_input="Say hello in exactly one word.")
+    async with model:
+        result = await _assistant(model).run("Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
 
@@ -109,9 +111,8 @@ async def test_gzip_only_headers():
 async def test_msgpack_only_headers():
     """Msgpack-only sends Content-Type: application/vnd.msgpack without gzip."""
     model, transport = _cerebras_llm_with_transport(use_gzip=False, use_msgpack=True)
-    async with model, VoiceSession(llm=model) as sess:
-        await sess.start(Agent(instructions="You are a helpful assistant."))
-        result = await sess.run(user_input="Say hello in exactly one word.")
+    async with model:
+        result = await _assistant(model).run("Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
 
@@ -125,9 +126,8 @@ async def test_msgpack_only_headers():
 async def test_msgpack_and_gzip_headers():
     """Both flags send msgpack content type with gzip encoding."""
     model, transport = _cerebras_llm_with_transport(use_gzip=True, use_msgpack=True)
-    async with model, VoiceSession(llm=model) as sess:
-        await sess.start(Agent(instructions="You are a helpful assistant."))
-        result = await sess.run(user_input="Say hello in exactly one word.")
+    async with model:
+        result = await _assistant(model).run("Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
 
@@ -141,11 +141,9 @@ async def test_msgpack_and_gzip_headers():
 async def test_no_compression_headers():
     """With both flags off, sends standard JSON without gzip."""
     async with _cerebras_llm(gzip_compression=False, msgpack_encoding=False) as model:
-        async with VoiceSession(llm=model) as sess:
-            await sess.start(Agent(instructions="You are a helpful assistant."))
-            result = await sess.run(user_input="Say hello in exactly one word.")
-            result.expect.next_event().is_message(role="assistant")
-            result.expect.no_more_events()
+        result = await _assistant(model).run("Say hello in exactly one word.")
+        result.expect.next_event().is_message(role="assistant")
+        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio
