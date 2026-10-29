@@ -6,7 +6,6 @@
 use crate::agent_server::ServerCallbacks;
 use crate::{Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
@@ -14,13 +13,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, watch};
 mod health;
-mod lifecycle;
 pub use health::{
     HealthProbe, ServerStatus, bind_listener, serve_health, serve_metrics, worker_info_json,
 };
 #[cfg(test)]
 use health::{health_route, metrics_route};
-pub use lifecycle::{ServerPhase, ServerResource};
 mod settings;
 pub use settings::{
     DEFAULT_LOAD_THRESHOLD, Environment, ServerSettings, endpoint_url_base, prepare_prometheus_dir,
@@ -126,6 +123,27 @@ pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, String> {
 
 // --------------------------------------------------------------------- the listeners
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerPhase {
+    Idle,
+    Starting,
+    Running,
+    Draining,
+    Closing,
+    Closed,
+}
+
+/// What a running server owns and stops on close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ServerResource {
+    Setup,
+    Host,
+    Worker,
+    Load,
+    Health,
+    Metrics,
+}
+
 pub struct ServerStart {
     pub settings: ServerSettings,
     pub devmode: bool,
@@ -203,19 +221,19 @@ impl ServerRuntime {
 
     pub async fn run(&self, start: ServerStart) -> Result<(), String> {
         let receiver = self.receiver.lock().await.take().ok_or("worker is already running")?;
-        let origin = tokio::time::Instant::now();
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
         let process_cleanup = timeout * 3 + crate::ipc::supervisor::KILL_GRACE;
         let connection_cleanup =
             if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
-        let mut state = ServerLifecycle::new(process_cleanup.max(connection_cleanup));
-        let effects = state.handle(ServerInput::Start, Duration::ZERO);
-        self.publish(&state, effects);
-        self.snapshot.send_modify(|snapshot| snapshot.has_rtc = start.has_rtc);
+        let cleanup_timeout = process_cleanup.max(connection_cleanup);
+        self.snapshot.send_modify(|snapshot| {
+            snapshot.phase = ServerPhase::Starting;
+            snapshot.has_rtc = start.has_rtc;
+        });
         let runtime = self.clone();
         let serving = TokioSpawner::current()
-            .spawn(async move { runtime.serve(start, receiver, state, origin).await });
+            .spawn(async move { runtime.serve(start, receiver, cleanup_timeout).await });
         *self.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(serving);
         wait_outcome(&self.outcome).await
     }
@@ -264,72 +282,31 @@ impl ServerRuntime {
         result
     }
 
-    fn publish(&self, state: &ServerLifecycle, effects: Vec<ServerEffect>) {
-        self.snapshot.send_modify(|snapshot| snapshot.phase = state.phase());
-        for effect in effects {
-            match effect {
-                ServerEffect::DrainFinished(result) => {
-                    self.drain_outcome.send_if_modified(|outcome| {
-                        if outcome.is_some() {
-                            return false;
-                        }
-                        *outcome = Some(result.clone());
-                        true
-                    });
-                }
-                ServerEffect::CloseFinished { run_result, cleanup_result } => {
-                    self.cleanup_outcome.send_if_modified(|outcome| {
-                        if outcome.is_some() {
-                            return false;
-                        }
-                        *outcome = Some(cleanup_result.clone());
-                        true
-                    });
-                    self.outcome.send_if_modified(|outcome| {
-                        if outcome.is_some() {
-                            return false;
-                        }
-                        *outcome = Some(run_result.clone());
-                        true
-                    });
-                }
-                ServerEffect::IncompleteCleanup { resources } => {
-                    self.snapshot
-                        .send_modify(|snapshot| snapshot.incomplete_cleanup = resources.clone());
-                    crate::diagnostics::emit(
-                        log::Level::Error,
-                        format!(
-                            "server cleanup deadline missed; runtime retains ownership resources={resources:?}"
-                        ),
-                    );
-                }
-                _ => {}
+    fn set_phase(&self, phase: ServerPhase) {
+        self.snapshot.send_modify(|snapshot| snapshot.phase = phase);
+    }
+
+    /// The first outcome sent wins; later ones are no-ops.
+    fn settle(outcome: &Outcome, result: Result<(), String>) {
+        outcome.send_if_modified(|outcome| {
+            if outcome.is_some() {
+                return false;
             }
-        }
+            *outcome = Some(result);
+            true
+        });
     }
 
     async fn serve(
         self,
         start: ServerStart,
         mut control: watch::Receiver<Control>,
-        mut state: ServerLifecycle,
-        origin: tokio::time::Instant,
+        cleanup_timeout: Duration,
     ) {
-        let mut expected = vec![ServerResource::Setup, ServerResource::Host, ServerResource::Load];
-        if !start.settings.simulation {
-            expected.push(ServerResource::Health);
-        }
-        if start.settings.prometheus_port.is_some() {
-            expected.push(ServerResource::Metrics);
-        }
-        if !start.unregistered {
-            expected.push(ServerResource::Worker);
-        }
-        for resource in expected {
-            state.handle(ServerInput::ResourceStarted(resource), origin.elapsed());
-        }
         let (stop, _) = watch::channel(false);
         let mut resources = Resources::default();
+        let mut failure: Option<String> = None;
+        let mut drain_requested = false;
         let started = {
             let startup = self.start(&start, &stop, &mut resources);
             tokio::pin!(startup);
@@ -339,15 +316,8 @@ impl ServerRuntime {
                     changed = control.changed() => {
                         if changed.is_err() { break None; }
                         let request = control.borrow_and_update().clone();
-                        if request.drain.is_some() {
-                            let effects = state.handle(ServerInput::Drain, origin.elapsed());
-                            self.publish(&state, effects);
-                        }
-                        if request.close {
-                            let effects = state.handle(ServerInput::Close, origin.elapsed());
-                            self.publish(&state, effects);
-                            break None;
-                        }
+                        drain_requested |= request.drain.is_some();
+                        if request.close { break None; }
                     }
                     result = &mut startup => break Some(result),
                 }
@@ -355,91 +325,113 @@ impl ServerRuntime {
         };
         let mut drain = None;
         let mut started_notification = None;
-        if let Some(result) = started {
-            let readiness = result.as_ref().ok().cloned();
-            let effects =
-                state.handle(ServerInput::StartupFinished(result.map(|_| ())), origin.elapsed());
-            let notify_started = effects.contains(&ServerEffect::Started);
-            if effects.contains(&ServerEffect::Drain) {
-                drain =
-                    Some(self.drain_resources(
-                        resources.worker.clone(),
-                        control.borrow().drain.flatten(),
-                    ));
+        let running = matches!(started, Some(Ok(_)));
+        match started {
+            Some(Ok(readiness)) => {
+                self.set_phase(ServerPhase::Running);
+                if drain_requested {
+                    self.set_phase(ServerPhase::Draining);
+                    let timeout = control.borrow().drain.flatten();
+                    drain = Some(self.drain_resources(resources.worker.clone(), timeout));
+                }
+                started_notification = Some((self.host.proxy.started(), readiness));
             }
-            self.publish(&state, effects);
-            if notify_started {
-                started_notification =
-                    Some((self.host.proxy.started(), readiness.expect("startup succeeded")));
-            }
+            Some(Err(error)) => failure = Some(error),
+            None => {}
         }
-        while !matches!(state.phase(), ServerPhase::Closing | ServerPhase::Closed) {
+        let mut drained = false;
+        while running {
             tokio::select! {
                 biased;
                 changed = control.changed() => {
                     if changed.is_err() { break; }
                     let request = control.borrow_and_update().clone();
-                    if request.close {
-                        let effects = state.handle(ServerInput::Close, origin.elapsed());
-                        self.publish(&state, effects);
-                    } else if request.drain.is_some() {
-                        let effects = state.handle(ServerInput::Drain, origin.elapsed());
-                        if effects.contains(&ServerEffect::Drain) {
-                            drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
-                        }
-                        self.publish(&state, effects);
+                    if request.close { break; }
+                    if request.drain.is_some() && !drain_requested {
+                        drain_requested = true;
+                        self.set_phase(ServerPhase::Draining);
+                        drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
                     }
                 }
                 result = async { started_notification.as_mut().expect("notification pending").0.as_mut().await }, if started_notification.is_some() => {
                     let (_, readiness) = started_notification.take().expect("notification pending");
                     match result {
                         Ok(()) => { readiness.send_replace(true); }
-                        Err(error) => {
-                            let effects = state.handle(ServerInput::Failed(error.to_string()), origin.elapsed());
-                            self.publish(&state, effects);
-                        }
+                        Err(error) => { failure = Some(error.to_string()); break; }
                     }
                 }
                 result = pending_drain(&mut drain), if drain.is_some() => {
                     drain = None;
-                    let effects = state.handle(ServerInput::DrainFinished(result), origin.elapsed());
-                    self.publish(&state, effects);
+                    drained = true;
+                    Self::settle(&self.drain_outcome, result);
                 }
                 result = pending_worker(&mut resources.connection), if resources.connection.is_some() => {
+                    // The connection is gone: nothing of it is left to stop.
                     resources.connection = None;
-                    let result = result.unwrap_or_else(|error| Err(error.to_string()));
-                    let error = result.clone().err().unwrap_or_else(|| "worker connection stopped".into());
-                    state.handle(ServerInput::ResourceStopped { resource: ServerResource::Worker, result }, origin.elapsed());
-                    let effects = state.handle(ServerInput::Failed(error), origin.elapsed());
-                    self.publish(&state, effects);
+                    resources.worker = None;
+                    failure = Some(match result.unwrap_or_else(|error| Err(error.to_string())) {
+                        Ok(()) => "worker connection stopped".into(),
+                        Err(error) => format!("{:?}: {error}", ServerResource::Worker),
+                    });
+                    break;
                 }
             }
         }
+        self.set_phase(ServerPhase::Closing);
+        if drain_requested && !drained {
+            Self::settle(&self.drain_outcome, Err("server closed during drain".into()));
+        }
         drop(drain);
-        let effects = state.handle(ServerInput::Close, origin.elapsed());
-        self.publish(&state, effects);
         drop(started_notification);
         stop.send_replace(true);
         let mut closing = resources.close(self.host.clone());
-        while !closing.is_empty() {
-            let delay = state.wake_at().map(|at| at.saturating_sub(origin.elapsed()));
+        let mut remaining: std::collections::BTreeSet<ServerResource> = [
+            ServerResource::Host,
+            ServerResource::Setup,
+            ServerResource::Worker,
+            ServerResource::Load,
+            ServerResource::Health,
+            ServerResource::Metrics,
+        ]
+        .into();
+        let mut cleanup_failure: Option<String> = None;
+        let mut reported = false;
+        let deadline = tokio::time::sleep(cleanup_timeout);
+        tokio::pin!(deadline);
+        while !remaining.is_empty() {
             tokio::select! {
                 biased;
-                _ = deadline(delay) => {
-                    let effects = state.tick(origin.elapsed());
-                    self.publish(&state, effects);
+                () = &mut deadline, if !reported => {
+                    // The runtime keeps the stragglers; the callers get their outcome now.
+                    reported = true;
+                    let resources: Vec<_> = remaining.iter().copied().collect();
+                    crate::diagnostics::emit(
+                        log::Level::Error,
+                        format!("server cleanup deadline missed; runtime retains ownership resources={resources:?}"),
+                    );
+                    self.snapshot.send_modify(|snapshot| snapshot.incomplete_cleanup = resources);
+                    self.finish(&failure, &cleanup_failure);
                 }
-                result = closing.next() => {
-                    if let Some((resource, result)) = result {
-                        if let Err(error) = &result {
-                            crate::diagnostics::emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
-                        }
-                        let effects = state.handle(ServerInput::ResourceStopped { resource, result }, origin.elapsed());
-                        self.publish(&state, effects);
+                Some((resource, result)) = closing.next() => {
+                    remaining.remove(&resource);
+                    if let Err(error) = result {
+                        crate::diagnostics::emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
+                        let error = format!("{resource:?}: {error}");
+                        cleanup_failure.get_or_insert(error.clone());
+                        failure.get_or_insert(error);
                     }
                 }
             }
         }
+        self.set_phase(ServerPhase::Closed);
+        if !reported {
+            self.finish(&failure, &cleanup_failure);
+        }
+    }
+
+    fn finish(&self, failure: &Option<String>, cleanup_failure: &Option<String>) {
+        Self::settle(&self.cleanup_outcome, cleanup_failure.clone().map_or(Ok(()), Err));
+        Self::settle(&self.outcome, failure.clone().map_or(Ok(()), Err));
     }
 
     async fn start(
@@ -636,13 +628,6 @@ async fn wait_outcome(outcome: &Outcome) -> Result<(), String> {
         .map_err(|error| error.to_string())?
         .clone()
         .unwrap_or(Ok(()))
-}
-
-async fn deadline(delay: Option<Duration>) {
-    match delay {
-        Some(delay) => tokio::time::sleep(delay).await,
-        None => std::future::pending().await,
-    }
 }
 
 async fn pending_drain(
