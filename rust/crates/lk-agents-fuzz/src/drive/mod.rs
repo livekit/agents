@@ -340,7 +340,7 @@ pub struct RealtimeSetup {
     /// `RealtimeModel(modalities=["text"])`: the server answers in text, which the session's TTS
     /// speaks when the setup has one.
     pub text_only: bool,
-    /// `RealtimeModelFallbackAdapter` over two such servers: a fatal error swaps to the other.
+    /// A `RealtimeModelFallbackAdapter`'s model: a fatal error swaps to a fresh model.
     pub fallback: bool,
     /// A full-duplex speech model (`DuplexRealtimeAdapter`) instead of the server: it detects
     /// turns and speaks on its own; the server's switches above do not apply.

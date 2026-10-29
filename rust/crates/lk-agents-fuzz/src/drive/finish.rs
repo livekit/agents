@@ -86,7 +86,7 @@ impl Run {
                 .applied()
                 .iter()
                 .filter(|a| a.accepted)
-                // This socket's: one a fallback adapter swapped away from took its person along.
+                // This session's: a dropped connection or a swap took the person's turn along.
                 .filter_map(|a| match &a.input {
                     Input::RealtimeEvent { socket: s, event: RtEvent::SpeechStarted }
                         if s.nth == socket =>

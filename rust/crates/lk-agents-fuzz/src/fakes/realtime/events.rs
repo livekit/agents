@@ -1,6 +1,6 @@
-//! What the session tells the driver of the server's happenings, as the native session reports
-//! them: the response it was told of and only that one's messages, words and audio; its end and
-//! metrics; the items the server added; the person's speech and transcript; and the errors.
+//! What the provider tells the driver of the server's happenings: the response it was told of
+//! and only that one's messages, words and audio; its end and metrics; the items the server
+//! added; the person's speech and transcript; and the errors.
 use std::time::Duration;
 
 use lk_agents_abi::{
@@ -34,27 +34,22 @@ impl Socket {
                 let slot =
                     self.registry.register(Kind::Generation, Detail::None, Control::Generation);
                 st.generations.insert(r, slot);
-                let server = st.server().expect("open");
-                server.registered(r, slot.nth);
+                st.server.registered(r, slot.nth);
                 let (id, request) = {
-                    let resp = &server.responses[r as usize];
+                    let resp = &st.server.responses[r as usize];
                     (resp.id.clone(), resp.request.clone())
                 };
-                if let Some(req_id) = request.clone().filter(|req| st.discarded.remove(req)) {
-                    // Abandoned before creation: cancelled by id, its end told to nobody.
-                    st.server().expect("open").cancel(now, Some(&id));
-                    if !st.settled.remove(&req_id) {
-                        let error = RealtimeError::new("generate_reply cancelled");
-                        st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed {
-                            req_id,
-                            error,
-                        }));
-                    }
+                if let Some(req_id) = request.clone().filter(|req| st.cancelled.remove(req)) {
+                    // Cancelled before creation: cancelled by id, its end told to nobody.
+                    st.server.cancel(now, Some(&id));
+                    let error = RealtimeError::new("generate_reply cancelled");
+                    st.events
+                        .push_back(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
                     return;
                 }
-                st.server().expect("open").told_created(r, now);
+                st.server.told_created(r, now);
                 st.close_generation(audio);
-                let req_id = request.filter(|req| st.asked.remove(req).is_some());
+                let req_id = request.filter(|req| st.asked.remove(req));
                 st.generation = Some(Generation {
                     r,
                     id: id.clone(),
@@ -68,7 +63,7 @@ impl Socket {
                 }));
             }
             Happening::MessageAdded { r, previous } => {
-                let item = st.server().expect("open").responses[r as usize]
+                let item = st.server.responses[r as usize]
                     .item
                     .clone()
                     .unwrap_or_default();
@@ -86,7 +81,6 @@ impl Socket {
                         let g_id = g.id.clone();
                         st.events.push_back(modalities(&item, &g_id, false));
                     }
-                    st.spoken.insert(item);
                 }
                 remote_added(st, added, previous);
             }
@@ -139,10 +133,9 @@ impl Socket {
                 }
             }
             Happening::CallAdded { r } => {
-                let server = st.server().expect("open");
-                let (fc, name) =
-                    server.responses[r as usize].function_call.clone().expect("a call");
-                let previous = server.responses[r as usize].item.clone();
+                let resp = &st.server.responses[r as usize];
+                let (fc, name) = resp.function_call.clone().expect("a call");
+                let previous = resp.item.clone();
                 let call = stamped(function_call(&fc, &name), self.clock.wall());
                 remote_added(st, call, previous);
             }
@@ -165,9 +158,8 @@ impl Socket {
             }
             Happening::CallDone { r } => {
                 if active(st, r) {
-                    let server = st.server().expect("open");
                     let (fc, name) =
-                        server.responses[r as usize].function_call.clone().expect("a call");
+                        st.server.responses[r as usize].function_call.clone().expect("a call");
                     let ChatItem::FunctionCall(call) =
                         stamped(function_call(&fc, &name), self.clock.wall())
                     else {
@@ -193,7 +185,7 @@ impl Socket {
                         st.events.push_back(message_done(id, &g.id));
                     }
                 }
-                let (input, output) = st.server().expect("open").usage(r);
+                let (input, output) = st.server.usage(r);
                 let usage = TokenUsage {
                     input_tokens: input,
                     output_tokens: output,
@@ -224,11 +216,9 @@ impl Socket {
             }
             Happening::SpeechStarted { item } => {
                 st.speech_started.insert(item, self.wall_secs());
-                st.user_speaking = true;
                 st.events.push_back(Event::InputSpeechStarted(InputSpeechStarted {}));
             }
             Happening::SpeechStopped => {
-                st.user_speaking = false;
                 st.events.push_back(Event::InputSpeechStopped(InputSpeechStopped {
                     user_transcription_enabled: true,
                 }));
@@ -266,7 +256,7 @@ impl Socket {
                 }
             }
             Happening::Error { code, message, request } => {
-                if let Some(req_id) = request.filter(|req| st.asked.remove(req).is_some()) {
+                if let Some(req_id) = request.filter(|req| st.asked.remove(req)) {
                     let error = RealtimeError::with_code(message, code.map(str::to_owned));
                     st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed {
                         req_id,
@@ -280,13 +270,10 @@ impl Socket {
                 let message = format!(
                     "{PROVIDER} returned an error: You exceeded your current quota, please check your plan and billing details."
                 );
-                st.events.push_back(Event::Error(self.error(
-                    message,
-                    Some("insufficient_quota"),
-                    false,
-                )));
-                self.hang_up(st);
-                self.end(st);
+                // A fallback adapter takes it as recoverable while it has a model to swap to.
+                let error = self.error(message, Some("insufficient_quota"), self.setup.fallback);
+                st.events.push_back(Event::Error(error));
+                self.fatal(st);
             }
         }
     }
@@ -429,6 +416,14 @@ pub(super) fn modalities(message_id: &str, response_id: &str, audio: bool) -> Ev
         message_id: message_id.into(),
         response_id: Some(response_id.into()),
         modalities: if audio { Modalities::AudioAndText } else { Modalities::TextOnly },
+    })
+}
+
+pub(super) fn cancelled(response_id: String) -> Event {
+    Event::GenerationDone(GenerationDone {
+        response_id,
+        status: GenerationStatus::Cancelled,
+        usage: TokenUsage::default(),
     })
 }
 

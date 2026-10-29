@@ -1021,7 +1021,6 @@ impl Talk {
                         RtEvent::ResponseFailed,
                         RtEvent::TranscriptionFailed,
                         RtEvent::SecondGeneration,
-                        RtEvent::StrayDelta,
                     ]);
                     rows.push(Input::RealtimeEvent { socket: socket_ref, event });
                 }

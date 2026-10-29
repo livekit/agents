@@ -61,9 +61,11 @@ impl Rule for InterruptionHasCause {
                                 }
                             )
                     });
+                    // The same instant counts: the model reports its error and swaps in one
+                    // delivery, the host's event journalled after the interruption.
                     failed
                         || r.host_view().events().iter().any(|(e, ev)| {
-                            *e < at
+                            e.at_ms <= at.at_ms
                                 && matches!(
                                     ev,
                                     lk_agents_voice::events::SessionEvent::Error(err)

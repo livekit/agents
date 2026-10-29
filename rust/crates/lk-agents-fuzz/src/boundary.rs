@@ -28,8 +28,6 @@ pub const VOICE: Boundary = Boundary {
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
         "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
          over FakeRoom, on the run's injected scheduler and clock",
-        "inference's realtime fallback adapter (lk_agents_inference::fallback::realtime) over two \
-         realtime fakes, on the run's clock",
     ],
     fakes: &[
         "fakes::stt",
@@ -42,8 +40,9 @@ pub const VOICE: Boundary = Boundary {
         "fakes::nodes",
         "fakes::output",
         "fakes::avatar (generator/media/RTC ports under the real runtime runner and stream executors)",
-        "fakes::realtime (a LiveKit Inference realtime session's events at the Realtime \
-         boundary, over a server model drawn from the corpus); fakes::realtime::duplex (a duplex model's events at \
+        "fakes::realtime (a realtime model at the Realtime port: the server model drawn from \
+         the corpus, its happenings as the port's events, a fallback setup's swap as one; no \
+         session or fallback logic); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
         "lk_agents_test_support::rtc::FakeRoom",
     ],
@@ -53,7 +52,7 @@ pub const VOICE: Boundary = Boundary {
     ],
     outside: &[
         "the voice runtime arrival-order loop (the harness drives its same actor and effect execution)",
-        "inference's realtime machine, pump and wire codec \
+        "inference's realtime session (machine, pump, wire codec) and fallback adapter \
          (lk_agents_inference::realtime; its own tests over the simulated OpenAI Realtime server, \
          held to the corpus recordings and probes; the fakes mirror their outcomes)",
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",

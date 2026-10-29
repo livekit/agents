@@ -420,8 +420,18 @@ impl Server {
         self.buffer_ms += ms;
     }
 
-    pub fn buffered(&self) -> bool {
-        self.buffer_ms > 0
+    pub fn buffered_ms(&self) -> u64 {
+        self.buffer_ms
+    }
+
+    /// The VAD heard the person start and not yet stop.
+    pub fn speaking(&self) -> bool {
+        self.speaking.is_some()
+    }
+
+    /// The audio an item holds, if it holds the item.
+    pub fn audio_ms(&self, id: &str) -> Option<u64> {
+        self.items.iter().find(|i| i.id == id).map(|i| i.audio_ms)
     }
 
     /// The session's commit of what it sent.

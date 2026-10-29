@@ -63,7 +63,7 @@ table! { RealtimeEvents:
     event::GenerationDone => Covered("response.done");
     event::RemoteItemAdded => Covered("conversation.item.added");
     event::SessionReconnected => Covered("a connection the session opened again");
-    event::SessionSwapped => Covered("a fallback setup's FatalError: the adapter swaps to its other server");
+    event::SessionSwapped => Covered("a fallback setup's FatalError: the model swaps to a fresh one");
     event::Metrics => Covered("response.done usage, transcription usage");
     event::Error => Covered("error, a failed connection");
     event::HostError => Skipped("a host session's wall-clock error");

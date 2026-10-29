@@ -5,8 +5,6 @@
 //! share: an agent, a history, a patch, built from the case's terms.
 use super::*;
 use lk_agents_abi::voice::console::ConsolePort;
-use lk_agents_runtime::inference::fallback::IgnoreEvents;
-use lk_agents_runtime::inference::fallback::realtime::{ChainModel, RealtimeFallbackModel};
 
 impl Run {
     /// Build a session through the host's API, over the fake room and the fakes, and start it.
@@ -140,21 +138,6 @@ impl Run {
                     } else {
                         fakes::RealtimeVad::Server
                     });
-                    let fake = |seed: u64, connect: Duration| {
-                        let setup = fakes::ServerSetup {
-                            vad,
-                            seed,
-                            connect,
-                            tool_calls: server.tool_calls,
-                            text_only: server.text_only,
-                        };
-                        fakes::FakeRealtime::new(
-                            registry.clone(),
-                            setup,
-                            time.clock(),
-                            tasks.clone(),
-                        ) as Arc<dyn Realtime>
-                    };
                     if server.duplex {
                         let clock = time.clock();
                         let duplex = fakes::FakeDuplex::new(
@@ -165,23 +148,16 @@ impl Run {
                         );
                         return duplex as Arc<dyn Realtime>;
                     }
-                    if !server.fallback {
-                        return fake(server.seed, connect);
-                    }
-                    let children = vec![
-                        ChainModel::Native(fake(server.seed, connect)),
-                        // The fallback is a healthy model, connecting at once.
-                        ChainModel::Native(fake(server.seed.rotate_left(17), Duration::ZERO)),
-                    ];
-                    // The adapter's defaults: a 10 s cooldown, a swap asking for the cut reply.
-                    let model = RealtimeFallbackModel::new(
-                        children,
-                        10.0,
-                        true,
-                        Arc::new(IgnoreEvents),
-                        time.clock(),
-                    );
-                    Arc::new(model.expect("children that agree")) as Arc<dyn Realtime>
+                    let setup = fakes::ServerSetup {
+                        vad,
+                        seed: server.seed,
+                        connect,
+                        tool_calls: server.tool_calls,
+                        text_only: server.text_only,
+                        fallback: server.fallback,
+                    };
+                    fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
+                        as Arc<dyn Realtime>
                 }),
                 tts,
                 Some(Arc::new(WireSink)),
