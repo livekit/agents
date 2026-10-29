@@ -16,7 +16,7 @@ pub use gate::{AdaptiveNoiseGate, AudioGate, FixedGate};
 pub use host::GateClass;
 pub use lk_agents_abi::llm::duplex::DuplexCapabilities;
 pub use segmenter::{AUDIO_TIMEOUT, Fragment, Segmenter, Step};
-pub use session::NativeDuplexModel;
+pub use session::DuplexAdapterModel;
 
 /// The realtime capabilities a duplex model runs under: it detects turns and answers them itself,
 /// speaks only audio, and owns its output timeline.

@@ -3,7 +3,7 @@ use super::*;
 // These sequences drive the async worker through its real command and transport queues.
 // Reusing the gated host keeps the same boundary behavior as the individual race regressions.
 
-async fn wait_for_snapshot(handle: &WorkerHandle, predicate: impl Fn(&Snapshot) -> bool) {
+async fn wait_for_snapshot(handle: &WorkerClient, predicate: impl Fn(&Snapshot) -> bool) {
     tokio::time::timeout(Duration::from_secs(1), async {
         while !predicate(&handle.snapshot()) {
             tokio::time::sleep(Duration::from_millis(1)).await;

@@ -4,7 +4,7 @@
 //! processes and the user's callbacks.
 
 use crate::server_host::HostedServer;
-use crate::{Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification};
+use crate::{Worker, WorkerCommand, WorkerClient, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
@@ -142,7 +142,7 @@ pub struct ServerSnapshot {
     pub phase: ServerPhase,
     pub worker_id: String,
     pub http_port: u16,
-    pub worker: Option<WorkerHandle>,
+    pub worker: Option<WorkerClient>,
     pub has_rtc: bool,
     pub incomplete_cleanup: Vec<ServerResource>,
 }
@@ -599,7 +599,7 @@ impl ServerRuntime {
 
     fn drain_resources(
         &self,
-        worker: Option<WorkerHandle>,
+        worker: Option<WorkerClient>,
         timeout: Option<Duration>,
     ) -> BoxFuture<'static, Result<(), String>> {
         let host = self.host.clone();
@@ -662,7 +662,7 @@ struct Resources {
     setup: Option<
         lk_agents_net::blocking_io::BlockingIoTask<Result<(Option<String>, Option<f32>), String>>,
     >,
-    worker: Option<WorkerHandle>,
+    worker: Option<WorkerClient>,
     connection: Option<OwnedTask<Result<(), String>>>,
     load: Option<OwnedTask<Result<(), String>>>,
     health: Option<OwnedTask<Result<(), String>>>,

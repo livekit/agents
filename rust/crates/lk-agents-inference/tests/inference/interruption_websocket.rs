@@ -1,6 +1,6 @@
 //! One end-to-end pass over the real socket.
 //!
-//! Everything else in this crate is tested against [`InterruptionCore`] with no I/O, which is the
+//! Everything else in this crate is tested against [`InterruptionMachine`] with no I/O, which is the
 //! point of the split. This file exists because that leaves one thing unproven: that the driver
 //! actually *wires* the core to a WebSocket -- handshake, `session.create`, the 8-byte binary
 //! header, and a verdict coming back out as an `OverlappingSpeechEvent`. A unit test cannot

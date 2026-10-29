@@ -39,7 +39,7 @@ pub trait DuplexHostSession: Send + Sync {
 
 /// `DuplexRealtimeAdapter`'s engine: the session's realtime model, its sessions on the clock
 /// and executor it was built with.
-pub struct NativeDuplexModel {
+pub struct DuplexAdapterModel {
     host: Arc<dyn DuplexHost>,
     label: String,
     caps: RealtimeCapabilities,
@@ -48,10 +48,10 @@ pub struct NativeDuplexModel {
     anchor: WallAnchor,
 }
 
-impl NativeDuplexModel {
+impl DuplexAdapterModel {
     pub fn new(host: Arc<dyn DuplexHost>, audio_timeout: Duration, clock: Arc<dyn Clock>) -> Self {
         let anchor = WallAnchor::of(&*clock);
-        NativeDuplexModel {
+        DuplexAdapterModel {
             label: host.label(),
             caps: crate::duplex::realtime_capabilities(host.capabilities()),
             host,
@@ -62,7 +62,7 @@ impl NativeDuplexModel {
     }
 }
 
-impl Realtime for NativeDuplexModel {
+impl Realtime for DuplexAdapterModel {
     fn label(&self) -> String {
         self.label.clone()
     }

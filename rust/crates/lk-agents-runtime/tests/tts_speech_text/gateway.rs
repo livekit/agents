@@ -436,7 +436,7 @@ async fn identified_views_keep_their_expressive_configuration() {
 }
 
 #[tokio::test]
-async fn a_call_policy_replaces_native_tts_defaults_before_connecting() {
+async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
     let ws = Arc::new(FakeWs::hanging());
     let client: Arc<dyn Tts> = Arc::new(tts(ws.clone()));
     let conn = ApiConnectOptions { connect_timeout: Some(0.0), max_retry: 0, ..Default::default() };

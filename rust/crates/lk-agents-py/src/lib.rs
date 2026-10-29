@@ -169,7 +169,7 @@ impl generated::Implementations for Selected {
     type AdaptiveNoiseGate = lk_agents_runtime::inference::duplex::GateClass<
         lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
     >;
-    type DuplexRealtimeModel = lk_agents_runtime::inference::duplex::NativeDuplexModel;
+    type DuplexRealtimeModel = lk_agents_runtime::inference::duplex::DuplexAdapterModel;
     type InterruptionDetector =
         lk_agents_runtime::inference::interruption::NativeInterruptionDetector;
     type InferenceStt = lk_agents_runtime::inference::stt::NativeStt;

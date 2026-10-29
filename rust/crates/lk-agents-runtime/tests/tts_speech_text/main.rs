@@ -11,5 +11,5 @@ fn speech() -> lk_agents_abi::tts::text::SpeechTextProcessors {
 
 mod fallback;
 mod judge;
-mod native;
+mod gateway;
 mod sentence_adapter;

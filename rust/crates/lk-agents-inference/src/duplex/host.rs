@@ -15,7 +15,7 @@ use lk_agents_abi::llm::realtime::{
 use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt};
 use tokio::sync::mpsc;
 
-use super::session::{DuplexHost, DuplexHostSession, NativeDuplexModel};
+use super::session::{DuplexHost, DuplexHostSession, DuplexAdapterModel};
 use super::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment,
@@ -324,7 +324,7 @@ impl DuplexHostSession for HostSession {
 
 // ------------------------------------------------------------------------------------ the model
 
-impl abi::DuplexRealtimeModel for NativeDuplexModel {
+impl abi::DuplexRealtimeModel for DuplexAdapterModel {
     type Env = ProcessEnv;
 
     fn new(
@@ -337,7 +337,7 @@ impl abi::DuplexRealtimeModel for NativeDuplexModel {
         let spawner = (env.spawner)().map_err(HostError::new)?;
         let host = Arc::new(HostModel { host, label, caps, spawner });
         let timeout = Duration::from_secs_f64(audio_timeout.max(0.0));
-        Ok(NativeDuplexModel::new(host, timeout, env.clock.clone()))
+        Ok(DuplexAdapterModel::new(host, timeout, env.clock.clone()))
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

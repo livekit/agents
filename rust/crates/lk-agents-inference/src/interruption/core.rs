@@ -1,4 +1,4 @@
-//! `InterruptionCore`: every decision `_forward_data` and `recv_task` make, with no socket.
+//! `InterruptionMachine`: every decision `_forward_data` and `recv_task` make, with no socket.
 //! `now: Ts` is for anything measured, `wall: f64` (`time.time()`) for anything reported.
 
 use std::num::NonZeroUsize;
@@ -161,7 +161,7 @@ impl StreamError {
 }
 
 #[derive(Debug)]
-pub struct InterruptionCore {
+pub struct InterruptionMachine {
     threshold: Option<f64>,
     sample_rate: u32,
     inference_timeout: Duration,
@@ -185,14 +185,14 @@ pub struct InterruptionCore {
     prefix_size: usize,
 }
 
-impl InterruptionCore {
+impl InterruptionMachine {
     pub fn new(opts: InterruptionOptions) -> Self {
         let sample_rate = opts.sample_rate;
         let window =
             AudioWindow::new((opts.max_audio_duration * sample_rate as f64) as usize, sample_rate);
         let batch_size = (opts.detection_interval * sample_rate as f64) as usize;
         let prefix_size = (opts.audio_prefix_duration * sample_rate as f64) as usize;
-        InterruptionCore {
+        InterruptionMachine {
             threshold: opts.threshold,
             sample_rate,
             inference_timeout: Duration::from_secs_f64(opts.inference_timeout),

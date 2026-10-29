@@ -1,6 +1,6 @@
 //! Adaptive interruption (`inference/interruption.py`): while the agent speaks audio fills a 3 s
 //! window; once the user talks over it, the window goes to the gateway every 100 ms until a
-//! verdict or either side stops. [`InterruptionCore`] decides; [`transport`] drives.
+//! verdict or either side stops. [`InterruptionMachine`] decides; [`transport`] drives.
 
 mod audio;
 mod cache;
@@ -16,7 +16,7 @@ pub mod transport;
 
 pub use audio::{AudioError, AudioFrame, AudioWindow};
 pub use core::{
-    InputEvent, InputOutcome, InterruptionCore, InterruptionEffect, InterruptionEvent, OverlapEnd,
+    InputEvent, InputOutcome, InterruptionMachine, InterruptionEffect, InterruptionEvent, OverlapEnd,
     OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,
 };
 pub use detector::NativeInterruptionDetector;

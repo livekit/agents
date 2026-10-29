@@ -154,7 +154,7 @@ fn register_message(worker_id: &str) -> Result<ServerMessage, TransportError> {
 
 type Scripted = Worker<ScriptedTransport, LoadHost, FrozenClock>;
 
-fn conn(steps: Vec<Step>, max_retry: u32) -> (Scripted, Arc<Mutex<Wire>>, WorkerHandle) {
+fn conn(steps: Vec<Step>, max_retry: u32) -> (Scripted, Arc<Mutex<Wire>>, WorkerClient) {
     conn_with(
         steps,
         max_retry,
@@ -168,7 +168,7 @@ fn conn_with(
     max_retry: u32,
     cfg_worker: WorkerConfig,
     host: LoadHost,
-) -> (Scripted, Arc<Mutex<Wire>>, WorkerHandle) {
+) -> (Scripted, Arc<Mutex<Wire>>, WorkerClient) {
     let wire = Arc::new(Mutex::new(Wire::default()));
     let t = ScriptedTransport { script: Mutex::new(steps.into()), wire: wire.clone() };
     let m = WorkerState::new(cfg_worker);
@@ -312,7 +312,7 @@ async fn registering_leaves_the_idle_process_target_on_the_handle() {
 
 // The default load function: which side samples, and what "no answer" means
 
-fn load_conn(host: LoadHost) -> (Scripted, WorkerHandle) {
+fn load_conn(host: LoadHost) -> (Scripted, WorkerClient) {
     // Finite, so `worker_load` is actually compared against something (devmode's is `inf`).
     let cfg = WorkerConfig {
         ws_url: "wss://gw".into(),
@@ -471,7 +471,7 @@ impl WorkerHost for GatedHost {
 struct RuntimeRig {
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
     runtime: Worker<ChannelTransport, GatedHost, TestClock>,
-    handle: WorkerHandle,
+    handle: WorkerClient,
     peer: tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>,
     sent: tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
     started: tokio::sync::mpsc::UnboundedReceiver<&'static str>,

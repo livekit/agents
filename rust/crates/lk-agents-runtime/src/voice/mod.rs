@@ -72,7 +72,7 @@ pub struct Runtime {
         tokio::sync::mpsc::Sender<lk_agents_abi::llm::realtime::Event>,
     >,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
-    video_parts: audio::VideoForwarderParts,
+    video_parts: audio::VideoForwarding,
     video_forwarder: Option<TaskId>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
@@ -106,7 +106,7 @@ impl Runtime {
             peer,
             storage,
         } = cores;
-        let video_parts = audio::VideoForwarderParts {
+        let video_parts = audio::VideoForwarding {
             closing: shared.closing.subscribe(),
             queue: reports.clone(),
         };

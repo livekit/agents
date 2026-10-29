@@ -7,8 +7,8 @@ use crate::interruption::options::{
 const SR: u32 = 16_000;
 
 /// The defaults, with the credentials already resolved.
-fn core_with(threshold: Option<f64>) -> InterruptionCore {
-    InterruptionCore::new(
+fn core_with(threshold: Option<f64>) -> InterruptionMachine {
+    InterruptionMachine::new(
         InterruptionOptions::new(
             threshold,
             MIN_INTERRUPTION_DURATION,
@@ -24,7 +24,7 @@ fn core_with(threshold: Option<f64>) -> InterruptionCore {
     )
 }
 
-fn core() -> InterruptionCore {
+fn core() -> InterruptionMachine {
     core_with(None)
 }
 
@@ -43,7 +43,7 @@ fn ts(secs: f64) -> Ts {
 }
 
 fn end_overlap(
-    c: &mut InterruptionCore,
+    c: &mut InterruptionMachine,
     ended_at: f64,
     agent_ended: bool,
     now: f64,
@@ -53,7 +53,7 @@ fn end_overlap(
 
 /// The server's answer to the request stamped `sent`, arriving at `at`.
 fn verdict(
-    c: &mut InterruptionCore,
+    c: &mut InterruptionMachine,
     detected: bool,
     sent: f64,
     prediction_duration: f64,
@@ -69,7 +69,7 @@ fn verdict(
     c.on_server_message(msg, ts(at), at).unwrap()
 }
 
-fn start_overlap(c: &mut InterruptionCore, speech_duration: f64, at: f64) {
+fn start_overlap(c: &mut InterruptionMachine, speech_duration: f64, at: f64) {
     c.on_input(
         InputEvent::OverlapSpeechStarted(OverlapStart {
             speech_duration,

@@ -27,12 +27,12 @@ pub struct RequestSnapshot<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlannedRequest {
+pub struct ModelRequest {
     pub chat_ctx: ChatContext,
     pub tools: Vec<ToolSpec>,
 }
 
-pub fn plan_request(snapshot: RequestSnapshot<'_>) -> PlannedRequest {
+pub fn plan_request(snapshot: RequestSnapshot<'_>) -> ModelRequest {
     let mut items = Vec::with_capacity(snapshot.history.len() + 2);
     if !snapshot.instructions.is_empty() {
         items.push(ChatItem::Message(ChatMessage::text(
@@ -58,7 +58,7 @@ pub fn plan_request(snapshot: RequestSnapshot<'_>) -> PlannedRequest {
         .filter(|t| !(snapshot.on_enter && t.flags.ignore_on_enter))
         .cloned()
         .collect();
-    PlannedRequest { chat_ctx: ChatContext::new(items), tools }
+    ModelRequest { chat_ctx: ChatContext::new(items), tools }
 }
 
 /// Write the person's answer into the tool outputs left waiting by the previous invocation.
@@ -156,7 +156,7 @@ mod tests {
                 created_at: SystemTime::UNIX_EPOCH,
             })
         };
-        let names = |p: &PlannedRequest| p.tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+        let names = |p: &ModelRequest| p.tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&plan(false)), ["lookup", "collect_dob"]);
         assert_eq!(names(&plan(true)), ["lookup"]);
         let texts: Vec<_> = plan(false)

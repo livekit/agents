@@ -65,14 +65,14 @@ pub use lk_agents_abi::worker::worker::{
 };
 
 #[derive(Clone)]
-pub struct WorkerHandle {
+pub struct WorkerClient {
     tx: tokio::sync::mpsc::Sender<WorkerCommand>,
     control: tokio::sync::watch::Sender<WorkerControl>,
     snapshot: Arc<std::sync::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
 }
 
-impl WorkerHandle {
+impl WorkerClient {
     /// Fails when the worker has stopped or its queue is full; the command is handed back.
     pub fn send(&self, cmd: WorkerCommand) -> Result<(), WorkerCommand> {
         if self.tx.is_closed() || self.control.is_closed() {
@@ -483,7 +483,7 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
         transport: crate::TransportConfig,
         host: P,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
-    ) -> (Self, WorkerHandle) {
+    ) -> (Self, WorkerClient) {
         Self::with_components(
             transport.build(),
             connection,
@@ -504,12 +504,12 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         host: P,
         clock: C,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
-    ) -> (Self, WorkerHandle) {
+    ) -> (Self, WorkerClient) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
         let (notifications, _) = tokio::sync::broadcast::channel(128);
         let snapshot = Arc::new(std::sync::Mutex::new(Snapshot::default()));
-        let handle = WorkerHandle {
+        let handle = WorkerClient {
             tx,
             control: control_tx,
             snapshot: snapshot.clone(),

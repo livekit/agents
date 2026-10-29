@@ -45,7 +45,7 @@ pub use transport::{
 };
 pub use worker::{
     EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig, RuntimeError,
-    Snapshot, Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification, retry_delay,
+    Snapshot, Worker, WorkerCommand, WorkerClient, WorkerHost, WorkerNotification, retry_delay,
 };
 
 #[cfg(test)]

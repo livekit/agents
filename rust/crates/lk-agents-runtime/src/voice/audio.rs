@@ -41,14 +41,14 @@ pub fn tagged<T: Send + 'static>(
 }
 
 #[derive(Clone)]
-pub struct VideoForwarderParts {
+pub struct VideoForwarding {
     pub closing: tokio::sync::watch::Receiver<bool>,
     /// The loop's queue: the frames (the sampler runs in the loop, on the session clock) and the
     /// source's end.
     pub queue: Tx,
 }
 
-impl VideoForwarderParts {
+impl VideoForwarding {
     pub async fn pump(self, input: Arc<dyn lk_agents_abi::voice::io::VideoInput>) {
         let mut p = self;
         let cause = loop {

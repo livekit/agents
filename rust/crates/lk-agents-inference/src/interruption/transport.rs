@@ -1,6 +1,6 @@
-//! The driver: one WebSocket, a reconnect ladder, and the effects [`InterruptionCore`] asked for.
+//! The driver: one WebSocket, a reconnect ladder, and the effects [`InterruptionMachine`] asked for.
 //! `_forward_data` and `recv_task` (`inference/interruption.py:793`) are `select!` arms in
-//! `run_once`; only the send half is a task. The `Mutex<InterruptionCore>` is never held across an
+//! `run_once`; only the send half is a task. The `Mutex<InterruptionMachine>` is never held across an
 //! `.await`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 use crate::headers::HeaderProvider;
 use crate::interruption::core::{
-    InputEvent, InterruptionCore, InterruptionEffect, InterruptionEvent, RequestIdentity,
+    InputEvent, InterruptionMachine, InterruptionEffect, InterruptionEvent, RequestIdentity,
     SpanAttributes, StreamError,
 };
 use crate::interruption::event::{
@@ -477,7 +477,7 @@ async fn run(
     // buffered agent audio.
     let core = {
         let opts = ctx.opts.lock().unwrap().clone();
-        Arc::new(Mutex::new(InterruptionCore::new(opts)))
+        Arc::new(Mutex::new(InterruptionMachine::new(opts)))
     };
     loop {
         let socket = connect_ws(ctx).await?;
@@ -491,7 +491,7 @@ async fn run(
 async fn run_once(
     ctx: &StreamContext,
     input_rx: &mut mpsc::Receiver<QueuedInput>,
-    core: &Arc<Mutex<InterruptionCore>>,
+    core: &Arc<Mutex<InterruptionMachine>>,
     socket: Socket,
 ) -> Result<bool, StreamError> {
     let Socket { sender: sink, receiver: mut source } = socket;
@@ -612,7 +612,7 @@ enum Incoming {
 
 fn handle_incoming(
     ctx: &StreamContext,
-    core: &Arc<Mutex<InterruptionCore>>,
+    core: &Arc<Mutex<InterruptionMachine>>,
     connection: u64,
     msg: Result<WsMessage, TransportError>,
     close_status: i64,
@@ -664,7 +664,7 @@ fn handle_incoming(
 
 /// `send_task` (`inference/interruption.py:796`).
 async fn send_task(
-    core: Arc<Mutex<InterruptionCore>>,
+    core: Arc<Mutex<InterruptionMachine>>,
     sink: Arc<dyn WsSender>,
     mut data_rx: mpsc::UnboundedReceiver<(RequestIdentity, Vec<i16>)>,
     closing: Arc<AtomicBool>,

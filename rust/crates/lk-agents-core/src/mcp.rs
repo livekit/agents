@@ -36,16 +36,16 @@ pub fn raw_schema(
     schema
 }
 
-pub fn plan_setup(toolset_initialized: bool, server_connected: bool) -> SetupPlan {
+pub fn plan_setup(toolset_initialized: bool, server_connected: bool) -> McpSetup {
     match (toolset_initialized, server_connected) {
-        (true, true) => SetupPlan::Skip,
-        (_, false) => SetupPlan::ConnectThenList,
-        (false, true) => SetupPlan::ListOnly,
+        (true, true) => McpSetup::Skip,
+        (_, false) => McpSetup::ConnectThenList,
+        (false, true) => McpSetup::ListOnly,
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetupPlan {
+pub enum McpSetup {
     Skip,
     ConnectThenList,
     ListOnly,
@@ -398,9 +398,9 @@ impl McpToolsPort for McpTools {
     }
     fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String {
         match plan_setup(toolset_initialized, server_connected) {
-            SetupPlan::Skip => "skip",
-            SetupPlan::ConnectThenList => "connect_then_list",
-            SetupPlan::ListOnly => "list_only",
+            McpSetup::Skip => "skip",
+            McpSetup::ConnectThenList => "connect_then_list",
+            McpSetup::ListOnly => "list_only",
         }
         .into()
     }
