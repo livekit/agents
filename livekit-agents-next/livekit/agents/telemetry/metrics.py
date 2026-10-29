@@ -103,7 +103,7 @@ def _histogram(name: str) -> metrics_api.Histogram:
 def flush_turn_metrics(chat_ctx: ChatContext) -> None:
     """Record the per-turn latency histograms of the history; called at session end."""
     for msg in chat_ctx.messages():
-        for name, _, value, attrs in _core.otel_turn_records(dict(msg.metrics)):
+        for name, _, value, attrs in _core.otel_turn_records(msg.metrics):
             _record(name, "histogram", value, attrs)
 
 

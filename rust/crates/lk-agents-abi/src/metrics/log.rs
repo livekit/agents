@@ -147,28 +147,6 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
     Some(MetricsLog { message, fields })
 }
 
-/// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
-/// (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).
-#[crate::host(export)]
-pub fn metrics_log_fields(
-    metrics: &AgentMetrics,
-) -> Option<(&'static str, serde_json::Map<String, serde_json::Value>)> {
-    let out = log_fields(metrics)?;
-    let fields = out
-        .fields
-        .into_iter()
-        .map(|(key, value)| {
-            let value = match value {
-                LogValue::Str(s) => s.into(),
-                LogValue::Float(f) => f.into(),
-                LogValue::Int(i) => i.into(),
-            };
-            (key.to_owned(), value)
-        })
-        .collect();
-    Some((out.message, fields))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

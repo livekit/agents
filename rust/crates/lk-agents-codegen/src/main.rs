@@ -114,7 +114,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/tts/markup/mood.rs",
     "rust/crates/lk-agents-abi/src/llm/chat_context.rs",
     "rust/crates/lk-agents-abi/src/llm/ctx_diff.rs",
-    "rust/crates/lk-agents-abi/src/metrics/otel.rs",
     "rust/crates/lk-agents-abi/src/types/connect.rs",
     "rust/crates/lk-agents-voice/src/generation/mod.rs",
     "rust/crates/lk-agents-abi/src/voice/io.rs",
@@ -139,7 +138,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/agent_session/commands.rs",
     "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
     "rust/crates/lk-agents-abi/src/llm/mcp.rs",
-    "rust/crates/lk-agents-abi/src/metrics/log.rs",
 ];
 
 /// The authoritative v2 Python project. Generation must not recreate the retired v1 package.

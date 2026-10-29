@@ -13,6 +13,7 @@ pub mod evals;
 pub mod inference;
 pub mod llm;
 pub mod media;
+pub mod metrics;
 pub mod recorder;
 pub mod storage;
 pub mod stt;
@@ -67,6 +68,7 @@ pub trait Implementations: 'static {
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
     type StreamBuffer: ::lk_agents_abi::media::codecs::StreamBuffer;
     type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
+    type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
@@ -230,6 +232,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<media::AudioDecoder>()?;
     m.add_class::<media::StreamBuffer>()?;
     m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::otel_turn_records, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::otel_usage_records, m)?)?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::_core_ContextActivation>()?;

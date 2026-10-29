@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
+#     rust/crates/lk-agents-abi/src/metrics/otel.rs
 #     rust/crates/lk-agents-abi/src/telemetry/policy.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs
@@ -15,6 +16,10 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .usage import ModelUsage
+
+OtelValue: TypeAlias = int | float
+"""Token counts stay integers: the exported data point type follows the first value seen."""
+
 
 TelemetryValueKind: TypeAlias = Literal["scalar", "integer", "string", "bytes", "mapping", "sequence", "unsupported"]
 

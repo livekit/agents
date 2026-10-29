@@ -131,13 +131,10 @@ from ._generated._core_classes import (
     language_iso as language_iso,
     language_name as language_name,
     language_region as language_region,
-    metrics_log_fields as metrics_log_fields,
     normalize_date_of_birth as normalize_date_of_birth,
     normalize_email_address as normalize_email_address,
     normalize_language as normalize_language,
     normalize_phone_number as normalize_phone_number,
-    otel_turn_records as otel_turn_records,
-    otel_usage_records as otel_usage_records,
     plan_session_start as plan_session_start,
     recording_enabled as recording_enabled,
     remove_instructions as remove_instructions,
@@ -240,6 +237,11 @@ from ._generated._core_media import (
     AudioEmitter as AudioEmitter,
     StreamBuffer as StreamBuffer,
     split_sentences as split_sentences,
+)
+from ._generated._core_metrics import (
+    metrics_log_fields as metrics_log_fields,
+    otel_turn_records as otel_turn_records,
+    otel_usage_records as otel_usage_records,
 )
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,

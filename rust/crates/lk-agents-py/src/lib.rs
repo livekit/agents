@@ -46,6 +46,7 @@ impl generated::Implementations for Selected {
     type PlayState = lk_agents_runtime::voice::background_audio::PlayState;
     type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
+    type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
     type TransportFunctions = lk_agents_runtime::net::strings::TransportAlgorithms;
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::media::blingfire::MediaTokenization;

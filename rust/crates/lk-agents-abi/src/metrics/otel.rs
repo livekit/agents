@@ -18,6 +18,7 @@ pub enum InstrumentKind {
 }
 
 /// Token counts stay integers: the exported data point type follows the first value seen.
+#[crate::host(record(module = "telemetry", emit, transparent))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OtelValue {
     Int(u64),
@@ -35,16 +36,9 @@ pub struct OtelRecord {
 
 impl OtelRecord {
     /// `int` and `float` stay distinct: an OTel series takes its type from the first value.
-    pub fn wire(
-        self,
-    ) -> (&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)
-    {
-        let value = match self.value {
-            OtelValue::Int(i) => i.into(),
-            OtelValue::Float(f) => f.into(),
-        };
-        let attrs = self.attributes.into_iter().map(|(k, v)| (k.to_owned(), v.into())).collect();
-        (self.instrument, self.kind.as_str(), value, attrs)
+    pub fn wire(self) -> super::OtelWire {
+        let attrs = self.attributes.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
+        (self.instrument.to_owned(), self.kind.as_str().to_owned(), self.value, attrs)
     }
 
     fn counter(
@@ -218,16 +212,6 @@ pub fn usage_records(ev: &AgentMetrics) -> Vec<OtelRecord> {
 ///
 /// Key presence: a measured `0.0` is recorded. All three user-turn delays carry `stt_metadata`,
 /// including `on_user_turn_completed_delay`; reproduced, not corrected.
-/// `_record_turn_metrics(report)` minus the recording, as [`OtelRecord::wire`] tuples. `None` and
-/// `{}` yield nothing; a present `0.0` yields a record.
-#[crate::host(export(name = "otel_turn_records"))]
-pub fn turn_records_wire(
-    report: Option<MetricsReport>,
-) -> Vec<(&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)>
-{
-    turn_records(&report.unwrap_or_default()).into_iter().map(OtelRecord::wire).collect()
-}
-
 pub fn turn_records(report: &MetricsReport) -> Vec<OtelRecord> {
     let llm = turn_metadata_attrs(report.llm_metadata.as_ref());
     let tts = turn_metadata_attrs(report.tts_metadata.as_ref());
@@ -248,17 +232,6 @@ pub fn turn_records(report: &MetricsReport) -> Vec<OtelRecord> {
     record(TURN_END_OF_TURN_DELAY, report.end_of_turn_delay, &stt);
     record(TURN_ON_USER_TURN_COMPLETED_DELAY, report.on_user_turn_completed_delay, &stt);
     out
-}
-
-/// `collect_usage(ev)` minus the recording: the counter increments it would make. Empty for
-/// unhandled types, unknown types and honest zeros alike (the reference gates on truthiness).
-/// `otel_turn_records` is generated.
-#[crate::host(export)]
-pub fn otel_usage_records(
-    metrics: &AgentMetrics,
-) -> Vec<(&'static str, &'static str, serde_json::Value, serde_json::Map<String, serde_json::Value>)>
-{
-    usage_records(metrics).into_iter().map(OtelRecord::wire).collect()
 }
 
 #[cfg(test)]
