@@ -79,14 +79,6 @@ impl AgentClient {
         env: &ProcessEnv,
         endpoint: String,
         token: Option<String>,
-    ) -> Result<Self, ClientError> {
-        Self::new_with_options(env, endpoint, token, ApiConnectOptions::default())
-    }
-
-    pub fn new_with_options(
-        env: &ProcessEnv,
-        endpoint: String,
-        token: Option<String>,
         options: ApiConnectOptions,
     ) -> Result<Self, ClientError> {
         options.validate().map_err(|error| ClientError::InvalidInput(error.to_string()))?;
@@ -145,39 +137,6 @@ impl AgentClient {
 
     pub fn offers_extension(&self) -> Result<bool, ClientError> {
         Ok(self.inner.core.lock().map_err(poisoned)?.offers_extension())
-    }
-
-    pub async fn send(
-        &self,
-        message: Message,
-        thread_id: Option<&str>,
-        task_id: Option<&str>,
-    ) -> Result<Reply, ClientError> {
-        self.send_with_history(message, thread_id, task_id, None).await
-    }
-
-    /// Text is converted once, before execution, so retries retain its generated messageId.
-    pub async fn send_text(
-        &self,
-        text: String,
-        thread_id: Option<&str>,
-        task_id: Option<&str>,
-    ) -> Result<Reply, ClientError> {
-        self.send(
-            Message {
-                message_id: crate::strings::shortuuid("msg_"),
-                role: a2a::Role::User,
-                parts: vec![a2a::Part::text(text)],
-                context_id: None,
-                task_id: None,
-                metadata: None,
-                extensions: None,
-                reference_task_ids: None,
-            },
-            thread_id,
-            task_id,
-        )
-        .await
     }
 
     /// An explicitly supplied, validated conversation is sent only to a capable peer and

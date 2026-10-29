@@ -30,8 +30,7 @@ impl port::AgentClient for AgentClient {
         token: Option<String>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self, AgentClientError> {
-        Self::new_with_options(env, endpoint_url, token, conn_options.unwrap_or_default())
-            .map_err(client_error)
+        Self::new(env, endpoint_url, token, conn_options.unwrap_or_default()).map_err(client_error)
     }
 
     async fn connect(&self) -> Result<port::AgentCard, AgentClientError> {
