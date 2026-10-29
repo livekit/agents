@@ -398,6 +398,8 @@ pub struct Param {
     pub shape_error: Option<crate::shape_error::ShapeError>,
     /// `#[host(one_or_many)]` on a list: the host passes one item or a `list` of them.
     pub one_or_many: bool,
+    /// `#[host(pcm)]` on bytes: a 16-bit PCM view is read as its bytes, a partial sample included.
+    pub pcm: bool,
 }
 
 /// A declared default, written once as a host literal and converted for both sides.

@@ -395,6 +395,8 @@ pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(S
             let ty = if let (true, Ty::List(item)) = (p.one_or_many, &p.ty) {
                 let item = annotation(c, item, Dir::In, imports);
                 format!("{item} | list[{item}]")
+            } else if p.pcm {
+                "bytes | bytearray | memoryview".to_owned()
             } else if p.shape_error.as_ref().is_some_and(|policy| policy.items) {
                 strict_list_input(c, &p.ty, imports)
             } else {

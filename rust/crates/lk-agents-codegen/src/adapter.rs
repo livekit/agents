@@ -244,8 +244,11 @@ fn numeric_extractors(c: &Class) -> Result<String, String> {
                 continue;
             }
             let at = format!("{}::{}", c.trait_path, method.rust_name);
-            let conversion =
-                from_object("obj", &parameter.ty, &format!("{:?}", parameter.name), &at)?;
+            let path = format!("{:?}", parameter.name);
+            let conversion = match parameter.pcm {
+                true => format!("::lk_agents_abi::python::pcm_bytes(obj, {path})"),
+                false => from_object("obj", &parameter.ty, &path, &at)?,
+            };
             source.push_str(&format!(
                 "\nfn {}(obj: &Bound<'_, PyAny>) -> PyResult<{}> {{\n    {conversion}\n}}\n",
                 extractor_name(c, method, parameter),
@@ -517,6 +520,7 @@ fn duplex_class(
         default: None,
         shape_error: None,
         one_or_many: false,
+        pcm: false,
     };
     let (item_ty, convert) = input(&at, &param)?;
     let convert = convert.map(|c| format!("        let item = {c};\n")).unwrap_or_default();

@@ -152,6 +152,7 @@ impl Resolver<'_> {
                     ty: Ty::CallContext,
                     shape_error: None,
                     one_or_many: false,
+                    pcm: false,
                     by_ref,
                     kw_only: false,
                     default: None,
@@ -181,6 +182,7 @@ impl Resolver<'_> {
                 default: None,
                 shape_error: None,
                 one_or_many: false,
+                pcm: false,
             });
         }
         let mut lends = false;
