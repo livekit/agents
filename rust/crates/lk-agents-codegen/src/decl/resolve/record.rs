@@ -15,6 +15,7 @@ impl Resolver<'_> {
         let persisted = voc::find(&record.nested, "persisted").is_some();
         let transparent = voc::find(&record.nested, "transparent").is_some();
         let enumeration = voc::find(&record.nested, "enum").is_some();
+        let typed_dict = voc::find(&record.nested, "typed_dict").is_some();
         let dispatch = voc::text(at, &record.nested, "dispatch")?;
         if dispatch.is_some() && !transparent {
             return Err(format!(
@@ -48,6 +49,10 @@ impl Resolver<'_> {
             return Err(format!(
                 "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value, and at most one unit variant crossing as None"
             ));
+        }
+        if typed_dict && (persisted || !constants.is_empty() || !matches!(item, syn::Item::Struct(_)))
+        {
+            return Err(format!("{at}: a typed_dict record is a plain struct of keys"));
         }
         if name.contains('.') && (persisted || !matches!(item, syn::Item::Struct(_))) {
             return Err(format!("{at}: a nested model is a record struct, not persisted"));
@@ -133,6 +138,7 @@ impl Resolver<'_> {
             clone: derives(item_attrs(item), "Clone"),
             legacy: false,
             transparent,
+            typed_dict,
             enumeration,
             constants,
             persisted,
@@ -349,6 +355,7 @@ pub(super) fn record_target(
             "constant",
             "nested_in",
             "dispatch",
+            "typed_dict",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?

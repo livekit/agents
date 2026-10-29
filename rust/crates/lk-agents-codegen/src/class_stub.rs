@@ -490,9 +490,16 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             "dict[str, object]".into()
         }
         Ty::Record(r) => match &r.host {
-            HostForm::Model { module, name } | HostForm::Record { module, name } => {
+            // A nested model is named through its owner.
+            HostForm::Model { module, name } | HostForm::Record { module, name }
+                if name.contains('.') =>
+            {
                 imports.add(&format!(".{module}"), name);
                 name.clone()
+            }
+            // Two modules' models of one name are told apart by an alias.
+            HostForm::Model { module, name } | HostForm::Record { module, name } => {
+                imports.external(&format!(".{module}"), name)
             }
             HostForm::CoreClass(name) => {
                 imports.add(".._core", name);

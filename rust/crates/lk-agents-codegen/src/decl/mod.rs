@@ -52,6 +52,9 @@ pub struct RecordDecl {
     /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
     /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
     pub transparent: bool,
+    /// `record(.., typed_dict)`: a struct crossing as a plain dict typed by a generated `TypedDict`
+    /// (an optional field is a `NotRequired` key, absent when `None`), not a model instance.
+    pub typed_dict: bool,
     /// `record(.., enum)`: a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`,
     /// its `.value` the string) rather than a `Literal` of its strings.
     pub enumeration: bool,

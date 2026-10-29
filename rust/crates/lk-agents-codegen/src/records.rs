@@ -334,6 +334,7 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
     let mut s = String::new();
     let mut classes = Vec::new();
     let (extract, emit) = match &r.body {
+        RecordBody::Struct(fields) if r.typed_dict => typed_dict_rust(r, fields)?,
         RecordBody::Struct(fields) => {
             classes.push(r.name.clone());
             let class = class_ref(&module, &r.name);
@@ -523,6 +524,59 @@ fn construct(class: &str, args: &str, kwargs: &str, as_trait: bool) -> String {
         true => format!("{class}.call({args}, {kwargs})"),
         false => format!("crate::host::construct({class}.as_any(), {args}, {kwargs})"),
     }
+}
+
+/// A `typed_dict` record's extract and emit bodies: keys of a plain dict, an optional field's key
+/// absent (or `None`) when it holds nothing.
+fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String), String> {
+    let mut reads = String::new();
+    let mut pattern = Vec::new();
+    let mut sets = String::new();
+    for f in fields {
+        if f.factory.is_some() || f.omitted.is_some() || f.skip {
+            return Err(format!("{}: {}: a typed_dict key is read or defaulted", r.rust, f.rust_name));
+        }
+        let (key, path) = (f.host_name(), format!("{}.{}", r.name, f.host_name()));
+        let read = match &f.ty {
+            Ty::Optional(inner) => format!(
+                "match obj.get_item({key:?})? {{ Some(v) if !v.is_none() => Some(({})?), _ => None }}",
+                read(inner, "(&v)", &path)?
+            ),
+            // A defaulted key reads absent and `None` alike as its default.
+            ty if let Some(default) = &f.default => format!(
+                "match obj.get_item({key:?})? {{ Some(v) if !v.is_none() => ({})?, _ => {} }}",
+                read(ty, "(&v)", &path)?,
+                crate::adapter::rust_literal(default, ty)
+            ),
+            ty => format!(
+                "{{ let v = obj.get_item({key:?})?.ok_or_else(|| ::pyo3::exceptions::PyKeyError::new_err({path:?}))?; ({})? }}",
+                read(ty, "(&v)", &path)?
+            ),
+        };
+        reads.push_str(&format!("            {}: {read},
+", f.rust_name));
+        pattern.push(f.rust_name.clone());
+        sets.push_str(&match &f.ty {
+            Ty::Optional(inner) => format!(
+                "        if let Some(x) = {} {{
+            dict.set_item({key:?}, {})?;
+        }}
+",
+                f.rust_name,
+                emit(inner, "x")?
+            ),
+            ty => format!("        dict.set_item({key:?}, {})?;
+", emit(ty, &f.rust_name)?),
+        });
+    }
+    let extract = format!(
+        "        let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, \"dict\"))?;\n        Ok(Self {{\n{reads}        }})\n"
+    );
+    let emit = format!(
+        "        let Self {{ {} }} = self;\n        let dict = ::pyo3::types::PyDict::new(py);\n{sets}        Ok(dict.into_any())\n",
+        pattern.join(", ")
+    );
+    Ok((extract, emit))
 }
 
 /// `field: read,` lines of a struct literal read off `obj`.

@@ -585,7 +585,7 @@ fn signature(params: &[Param]) -> String {
     parts.join(", ")
 }
 
-fn rust_literal(d: &Literal, ty: &Ty) -> String {
+pub(crate) fn rust_literal(d: &Literal, ty: &Ty) -> String {
     if let Ty::Optional(inner) = ty
         && *d != Literal::None
     {

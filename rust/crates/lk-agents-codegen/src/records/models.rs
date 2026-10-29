@@ -30,9 +30,14 @@ pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
     let (imports, classes) = split_header(legacy);
     let (declared_imports, declared) = split_header(body);
     let imports = crate::imports::merge(imports, declared_imports)?;
+    let imports = imports.trim_end();
+    // isort: one blank line between an import statement and the comment, two after a block.
+    let gap = match imports.lines().last() {
+        Some(last) if !last.starts_with(' ') => "\n\n",
+        _ => "\n\n\n",
+    };
     Ok(format!(
-        "{}\n\n\n# The declared records.\n\n\n{}\n\n\n{}",
-        imports.trim_end(),
+        "{imports}{gap}# The declared records.\n\n\n{}\n\n\n{}",
         declared.trim(),
         classes.trim_start()
     ))
@@ -71,7 +76,9 @@ pub fn link_legacy(legacy: &mut [crate::ir::Decl], decls: &mut Declarations) -> 
     for r in &decls.records {
         let ident = r.rust.rsplit("::").next().unwrap_or(&r.rust).to_owned();
         let model = Some((r.module.clone(), r.name.clone()));
-        records.entry(ident).and_modify(|m| *m = None).or_insert(model);
+        records.entry(ident).and_modify(|m| *m = None).or_insert(model.clone());
+        // A legacy union names a model by its Python name, `py:<module>:<name>`.
+        records.insert(format!("py:{}:{}", r.module, r.name), model);
     }
     type Records = BTreeMap<String, Option<(String, String)>>;
     fn walk(
@@ -364,6 +371,30 @@ fn model(
         s
     };
     match &r.body {
+        RecordBody::Struct(fields) if r.typed_dict => {
+            runtime.add("typing", "TypedDict");
+            let mut s = format!("\n\nclass {}(TypedDict):\n", r.name);
+            s.push_str(&docstring(&r.doc, "    "));
+            if !r.doc.is_empty() {
+                s.push('\n');
+            }
+            for f in fields {
+                let ann = match &f.ty {
+                    Ty::Optional(inner) => {
+                        runtime.add("typing", "NotRequired");
+                        format!("NotRequired[{}]", annotation(inner, module, own, out, typing))
+                    }
+                    ty if f.default.is_some() => {
+                        runtime.add("typing", "NotRequired");
+                        format!("NotRequired[{}]", annotation(ty, module, own, out, typing))
+                    }
+                    ty => annotation(ty, module, own, out, typing),
+                };
+                s.push_str(&format!("    {}: {ann}\n", f.host_name()));
+                s.push_str(&docstring(&f.doc, "    "));
+            }
+            s
+        }
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested);
