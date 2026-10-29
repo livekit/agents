@@ -1,3 +1,7 @@
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::request::scope_base;
 use super::*;
 
 /// The node's side of one stream, in memory.

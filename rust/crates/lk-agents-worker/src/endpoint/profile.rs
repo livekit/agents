@@ -1,9 +1,12 @@
 //! Explicit real-TCP endpoint capacity profile; kept out of the fast unit lane.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 
 const MESSAGE_BYTES: usize = 16 << 10;
 const MESSAGES: usize = 8;
