@@ -431,3 +431,139 @@ impl SegmentFinish {
         FinishEffect::Confirm
     }
 }
+
+/// The next physical source item, before conversion for the destination's audio rate.
+#[derive(Debug)]
+pub enum Next {
+    Frame(lk_agents_abi::AudioFrame),
+    Boundary,
+    End,
+}
+
+pub enum FlowEvent {
+    Ready { interrupted: bool },
+    Source { next: Option<Result<Next, crate::agent_session::DriverError>>, interrupted: bool },
+    Launched(bool),
+    Forwarded(Result<(), SegmentEnd>),
+    TailPushed(Result<(), SegmentEnd>),
+    BoundaryFlushed,
+}
+
+/// The ordered source, conversion and capture operations for one forwarding.
+pub enum FlowEffect {
+    CheckInterruption,
+    Read,
+    WaitLaunch,
+    Frame(lk_agents_abi::AudioFrame),
+    Tail,
+    FlushBoundary,
+    Finish(SegmentEnd),
+}
+
+enum FlowPhase {
+    Ready,
+    Reading,
+    Launching(lk_agents_abi::AudioFrame),
+    Forwarding,
+    Boundary,
+    Flushing,
+    Ending,
+    Done,
+}
+
+/// Chooses how source boundaries, interruption and physical failures end a forwarding.
+pub struct SegmentFlow {
+    has_sink: bool,
+    stop_at_boundary: bool,
+    phase: FlowPhase,
+}
+
+impl SegmentFlow {
+    pub fn new(has_sink: bool, stop_at_boundary: bool) -> Self {
+        Self { has_sink, stop_at_boundary, phase: FlowPhase::Ready }
+    }
+
+    pub fn handle(&mut self, event: FlowEvent, pushed: u64) -> FlowEffect {
+        let phase = std::mem::replace(&mut self.phase, FlowPhase::Done);
+        match (phase, event) {
+            (FlowPhase::Ready, FlowEvent::Ready { interrupted: true })
+            | (FlowPhase::Reading, FlowEvent::Source { next: None, .. }) => {
+                FlowEffect::Finish(SegmentEnd::Cut)
+            }
+            (FlowPhase::Ready, FlowEvent::Ready { interrupted: false }) => {
+                self.phase = FlowPhase::Reading;
+                FlowEffect::Read
+            }
+            (FlowPhase::Reading, FlowEvent::Source { next: Some(Err(error)), .. }) => {
+                FlowEffect::Finish(SegmentEnd::Provider(error))
+            }
+            (FlowPhase::Reading, FlowEvent::Source { next: Some(Ok(next)), interrupted }) => {
+                match next {
+                    Next::Frame(_) if !self.has_sink => self.ready(),
+                    Next::Frame(_) if interrupted => FlowEffect::Finish(SegmentEnd::Cut),
+                    Next::Frame(frame) if pushed == 0 => {
+                        self.phase = FlowPhase::Launching(frame);
+                        FlowEffect::WaitLaunch
+                    }
+                    Next::Frame(frame) => {
+                        self.phase = FlowPhase::Forwarding;
+                        FlowEffect::Frame(frame)
+                    }
+                    Next::Boundary if !self.stop_at_boundary && !self.has_sink => self.ready(),
+                    Next::Boundary if !self.stop_at_boundary && interrupted => {
+                        FlowEffect::Finish(SegmentEnd::Cut)
+                    }
+                    Next::Boundary | Next::End if !self.has_sink => {
+                        FlowEffect::Finish(SegmentEnd::Audio)
+                    }
+                    Next::Boundary if !self.stop_at_boundary => {
+                        self.phase = FlowPhase::Boundary;
+                        FlowEffect::Tail
+                    }
+                    Next::Boundary | Next::End => {
+                        self.phase = FlowPhase::Ending;
+                        FlowEffect::Tail
+                    }
+                }
+            }
+            (FlowPhase::Launching(_), FlowEvent::Launched(false)) => {
+                FlowEffect::Finish(SegmentEnd::Cut)
+            }
+            (FlowPhase::Launching(frame), FlowEvent::Launched(true)) => {
+                self.phase = FlowPhase::Forwarding;
+                FlowEffect::Frame(frame)
+            }
+            (FlowPhase::Forwarding, FlowEvent::Forwarded(Ok(()))) => self.ready(),
+            (FlowPhase::Forwarding, FlowEvent::Forwarded(Err(end)))
+            | (FlowPhase::Boundary | FlowPhase::Ending, FlowEvent::TailPushed(Err(end))) => {
+                FlowEffect::Finish(end)
+            }
+            (FlowPhase::Boundary, FlowEvent::TailPushed(Ok(()))) => {
+                self.phase = FlowPhase::Flushing;
+                FlowEffect::FlushBoundary
+            }
+            (FlowPhase::Ending, FlowEvent::TailPushed(Ok(()))) => {
+                FlowEffect::Finish(SegmentEnd::Audio)
+            }
+            (FlowPhase::Flushing, FlowEvent::BoundaryFlushed) => self.ready(),
+            _ => panic!("source outcome does not match the requested forwarding operation"),
+        }
+    }
+
+    fn ready(&mut self) -> FlowEffect {
+        self.phase = FlowPhase::Ready;
+        FlowEffect::CheckInterruption
+    }
+}
+
+/// A source with no destination still drains until its boundary, end, failure or interruption.
+pub fn drained(end: SegmentEnd, text: String) -> Result<crate::transcription::Heard, SourceFailed> {
+    match end {
+        SegmentEnd::Provider(error) => Err(error.into()),
+        SegmentEnd::Audio | SegmentEnd::Cut => Ok(crate::transcription::Heard {
+            text,
+            complete: matches!(end, SegmentEnd::Audio),
+            ..crate::transcription::Heard::default()
+        }),
+    }
+}

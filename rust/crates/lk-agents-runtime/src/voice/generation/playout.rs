@@ -21,13 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-#[derive(Debug)]
-pub(crate) enum Next {
-    Frame(AudioFrame),
-    /// Flush and keep playing (a realtime `MessageDone`).
-    Boundary,
-    End,
-}
+pub(crate) use lk_agents_voice::generation::playout::Next;
+use lk_agents_voice::generation::playout::{FlowEffect, FlowEvent, SegmentFlow, drained};
 
 /// A source of one segment's frames. `next` is never raced (it may be a host generator that
 /// dropping does not cancel); interruption is checked between frames, and the push is raced.
@@ -93,21 +88,26 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     segment: &mut S,
 ) -> Result<Heard, SourceFailed> {
     let Some(out) = out else {
-        // Raced like the sink path's `watched`: a cut source may never end its segment.
-        let complete = loop {
-            let next = tokio::select! {
-                biased;
-                () = handle.wait_for_interrupted() => break false,
-                next = segment.next() => next?,
+        let mut flow = SegmentFlow::new(false, segment.stop_at_boundary());
+        let mut effect = FlowEffect::CheckInterruption;
+        loop {
+            let event = match effect {
+                FlowEffect::CheckInterruption => {
+                    FlowEvent::Ready { interrupted: handle.interrupted() }
+                }
+                FlowEffect::Read => {
+                    let next = tokio::select! {
+                        biased;
+                        () = handle.wait_for_interrupted() => None,
+                        next = segment.next() => Some(next),
+                    };
+                    FlowEvent::Source { next, interrupted: handle.interrupted() }
+                }
+                FlowEffect::Finish(end) => return drained(end, segment.text()),
+                _ => unreachable!("a source with no destination requests only reads"),
             };
-            match next {
-                Next::Frame(_) => {}
-                Next::Boundary if segment.stop_at_boundary() => break true,
-                Next::Boundary => {}
-                Next::End => break true,
-            }
-        };
-        return Ok(silent(segment.text(), complete));
+            effect = flow.handle(event, 0);
+        }
     };
     // Opened before the first push, so nothing the sink says about this segment is missed.
     let (tx, events) = mpsc::unbounded_channel();
@@ -120,55 +120,36 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         events,
         chain: OutputChain::new(out.sample_rate()),
     };
-    let mut ended = loop {
-        if handle.interrupted() {
-            break Ended::Cut;
-        }
-        // The next frame or the interruption, folding sink reports meanwhile: a slow provider
-        // must not delay the cut, and a pushed frame's `PlaybackStarted` must not wait for the
-        // next frame. Dropping `next()` here is what interruption means for it.
-        let next = playing.watched(segment.next()).await;
-        playing.settle(segment);
-        let frame = match next {
-            None => break Ended::Cut,
-            Some(Ok(Next::Frame(frame))) => frame,
-            Some(Ok(Next::Boundary)) if segment.stop_at_boundary() => break Ended::Audio,
-            Some(Ok(Next::Boundary)) => {
-                if handle.interrupted() {
-                    break Ended::Cut;
-                }
-                // The stretch so far is a whole: its tail, its push record, its flush.
-                if let Err(e) = playing.push_tail(segment).await {
-                    break e;
-                }
+    let mut flow = SegmentFlow::new(true, segment.stop_at_boundary());
+    let mut effect = FlowEffect::CheckInterruption;
+    let ended = loop {
+        let event = match effect {
+            FlowEffect::CheckInterruption => FlowEvent::Ready { interrupted: handle.interrupted() },
+            FlowEffect::Read => {
+                // One pending source read, with the sink's independent reports folded beside it.
+                let next = playing.watched(segment.next()).await;
+                playing.settle(segment);
+                FlowEvent::Source { next, interrupted: handle.interrupted() }
+            }
+            FlowEffect::WaitLaunch => FlowEvent::Launched(wait_launch(shared, handle).await),
+            FlowEffect::Frame(frame) => {
+                playing.drain(segment);
+                let result = match playing.chain.push(&frame) {
+                    Ok(frames) => playing.push(segment, frames).await,
+                    Err(error) => Err(Ended::Provider(error)),
+                };
+                FlowEvent::Forwarded(result)
+            }
+            FlowEffect::Tail => FlowEvent::TailPushed(playing.push_tail(segment).await),
+            FlowEffect::FlushBoundary => {
                 playing.report_push();
                 playing.flush_batch();
-                continue;
+                FlowEvent::BoundaryFlushed
             }
-            Some(Ok(Next::End)) => break Ended::Audio,
-            Some(Err(e)) => break Ended::Provider(e),
+            FlowEffect::Finish(end) => break end,
         };
-        // The frame may have taken a while to arrive: a speech cut meanwhile never starts playing.
-        // The launch hold: the speech's first frame waits while the user speaks.
-        if handle.interrupted() || (playing.state.pushed == 0 && !wait_launch(shared, handle).await)
-        {
-            break Ended::Cut;
-        }
-        playing.drain(segment);
-        let frames = match playing.chain.push(&frame) {
-            Ok(frames) => frames,
-            Err(e) => break Ended::Provider(e),
-        };
-        if let Err(e) = playing.push(segment, frames).await {
-            break e;
-        }
+        effect = flow.handle(event, playing.state.pushed);
     };
-    // The resampler's tail belongs to the segment on the clean path only.
-    if let Ended::Audio = ended
-        && let Err(e) = playing.push_tail(segment).await
-    {
-        ended = e;
-    }
     playing.report_push();
     let text = segment.text();
     let (mut finish, mut effect) = SegmentFinish::begin(ended, text, &playing.state);
