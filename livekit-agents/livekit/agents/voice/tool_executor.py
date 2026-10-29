@@ -87,6 +87,13 @@ Otherwise, summarize only what you have not said yet, with a natural transition.
 Never repeat information you have already told the user."""
 
 
+def tool_replied(ctx: RunContext, reply: Sequence[ChatItem] = ()) -> None:
+    """What ``reply`` said is the reply to a tool its turn let run in the background."""
+    fut = ctx.speech_handle._background_tool_replies.get(ctx.function_call.call_id)
+    if fut is not None and not fut.done():
+        fut.set_result([i for i in reply if i.type == "message" and i.role == "assistant"])
+
+
 class UpdatePromptArgs(TypedDict):
     """Args for the ``update`` template."""
 
@@ -290,6 +297,7 @@ class _PendingUpdate:
     say: str | None = None  # exact text spoken as written, on its own
     tool_choice: ToolChoice | None = None
     """What the reply may call: an update's request, or None for a result to act on."""
+    result: bool = False  # the call's end
 
 
 def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | None:
@@ -569,6 +577,9 @@ class _ToolExecutor:
         """Cancel everything and drop any buffered replies."""
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if isinstance(self._sink, _CallSink):
+            for update in self._sink._pending_updates:
+                if update.result:
+                    tool_replied(update.ctx)
             self._sink._pending_updates.clear()
             if self._sink._reply_task is not None:
                 tasks.append(self._sink._reply_task)
@@ -672,6 +683,7 @@ class _CallSink:
         message: str | None
         if task.exe_task.cancelled() or isinstance(output, asyncio.CancelledError):
             status, message = "cancelled", None
+            tool_replied(run_ctx)
         elif isinstance(output, BaseException) and not isinstance(output, StopResponse):
             status, message = "error", str(output)
         elif output is None or isinstance(output, (StopResponse, Agent)):
@@ -737,6 +749,7 @@ class _CallSink:
         if not ctx._first_update_fut.done():
             self._executor._report(ctx, message, silent=silent)
             ctx.function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            ctx.speech_handle._background_tool_replies[ctx.function_call.call_id] = asyncio.Future()
             return
 
         await self._enqueue_reply(ctx, [pair[0], pair[1]], tool_choice="none")
@@ -761,12 +774,14 @@ class _CallSink:
             self._speaker(ctx)._say_exactly(text)
             ctx._first_update_fut.set_result(ToolResult(pair[1].output, reply_required=False))
             ctx.function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            ctx.speech_handle._background_tool_replies[ctx.function_call.call_id] = asyncio.Future()
             return
 
         await self._enqueue_reply(ctx, [pair[0], pair[1]], say=text)
 
     async def ended(self, ctx: RunContext, output: Any) -> None:
         if output is None or isinstance(output, StopResponse):
+            tool_replied(ctx)
             return
 
         said: str | None = None
@@ -782,10 +797,10 @@ class _CallSink:
             # the activity acts on it as it does when a tool returns without updates:
             # an InputRequired speaks the question itself, so no reply is generated
             pair[1].reply_required = not isinstance(output, InputRequired)
-            await self._enqueue_reply(ctx, [pair[0], pair[1]])
+            await self._enqueue_reply(ctx, [pair[0], pair[1]], result=True)
             activity._apply_transition(output, fnc_call_out=pair[1])
             return
-        await self._enqueue_reply(ctx, [pair[0], pair[1]], say=said)
+        await self._enqueue_reply(ctx, [pair[0], pair[1]], say=said, result=True)
 
     def _speaker(self, ctx: RunContext) -> AgentActivity:
         """The activity that speaks for this executor's tools now."""
@@ -800,10 +815,11 @@ class _CallSink:
         *,
         say: str | None = None,
         tool_choice: ToolChoice | None = None,
+        result: bool = False,
     ) -> None:
-        """Queue a tool's progress for the next idle, in call order: ``say`` is spoken as
-        written, the items' outputs that ask for a reply are worded by the model, which may
-        call what ``tool_choice`` allows (its default for a result)."""
+        """Queue a tool's progress or ``result`` for the next idle, in call order: ``say`` is
+        spoken as written, the items' outputs that ask for a reply are worded by the model,
+        which may call what ``tool_choice`` allows (its default for a result)."""
         # eager insert so a reply firing before delivery sees the items
         target = self._speaker(ctx)
         chat_ctx = target._chat_ctx.copy()
@@ -812,6 +828,8 @@ class _CallSink:
         ctx.session.history.insert(items)
 
         if say is None and not _asks_reply(items):
+            if result:
+                tool_replied(ctx)
             return
 
         self._pending_updates.append(
@@ -822,6 +840,7 @@ class _CallSink:
                 seq=next(self._seq),
                 say=say,
                 tool_choice=tool_choice,
+                result=result,
             )
         )
         self._schedule_delivery(ctx.session)
@@ -848,6 +867,9 @@ class _CallSink:
                 target_activity = await session.wait_for_idle()
         except ActivityClosedError:
             logger.debug("dropping tool reply — owning activity closed")
+            for update in self._pending_updates:
+                if update.result:
+                    tool_replied(update.ctx)
             self._pending_updates.clear()
             return
 
@@ -873,6 +895,8 @@ class _CallSink:
                     # cut off before any of it played: said at the next idle, in call order
                     bisect.insort(self._pending_updates, update, key=lambda u: u.seq)
                     self._schedule_delivery(session)
+                elif update.result:
+                    tool_replied(update.ctx, speech.chat_items)
 
             speech.add_done_callback(_on_say_done)
             if _asks_reply(update.items):
@@ -924,6 +948,13 @@ class _CallSink:
             tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
             chat_ctx=chat_ctx,
         )
+
+        def _on_reply_done(speech: SpeechHandle) -> None:
+            for update in updates:
+                if update.result:
+                    tool_replied(update.ctx, speech.chat_items)
+
+        speech.add_done_callback(_on_reply_done)
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(

@@ -114,7 +114,6 @@ async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
     assert questions == ["Which date?", "Morning or evening?", "Which seat?"]
 
 
-@pytest.mark.xfail(strict=True, reason="R42: a call does not take the lane's questions")
 @pytest.mark.rule("R42")
 async def test_a_question_asked_by_text_is_answered_on_a_call(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]
@@ -147,13 +146,14 @@ async def test_a_question_asked_by_text_is_answered_on_a_call(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="R42: a call leaves no question on its lane")
 @pytest.mark.rule("R42")
 async def test_a_question_asked_on_a_call_is_answered_by_text(
     agentdb_storage: AgentDBStorage, door: Callable[..., Door], expert: Callable[..., A2ADelegate]
 ) -> None:
     heard: list[tuple[str, str]] = []
-    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    expert_of = asking("Which day?", answer="Booked.", heard=heard)
+    # one delegate per door: the call's end closes its own (B55)
+    delegate = expert(expert_of, announce=False)
     texting = Agent(
         instructions="front desk",
         llm=ScriptedLLM(Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1]))),
@@ -166,7 +166,7 @@ async def test_a_question_asked_on_a_call_is_answered_by_text(
     desk = door(handler)
     thread = await desk.thread()
     model = ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="change my visit")]))
-    calling = Agent(instructions="front desk", tools=[delegate])
+    calling = Agent(instructions="front desk", tools=[expert(expert_of, announce=False)])
     async with LiveSession(llm=model, thread=Thread(desk.storage, thread, agent_name=AGENT)) as s:
         await s.start(calling)
         await s.run(user_input="change my visit")
@@ -178,7 +178,6 @@ async def test_a_question_asked_on_a_call_is_answered_by_text(
     assert answered.answer == "You are booked."
 
 
-@pytest.mark.xfail(strict=True, reason="B68: a text leaves the call's question open")
 @pytest.mark.rule("B68")
 async def test_a_text_during_a_call_answers_the_question_in_front(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]

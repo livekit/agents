@@ -58,6 +58,9 @@ class SpeechHandle:
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
         self._num_steps = 1
+        # what was said in reply to each tool this speech let run in the background, keyed by the
+        # tool's call id
+        self._background_tool_replies: dict[str, asyncio.Future[list[llm.ChatMessage]]] = {}
         # one agent_turn span for the whole speech, however many generations (LLM steps) it
         # takes; opened by the first reply task, ended with the speech in _mark_done
         self._agent_turn_span: trace.Span | None = None

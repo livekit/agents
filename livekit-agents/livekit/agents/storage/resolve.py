@@ -143,10 +143,18 @@ class Thread:
     """``ctx.thread``: the durable thread, with the verbs that reach outside the turn. Reads
     open the thread's database for the call."""
 
-    def __init__(self, storage: AgentDBStorage, thread_id: str, *, agent_name: str) -> None:
+    def __init__(
+        self,
+        storage: AgentDBStorage,
+        thread_id: str,
+        *,
+        agent_name: str,
+    ) -> None:
         self._storage = storage
         self._id = thread_id
         self._agent_name = agent_name
+        # set by the server from the lane's text door, never by the user
+        self._call_holds_lane = False
 
     @property
     def id(self) -> str:
@@ -159,6 +167,12 @@ class Thread:
     @property
     def storage(self) -> AgentDBStorage:
         return self._storage
+
+    @property
+    def call_holds_lane(self) -> bool:
+        """A call on this thread holds its lane for the whole call, and texts that arrive during
+        it are turns of the call: the lane's text door is ``live``, or there is none."""
+        return self._call_holds_lane
 
     async def info(self) -> ThreadInfo:
         return await self._storage.get_thread(self._id, fresh=True)

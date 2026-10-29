@@ -140,6 +140,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from .._generated.storage import TaskRow
     from ..llm import mcp
     from .agent_run import AgentRun
     from .agent_session import ExpressiveOptions, LiveSession
@@ -346,6 +347,8 @@ class _Question:
     transition: InputRequired
     output: llm.FunctionCallOutput | None
     asked: bool = False
+    row: TaskRow | None = None
+    """The lane's task of a question asked by another door, which completes once answered."""
 
     @property
     def relays(self) -> bool:
@@ -543,6 +546,24 @@ class AgentActivity(RecognitionHooks):
         self._chat_ctx: llm.ChatContext = (
             chat_ctx.copy(tools=self.tools) if chat_ctx is not None else llm.ChatContext.empty()
         )
+        # the lane's open questions belong to the lane, not to a door: one asked by text is in
+        # front of the person on the call too, and its call need not be in this history
+        lane = sess._live_lane
+        for asked in lane.take_questions() if lane is not None else []:
+            output = next(
+                (
+                    i
+                    for i in self._chat_ctx.items
+                    if isinstance(i, llm.FunctionCallOutput) and i.call_id == asked.call_id
+                ),
+                None,
+            ) or llm.FunctionCallOutput(
+                call_id=asked.call_id, name=asked.tool, output=asked.question, is_error=False
+            )
+            question = InputRequired(
+                asked.question, verbatim=asked.verbatim, _answer_ref=asked.answer_ref
+            )
+            self._questions.append(_Question(question, output, asked=True, row=asked.row))
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
         """Whether a realtime model's server-side turn detection is on for this session.
@@ -3338,20 +3359,29 @@ class AgentActivity(RecognitionHooks):
             if out is not None and question.relays and isinstance(self.llm, llm.RealtimeModel)
             else None
         )
-        if transition.verbatim:
-            if claimed is not None:
-                self._claim_next_turn(claimed, question)
-            handle = self._say_exactly(transition.question)
-        else:
-            # the model asks in its own words, with no tool to call; the answer's turn is
-            # claimed once it has asked, so the claim does not steer this reply
-            handle = self._generate_reply(
-                instructions=ASK_IN_OWN_WORDS.format(question=transition.question),
-                tool_choice="none",
+        try:
+            if transition.verbatim:
+                if claimed is not None:
+                    self._claim_next_turn(claimed, question)
+                handle = self._say_exactly(transition.question)
+            else:
+                # the model asks in its own words, with no tool to call; the answer's turn is
+                # claimed once it has asked, so the claim does not steer this reply
+                handle = self._generate_reply(
+                    instructions=ASK_IN_OWN_WORDS.format(question=transition.question),
+                    tool_choice="none",
+                )
+        except Exception as e:
+            # it stays unasked; nothing awaits it, so the failure is on the call's lane
+            logger.exception(
+                "the question could not be asked", extra={"question": transition.question}
             )
-            if claimed is not None:
-                relay = claimed
-                handle.add_done_callback(lambda _: self._claim_next_turn(relay, question))
+            if (lane := self._session._live_lane) is not None:
+                lane.error(f"the question could not be asked: {e}")
+            return
+        if claimed is not None and not transition.verbatim:
+            relay = claimed
+            handle.add_done_callback(lambda _: self._claim_next_turn(relay, question))
         question.asked = True
         if (run_state := self._session._global_run_state) is not None and not run_state.done():
             run_state._watch_handle(handle)
@@ -3364,6 +3394,8 @@ class AgentActivity(RecognitionHooks):
         if front is None:
             return
         self._questions.remove(front)
+        if front.row is not None and (lane := self._session._live_lane) is not None:
+            lane.question_answered(front.row)
         pending = front.output
         if pending is not None:
             text = message.text_content or ""
@@ -4636,6 +4668,7 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the chat context before generating the reply")
                 speech_handle._mark_done(error=e)
                 return
+            self._answer_pending_input(msg)
             self._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 

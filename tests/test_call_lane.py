@@ -220,17 +220,7 @@ async def test_a_model_retry_on_a_call_reads_as_in_text() -> None:
 
 
 @pytest.mark.rule("R59", "R60")
-@pytest.mark.parametrize(
-    "holds",
-    [
-        pytest.param(
-            True,
-            id="live",
-            marks=pytest.mark.xfail(strict=True, reason="R59, R60: the call never holds its lane"),
-        ),
-        pytest.param(False, id="per-turn"),
-    ],
-)
+@pytest.mark.parametrize("holds", [True, False], ids=["live", "per-turn"])
 async def test_a_text_during_a_call_is_a_turn_of_the_call_when_the_call_holds_its_lane(
     door: Callable[..., Door], holds: bool
 ) -> None:
@@ -263,7 +253,6 @@ def held(desk: Door, thread: str) -> Thread:
 
 
 @pytest.mark.rule("B64")
-@pytest.mark.xfail(strict=True, reason="B64: the text ends with the acknowledgement")
 async def test_a_text_whose_work_runs_on_ends_with_the_calls_reply_to_its_result(
     door: Callable[..., Door],
 ) -> None:
@@ -294,7 +283,6 @@ async def test_a_text_whose_work_runs_on_ends_with_the_calls_reply_to_its_result
 
 
 @pytest.mark.rule("B65")
-@pytest.mark.xfail(strict=True, reason="B65: the text ends completed")
 @pytest.mark.parametrize("said", ["", "Let me look at"], ids=["nothing-said", "part-said"])
 async def test_a_text_whose_reply_was_cut_off_ends_as_in_text(
     door: Callable[..., Door], said: str

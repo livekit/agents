@@ -81,6 +81,8 @@ class _CallThreadEntrypoint:
 
     entrypoint: Callable[[JobContext], Awaitable[None]]
     storage: AgentDBStorage
+    call_holds_lane: bool = True
+    """The mode the lane's text door gives the call (``Thread.call_holds_lane``)."""
 
     async def __call__(self, ctx: JobContext) -> None:
         if not self.storage.holder:
@@ -93,7 +95,9 @@ class _CallThreadEntrypoint:
         try:
             if not isinstance(thread_id, str) or not thread_id:
                 thread_id = (await resolve_thread(self.storage.threads)).id
-            ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
+            thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
+            thread._call_holds_lane = self.call_holds_lane
+            ctx._thread = thread
         except StorageError as e:
             logger.warning(
                 "the call's thread could not be resolved; the call is kept in memory",
@@ -560,6 +564,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._a2a_endpoints: dict[str, A2AEndpoint[Any]] = {}
         self._conn: _core.Worker | None = None  # once run() has started the Rust worker
 
+        # the call's mode follows the person's text door on its lane: under live, or with no
+        # text door, the call holds the lane; otherwise it takes it per voice turn
+        self._call_holds_lane = True
+
         self._lock = asyncio.Lock()
 
     @property
@@ -698,6 +706,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     url_base=self._endpoint_url_base,
                     agents=self._agents,
                 )
+                if door.lane in (None, self._agent_name):
+                    policy = door.turn_options.policy
+                    person = policy.get("a2a") if isinstance(policy, dict) else policy
+                    self._call_holds_lane &= person == "live"
                 self._http.mount(f"/{door.name}", door.app, name=door.name)
                 self._http.configure_endpoint(f"/{door.name}", public=door.public)
                 self._a2a_endpoints[door.name] = door
@@ -956,7 +968,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=(
-                    _CallThreadEntrypoint(self._entrypoint_fnc, self._storage)
+                    _CallThreadEntrypoint(
+                        self._entrypoint_fnc, self._storage, self._call_holds_lane
+                    )
                     if self._storage is not None
                     and self._entrypoint_fnc is not _text_only_entrypoint
                     else self._entrypoint_fnc
