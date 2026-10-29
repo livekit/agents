@@ -45,4 +45,3 @@ session = AgentSession(
 
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
 - [Agents Starter Example](https://github.com/livekit-examples/agent-starter-python)
-- [More Agents Examples](https://github.com/livekit-examples/python-agents-examples)
