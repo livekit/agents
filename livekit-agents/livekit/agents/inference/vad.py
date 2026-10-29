@@ -230,9 +230,11 @@ class _VADStream(vad.VADStream):
                 self._opts.prefix_padding_duration * self._input_sample_rate
             )
 
+            # The loop mutates this private buffer; event frames own copied bytes.
             self._speech_buffer.resize(
                 int(self._opts.max_buffered_speech * self._input_sample_rate)
-                + self._prefix_padding_samples
+                + self._prefix_padding_samples,
+                refcheck=False,
             )
 
             # Resizing may discard samples that the write cursor still counted.

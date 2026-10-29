@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from livekit import rtc
+from livekit import local_inference, rtc
 from livekit.agents import vad
 from livekit.agents.inference import vad as inference_vad
 
@@ -33,6 +33,9 @@ class _Model:
     def reset(self) -> None:
         pass
 
+    def close(self) -> None:
+        pass
+
 
 @pytest.fixture(params=["inference", "silero"])
 def vad_impl(request: pytest.FixtureRequest) -> Iterator[inference_vad.VAD | silero_vad.VAD]:
@@ -45,7 +48,7 @@ def vad_impl(request: pytest.FixtureRequest) -> Iterator[inference_vad.VAD | sil
         "deactivation_threshold": 0.4,
     }
     if request.param == "inference":
-        with patch.object(inference_vad, "_NativeVAD", _Model):
+        with patch.object(local_inference, "VAD", _Model):
             yield inference_vad.VAD(**options)
     else:
         silero_vad = pytest.importorskip("livekit.plugins.silero.vad", exc_type=ModuleNotFoundError)
@@ -79,19 +82,43 @@ async def test_resize_buffer_during_speech(
     vad_impl: inference_vad.VAD | silero_vad.VAD, option: str, resize: str
 ) -> None:
     stream = vad_impl.stream()
+    retained: list[tuple[rtc.AudioFrame, bytes]] = []
     try:
+        # Keep actual emitted frames alive through later buffer resize and reset.
+        emitted = await _push_window(stream, 10)
+        emitted.extend(await _push_window(stream, 0))
+        event = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        assert event.type == vad.VADEventType.END_OF_SPEECH
+        assert event.frames
+        emitted.append(event)
+        retained = [
+            (frame, frame.data.tobytes())
+            for event in emitted
+            if event.type in (vad.VADEventType.START_OF_SPEECH, vad.VADEventType.END_OF_SPEECH)
+            for frame in event.frames
+        ]
+        assert any(
+            event.type == vad.VADEventType.START_OF_SPEECH and event.frames for event in emitted
+        )
+        assert retained
+        stream.flush()
+
         # Fill beyond the capacity that will remain after either update.
         for value in range(1, 10):
             await _push_window(stream, value)
+        assert all(frame.data.tobytes() == data for frame, data in retained)
 
         samples = np.repeat(np.arange(1, 10, dtype=np.int16), _WINDOW_SAMPLES)
         if resize != "grow":
             vad_impl.update_options(**{option: 0.016})
-            retained = int((0.080 if option == "max_buffered_speech" else 0.272) * _SAMPLE_RATE)
-            samples = samples[:retained]
+            retained_samples = int(
+                (0.080 if option == "max_buffered_speech" else 0.272) * _SAMPLE_RATE
+            )
+            samples = samples[:retained_samples]
         if resize != "shrink":
             vad_impl.update_options(**{option: 0.512})
             samples = np.concatenate([samples, np.zeros(_WINDOW_SAMPLES, dtype=np.int16)])
+        assert all(frame.data.tobytes() == data for frame, data in retained)
 
         await _push_window(stream, 0)
         event = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
@@ -110,5 +137,6 @@ async def test_resize_buffer_during_speech(
             assert event.type == vad.VADEventType.END_OF_SPEECH
             assert event.frames[0].samples_per_channel == len(event.frames[0].data)
             assert 10 in event.frames[0].data
+            assert all(frame.data.tobytes() == data for frame, data in retained)
     finally:
         await stream.aclose()
