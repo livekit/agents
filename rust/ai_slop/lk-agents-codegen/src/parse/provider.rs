@@ -166,13 +166,15 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
         let pm = python(&t.attrs);
         only(&at, &pm, &["ty", "attr", "import", "default"])?;
         let name = id.ident.to_string();
+        let attr = has(&pm, "attr");
         params.push(ProviderParam {
-            name: name.strip_prefix('_').unwrap_or(&name).to_owned(),
+            // An attribute keeps its name: `_x` sets the result's private `_x`.
+            name: if attr { name } else { name.strip_prefix('_').unwrap_or(&name).to_owned() },
             rust_ty: span_text(text, t.ty.span()),
             py_ty: meta_str(&pm, "ty"),
             import: meta_str(&pm, "import"),
             default: meta_str(&pm, "default"),
-            attr: has(&pm, "attr"),
+            attr,
         });
     }
     // An awaited call is an `async fn`, or a `fn` returning a boxed future of its output.

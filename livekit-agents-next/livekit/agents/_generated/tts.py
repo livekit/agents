@@ -271,12 +271,11 @@ class TTS(
         return out
 
     async def _core_stream(
-        self, expressive: bool, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, _expressive: bool, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         out = self.stream(conn_options=conn)
         out._core_attempts.core = True
-        if expressive is not None:
-            out.expressive = expressive
+        out._expressive = _expressive
         return out
 
 

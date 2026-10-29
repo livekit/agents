@@ -725,10 +725,11 @@ impl Writer<'_> {
                         s.push_str("\n        out._core_attempts.core = True");
                     }
                     for a in attrs {
-                        s.push_str(&format!(
-                            "\n        if {0} is not None:\n            out.{0} = {0}",
-                            a.name
-                        ));
+                        s.push_str(&if a.rust_ty.starts_with("Option<") {
+                            format!("\n        if {0} is not None:\n            out.{0} = {0}", a.name)
+                        } else {
+                            format!("\n        out.{0} = {0}", a.name)
+                        });
                     }
                     s.push_str("\n        return out");
                 }

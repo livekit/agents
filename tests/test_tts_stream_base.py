@@ -206,3 +206,13 @@ async def test_a_stream_adapter_retries_each_sentence_not_the_whole_stream() -> 
         assert provider.attempts == 2
     finally:
         await adapter.aclose()
+
+
+async def test_a_core_opened_stream_carries_its_expressive_option() -> None:
+    provider = _StreamingTTS()
+    for expressive in (True, False):
+        stream = await provider._core_stream(expressive)
+        try:
+            assert stream._expressive is expressive
+        finally:
+            await stream.aclose()
