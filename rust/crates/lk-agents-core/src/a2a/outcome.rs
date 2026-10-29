@@ -252,6 +252,7 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
         if let Some(text) = out.output.as_ref().and_then(Value::as_str)
             && !text.is_empty()
             && out.error.is_none()
+            && out.status.is_none()
             && !out.interrupted
         {
             let item = chat_message(
@@ -356,6 +357,21 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     let output = out.output.clone().filter(|o| !o.is_null());
     let text = output.as_ref().and_then(Value::as_str).filter(|t| !t.is_empty());
     let status_message = text.map(|t| agent_text(&answer, t, s.ids.status_message.clone()));
+    if let Some(status) = out.status {
+        // a transport transition: its text is the status message, never an artifact
+        settled.outcome = match status {
+            TaskState::Rejected => RunOutcome::Rejected,
+            TaskState::Working => RunOutcome::Completed,
+            other => {
+                return Err(StorageError::Invalid(format!(
+                    "a handler transition to {other:?}: only rejected or working"
+                )));
+            }
+        };
+        let patch = TaskPatch { status_message, metadata, ..base };
+        settled.transitions.push(TaskTransition { task_id: answer, status, patch });
+        return Ok(settled);
+    }
     let artifacts = output.iter().map(|o| artifact(o, s.ids.artifact.clone())).collect();
     settled.transitions.push(TaskTransition {
         task_id: answer,
@@ -547,6 +563,29 @@ mod tests {
         assert_eq!(stop(false, true, false), None, "queue does not yield to a waiter");
         assert_eq!(stop(false, false, true), Some(Stop::ClientCanceled));
         assert_eq!(stop(true, false, false), None);
+    }
+
+    /// docs/server.md#handler-outcomes: a handler's `Rejected` and `Working` set those task
+    /// states with their text as the status message; neither completes with an artifact.
+    #[test]
+    fn a_rejected_or_working_handler_sets_that_state_without_an_artifact() {
+        for (status, outcome) in [
+            (TaskState::Rejected, RunOutcome::Rejected),
+            (TaskState::Working, RunOutcome::Completed),
+        ] {
+            let out = HandlerOutput {
+                output: Some(json!("not for me")),
+                status: Some(status),
+                ..HandlerOutput::default()
+            };
+            let s = settled(out, None, false);
+            let answer = s.transitions.last().unwrap();
+            assert_eq!((answer.task_id.as_str(), answer.status), ("AST_2", status));
+            assert_eq!(answer.patch.artifacts, None, "no artifact");
+            let message = answer.patch.status_message.as_ref().expect("its text");
+            assert_eq!(message.parts[0], a2a::Part::text("not for me"));
+            assert_eq!((s.outcome, s.output), (outcome, None));
+        }
     }
 
     #[test]

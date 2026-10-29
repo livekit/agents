@@ -80,6 +80,7 @@ impl TryFrom<host::HandlerOutput> for HandlerOutput {
             metadata: output.metadata,
             error: output.error,
             events: output.events,
+            status: output.status,
         })
     }
 }
@@ -115,6 +116,7 @@ impl From<HandlerOutput> for host::HandlerOutput {
             metadata: output.metadata,
             error: output.error,
             events: output.events,
+            status: output.status,
         }
     }
 }

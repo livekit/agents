@@ -2914,6 +2914,7 @@ pub mod storage_turn {
                 metadata: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "metadata", |v| match ::lk_agents_abi::python::value_from_py(v, "HandlerOutput.metadata")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err("HandlerOutput.metadata: expected a dict")) })?,
                 error: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "error", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 events: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "events", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::storage_turn::host_event_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
+                status: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "status", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::storage_class::task_state_from_py(v)).map(Some) })?,
             })
     }
 

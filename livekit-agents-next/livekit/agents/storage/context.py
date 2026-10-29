@@ -17,7 +17,7 @@ from pydantic import JsonValue
 from pydantic_core import to_jsonable_python
 
 from .._generated.a2a_client import Message
-from .._generated.storage_class import RunUsage, TaskRecord
+from .._generated.storage_class import RunUsage, TaskRecord, TaskState
 from .._generated.storage_turn import (
     Checkpoint,
     HandlerOutput,
@@ -28,7 +28,7 @@ from .._generated.storage_turn import (
     TurnEvent,
 )
 from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
-from ..llm.tool_context import WAITING_PREFIX, Completed, Failed
+from ..llm.tool_context import WAITING_PREFIX, Completed, Failed, Rejected, Working
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunCompleted, RunInputRequired, RunResult
@@ -220,6 +220,7 @@ class _TurnHost:
         from ..a2a.extension import VERBATIM
 
         metadata: dict[str, object] = {}
+        status: TaskState | None = None
         # a run returned as is answers with its question while it waits, else its output; a
         # transport transition answers the task (docs/server.md#handler-outcomes)
         if isinstance(output, RunInputRequired):
@@ -232,6 +233,10 @@ class _TurnHost:
             output = output.value
         elif isinstance(output, Failed):
             error, output = output.error, None
+        elif isinstance(output, Rejected):
+            status, output = "rejected", output.reason
+        elif isinstance(output, Working):
+            status, output = "working", output.message
 
         asked = next((r for r in reversed(results) if isinstance(r, RunInputRequired)), None)
         last = results[-1] if results else None
@@ -265,6 +270,7 @@ class _TurnHost:
             metadata=metadata,
             events=[*_tool_events(results), *ctx._events],
             error=error,
+            status=status,
         )
 
 

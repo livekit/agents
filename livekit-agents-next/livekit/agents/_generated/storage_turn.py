@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .a2a_client import Message
-    from .storage_class import ItemRow, RunUsage, TaskRecord
+    from .storage_class import ItemRow, RunUsage, TaskRecord, TaskState
     from .storage_context import AppStatement, ContextScope, ContextScopeWrite
 
 
@@ -67,6 +67,10 @@ class HandlerOutput:
     metadata: dict[str, object]
     error: str | None
     events: list[HostEvent]
+    status: TaskState | None = None
+    """A `Rejected` or `Working` transition's state (docs/server.md#handler-outcomes); `output`
+    is then its reason or status message.
+    """
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -33,6 +33,7 @@ use lk_agents_abi::livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use lk_agents_abi::livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use lk_agents_abi::storage::RunUsage;
 use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
 
@@ -252,6 +253,10 @@ pub struct HandlerOutput {
     /// Journal events the handler recorded, in order, written with the commit.
     #[serde(default)]
     pub events: Vec<HostEvent>,
+    /// A `Rejected` or `Working` transition's state; `output` is then its reason or status
+    /// message.
+    #[serde(default)]
+    pub status: Option<TaskState>,
 }
 
 /// What `Turn::run` returns: the message's task after the turn, and the reply.

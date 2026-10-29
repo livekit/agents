@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::errors::ProviderError;
 use crate::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
-use crate::storage::{ItemRow, RunUsage, TaskRecord};
+use crate::storage::{ItemRow, RunUsage, TaskRecord, TaskState};
 use crate::{StreamSink, StreamSource};
 
 pub use crate::a2a::client::Message;
@@ -68,6 +68,10 @@ pub struct HandlerOutput {
     pub metadata: Map<String, Value>,
     pub error: Option<String>,
     pub events: Vec<HostEvent>,
+    /// A `Rejected` or `Working` transition's state (docs/server.md#handler-outcomes); `output`
+    /// is then its reason or status message.
+    #[host(default = None)]
+    pub status: Option<TaskState>,
 }
 
 #[crate::host(record(module = "storage_turn", emit))]
