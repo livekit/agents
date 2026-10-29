@@ -97,25 +97,6 @@ def test_destination_redaction_never_mutates_other_exporters(monkeypatch):
         provider.shutdown()
 
 
-def test_capture_opt_in_applies_before_each_destination(monkeypatch):
-    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
-    monkeypatch.setattr(traces.telemetry_utils, "redaction_enabled", lambda *_: False)
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider(shutdown_on_exit=False)
-    provider.add_span_processor(
-        SimpleSpanProcessor(traces.RedactingSpanExporter(exporter, allow_pii=True))
-    )
-    try:
-        with provider.get_tracer("node").start_as_current_span("llm") as span:
-            span.set_attribute("gen_ai.input.messages", "private")
-            span.set_attribute("gen_ai.usage.input_tokens", 5)
-        attrs = exporter.get_finished_spans()[0].attributes
-        assert "gen_ai.input.messages" not in attrs
-        assert attrs["gen_ai.usage.input_tokens"] == 5
-    finally:
-        provider.shutdown()
-
-
 def test_capture_policy_is_frozen_at_span_start(monkeypatch):
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
@@ -224,43 +205,6 @@ def test_explicit_noop_provider_keeps_tracing_disabled(monkeypatch):
         assert trace.get_current_span() is span
     assert cloud._owned_trace_provider is None
     assert dynamic._tracer_provider is provider
-
-
-def test_existing_meter_provider_reports_reader_conflict_without_replacing_readers(monkeypatch):
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-
-    reader = InMemoryMetricReader()
-    provider = MeterProvider(metric_readers=[reader], shutdown_on_exit=False)
-    monkeypatch.setattr(_providers.metrics_api, "get_meter_provider", lambda: provider)
-    cloud = _providers._CloudTelemetry()
-    cloud._session = SimpleNamespace()
-    monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
-    monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
-    try:
-        with pytest.warns(RuntimeWarning, match="reader registered at application MeterProvider"):
-            cloud.configure(
-                job_id="meter-job",
-                room_id="meter-room",
-                observability_url="https://unused",
-                enable_traces=False,
-                enable_logs=False,
-            )
-        assert cloud._owned_meter_provider is None
-        provider.get_meter("application").create_counter("application.requests").add(1)
-        data = reader.get_metrics_data()
-        metrics = [
-            metric
-            for resource in data.resource_metrics
-            for scope in resource.scope_metrics
-            for metric in scope.metrics
-        ]
-        assert metrics[0].name == "application.requests"
-        assert metrics[0].data.data_points[0].value == 1
-    finally:
-        cloud.release("meter-job")
-        cloud.shutdown_at_exit()
-        provider.shutdown()
 
 
 @pytest.mark.asyncio

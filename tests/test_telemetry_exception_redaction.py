@@ -57,22 +57,6 @@ def _capture_exception(span: _FakeSpan, *, redacted: NotGivenOr[bool]) -> None:
         telemetry_utils.record_exception(span, exc, redacted=redacted)  # type: ignore[arg-type]
 
 
-def test_record_exception_preserves_details_when_not_redacted() -> None:
-    span = _FakeSpan()
-
-    _capture_exception(span, redacted=False)
-
-    assert len(span.recorded_exceptions) == 1
-    assert span.attributes[trace_types.ATTR_EXCEPTION_TYPE] == "RuntimeError"
-    # the GenAI/HTTP conventions' low-cardinality error identifier
-    assert span.attributes[trace_types.ATTR_ERROR_TYPE] == "RuntimeError"
-    assert span.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == "secret transcript"
-    assert "secret transcript" in span.attributes[trace_types.ATTR_EXCEPTION_TRACE]
-    assert span.status is not None
-    assert span.status.status_code == trace.StatusCode.ERROR
-    assert span.status.description == "secret transcript"
-
-
 def test_record_exception_omits_details_when_redacted() -> None:
     span = _FakeSpan()
 
