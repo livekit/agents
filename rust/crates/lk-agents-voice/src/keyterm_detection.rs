@@ -1,5 +1,5 @@
+use crate::agent_session::Driver;
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::{Driver, SessionShared};
 use crate::generation::GenEvent;
 use crate::trace::{DetectorName, DetectorStep, InputStep};
 use lk_agents_abi::metrics::base::LlmMetrics;
@@ -173,86 +173,112 @@ impl KeytermSlot {
     }
 }
 
-/// The task: request, drain for the first `record_keyterms` call and usage, report.
-pub async fn detection_pass(
-    shared: Arc<SessionShared>,
-    llm: Arc<dyn Llm>,
-    request: lk_agents_abi::ChatRequest,
+/// A provider operation's physical outcome, with its observation time supplied separately.
+pub enum DetectionPassEvent {
+    Chunk(lk_agents_abi::LlmChunk),
+    OpenedFailed,
+    Ended,
+    StreamFailed,
+}
+
+/// The first extraction call and the last usage snapshot of one keyterm pass.
+pub struct DetectionPass {
     req: u64,
-) {
-    let id = llm.id();
-    let started_at = shared.time.wall_secs();
-    let mut stream = match llm.chat(&request).await {
-        Ok(s) => s,
-        Err(_) => {
-            shared.report(GenEvent::KeytermAnswer {
-                req,
-                arguments: None,
-                failed: true,
-                metrics: None,
-            });
-            return;
+    provider: lk_agents_abi::ProviderId,
+    started_at: f64,
+    arguments: Option<String>,
+    usage: Option<lk_agents_abi::CompletionUsage>,
+    request_id: String,
+    ttft: Option<f64>,
+    settled: bool,
+}
+
+impl DetectionPass {
+    pub fn new(req: u64, provider: lk_agents_abi::ProviderId, started_at: f64) -> Self {
+        Self {
+            req,
+            provider,
+            started_at,
+            arguments: None,
+            usage: None,
+            request_id: String::new(),
+            ttft: None,
+            settled: false,
         }
-    };
-    let mut arguments: Option<String> = None;
-    let mut usage: Option<lk_agents_abi::CompletionUsage> = None;
-    let mut request_id = String::new();
-    let mut ttft: Option<f64> = None;
-    let mut failed = false;
-    loop {
-        match stream.next().await {
-            Ok(Some(chunk)) => {
-                if ttft.is_none() {
-                    ttft = Some((shared.time.wall_secs() - started_at).max(0.0));
+    }
+
+    /// Opening failed, including when the runtime no longer holds the requested provider.
+    pub fn opening_failed(req: u64) -> GenEvent {
+        GenEvent::KeytermAnswer { req, arguments: None, failed: true, metrics: None }
+    }
+
+    pub fn handle(&mut self, event: DetectionPassEvent, now: f64) -> Option<GenEvent> {
+        if self.settled {
+            return None;
+        }
+        match event {
+            DetectionPassEvent::Chunk(chunk) => {
+                if self.ttft.is_none() {
+                    self.ttft = Some((now - self.started_at).max(0.0));
                 }
-                if request_id.is_empty() {
-                    request_id = chunk.id.clone();
+                if self.request_id.is_empty() {
+                    self.request_id = chunk.id;
                 }
-                if let Some(delta) = &chunk.delta
-                    && arguments.is_none()
+                if let Some(delta) = chunk.delta
+                    && self.arguments.is_none()
                     && let Some(call) =
-                        delta.tool_calls.iter().find(|c| c.name == RECORD_KEYTERMS_TOOL)
+                        delta.tool_calls.into_iter().find(|call| call.name == RECORD_KEYTERMS_TOOL)
                 {
-                    arguments = Some(call.arguments.clone());
+                    self.arguments = Some(call.arguments);
                 }
                 if chunk.usage.is_some() {
-                    usage = chunk.usage.clone();
+                    self.usage = chunk.usage;
                 }
+                None
             }
-            Ok(None) => break,
-            Err(_) => {
-                failed = true;
-                break;
+            DetectionPassEvent::OpenedFailed => {
+                self.settled = true;
+                Some(Self::opening_failed(self.req))
+            }
+            DetectionPassEvent::Ended => {
+                self.settled = true;
+                Some(self.finish(false, now))
+            }
+            DetectionPassEvent::StreamFailed => {
+                self.settled = true;
+                Some(self.finish(true, now))
             }
         }
     }
-    let now = shared.time.wall_secs();
-    let duration = (now - started_at).max(0.0);
-    let u = usage.unwrap_or_default();
-    let metrics = (!failed).then(|| {
-        Box::new(LlmMetrics {
-            label: id.label.clone(),
-            request_id,
-            timestamp: now,
-            duration,
-            ttft: ttft.unwrap_or(-1.0),
-            cancelled: false,
-            completion_tokens: u.completion_tokens,
-            prompt_tokens: u.prompt_tokens,
-            prompt_cached_tokens: u.prompt_cached_tokens,
-            cache_creation_tokens: u.cache_creation_tokens,
-            reasoning_tokens: u.reasoning_tokens,
-            total_tokens: u.total_tokens,
-            tokens_per_second: if duration > 0.0 && u.completion_tokens > 0 {
-                f64::from(u.completion_tokens) / duration
-            } else {
-                0.0
-            },
-            speech_id: None,
-            metadata: Some(id.metadata()),
-        })
-    });
-    shared.report(GenEvent::KeytermAnswer { req, arguments, failed, metrics });
+
+    fn finish(&mut self, failed: bool, now: f64) -> GenEvent {
+        let duration = (now - self.started_at).max(0.0);
+        let usage = self.usage.take().unwrap_or_default();
+        let metrics = (!failed).then(|| {
+            Box::new(LlmMetrics {
+                label: self.provider.label.clone(),
+                request_id: std::mem::take(&mut self.request_id),
+                timestamp: now,
+                duration,
+                ttft: self.ttft.unwrap_or(-1.0),
+                cancelled: false,
+                completion_tokens: usage.completion_tokens,
+                prompt_tokens: usage.prompt_tokens,
+                prompt_cached_tokens: usage.prompt_cached_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+                reasoning_tokens: usage.reasoning_tokens,
+                total_tokens: usage.total_tokens,
+                tokens_per_second: if duration > 0.0 && usage.completion_tokens > 0 {
+                    f64::from(usage.completion_tokens) / duration
+                } else {
+                    0.0
+                },
+                speech_id: None,
+                metadata: Some(self.provider.metadata()),
+            })
+        });
+        GenEvent::KeytermAnswer { req: self.req, arguments: self.arguments.take(), failed, metrics }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -112,15 +112,12 @@ impl Runtime {
             E::RequestKeyterms { llm, req, request } => {
                 let shared = Arc::clone(&self.shared);
                 let Some(llm) = shared.resources.llm(llm) else {
-                    shared.report(GenEvent::KeytermAnswer {
-                        req,
-                        arguments: None,
-                        failed: true,
-                        metrics: None,
-                    });
+                    shared.report(
+                        lk_agents_voice::keyterm_detection::DetectionPass::opening_failed(req),
+                    );
                     return;
                 };
-                let task = lk_agents_voice::keyterm_detection::detection_pass(
+                let task = crate::voice::keyterm_detection::detection_pass(
                     Arc::clone(&shared),
                     llm,
                     *request,
