@@ -242,7 +242,9 @@ async fn simulate(seed: u64, messages: usize) -> Record {
             follow_up(&mut requests, i, now, &opts, &mut rng);
         }
         if faulty {
-            inject(&database, &world, &faults, &mut rng);
+            if inject(&database, &world, &faults, &mut rng) {
+                database.lapse_lease().await;
+            }
             if rng.u16(0..400) == 0 {
                 let started: Vec<String> =
                     requests.iter().filter(|r| r.started).map(|r| r.task_id.clone()).collect();
@@ -302,7 +304,8 @@ fn follow_up(
 
 /// Storage's faults, armed at random while faults are on: the next commit's acknowledgment lost
 /// before or after it applies, or the commit refused; the database unreachable for a while.
-fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) {
+/// True when the lane's lease lapses now as well.
+fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) -> bool {
     let mut fire = |pct: u8, kind: &'static str| {
         let hit = pct > 0 && rng.u16(0..1000) < u16::from(pct);
         if hit {
@@ -319,9 +322,12 @@ fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) {
             database.faults.fail_next_commit(fault);
         }
     }
-    if fire(f.unavailable, "Unavailable") {
+    let unreachable = fire(f.unavailable, "Unavailable");
+    let lapsed = fire(f.lease_lost, "LeaseLapsed");
+    if unreachable {
         database.faults.unreachable_for(Duration::from_millis(rng.u64(50..1500)));
     }
+    lapsed
 }
 
 /// What the run left: every task row, the receipts no turn answered, and which invocations'

@@ -105,6 +105,14 @@ impl Database {
         self.memory.query(Statement::raw(sql)).await.unwrap_or_default()
     }
 
+    /// The lane's lease lapses as a paused holder's does, its renewal not yet landed: a waiter
+    /// may take the lane, and the holder's commit then meets the fence.
+    pub async fn lapse_lease(&self) {
+        let lapse =
+            Statement::raw("UPDATE lanes SET lease_until = 0 WHERE lease_token IS NOT NULL");
+        let _ = self.memory.batch(vec![lapse]).await;
+    }
+
     async fn rows(&self) -> Rows {
         let text = |v: &SqlValue| v.as_str().unwrap_or_default().to_owned();
         self.select(ROWS)
