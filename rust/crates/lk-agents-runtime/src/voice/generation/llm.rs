@@ -69,12 +69,20 @@ pub(super) async fn produce_segments(
             let _ = tx.send(SegEvent::Chunk(Visible::of(text)));
             let _ = tx.send(SegEvent::End);
         }
-        // Taken, not borrowed: no lock across an await, and a second read finds `None`.
+        // Taken, not borrowed: no lock across an await, and a second read finds `None`. Read until
+        // the voice gives up or the speech is interrupted (`_tts_task` cancels its forwarding).
         ReplySource::TextStream(rx) => {
             let rx = rx.lock().expect("say stream poisoned").take();
             if let Some(mut rx) = rx {
                 loop {
-                    let Some(chunk) = until_stopped(tx.closed(), rx.recv()).await.flatten() else {
+                    let stopped = async {
+                        tokio::select! {
+                            biased;
+                            () = handle.wait_for_interrupted() => {}
+                            () = tx.closed() => {}
+                        }
+                    };
+                    let Some(chunk) = until_stopped(stopped, rx.recv()).await.flatten() else {
                         break;
                     };
                     one_segment(chunk);
