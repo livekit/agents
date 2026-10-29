@@ -5,7 +5,7 @@
 use lk_agents_abi::python::value_from_py;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::PyDict;
 use serde::de::DeserializeOwned;
 
 /// A storage failure as the `livekit.agents.storage` exception the ABI declares for it.
@@ -31,9 +31,4 @@ pub(crate) fn parse_request<T: DeserializeOwned>(
     };
     let v = value_from_py(obj, what)?;
     serde_json::from_value(v).map_err(|e| PyValueError::new_err(format!("{what}: {e}")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }
