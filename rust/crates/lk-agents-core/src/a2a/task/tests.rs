@@ -429,3 +429,39 @@ fn a_watched_task_that_asks_a_question_is_answered() {
     let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
     assert_eq!(answer.task.as_ref().map(|t| t.status), Some(TaskState::InputRequired));
 }
+
+/// docs/internals/storage.md#the-unit-of-work: a run that raises writes only its `run_ended`;
+/// the context it saved and its managed transactions roll back with the turn.
+#[test]
+fn a_raised_handler_commits_none_of_its_staged_writes() {
+    let mut m = machine(Policy::Queue);
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
+    m.pending = Some(1);
+    let raised = HandlerOutput {
+        error: Some("RuntimeError: boom".into()),
+        scope_writes: vec![ContextScopeWrite {
+            expected_revision: 0,
+            scope: lk_agents_abi::storage::context::ContextScope::default(),
+        }],
+        app_writes: vec![AppStatement {
+            sql: "INSERT INTO notes VALUES (1)".into(),
+            params: vec![],
+        }],
+        ..HandlerOutput::default()
+    };
+    let mut op = step(&mut m, Completion::Done);
+    let end = loop {
+        op = match op {
+            Operation::ReadPending(_) => step(&mut m, Completion::Task(None)),
+            Operation::Stage(staged) if staged.end.is_some() => break staged.end.unwrap(),
+            Operation::Stage(_) | Operation::Handle(_) => step(&mut m, Completion::Done),
+            Operation::Next(_) => {
+                step(&mut m, Completion::Event(HandlerEvent::Output(Box::new(raised.clone()))))
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(end.outcome, RunOutcome::Failed);
+    assert!(end.scope_writes.is_empty(), "the saved context rolls back");
+    assert!(end.app_writes.is_empty(), "the managed transaction rolls back");
+}

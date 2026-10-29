@@ -281,9 +281,10 @@ impl TaskMachine {
         if !turn.drain {
             self.answer = Some((turn.answer_task.clone(), settled.output));
         }
-        let HandlerOutput { state, scope_writes, mut app_writes, usage, error, .. } = out;
+        let HandlerOutput { state, mut scope_writes, mut app_writes, usage, error, .. } = out;
         if error.is_some() {
-            // a raised handler's managed transactions roll back with its turn
+            // a raised handler's saved context and managed transactions roll back with its turn
+            scope_writes.clear();
             app_writes.clear();
         }
         self.phase = Phase::Turn(Step::Settle);
