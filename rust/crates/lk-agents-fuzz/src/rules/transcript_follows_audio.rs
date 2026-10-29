@@ -7,9 +7,8 @@
 //!
 //! A finish is a playhead too: a cut segment shows the words whose audio started before where the
 //! cut says it stopped, with no progress reported in between. And a segment the sink reported
-//! finished whole shows the words still queued at once, their audio being over. Those come in one go, right before the
-//! segment's uninterrupted finish, with nothing played in between, and each is stamped as ending
-//! where it starts (the finish's clamp) unless its audio ended before the finish's position.
+//! finished whole shows the words still queued at once, their audio being over. Those come in one
+//! go, right before the segment's uninterrupted finish, with nothing played in between.
 use lk_agents_voice::{
     agent_activity::scheduling::SpeechId,
     trace::{PlayoutStep, Step},
@@ -31,7 +30,7 @@ impl Rule for TranscriptFollowsAudio {
         id: "transcript_follows_audio",
         guarantee: "A synchronised transcript shows no word before the segment has played up to where the word's audio starts, except the rest of a segment the sink reported finished whole.",
         examples: &[shown_as_played, rest_shown_at_the_end],
-        counterexamples: &[shown_ahead_of_the_voice, shown_ahead_then_cut],
+        counterexamples: &[shown_ahead_of_the_voice, shown_ahead_then_cut, shown_whole_with_no_finish],
         probe: None,
     };
 
@@ -57,13 +56,11 @@ impl Rule for TranscriptFollowsAudio {
             for (_, step) in internal.speech(speech.id).steps() {
                 let Step::Playout(step) = step else { continue };
                 match step {
-                    PlayoutStep::TranscriptShown { text, start, end, played, .. } => {
+                    PlayoutStep::TranscriptShown { text, start, played, .. } => {
                         let played = played.as_secs_f64();
-                        // A word with an end no later than its start was stamped by a whole
-                        // finish (its audio over); one from a cut segment the sink reported played
-                        // out after the next segment began is shown under the next one's playout.
-                        let finished = !text.trim().is_empty() && *end <= *start + EPSILON;
-                        if *start > played + EPSILON && !finished {
+                        // Its stamps excuse nothing: a word stamped as ending where it starts
+                        // (a whole finish's clamp) is still owed that finish next (seed 19354).
+                        if *start > played + EPSILON {
                             ahead.push((text.clone(), *start, played));
                         } else {
                             check.expect(&speech, true, "");
@@ -140,6 +137,15 @@ fn rest_shown_at_the_end() -> Recording {
 /// A word shown with its audio still ahead, and the segment playing on.
 fn shown_ahead_of_the_voice() -> Recording {
     speech().journal(progressed(60)).journal(shown(" two", 0.1, 60)).journal(progressed(160)).done()
+}
+
+/// Words stamped as a whole finish stamps them, shown before any audio, and no finish followed.
+fn shown_whole_with_no_finish() -> Recording {
+    let mut word = shown(" two", 0.1, 0);
+    if let Step::Playout(PlayoutStep::TranscriptShown { end, .. }) = &mut word {
+        *end = 0.1;
+    }
+    speech().journal(word).journal(progressed(160)).done()
 }
 
 /// A word shown with its audio still ahead, then the segment cut: it was never heard.
