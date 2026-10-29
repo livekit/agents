@@ -25,6 +25,7 @@ lk-agents-runtime = { path = "../lk-agents-runtime", default-features = false }
 # The avatar fake's video frames hold their tag as shared bytes.
 bytes = "1"
 tokio = { workspace = true, features = ["test-util", "io-util"] }
+prost.workspace = true
 serde_json.workspace = true
 fastrand = "2"
 livekit-protocol.workspace = true

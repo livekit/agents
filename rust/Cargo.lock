@@ -1447,6 +1447,7 @@ dependencies = [
  "lk-agents-runtime",
  "lk-agents-test-support",
  "lk-agents-voice",
+ "prost",
  "serde_json",
  "tokio",
 ]

@@ -2,7 +2,7 @@
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{BoxFuture, Clock, Spawner, Ts};
-use lk_agents_net::tcp::{Connection, Connector};
+use lk_agents_runtime::net::tcp::{Connection, Connector};
 use lk_agents_runtime::voice::console::ConsoleIo;
 use lk_agents_voice::remote_session::{self, FrameDecoder, frame, proto};
 use prost::Message as _;
