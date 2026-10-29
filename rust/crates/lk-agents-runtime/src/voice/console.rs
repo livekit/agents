@@ -52,7 +52,7 @@ impl lk_agents_abi::voice::console::ConsoleIo for ConsoleIo {
         use lk_agents_net::env::Env;
         Self::with_ports(
             addr,
-            Arc::new(lk_agents_net::tcp::Tcp::<crate::process::Process>::new()),
+            Arc::new(lk_agents_net::tcp::Tcp::new(crate::process::Process::runtime)),
             crate::process::Process::clock(),
         )
     }

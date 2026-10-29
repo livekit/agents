@@ -1,10 +1,8 @@
 //! Raw TCP connections on the hosting process's reactor, exposed as generic byte IO ports.
 
-use crate::env::Env;
 use crate::task::OwnedTask;
 use lk_agents_abi::BoxFuture;
 use std::io;
-use std::marker::PhantomData;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Independent halves, so a consumer can read while another task writes.
@@ -17,25 +15,22 @@ pub trait Connector: Send + Sync {
     fn connect<'a>(&'a self, addr: &'a str) -> BoxFuture<'a, io::Result<Connection>>;
 }
 
-/// Defers process runtime access until connection, so constructing a client starts nothing.
-pub struct Tcp<E>(PhantomData<fn() -> E>);
+/// Connects on the reactor `runtime` returns, called at connection so constructing a client
+/// starts nothing.
+pub struct Tcp {
+    runtime: fn() -> Result<tokio::runtime::Handle, String>,
+}
 
-impl<E: Env> Tcp<E> {
-    pub fn new() -> Self {
-        Self(PhantomData)
+impl Tcp {
+    pub fn new(runtime: fn() -> Result<tokio::runtime::Handle, String>) -> Self {
+        Self { runtime }
     }
 }
 
-impl<E: Env> Default for Tcp<E> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<E: Env> Connector for Tcp<E> {
+impl Connector for Tcp {
     fn connect<'a>(&'a self, addr: &'a str) -> BoxFuture<'a, io::Result<Connection>> {
         Box::pin(async move {
-            let runtime = E::runtime().map_err(io::Error::other)?;
+            let runtime = (self.runtime)().map_err(io::Error::other)?;
             connect_on(&runtime, addr.to_owned()).await
         })
     }
