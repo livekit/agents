@@ -217,10 +217,6 @@ def chat_ctx_to_dict(
 def resolve_host_ref(id: int) -> Any:
     """The object the host interned under ``id``; read, not released."""
 
-def run_shutdown_callbacks(
-    callbacks: list[Callable[..., Awaitable[None]]], reason: str, per_callback: float = 10.0
-) -> Awaitable[None]: ...
-
 # --- metrics and telemetry -----------------------------------------------------------------------
 
 def session_records(

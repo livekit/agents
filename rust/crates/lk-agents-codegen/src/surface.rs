@@ -28,7 +28,6 @@ const HANDWRITTEN: &[&str] = &[
     "chat_ctx_to_dict",
     "init",
     "resolve_host_ref",
-    "run_shutdown_callbacks",
     "session_records",
     "stt_node",
     "tts_node",

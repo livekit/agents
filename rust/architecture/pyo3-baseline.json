@@ -54,7 +54,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/room_io.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/rtc/error.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/voice/session_options.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/worker/job.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/worker.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/images.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/tests/eot.rs"

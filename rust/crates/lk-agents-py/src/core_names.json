@@ -297,7 +297,6 @@
     "resolve_ref",
     "rt_server_turn_detection",
     "rtc_wire_names",
-    "run_shutdown_callbacks",
     "send_dtmf_events",
     "sentence_tokenizer_config",
     "serialize_image_frame",

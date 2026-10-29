@@ -16,7 +16,6 @@
   "host-call:rust/crates/lk-agents-abi/src/tts/tts.rs",
   "host-call:rust/crates/lk-agents-abi/src/utils/audio.rs",
   "host-call:rust/crates/lk-agents-abi/src/utils/video.rs",
-  "host-call:rust/crates/lk-agents-abi/src/worker/job.rs",
   "host-call:rust/crates/lk-agents-py/src/nodes.rs",
   "host-call:rust/crates/lk-agents-py/src/storage.rs",
   "host-call:rust/crates/lk-agents-runtime/src/images.rs"

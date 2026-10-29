@@ -60,9 +60,6 @@ pub use telemetry::report::{
     DISABLED_MARKERS, EvaluationRecord, LogRecordWire, LoggerName, Outcome, TAG_FAIL, TAG_SUCCESS,
     TagEntry, Tagger, UploadGate, session_records, usage_attributes,
 };
-pub use worker::job::{
-    CallbackOutcome, SHUTDOWN_CALLBACK_TIMEOUT, run_shutdown_callbacks,
-};
 
 #[cfg(feature = "python")]
 pub use media::emitter::EmitterError;
