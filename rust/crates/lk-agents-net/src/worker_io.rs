@@ -5,8 +5,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use lk_agents_abi::SpawnerExt;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
+
+use crate::task::TokioSpawner;
 
 /// Why worker I/O was not admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -94,16 +97,9 @@ impl WorkerIo {
         &self,
         work: impl Future<Output = T> + Send + 'static,
     ) -> T {
-        struct Owned<T>(JoinHandle<T>);
-        impl<T> Drop for Owned<T> {
-            fn drop(&mut self) {
-                self.0.abort();
-            }
-        }
-        let mut task = Owned(self.runtime.spawn(work));
-        match (&mut task.0).await {
+        match TokioSpawner::new(self.runtime.clone()).spawn(work).await {
             Ok(value) => value,
-            Err(error) => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => std::panic::resume_unwind(Box::new(error.to_string())),
         }
     }
 
