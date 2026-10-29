@@ -1,7 +1,7 @@
 //! The process-wide Tokio runtime, started on first use and never at import: `fork()` copies only
-//! the calling thread, so a runtime inherited across a fork has no workers. The runtime remembers
-//! the process that started it and refuses to serve another. The host's ports (its time and frame
-//! reader) are installed here once.
+//! the calling thread, so a runtime inherited across a fork has no workers. The process records
+//! its owner and refuses to serve another. The host's ports (its time and frame reader) are
+//! installed here once.
 
 use lk_agents_abi::media::images::FrameReader;
 use std::sync::{Arc, Mutex};
@@ -12,11 +12,6 @@ use lk_agents_voice::tts::processing::SpeechText;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProcessError {
-    #[error(
-        "the native runtime was started before this process was forked; it cannot run in the \
-         child. Use the core only after the fork (or with the spawn start method)."
-    )]
-    Forked,
     #[error("the native runtime failed to start: {0}")]
     Start(String),
     #[error(
@@ -27,7 +22,6 @@ pub enum ProcessError {
 }
 
 struct Started {
-    pid: u32,
     runtime: tokio::runtime::Runtime,
     media_pool: MediaPool,
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
@@ -43,12 +37,13 @@ struct State {
     frames: Option<Arc<dyn FrameReader>>,
     /// The host's time, installed once as the host loads.
     time: Option<Arc<dyn HostTime>>,
-    /// The process that declared itself the core's (`_core.init`, else its first entry).
-    declared: Option<u32>,
+    /// The process that declared itself the core's (`_core.init`, else its first entry or the
+    /// runtime's start): the runtime, when started, is this process's.
+    owner: Option<u32>,
 }
 
 static PROCESS: Mutex<State> =
-    Mutex::new(State { started: None, frames: None, time: None, declared: None });
+    Mutex::new(State { started: None, frames: None, time: None, owner: None });
 
 /// The host's clock and executor. Each read resolves the caller's: a host whose
 /// running loop is on virtual time answers with that loop's.
@@ -83,11 +78,11 @@ pub fn media_pool() -> Result<MediaPool, ProcessError> {
 }
 
 fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> {
-    let pid = std::process::id();
     let mut state = state();
+    owned(&mut state)?;
     let slot = &mut state.started;
     if let Some(started) = slot.as_ref() {
-        return if started.pid == pid { Ok(read(started)) } else { Err(ProcessError::Forked) };
+        return Ok(read(started));
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         // Codec/model work has its own admitted workers. Starting one async worker per CPU
@@ -103,20 +98,22 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .map_err(|error| ProcessError::Start(error.to_string()))?;
     let report_admission = Default::default();
     let http = Arc::new(lk_agents_net::http::GatewayHttp::new().map_err(ProcessError::Start)?);
-    let started =
-        slot.insert(Started { pid, runtime, media_pool, blocking_io, report_admission, http });
+    let started = slot.insert(Started { runtime, media_pool, blocking_io, report_admission, http });
     Ok(read(started))
+}
+
+/// A process that never declared itself does so now; one holding another's declaration is
+/// refused.
+fn owned(state: &mut State) -> Result<(), ProcessError> {
+    let pid = std::process::id();
+    if *state.owner.get_or_insert(pid) == pid { Ok(()) } else { Err(ProcessError::Inherited) }
 }
 
 /// The fork guard every host entry passes first: a process that never declared itself does so
 /// now (the reference has no initialiser); one that inherited another's declaration across a
 /// fork is refused until it calls [`reinit`], since its runtime's threads did not survive.
 pub fn check_pid() -> Result<(), ProcessError> {
-    let pid = std::process::id();
-    match state().declared.get_or_insert(pid) {
-        declared if *declared == pid => Ok(()),
-        _ => Err(ProcessError::Inherited),
-    }
+    owned(&mut state())
 }
 
 /// Declares this process as the runtime's owner (`_core.init` in a forked child): a runtime
@@ -124,8 +121,7 @@ pub fn check_pid() -> Result<(), ProcessError> {
 /// the child does not have. The next [`handle`] starts a fresh one.
 pub fn reinit() {
     let mut state = state();
-    state.declared = Some(std::process::id());
-    if state.started.as_ref().is_some_and(|started| started.pid != std::process::id()) {
+    if state.owner.replace(std::process::id()) != Some(std::process::id()) {
         std::mem::forget(state.started.take());
     }
 }
@@ -224,9 +220,9 @@ mod pid_tests {
     // usable at once (the reference needs no initialiser).
     #[test]
     fn a_forked_child_is_refused_until_it_re_declares_itself() {
-        state().declared = None;
+        state().owner = None;
         check_pid().expect("first use must self-declare rather than raise");
-        state().declared = Some(std::process::id() ^ 0x5555);
+        state().owner = Some(std::process::id() ^ 0x5555);
         let err = check_pid().expect_err("a stale declaration must be refused");
         assert!(err.to_string().contains("inherited across a fork"), "{err}");
         reinit();
