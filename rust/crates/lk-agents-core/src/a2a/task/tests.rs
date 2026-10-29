@@ -130,9 +130,9 @@ fn batch_preserves_the_callers_continuation_target() {
     }];
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
-        Operation::RecoverOrphans { .. }
+        Operation::ReadWorking
     ));
-    let pending = step(&mut m, Completion::Done);
+    let pending = step(&mut m, Completion::Tasks(Vec::new()));
     assert_eq!(pending, Operation::ReadPending(Some("waiting".into())));
 }
 
@@ -145,8 +145,39 @@ fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
     let abandon =
         operation(at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("offline".into()))));
     assert!(matches!(abandon, Operation::Abandon { outcome: RunOutcome::Failed, .. }));
-    assert!(matches!(step(&mut m, Completion::Done), Operation::FailTask {
-        task_id, reason: REASON_STORAGE_UNAVAILABLE } if task_id == "receipt"));
+    assert!(matches!(step(&mut m, Completion::Done), Operation::Pickup(t) if t == "receipt"));
+    assert!(matches!(
+        step(&mut m, Completion::Picked(Some(TaskState::Working))),
+        Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+            if failed.len() == 1 && failed[0].0 == "receipt"
+    ));
+}
+
+/// A dead holder's `working` rows fail worker-lost, except the message's own task; a named task
+/// that already ended is not failed.
+#[test]
+fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
+    let mut m = machine(Policy::Queue);
+    m.phase = Phase::Open;
+    m.pending = Some(1);
+    assert!(matches!(step(&mut m, opened(false, true)), Operation::ReadWorking));
+    let working = |id: &str| TaskRow { task_id: id.into(), ..row(TaskState::Working) };
+    let fail = step(&mut m, Completion::Tasks(vec![working("receipt"), working("dead")]));
+    assert!(
+        matches!(&fail, Operation::FailOrphans { reason: REASON_WORKER_LOST, failed }
+            if failed.iter().map(|f| f.0.as_str()).eq(["dead"])),
+        "{fail:?}"
+    );
+    assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(None));
+    // the lease ran out: the receipt fails lease-timeout, unless a client already ended it
+    let mut m = machine(Policy::Queue);
+    m.phase = Phase::Open;
+    m.pending = Some(1);
+    let rejected = StorageError::Rejected { running_task_id: None };
+    assert!(matches!(operation(at(&mut m, Duration::ZERO, Err(rejected))), Operation::Pickup(_)));
+    assert!(
+        matches!(step(&mut m, Completion::Picked(None)), Operation::ReadTask(t) if t == "receipt")
+    );
 }
 
 #[test]
@@ -186,9 +217,10 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
     let mut m = machine(Policy::Queue);
     m.phase = Phase::Open;
     m.pending = Some(1);
+    assert!(matches!(operation(at(&mut m, Duration::ZERO, Err(rejected))), Operation::Pickup(_)));
     assert!(matches!(
-        operation(at(&mut m, Duration::ZERO, Err(rejected))),
-        Operation::FailTask { reason: REASON_LEASE_TIMEOUT, .. }
+        step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
+        Operation::FailOrphans { reason: REASON_LEASE_TIMEOUT, .. }
     ));
     // anything else ends the request with its typed error
     for error in [
@@ -232,12 +264,13 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     }
     assert!(reopened, "the stale submitted task was watched forever");
     assert!(now >= Duration::from_secs(2), "not before the wait ran out");
+    assert!(matches!(step(&mut m, opened(false, false)), Operation::Pickup(_)));
     assert!(matches!(
-        step(&mut m, opened(false, false)),
-        Operation::FailTask { reason: REASON_WORKER_LOST, .. }
+        step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
+        Operation::FailOrphans { reason: REASON_WORKER_LOST, .. }
     ));
-    assert!(matches!(step(&mut m, Completion::Done), Operation::RecoverOrphans { .. }));
-    assert!(matches!(step(&mut m, Completion::Done), Operation::CloseRun));
+    assert!(matches!(step(&mut m, Completion::Done), Operation::ReadWorking));
+    assert!(matches!(step(&mut m, Completion::Tasks(Vec::new())), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     let effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Failed)))));
     assert!(matches!(&effects[..], [Effect::Finished(Ok(Answer { task: Some(_), .. }))]));
@@ -333,10 +366,11 @@ fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() 
         let mut m = continuing(Policy::Queue, Some("waiting"));
         let commit = turn(&mut m, Some(question()), answered("Tuesday"));
         assert!(matches!(commit, Operation::Commit { answer_task: Some(t), .. } if t == "waiting"));
-        let fail = operation(at(&mut m, Duration::ZERO, Err(error)));
+        let pickup = operation(at(&mut m, Duration::ZERO, Err(error)));
+        assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
+        let fail = step(&mut m, Completion::Picked(Some(TaskState::Working)));
         assert!(
-            matches!(&fail, Operation::FailTask { task_id, reason: REASON_STORAGE_UNAVAILABLE }
-                if task_id == "receipt"),
+            matches!(&fail, Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, .. }),
             "{fail:?}"
         );
         assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));

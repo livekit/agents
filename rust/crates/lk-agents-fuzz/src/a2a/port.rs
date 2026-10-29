@@ -21,8 +21,8 @@ use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::storage::thread::REASON_STORAGE_UNAVAILABLE;
 use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskRow, TaskWrite, merge_write};
-use lk_agents_abi::storage::thread::{REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST};
 use lk_agents_core::a2a::failed_message;
 use lk_agents_core::a2a::task::{Completion, HandlerEvent, Operation};
 
@@ -225,14 +225,13 @@ impl Port {
     }
 
     /// `fail_orphan`: only a `working` row fails, its status message naming `reason`.
-    fn fail_working(&mut self, task_id: &str, reason: &str, now: Duration) {
+    fn fail_working(&mut self, task_id: &str, message: a2a::Message, now: Duration) {
         if let Some(row) = self.tasks.get_mut(task_id)
             && row.status == TaskState::Working
         {
             row.status = TaskState::Failed;
             row.updated_at = now.as_millis() as i64;
-            let id = format!("msg_fail_{}", row.seq);
-            row.data.status_message = Some(failed_message(task_id, reason, id));
+            row.data.status_message = Some(message);
         }
     }
 
@@ -474,23 +473,20 @@ impl Port {
                 self.inbox.iter().filter(|r| r.id > self.drained).cloned().collect(),
             ),
             Operation::Pickup(task_id) => Completion::Picked(self.pickup(task_id, now)),
-            Operation::FailTask { task_id, reason } => {
-                if self.pickup(task_id, now).is_some() {
-                    self.fail_working(task_id, reason, now);
-                }
-                Completion::Done
-            }
-            Operation::RecoverOrphans { skip } => {
+            Operation::ReadWorking => {
                 let open = run.as_ref().expect("a run is open");
-                let working: Vec<String> = open
-                    .loaded_tasks
-                    .iter()
-                    .flatten()
-                    .filter(|r| r.status == TaskState::Working && !skip.contains(&r.task_id))
-                    .map(|r| r.task_id.clone())
-                    .collect();
-                for task_id in working {
-                    self.fail_working(&task_id, REASON_WORKER_LOST, now);
+                Completion::Tasks(
+                    open.loaded_tasks
+                        .iter()
+                        .flatten()
+                        .filter(|r| r.status == TaskState::Working)
+                        .cloned()
+                        .collect(),
+                )
+            }
+            Operation::FailOrphans { failed, .. } => {
+                for (task_id, message) in failed {
+                    self.fail_working(task_id, message.clone(), now);
                 }
                 Completion::Done
             }
@@ -614,7 +610,9 @@ impl Port {
                         let (keep_lease, drained_id) = open.sent;
                         self.apply(worker, &open, keep_lease, drained_id, now);
                     } else {
-                        self.fail_working(task_id, REASON_STORAGE_UNAVAILABLE, now);
+                        let id = format!("msg_fail_{task_id}");
+                        let message = failed_message(task_id, REASON_STORAGE_UNAVAILABLE, id);
+                        self.fail_working(task_id, message, now);
                     }
                 }
                 self.release(worker);

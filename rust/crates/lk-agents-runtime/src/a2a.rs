@@ -22,7 +22,7 @@ use lk_agents_core::a2a::{
 };
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Receive, ReceiveInput};
-use lk_agents_storage::run::{ItemRow, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, TaskRow};
+use lk_agents_storage::run::{ItemRow, REASON_STORAGE_UNAVAILABLE, TaskRow};
 
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 
@@ -270,21 +270,11 @@ impl Turn {
             }
             Operation::ReadInbox => Completion::Inbox(db.inbox(true).await?),
             Operation::Pickup(task_id) => Completion::Picked(db.pickup(&task_id).await?),
-            Operation::FailTask { task_id, reason } => {
-                if db.pickup(&task_id).await?.is_some() {
-                    db.fail_orphan(&task_id, &failed(&task_id, reason)).await?;
+            Operation::ReadWorking => Completion::Tasks(call.run()?.tasks.working().await?),
+            Operation::FailOrphans { reason, failed } => {
+                for (task_id, message) in failed {
+                    db.fail_orphan(&task_id, &message).await?;
                     log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
-                }
-                Completion::Done
-            }
-            Operation::RecoverOrphans { skip } => {
-                let run = call.run()?;
-                for row in run.tasks.working().await? {
-                    if !skip.contains(&row.task_id) {
-                        let failed = failed(&row.task_id, REASON_WORKER_LOST);
-                        run.tasks.lane().fail_orphan(&row.task_id, &failed).await?;
-                        log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = row.task_id.as_str(); "a task whose worker died fails worker-lost");
-                    }
                 }
                 Completion::Done
             }
