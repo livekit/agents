@@ -194,7 +194,7 @@ pub mod diagnostics {
     /// `agent_activity.AgentActivity._pipeline_reply_task_impl`.
     pub const MAX_TOOL_STEPS: &str = "maximum number of function calls steps reached, generating final response with tool_choice='none'";
 
-    /// A tool kept raising `ModelRetry` past its budget (`Retries.tool`): the reply ends.
+    /// A tool kept raising `ModelRetry` past its budget (`Retries.tools`): the reply ends.
     pub const TOOL_RETRIES_EXCEEDED: &str = "tool exceeded its max retries count, ending the reply";
 }
 

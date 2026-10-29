@@ -18,6 +18,7 @@ from typing import (
     Generic,
     Literal,
     NamedTuple,
+    TypedDict,
     overload,
 )
 
@@ -166,6 +167,35 @@ def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
     return namespace
 
 
+class AgentRetries(TypedDict, total=False):
+    """Retry budgets, as pydantic-ai's: how many consecutive retries the model gets before the
+    run fails. ``Agent(retries=)`` defaults each key to ``1``; ``run(retries=)`` keeps the
+    agent's value for an omitted key.
+    """
+
+    tools: int
+    """Per tool: invalid arguments and ``ModelRetry`` from the tool. A tool's own ``retries=``
+    replaces it for that tool."""
+    output: int
+    """The final output: a candidate failing validation and ``ModelRetry`` from an output
+    validator."""
+
+
+def _retries(value: int | AgentRetries | None, base: Retries) -> Retries:
+    """``retries=`` over ``base``: an int sets both budgets, a dict the keys it has."""
+    if value is None:
+        return base
+    if isinstance(value, int):
+        value = {"tools": value, "output": value}
+    resolved = Retries(
+        tools=value.get("tools", base.tools), output=value.get("output", base.output)
+    )
+    for budget in (resolved.tools, resolved.output):
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
+            raise ValueError(f"retries must be non-negative integers, got {value!r}")
+    return resolved
+
+
 @dataclass
 class ModelSettings:
     tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
@@ -173,7 +203,10 @@ class ModelSettings:
 
 
 class Agent(Generic[Context_T, Output_T]):
-    """Shared agent configuration, parameterized by application context and final output."""
+    """Shared agent configuration, parameterized by application context and final output.
+
+    ``retries`` sets the retry budgets of every run (``AgentRetries``); an int sets both.
+    """
 
     def __init__(
         self,
@@ -188,6 +221,7 @@ class Agent(Generic[Context_T, Output_T]):
         llm: NotGivenOr[
             llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
         ] = NOT_GIVEN,
+        retries: int | AgentRetries | None = None,
     ) -> None:
         if not isinstance(instructions, str):
             raise TypeError("instructions must be a string")
@@ -207,7 +241,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
         # the retry budgets every invocation of this agent reads, in text and on a call
-        self._retries = Retries()
+        self._retries = _retries(retries, Retries())
 
         # a type, or an output function whose return value is the output
         self._output_type_explicit = output_type is not None
@@ -311,6 +345,7 @@ class Agent(Generic[Context_T, Output_T]):
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | None = None,
         usage: RunUsage | None = None,
+        retries: int | AgentRetries | None = None,
     ) -> RunResult[Output_T]:
         """One invocation on the given history: the model and tool loop until the accepted
         output or a request for human input (agents.md "Running a turn").
@@ -320,12 +355,17 @@ class Agent(Generic[Context_T, Output_T]):
             message_history: The conversation so far; omit for a fresh one.
             context: Application data and dependencies, read as ``ctx.context``.
             usage: A ``RunUsage`` this run's usage is added to, for a delegated run.
+            retries: The agent's retry budgets for this run (``AgentRetries``); an int sets both.
         """
         from .agent_run import door_hooks
 
         hooks = door_hooks()
         async with self.run_stream(
-            message, message_history=message_history, context=context, usage=usage
+            message,
+            message_history=message_history,
+            context=context,
+            usage=usage,
+            retries=retries,
         ) as stream:
             if hooks is not None and hooks.on_token is not None:
                 # inside a managed turn the reply reaches the client as it is written
@@ -340,6 +380,7 @@ class Agent(Generic[Context_T, Output_T]):
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | None = None,
         usage: RunUsage | None = None,
+        retries: int | AgentRetries | None = None,
     ) -> RunStream[RunResult[Output_T]]:
         """``run()`` as an async context manager streaming its text and events; execution
         starts on entry (agents.md "Streaming runs")::
@@ -359,6 +400,7 @@ class Agent(Generic[Context_T, Output_T]):
                 message_history=message_history,
                 context=context,
                 usage=usage,
+                retries=retries,
                 conn_options=DEFAULT_API_CONNECT_OPTIONS,
             )
 
@@ -405,8 +447,11 @@ class Agent(Generic[Context_T, Output_T]):
             self._host_instance = AgentHost(self)
         return self._host_instance
 
-    def _definition(self, tools: llm.ToolContext) -> AgentDefinition:
-        """The core's ``AgentDefinition`` of this agent with ``tools``."""
+    def _definition(
+        self, tools: llm.ToolContext, retries: int | AgentRetries | None = None
+    ) -> AgentDefinition:
+        """The core's ``AgentDefinition`` of this agent with ``tools``, under a run's
+        ``retries=``."""
         from .agent_run import tool_infos
 
         return AgentDefinition(
@@ -415,7 +460,7 @@ class Agent(Generic[Context_T, Output_T]):
             dynamic_instructions=bool(self._instruction_fns),
             tools=tool_infos(tools),
             output=self._host._output.spec(validated=bool(self._output_validators)),
-            retries=self._retries,
+            retries=_retries(retries, self._retries),
         )
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
@@ -453,6 +498,7 @@ class Agent(Generic[Context_T, Output_T]):
         on_duplicate: DuplicateMode = "allow",
         duplicate_scope: DuplicateScope = "name",
         needs_approval: bool | ReadBack = False,
+        retries: int | None = None,
     ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]: ...
 
     def tool(
@@ -467,6 +513,7 @@ class Agent(Generic[Context_T, Output_T]):
         on_duplicate: DuplicateMode = "allow",
         duplicate_scope: DuplicateScope = "name",
         needs_approval: bool | ReadBack = False,
+        retries: int | None = None,
     ) -> Any:
         """Register a function tool on this agent, as a decorator.
 
@@ -485,6 +532,7 @@ class Agent(Generic[Context_T, Output_T]):
             "on_duplicate": on_duplicate,
             "duplicate_scope": duplicate_scope,
             "needs_approval": needs_approval,
+            "retries": retries,
         }
 
         def register(func: Callable[_P, _R]) -> FunctionTool[_P, _R] | RawFunctionTool[_P, _R]:

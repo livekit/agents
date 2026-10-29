@@ -653,6 +653,7 @@ pub mod agent_run {
                 needs_approval: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "needs_approval", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::agent_run::read_back_from_py(v)).map(Some) })?,
                 on_duplicate: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "on_duplicate", |v| v.extract::<::lk_agents_abi::llm::mcp::DuplicateMode>().map_err(::std::convert::Into::<PyErr>::into))?,
                 duplicate_scope: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "duplicate_scope", |v| v.extract::<::lk_agents_abi::llm::mcp::DuplicateScope>().map_err(::std::convert::Into::<PyErr>::into))?,
+                retries: ::lk_agents_abi::python::attr_with(obj, "FunctionToolInfo", "retries", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(v, "FunctionToolInfo.retries")).map(Some) })?,
             })
     }
 
@@ -694,7 +695,7 @@ pub mod agent_run {
                 return Err(super::not_a(obj, "Retries"));
             }
             Ok(::lk_agents_abi::agent::Retries {
-                tool: ::lk_agents_abi::python::attr_with(obj, "Retries", "tool", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "Retries.tool"))?,
+                tools: ::lk_agents_abi::python::attr_with(obj, "Retries", "tools", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "Retries.tools"))?,
                 output: ::lk_agents_abi::python::attr_with(obj, "Retries", "output", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "Retries.output"))?,
             })
     }

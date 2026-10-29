@@ -16,6 +16,8 @@ pub struct McpToolOptions {
     /// Forward the tool's MCP progress notifications to `ctx.update()`. Also selects the
     /// non-blocking call path (`_tool_called_nonblocking`, which takes a `RunContext`).
     pub report_progress: bool,
+    /// The tool's `retries=`; `None` reads the run's tool budget.
+    pub retries: Option<u32>,
 }
 
 /// Per-tool behavior for MCP tools exposed by an MCPToolset.
@@ -41,6 +43,9 @@ pub struct McpToolOptionsPatch {
     /// Whether to forward the tool's progress notifications to ctx.update().
     #[python(ty = "bool")]
     pub report_progress: Option<bool>,
+    /// The tool's retry budget, in place of the agent's ``retries['tools']``.
+    #[python(ty = "int")]
+    pub retries: Option<u32>,
 }
 
 /// MCP failures preserve their native cause, including the upstream SDK error.

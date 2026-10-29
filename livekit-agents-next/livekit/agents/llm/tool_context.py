@@ -311,6 +311,8 @@ class FunctionToolInfo:
     needs_approval: bool = False
     read_back: ReadBack | None = None
     """``needs_approval=`` as a function: the read-back the person approves."""
+    retries: int | None = None
+    """``retries=``: this tool's retry budget in place of the agent's ``retries['tools']``."""
 
 
 ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
@@ -344,6 +346,7 @@ class RawFunctionToolInfo:
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
+    retries: int | None = None
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
@@ -432,6 +435,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    retries: int | None = None,
 ) -> RawFunctionTool[_P, _R]: ...
 
 
@@ -443,6 +447,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    retries: int | None = None,
 ) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
@@ -456,6 +461,7 @@ def function_tool(
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
     needs_approval: bool | ReadBack = False,
+    retries: int | None = None,
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -469,6 +475,7 @@ def function_tool(
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
     needs_approval: bool | ReadBack = False,
+    retries: int | None = None,
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -482,6 +489,7 @@ def function_tool(
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
     needs_approval: bool | ReadBack = False,
+    retries: int | None = None,
 ) -> (
     FunctionTool[..., object]
     | RawFunctionTool[..., object]
@@ -490,7 +498,13 @@ def function_tool(
     """``needs_approval``: the framework asks the person to confirm each call with a read-back
     and runs the body only on a repeat of the same validated call after the answer (tools.md
     "Approval"). ``True`` reads back the description and the arguments; a ``ReadBack`` function
-    writes it. Typed tools only."""
+    writes it. Typed tools only.
+
+    ``retries``: how many consecutive retries the model gets for this tool (invalid arguments,
+    ``ModelRetry``) before the run fails; the agent's ``retries['tools']`` when ``None``."""
+
+    if retries is not None and (isinstance(retries, bool) or retries < 0):
+        raise ValueError(f"retries must be a non-negative integer, got {retries!r}")
 
     def deco_raw(
         func: Callable[_P, _R],
@@ -516,6 +530,7 @@ def function_tool(
             flags=flags,
             on_duplicate=on_duplicate,
             duplicate_scope=duplicate_scope,
+            retries=retries,
         )
         return RawFunctionTool(func, info)
 
@@ -535,6 +550,7 @@ def function_tool(
             duplicate_scope=duplicate_scope,
             needs_approval=bool(needs_approval),
             read_back=needs_approval if callable(needs_approval) else None,
+            retries=retries,
         )
         return FunctionTool(wrapped, info)
 

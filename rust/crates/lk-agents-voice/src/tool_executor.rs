@@ -800,7 +800,7 @@ impl Driver {
         let limit = self.activity.tool_retries;
         let retried = end.executions.iter().map(|e| (e.call.name.as_str(), e.retry));
         let retries_exceeded =
-            self.activity.tools.retries.entry(speech).or_default().step(retried, limit);
+            self.activity.tools.retries.entry(speech).or_default().step(retried, |_| limit);
         let decision = next_step(StepInputs {
             tool_output: &end.executions,
             interrupted_before_tools: end.interrupted_before_tools,

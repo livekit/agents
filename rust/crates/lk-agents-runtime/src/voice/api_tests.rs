@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
     AgentUpdate {
-        tool_retries: lk_agents_abi::agent::Retries::default().tool,
+        tool_retries: lk_agents_abi::agent::Retries::default().tools,
         agent: agent.to_owned(),
         instructions,
         dynamic_instructions: None,

@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from ..text_session import _FrameContexts
-    from .agent import Agent
+    from .agent import Agent, AgentRetries
 
 
 @dataclass
@@ -221,6 +221,7 @@ async def start_run(
     message_history: ChatContext | Sequence[ChatItem] | None,
     context: Context_T | None,
     usage: RunUsage | None,
+    retries: int | AgentRetries | None,
     conn_options: APIConnectOptions,
 ) -> tuple[_TextRun[Context_T], _core.AgentRunUpdates]:
     """Start one native invocation; its core owns managed checkpoints and settlement."""
@@ -246,7 +247,7 @@ async def start_run(
         run.tools = ToolContext(agent.tools)
         captured = contextvars.copy_context()
         captured.run(_BindingContextVar.set, run)
-        runner = _core.AgentRunner(agent._definition(run.tools), run.llm, agent._host)
+        runner = _core.AgentRunner(agent._definition(run.tools, retries), run.llm, agent._host)
         run.runner = runner
         updates = runner.run(
             RunRequest(
@@ -340,6 +341,7 @@ def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
                 needs_approval=approval,
                 on_duplicate=tool.info.on_duplicate,
                 duplicate_scope=tool.info.duplicate_scope,
+                retries=tool.info.retries,
             )
         )
     return infos

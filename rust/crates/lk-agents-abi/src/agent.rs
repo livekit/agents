@@ -249,6 +249,8 @@ pub struct FunctionToolInfo {
     pub needs_approval: Option<ReadBack>,
     pub on_duplicate: DuplicateMode,
     pub duplicate_scope: DuplicateScope,
+    /// `retries=` on the tool: its own budget in place of the run's `Retries.tools`.
+    pub retries: Option<u32>,
 }
 
 /// How a `needs_approval` tool asks.
@@ -272,20 +274,21 @@ pub enum OutputSpec {
     Structured { schema: Value },
 }
 
-/// How many consecutive retries the model gets before the run fails: per tool for argument
-/// errors and `ModelRetry`, and for the final output. pydantic-ai's defaults.
+/// A run's retry budgets (`Agent(retries=)`, `run(retries=)`, pydantic-ai's): how many
+/// consecutive retries the model gets before the run fails, per tool for argument errors and
+/// `ModelRetry`, and for the final output.
 #[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retries {
     #[host(default = 1)]
-    pub tool: u32,
+    pub tools: u32,
     #[host(default = 1)]
     pub output: u32,
 }
 
 impl Default for Retries {
     fn default() -> Self {
-        Retries { tool: 1, output: 1 }
+        Retries { tools: 1, output: 1 }
     }
 }
 

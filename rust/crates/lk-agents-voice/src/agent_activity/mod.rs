@@ -50,7 +50,7 @@ pub(crate) struct AgentActivity {
     /// The agent's `transcription_node` and `realtime_audio_output_node`.
     pub(crate) output_nodes: crate::agent_session::nodes::OutputNodes,
     pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
-    /// The agent's tool retry budget (`Retries.tool`).
+    /// The agent's tool retry budget (`Retries.tools`).
     pub(crate) tool_retries: u32,
     /// `_tool_executor`.
     pub(crate) tools: crate::tool_executor::Tools,

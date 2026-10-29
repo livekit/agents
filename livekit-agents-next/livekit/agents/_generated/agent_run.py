@@ -163,6 +163,8 @@ class FunctionToolInfo:
     """`needs_approval=`: the body runs only on an answered read-back."""
     on_duplicate: DuplicateMode
     duplicate_scope: DuplicateScope
+    retries: int | None
+    """`retries=` on the tool: its own budget in place of the run's `Retries.tools`."""
 
 
 ReadBack: TypeAlias = Literal["default", "function"]
@@ -191,11 +193,12 @@ OutputSpec: TypeAlias = OutputSpecText | OutputSpecStructured
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Retries:
-    """How many consecutive retries the model gets before the run fails: per tool for argument
-    errors and `ModelRetry`, and for the final output. pydantic-ai's defaults.
+    """A run's retry budgets (`Agent(retries=)`, `run(retries=)`, pydantic-ai's): how many
+    consecutive retries the model gets before the run fails, per tool for argument errors and
+    `ModelRetry`, and for the final output.
     """
 
-    tool: int = 1
+    tools: int = 1
     output: int = 1
 
 

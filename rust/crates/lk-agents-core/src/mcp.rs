@@ -19,6 +19,7 @@ pub fn resolve_tool_options(config: Option<&McpToolOptionsPatch>) -> McpToolOpti
         on_duplicate: p.on_duplicate.unwrap_or(d.on_duplicate),
         duplicate_scope: p.duplicate_scope.unwrap_or(d.duplicate_scope),
         report_progress: p.report_progress.unwrap_or(d.report_progress),
+        retries: p.retries,
     }
 }
 

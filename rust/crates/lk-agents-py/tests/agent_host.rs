@@ -280,18 +280,18 @@ fn records_cross_as_their_models_with_declared_presence() {
         assert_eq!(
             _core::generated::records::agent_run::retries_from_py(&eval("models.Retries()"))
                 .unwrap(),
-            Retries { tool: 1, output: 1 }
+            Retries { tools: 1, output: 1 }
         );
         assert_eq!(
             _core::generated::records::agent_run::retries_from_py(&eval(
                 "models.Retries(output=0)"
             ))
             .unwrap(),
-            Retries { tool: 1, output: 0 }
+            Retries { tools: 1, output: 0 }
         );
         assert!(
             _core::generated::records::agent_run::retries_from_py(&eval(
-                "models.Retries(tool=None)"
+                "models.Retries(tools=None)"
             ))
             .is_err(),
             "None is not omission"

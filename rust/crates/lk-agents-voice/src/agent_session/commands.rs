@@ -611,7 +611,7 @@ pub struct AgentUpdate {
     pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     /// The executor is per-agent.
     pub toolset: crate::tool_executor::Toolset,
-    /// The agent's tool retry budget (`Retries.tool`).
+    /// The agent's tool retry budget (`Retries.tools`).
     pub tool_retries: u32,
     /// **Replaces** the old one: an agent starts from what it was constructed with, so a merge
     /// would take that choice away.

@@ -16,7 +16,7 @@ from ._generated.agent_run import RunSettled
 from ._generated.text_session import TextSessionState
 from .storage.context_store import ContextStore
 from .types import DEFAULT_API_CONNECT_OPTIONS
-from .voice.agent import Agent, _BindingContextVar
+from .voice.agent import Agent, AgentRetries, _BindingContextVar
 from .voice.agent_run import _TextRun, door_hooks, run_error, settled_result
 from .voice.agent_tool import _LocalAgentTool
 from .voice.events import Context_T
@@ -56,9 +56,14 @@ class TextSession(Generic[Context_T, Output_T]):
         *,
         state: TextSessionState | None = None,
         context: Context_T | None = None,
+        retries: int | AgentRetries | None = None,
     ) -> TextSessionTurn[Output_T]:
+        """One turn of the conversation. ``retries`` overrides every agent's retry budgets
+        for this turn (``AgentRetries``); an int sets both."""
         hooks = door_hooks()
-        async with self.run_stream(message, state=state, context=context) as stream:
+        async with self.run_stream(
+            message, state=state, context=context, retries=retries
+        ) as stream:
             async for text in stream.stream_text(delta=True):
                 if hooks is not None and hooks.on_token is not None:
                     await hooks.on_token(text)
@@ -70,6 +75,7 @@ class TextSession(Generic[Context_T, Output_T]):
         *,
         state: TextSessionState | None = None,
         context: Context_T | None = None,
+        retries: int | AgentRetries | None = None,
     ) -> RunStream[TextSessionTurn[Output_T]]:
         async def start() -> _Started[TextSessionTurn[Output_T]]:
             from ._core_view import to_core_item
@@ -115,7 +121,7 @@ class TextSession(Generic[Context_T, Output_T]):
                     runs[agent.name] = run
                     bindings.append(
                         records.TextSessionAgent(
-                            definition=agent._definition(run.tools),
+                            definition=agent._definition(run.tools, retries),
                             llm=run.llm,
                             host=agent._host,
                             output_type_explicit=agent._output_type_explicit,

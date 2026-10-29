@@ -1063,7 +1063,7 @@ pub struct UpdateAgentArgs {
     pub tools_host: Option<lk_agents_abi::HostRef>,
     #[host(kwarg(default = None))]
     pub tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
-    /// The agent's tool retry budget (`Retries.tool`).
+    /// The agent's tool retry budget (`Retries.tools`).
     pub tool_retries: u32,
     #[host(kwarg(default = None))]
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,

@@ -61,7 +61,15 @@ from ..types import (
 )
 from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
-from .agent import Agent, ModelSettings, Output_T, _BindingContextVar, _VoiceBinding
+from .agent import (
+    Agent,
+    AgentRetries,
+    ModelSettings,
+    Output_T,
+    _BindingContextVar,
+    _retries,
+    _VoiceBinding,
+)
 from .agent_run import run_error
 from .events import (
     AgentEvent,
@@ -118,9 +126,6 @@ Run_T = TypeVar("Run_T")
 
 # the hook running in this context, for `generate_reply(on_enter=)`
 _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
-
-# a run whose reply ends without its `output_type` is asked again this many times
-_OUTPUT_RETRIES = 2
 
 # on_exit and the other callbacks are awaited by the core this long before it moves on;
 # on_user_turn_completed is awaited until it returns
@@ -636,8 +641,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         user_input: str,
         output_type: type[Run_T] | None = None,
+        retries: int | AgentRetries | None = None,
     ) -> VoiceRunResult[Run_T]:
-        """Reply to ``user_input`` and record what the reply did, for assertions."""
+        """Reply to ``user_input`` and record what the reply did, for assertions. ``retries``
+        overrides the current agent's retry budgets for this run (``AgentRetries``)."""
         result = VoiceRunResult[Run_T](
             user_input=user_input,
             output_type=output_type,
@@ -646,7 +653,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._running.run(
             user_input=user_input,
             expects_output=output_type is not None,
-            max_retries=_OUTPUT_RETRIES,
+            max_retries=_retries(retries, self.current_agent._retries).output,
             retry_instructions=_OUTPUT_RETRY_PROMPT,
             origin=_origin(),
             host=result,
@@ -881,7 +888,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "agent_host": agent,
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),
-            "tool_retries": agent._retries.tool,
+            "tool_retries": agent._retries.tools,
         }
         # every leg a node may wrap is given, so the previous frame's node never stays on it; the
         # session's STT and TTS stay as they are, under the agent's nodes

@@ -28,6 +28,7 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
         needs_approval: approval.then_some(ReadBack::Default),
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
+        retries: None,
     };
     let agent = |name: &str, tools, output| SessionAgent {
         definition: AgentDefinition {

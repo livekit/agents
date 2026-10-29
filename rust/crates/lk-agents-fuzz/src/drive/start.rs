@@ -701,7 +701,7 @@ fn plain_frame(
         tools: Some(tool_specs(tools)),
         tools_host: None,
         tool_runner: Some(fakes::FakeTools::new(registry.clone())),
-        tool_retries: lk_agents_abi::agent::Retries::default().tool,
+        tool_retries: lk_agents_abi::agent::Retries::default().tools,
         chat_ctx: None,
         llm: Maybe::NotGiven,
         tts: Maybe::NotGiven,

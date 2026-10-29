@@ -78,18 +78,18 @@ pub fn delivered(outcome: &ToolOutcome) -> Option<String> {
     })
 }
 
-/// The invocation's tool retry budget (`Retries.tool`): consecutive retried steps per tool, reset
-/// by any call of that tool that did not ask for a retry. Shared by AgentRun and a call's reply.
+/// The invocation's tool retry budgets: consecutive retried steps per tool, reset by any call of
+/// that tool that did not ask for a retry. Shared by AgentRun and a call's reply.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolRetries(BTreeMap<String, u32>);
 
 impl ToolRetries {
     /// One settled step's calls as `(tool, retried)`: the first tool, by name, whose retries
-    /// went over `limit`.
+    /// went over its `limit` (the tool's `retries=`, else the run's `Retries.tools`).
     pub fn step<'a>(
         &mut self,
         calls: impl IntoIterator<Item = (&'a str, bool)>,
-        limit: u32,
+        limit: impl Fn(&str) -> u32,
     ) -> Option<RunError> {
         let mut retried: BTreeMap<&str, bool> = BTreeMap::new();
         for (tool, retry) in calls {
@@ -99,6 +99,7 @@ impl ToolRetries {
         for (tool, retried) in retried {
             let count = self.0.entry(tool.to_owned()).or_default();
             *count = if retried { *count + 1 } else { 0 };
+            let limit = limit(tool);
             if *count > limit && exceeded.is_none() {
                 exceeded =
                     Some(RunError::ToolRetriesExceeded { tool: tool.to_owned(), retries: limit });

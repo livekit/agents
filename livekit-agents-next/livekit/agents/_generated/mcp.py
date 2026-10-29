@@ -24,6 +24,8 @@ class MCPToolOptions(TypedDict, total=False):
     """What counts as a duplicate, e.g. ``"name_and_args"`` to compare arguments too."""
     report_progress: bool
     """Whether to forward the tool's progress notifications to ctx.update()."""
+    retries: int
+    """The tool's retry budget, in place of the agent's ``retries['tools']``."""
 
 
 # --- the frozen public paths -----------------------------------------------------------------

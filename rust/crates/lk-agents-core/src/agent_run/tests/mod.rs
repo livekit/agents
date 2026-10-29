@@ -40,6 +40,7 @@ pub(super) fn tool(name: &str, description: &str, schema: Value) -> FunctionTool
         needs_approval: None,
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
+        retries: None,
     }
 }
 

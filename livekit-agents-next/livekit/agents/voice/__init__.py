@@ -1,5 +1,5 @@
 from . import io, room_io, run_result
-from .agent import Agent
+from .agent import Agent, AgentRetries
 from .agent_session import (
     ExpressiveOptions,
     KeytermDetectionOptions,
@@ -45,6 +45,7 @@ __all__ = [
     "SpeechSteeringOptions",
     "VoiceActivityVideoSampler",
     "Agent",
+    "AgentRetries",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",

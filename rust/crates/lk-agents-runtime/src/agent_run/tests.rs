@@ -298,6 +298,7 @@ fn tool(name: &str) -> FunctionToolInfo {
         needs_approval: None,
         on_duplicate: DuplicateMode::Allow,
         duplicate_scope: DuplicateScope::Name,
+        retries: None,
     }
 }
 

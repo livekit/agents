@@ -120,6 +120,7 @@ impl HostToolRunner for FakeTools {
             needs_approval: (name == APPROVAL_TOOL).then_some(ReadBack::Default),
             on_duplicate: DuplicateMode::Allow,
             duplicate_scope: DuplicateScope::Name,
+            retries: None,
         };
         Box::pin(async move { Ok(Some(info)) })
     }
