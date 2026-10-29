@@ -252,7 +252,7 @@ mod tests {
             delivery.send(audio(12 * 1024 * 1024)).is_err(),
             "several individually admissible events exceeded the shared byte budget"
         );
-        assert!(matches!(receiver.next().await, Some(Event::TextDelta(_))));
+        assert!(matches!(receiver.next().await, Some(Event::AudioDelta(_))));
         delivery.send(audio(12 * 1024 * 1024)).unwrap();
         delivery.finish();
         assert!(receiver.next().await.is_some());
