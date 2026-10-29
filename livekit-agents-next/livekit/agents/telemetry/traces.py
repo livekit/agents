@@ -6,14 +6,15 @@ import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import aiohttp
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, trace
-from opentelemetry._logs import get_logger_provider
+from opentelemetry._logs import Logger, get_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.util.types import AnyValue, AttributeValue
+from pydantic import JsonValue
 
 from livekit import rtc
 
@@ -84,17 +85,16 @@ class DescribesOptions(Protocol):
     or sequences of them. Leave secrets and endpoints out: the report is uploaded. Objects
     without this method are reported by class name alone."""
 
-    def describe_options(self) -> Mapping[str, Any]: ...
+    def describe_options(self) -> Mapping[str, object]: ...
 
 
 def _describe_option_object(obj: object, *, depth: int) -> str:
     """Ask a host SDK object for its reportable options on admitted preparation work."""
     cls = type(obj)
     name = f"{cls.__module__}.{cls.__name__}"
-    describe = getattr(obj, "describe_options", None)
-    if not callable(describe):
+    if not isinstance(obj, DescribesOptions):
         return name
-    options, _ = _serialize_option_value(describe(), depth=depth + 1)
+    options, _ = _serialize_option_value(obj.describe_options(), depth=depth + 1)
     if not isinstance(options, Mapping):
         raise TypeError("describe_options() must return a mapping")
     parts = [
@@ -105,7 +105,7 @@ def _describe_option_object(obj: object, *, depth: int) -> str:
     return f"{name}({', '.join(parts)})"
 
 
-def _serialize_option_value(value: Any, *, depth: int = 0) -> tuple[Any, int]:
+def _serialize_option_value(value: object, *, depth: int = 0) -> tuple[JsonValue, int]:
     from ._export import attribute_bytes, policy
 
     native = policy()
@@ -120,7 +120,7 @@ def _serialize_option_value(value: Any, *, depth: int = 0) -> tuple[Any, int]:
     if isinstance(value, Mapping):
         charge = checked(native.value_bytes("mapping", len(value), depth, []))
         children = 0
-        result: dict[str, Any] = {}
+        result: dict[str, JsonValue] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise TypeError("session report option keys must be strings")
@@ -135,7 +135,7 @@ def _serialize_option_value(value: Any, *, depth: int = 0) -> tuple[Any, int]:
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
         charge = checked(native.value_bytes("sequence", len(value), depth, []))
         children = 0
-        items: list[Any] = []
+        items: list[JsonValue] = []
         for item in value:
             serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
             children += item_charge
@@ -146,13 +146,13 @@ def _serialize_option_value(value: Any, *, depth: int = 0) -> tuple[Any, int]:
     return serialized, checked(attribute_bytes(serialized, depth=depth))
 
 
-def _serialize_session_options(options: dict[str, Any]) -> dict[str, Any]:
+def _serialize_session_options(options: Mapping[str, object]) -> dict[str, JsonValue]:
     serialized, _ = _serialize_option_value(options)
     assert isinstance(serialized, dict)
     return serialized
 
 
-def _chat_item_span_attribute(item: ChatItem) -> dict[str, Any]:
+def _chat_item_span_attribute(item: ChatItem) -> dict[str, object]:
     return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
 
 
@@ -216,7 +216,7 @@ async def _upload_session_report(
     builder: _core._core_PreparedTranscript | None = None
     batch_size = 1
     provider = _cloud.logger_provider or get_logger_provider()
-    loggers: dict[str, Any] = {}
+    loggers: dict[str, Logger] = {}
     recording_options = RecordingOptions(
         audio=audio_allowed,
         traces=options.traces,
@@ -345,16 +345,20 @@ def _truncate(payload: str) -> str:
     return payload[:MAX_PAYLOAD_ATTR_LEN]
 
 
-def _payload_attributes(payload: str) -> dict[str, Any]:
-    attrs: dict[str, Any] = {trace_types.ATTR_RPC_PAYLOAD_SIZE: len(payload.encode("utf-8"))}
+def _payload_attributes(payload: str) -> dict[str, AttributeValue]:
+    attrs: dict[str, AttributeValue] = {
+        trace_types.ATTR_RPC_PAYLOAD_SIZE: len(payload.encode("utf-8"))
+    }
     if payload:
         attrs[trace_types.ATTR_RPC_PAYLOAD] = _truncate(payload)
     return attrs
 
 
-def _response_attributes(response: str | None) -> dict[str, Any]:
+def _response_attributes(response: str | None) -> dict[str, AttributeValue]:
     response = response or ""
-    attrs: dict[str, Any] = {trace_types.ATTR_RPC_RESPONSE_SIZE: len(response.encode("utf-8"))}
+    attrs: dict[str, AttributeValue] = {
+        trace_types.ATTR_RPC_RESPONSE_SIZE: len(response.encode("utf-8"))
+    }
     if response:
         attrs[trace_types.ATTR_RPC_RESPONSE] = _truncate(response)
     return attrs
@@ -367,7 +371,9 @@ _CANCEL_DESCRIPTIONS = {
 }
 
 
-def _cancellation_outcome(invocation: Any) -> tuple[Any, str]:
+def _cancellation_outcome(
+    invocation: rtc.RpcInvocationData,
+) -> tuple[rtc.RpcError.ErrorCode | None, str]:
     """The RPC error code the caller receives for a cancelled handler chain, and a status text.
 
     ``cancel_reason`` is set by the SDK before it cancels the chain; ``None`` there means the
@@ -384,8 +390,10 @@ def _cancellation_outcome(invocation: Any) -> tuple[Any, str]:
 class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
     """An ``rtc.RpcInterceptor`` emitting ``rpc_call`` / ``rpc_handler`` spans."""
 
-    async def intercept_outgoing(self, call: Any, next: Callable[[Any], Awaitable[str]]) -> str:
-        attributes: dict[str, Any] = {
+    async def intercept_outgoing(
+        self, call: rtc.RpcCallInfo, next: Callable[[rtc.RpcCallInfo], Awaitable[str]]
+    ) -> str:
+        attributes: dict[str, AttributeValue] = {
             trace_types.ATTR_RPC_METHOD: call.method,
             trace_types.ATTR_RPC_DESTINATION_IDENTITY: call.destination_identity,
             **_payload_attributes(call.payload),
@@ -405,10 +413,12 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
             return response
 
     async def intercept_incoming(
-        self, invocation: Any, next: Callable[[Any], Awaitable[str | None]]
+        self,
+        invocation: rtc.RpcInvocationData,
+        next: Callable[[rtc.RpcInvocationData], Awaitable[str | None]],
     ) -> str | None:
-        attributes: dict[str, Any] = {
-            trace_types.ATTR_RPC_METHOD: getattr(invocation, "method", ""),
+        attributes: dict[str, AttributeValue] = {
+            trace_types.ATTR_RPC_METHOD: invocation.method,
             trace_types.ATTR_RPC_REQUEST_ID: invocation.request_id,
             trace_types.ATTR_RPC_CALLER_IDENTITY: invocation.caller_identity,
             trace_types.ATTR_RPC_RESPONSE_TIMEOUT: invocation.response_timeout,
@@ -445,7 +455,7 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
 _interceptor = TracingRpcInterceptor()
 
 
-def install_rpc_tracing(local_participant: Any) -> bool:
+def install_rpc_tracing(local_participant: rtc.LocalParticipant) -> bool:
     """Trace RPCs on ``local_participant``. Idempotent. Returns False when the installed
     ``livekit-rtc`` has no interceptor support."""
     global _warned_unsupported
