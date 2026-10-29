@@ -460,6 +460,14 @@ async fn the_usage_record_reports_the_real_audio_duration() {
     assert!((usage.audio_duration - 0.2).abs() < 1e-9, "got {}", usage.audio_duration);
 }
 
+// Catches: reporting the default `offline_recognize`, which routes the session to a batch
+// `recognize()` the gateway does not have.
+#[tokio::test]
+async fn the_gateway_stt_reports_no_batch_recognition() {
+    let stt = stt(Arc::new(FakeWs::new(vec![])));
+    assert!(!Stt::capabilities(&stt).offline_recognize);
+}
+
 // Catches: a mid-stream `session.update` starved by continuous audio.
 #[tokio::test]
 async fn a_session_update_is_not_starved_by_the_audio_stream() {
