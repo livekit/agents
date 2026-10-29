@@ -17,14 +17,6 @@ from pydantic import JsonValue, TypeAdapter
 from livekit.protocol.agent_pb import agent_session as _pb
 
 from ._generated.chat_items import MetricsReport
-from .metrics import (
-    AgentSessionUsage,
-    EOTModelUsage,
-    InterruptionModelUsage,
-    LLMModelUsage,
-    STTModelUsage,
-    TTSModelUsage,
-)
 
 if TYPE_CHECKING:
     from .llm import ChatItem
@@ -49,15 +41,6 @@ ROLES: dict[ChatRole, int] = {
 }
 
 ROLE_NAMES = {v: k for k, v in ROLES.items()}
-
-# which ModelUsage variant each usage type fills, and the proto carrying it
-USAGE_VARIANTS: tuple[tuple[type, str, type[Message]], ...] = (
-    (LLMModelUsage, "llm", _pb.LLMModelUsage),
-    (TTSModelUsage, "tts", _pb.TTSModelUsage),
-    (STTModelUsage, "stt", _pb.STTModelUsage),
-    (InterruptionModelUsage, "interruption", _pb.InterruptionModelUsage),
-    (EOTModelUsage, "eot", _pb.EotModelUsage),
-)
 
 
 def encode_timestamp(created_at: float) -> Timestamp:
@@ -224,15 +207,3 @@ def _decode_fields(msg: Message) -> dict[str, object]:
         fd.name: v.ToNanoseconds() / 1e9 if isinstance(v, Timestamp) else v
         for fd, v in msg.ListFields()
     }
-
-
-def encode_session_usage(usage: AgentSessionUsage) -> _pb.AgentSessionUsage:
-    model_usages: list[_pb.ModelUsage] = []
-    for mu in usage.model_usage:
-        for src_type, variant, msg_type in USAGE_VARIANTS:
-            if isinstance(mu, src_type):
-                pb_usage = _pb.ModelUsage()
-                getattr(pb_usage, variant).CopyFrom(encode_by_name(msg_type, mu))
-                model_usages.append(pb_usage)
-                break
-    return _pb.AgentSessionUsage(model_usage=model_usages)

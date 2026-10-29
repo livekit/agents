@@ -7,10 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     cast,
-    get_args,
     get_origin,
     get_type_hints,
 )
@@ -41,7 +39,7 @@ from .._generated.tool_report import (
 )
 from ..log import logger
 from .chat_context import ChatContext, ImageContent
-from .tool_context import FunctionTool, RawFunctionTool, ToolError, is_raw_function_tool
+from .tool_context import FunctionTool, RawFunctionTool, ToolError
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -258,23 +256,6 @@ def parse_function_arguments(json_arguments: str) -> dict[str, object]:
     tokens stripped, double encoding unwrapped). Raises ``ValueError`` when unrecoverable or not
     a dict."""
     return _core.parse_function_arguments(json_arguments)
-
-
-def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, object] | None:
-    """The arguments that hand ``answer`` to ``fnc`` as an ``InputRequired(tool=)`` names it:
-    the tool's first string parameter. ``None`` for a tool without one: the model reads the
-    answer and calls the tool itself."""
-    if is_raw_function_tool(fnc):
-        properties = fnc.info.raw_schema.get("parameters", {}).get("properties", {})
-        names = [n for n, p in properties.items() if p.get("type") == "string"]
-    else:
-        hints = get_type_hints(fnc, include_extras=True)
-        names = [n for n in inspect.signature(fnc).parameters if _is_str(hints.get(n))]
-    return {names[0]: answer} if names else None
-
-
-def _is_str(hint: object) -> bool:
-    return hint is str or (get_origin(hint) is Annotated and get_args(hint)[0] is str)
 
 
 def prepare_function_arguments(

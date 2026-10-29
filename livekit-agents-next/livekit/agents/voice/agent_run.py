@@ -83,10 +83,6 @@ class RunHooks:
 _run_hooks = contextvars.ContextVar[RunHooks | None]("agents_run_hooks", default=None)
 
 
-def current_run_hooks() -> RunHooks | None:
-    return _run_hooks.get()
-
-
 def door_hooks() -> RunHooks | None:
     """The door's hooks for a run started here; none inside another run's tool, a delegation
     the caller controls."""

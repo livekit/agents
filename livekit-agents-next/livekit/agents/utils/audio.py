@@ -30,16 +30,6 @@ def silence_frame(duration: float, sample_rate: int, num_channels: int = 1) -> r
     )
 
 
-def silence_frame_like(frame: rtc.AudioFrame) -> rtc.AudioFrame:
-    """Create a zeroed ``rtc.AudioFrame`` matching the shape of ``frame``."""
-    return rtc.AudioFrame(
-        data=b"\x00\x00" * frame.samples_per_channel * frame.num_channels,
-        num_channels=frame.num_channels,
-        samples_per_channel=frame.samples_per_channel,
-        sample_rate=frame.sample_rate,
-    )
-
-
 def calculate_audio_duration(frames: AudioBuffer) -> float:
     """
     Calculate the total duration of audio frames.

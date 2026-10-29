@@ -264,10 +264,6 @@ Transition = Completed[object] | Failed | Rejected | InputRequired | Working
 """What a tool or a hook returns to change the state of the turn or the task."""
 
 
-def is_transition(value: object) -> TypeGuard[Transition]:
-    return isinstance(value, (Completed, Failed, Rejected, InputRequired, Working))
-
-
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()

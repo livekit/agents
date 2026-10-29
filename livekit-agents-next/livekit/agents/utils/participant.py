@@ -45,23 +45,6 @@ async def wait_for_agent(
     return room.remote_participants[identity]
 
 
-async def wait_for_participant_attribute(
-    room: rtc.Room,
-    *,
-    identity: str,
-    attribute: str,
-    value: str,
-) -> None:
-    """Wait until a remote participant's attribute equals ``value``.
-
-    Returns immediately if the attribute is already set. Raises
-    :class:`RuntimeError` if the room is not connected, the participant is not
-    present, the participant disconnects, or the room disconnects before the
-    attribute is set.
-    """
-    await _core.wait_for_participant_attribute(_room_session(room), identity, attribute, value)
-
-
 @overload
 async def wait_for_participant(
     room: rtc.Room,
