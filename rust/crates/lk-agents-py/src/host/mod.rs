@@ -1,4 +1,4 @@
-//! The Python entry of `HostInvoker` (decision 74: pyo3 is this crate's alone): [`Entry`] and
+//! The Python entry of `HostInvoker` (pyo3 is this crate's alone): [`Entry`] and
 //! [`Notifier`] implement the runtime's language-neutral port, which every generated proxy
 //! dispatches through (`lk_agents_runtime::host`). A callback runs in a copy of the context its
 //! operation captured at entry, on that context's event loop. The call itself runs inside the
@@ -318,7 +318,7 @@ pub fn read<'py>(obj: &Bound<'py, PyAny>, name: &str) -> PyResult<Bound<'py, PyA
 }
 
 /// A Rust future as the awaitable a `_core` coroutine method returns: polled on the loop when
-/// virtual time applies to it, else on the process runtime (decision 88).
+/// virtual time applies to it, else on the process runtime.
 pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -354,7 +354,7 @@ fn loop_spawner() -> Option<Arc<dyn lk_agents_abi::Spawner>> {
     Python::try_attach(loop_time::LoopRuntime::current).flatten().map(|rt| rt.spawner())
 }
 
-/// The host's time as the runtime reads it (decision 88), installed by `#[pymodule]`.
+/// The host's time as the runtime reads it, installed by `#[pymodule]`.
 pub struct HostTime;
 
 impl lk_agents_runtime::process::HostTime for HostTime {
