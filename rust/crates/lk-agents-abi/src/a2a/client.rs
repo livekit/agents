@@ -15,8 +15,6 @@ pub struct MessageMetadata {
     #[host(default = None)]
     pub verbatim: Option<String>,
     #[host(default = None)]
-    pub answer_tool: Option<String>,
-    #[host(default = None)]
     pub merged_into: Option<String>,
     #[host(default = None)]
     pub reason: Option<String>,
@@ -194,8 +192,6 @@ pub trait AgentClient: Send + Sync + Sized + 'static {
     async fn connect(&self) -> Result<AgentCard, AgentClientError>;
     #[host(getter)]
     fn offers_extension(&self) -> bool;
-    #[host(getter)]
-    fn extensions(&self) -> Vec<String>;
     #[host(await)]
     async fn send(
         &self,

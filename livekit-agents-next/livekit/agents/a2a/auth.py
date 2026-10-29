@@ -76,10 +76,6 @@ class Principal(AuthPrincipal):
 
     grant: AgentThreadGrant | None
 
-    @property
-    def unscoped(self) -> bool:
-        return self.kind == "project"
-
     @classmethod
     def _from_native(cls, principal: AuthPrincipal) -> Principal:
         grant = principal.grant

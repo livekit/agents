@@ -204,13 +204,6 @@ impl AgentClient {
         Ok(out)
     }
 
-    #[getter]
-    fn extensions(&self) -> PyResult<::std::vec::Vec<::std::string::String>> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::extensions(&self.0);
-        Ok(out)
-    }
-
     #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
     fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: Option<Bound<'_, PyAny>>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;

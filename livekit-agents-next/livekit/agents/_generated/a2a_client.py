@@ -15,7 +15,6 @@ class MessageMetadata:
     kind: str | None = None
     channel: str | None = None
     verbatim: str | None = None
-    answer_tool: str | None = None
     merged_into: str | None = None
     reason: str | None = None
     interrupted: bool | None = None

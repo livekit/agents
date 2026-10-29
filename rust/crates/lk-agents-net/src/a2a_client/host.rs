@@ -43,19 +43,6 @@ impl port::AgentClient for AgentClient {
         AgentClient::offers_extension(self).unwrap_or(false)
     }
 
-    fn extensions(&self) -> Vec<String> {
-        self.inner
-            .core
-            .lock()
-            .ok()
-            .and_then(|client| client.card().cloned())
-            .and_then(|card| card.capabilities.extensions)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|extension| extension.uri)
-            .collect()
-    }
-
     async fn send(
         &self,
         message: MessageInput,

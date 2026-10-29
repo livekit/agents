@@ -773,7 +773,7 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
     assert principal.kind == "grant" and principal.grant is not None
     assert principal.grant.scope == "user:bob" and principal.grant.write
     # the node's verdict without a bearer is the project credential; nothing is anonymous
-    assert CREDENTIALS._principal({}, agent_name=AGENT, node_authorized=True).unscoped
+    assert CREDENTIALS._principal({}, agent_name=AGENT, node_authorized=True).kind == "project"
     with pytest.raises(Unauthorized):
         CREDENTIALS._principal({}, agent_name=AGENT)
     # a grant naming neither a scope nor a thread is refused
