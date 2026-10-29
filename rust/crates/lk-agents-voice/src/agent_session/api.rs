@@ -1261,6 +1261,7 @@ impl<T: Send + 'static> Pusher<T> {
     ) {
         loop {
             let next = tokio::select! {
+                biased;
                 next = source.next() => next,
                 () = self.closed() => break,
             };
