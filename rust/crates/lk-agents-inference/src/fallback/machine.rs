@@ -103,6 +103,18 @@ impl FallbackPolicy {
         changed
     }
 
+    /// Cancellation is not a provider failure. `Some` reports whether availability changed;
+    /// `None` leaves health and recovery authorization untouched.
+    pub fn failed(
+        &mut self,
+        backend: ResourceId,
+        kind: Option<ApiErrorKind>,
+        cooldown_until: Option<Ts>,
+    ) -> Option<bool> {
+        (kind != Some(ApiErrorKind::Cancelled))
+            .then(|| self.observe(backend, false, cooldown_until))
+    }
+
     pub fn select(&mut self, backend: ResourceId, selection: u64) {
         self.entries.entry(backend).or_default().selected = selection;
     }

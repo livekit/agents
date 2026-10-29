@@ -362,14 +362,13 @@ impl<B: Backend> FallbackChain<B> {
                                 }
                             }
                             Attempt::Failed { error, produced_output } => {
-                                if error.api_kind() != Some(ApiErrorKind::Cancelled)
-                                    && !(error.api_kind() == Some(ApiErrorKind::Timeout)
-                                        && deadline.is_some_and(|at| self.clock.now() >= at))
-                                {
+                                let failed = !(error.api_kind() == Some(ApiErrorKind::Timeout)
+                                    && deadline.is_some_and(|at| self.clock.now() >= at))
+                                    && self.observe_result(*index, Err(&error));
+                                if failed {
                                     self.select(*index, 0);
-                                    self.set_available(*index, false);
                                 }
-                                if error.api_kind() != Some(ApiErrorKind::Cancelled)
+                                if failed
                                     && !produced_output
                                     && !self.closed.load(Ordering::SeqCst)
                                     && !*cancel.borrow()
@@ -396,7 +395,7 @@ impl<B: Backend> FallbackChain<B> {
                         served.take().expect("successful attempt outcome");
                     self.mark_serving(index);
                     self.select(index, attempt_id);
-                    self.set_available(index, true);
+                    self.observe_result(index, Ok(()));
                     return Ok(ChainOutcome::Served(value));
                 }
                 ChainEffect::WakeAt(at) => {
@@ -657,25 +656,30 @@ impl<B: Backend> FallbackChain<B> {
         drop(handles);
     }
 
-    fn set_available(&self, index: usize, available: bool) {
+    fn observe_result(&self, index: usize, result: Result<(), &ProviderError>) -> bool {
+        let available = result.is_ok();
         let changed = {
             let mut s = self.status.lock().expect("chain status");
             match s.backends.get(index) {
                 Some(st) if !st.closed => {
                     let resource = st.resource;
-                    s.health.observe(resource, available, None)
+                    match result {
+                        Ok(()) => Some(s.health.observe(resource, true, None)),
+                        Err(error) => s.health.failed(resource, error.api_kind(), None),
+                    }
                 }
-                _ => false,
+                _ => None,
             }
         };
         // Only on a transition: a second failure of a down provider emits nothing.
-        if changed {
+        if changed == Some(true) {
             self.observer.availability_changed(AvailabilityChanged {
                 index,
                 label: self.labels[index].clone(),
                 available,
             });
         }
+        changed.is_some()
     }
 }
 

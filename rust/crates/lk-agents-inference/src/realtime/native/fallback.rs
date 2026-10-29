@@ -314,7 +314,7 @@ impl FallbackSession {
             )
         };
         let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, self.clock.now()).into();
-        let mut opened = None;
+        let mut opened: Option<(u64, Arc<dyn RealtimeSession>)> = None;
         let mut target = target;
         let outcome = loop {
             let Some(effect) = effects.pop_front() else { unreachable!("fallback must settle") };
@@ -330,16 +330,35 @@ impl FallbackSession {
                     {
                         Ok(session) => {
                             target = index;
-                            opened = Some(session);
-                            ChainEvent::Succeeded { attempt }
+                            opened = Some((attempt, session));
+                            if self.lock().closed {
+                                ChainEvent::Cancel
+                            } else {
+                                ChainEvent::Succeeded { attempt }
+                            }
                         }
                         Err(error) => {
                             let backend = self.priority[index];
-                            if self.lock().policy.observe(
-                                backend,
-                                false,
-                                Some(self.clock.now().saturating_add(self.cooldown)),
-                            ) {
+                            let (closed, changed) = {
+                                let mut st = self.lock();
+                                let closed = st.closed;
+                                let changed = if closed {
+                                    None
+                                } else {
+                                    st.policy.failed(
+                                        backend,
+                                        error.api_kind(),
+                                        Some(self.clock.now().saturating_add(self.cooldown)),
+                                    )
+                                };
+                                (closed, changed)
+                            };
+                            if closed {
+                                effects
+                                    .extend(request.handle(ChainEvent::Cancel, self.clock.now()));
+                                continue;
+                            }
+                            if changed == Some(true) {
                                 self.announce(vec![backend], false);
                             }
                             ChainEvent::Failed { attempt, error, produced_output: false }
@@ -352,42 +371,48 @@ impl FallbackSession {
                     effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
                 }
                 ChainEffect::Finished(outcome) => break outcome,
-                // Opens settle before observations; there is no running attempt at cancellation.
-                ChainEffect::Cancel { .. } => {}
+                ChainEffect::Cancel { attempt } => {
+                    if opened.as_ref().is_some_and(|(id, _)| *id == attempt) {
+                        let (_, session) = opened.take().expect("matching opened session");
+                        session.aclose().await;
+                    }
+                }
                 _ => unreachable!("realtime fallback only opens realtime sessions"),
             }
         };
-        let opened = outcome.map(|()| opened.expect("successful realtime open"));
-        // Closed while the new model opened: it is closed too, never adopted.
-        if self.lock().closed {
-            if let Ok(session) = opened {
-                session.aclose().await;
+        // Adoption and close share the state lock. A late session is released outside it.
+        let late = {
+            let mut st = self.lock();
+            if st.closed {
+                opened.take().map(|(_, session)| session)
+            } else {
+                st.swapping = false;
+                match outcome {
+                    Ok(()) => {
+                        st.active = opened.take().expect("successful realtime open").1;
+                        st.active_index = target;
+                        self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
+                        st.events.push_back(Event::SessionSwapped {
+                            regenerate: self.regenerate_on_swap,
+                        });
+                    }
+                    Err(error) => {
+                        st.events.push_back(Event::Error(RealtimeModelError {
+                            timestamp: lk_agents_abi::Ts::ZERO,
+                            label: "livekit.agents.llm.realtime_fallback_adapter.RealtimeModelFallbackAdapter".to_owned(),
+                            message: error.to_string(),
+                            recoverable: false,
+                            req_id: None,
+                            code: None,
+                            provider_error: Some(error.attempt_error()),
+                        }));
+                    }
+                }
+                None
             }
-            return;
-        }
-        let mut st = self.lock();
-        st.swapping = false;
-        match opened {
-            Ok(session) => {
-                st.active = session;
-                st.active_index = target;
-                self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
-                st.events.push_back(Event::SessionSwapped { regenerate: self.regenerate_on_swap });
-            }
-            // Every model failed to start: escalate so the session closes.
-            Err(e) => {
-                st.events.push_back(Event::Error(RealtimeModelError {
-                    timestamp: lk_agents_abi::Ts::ZERO,
-                    label:
-                        "livekit.agents.llm.realtime_fallback_adapter.RealtimeModelFallbackAdapter"
-                            .to_owned(),
-                    message: e.to_string(),
-                    recoverable: false,
-                    req_id: None,
-                    code: None,
-                    provider_error: None,
-                }));
-            }
+        };
+        if let Some(session) = late {
+            session.aclose().await;
         }
     }
 
@@ -555,13 +580,18 @@ impl RealtimeSession for FallbackSession {
                         let (target, recovered, failed) = {
                             let mut st = self.lock();
                             let now = self.clock.now();
-                            let recovered = st.policy.refresh(&self.priority, now);
                             let backend = self.priority[st.active_index];
-                            let failed = st.policy.observe(
+                            let Some(failed) = st.policy.failed(
                                 backend,
-                                false,
+                                e.provider_error.as_ref().map(|error| error.kind),
                                 Some(now.saturating_add(self.cooldown)),
-                            );
+                            ) else {
+                                return Some(Event::Error(e));
+                            };
+                            // A zero cooldown applies to the next pass, not the failure just observed.
+                            let recovery_priority: Vec<_> =
+                                self.priority.iter().copied().filter(|id| *id != backend).collect();
+                            let recovered = st.policy.refresh(&recovery_priority, now);
                             (
                                 st.policy.candidates(&self.priority, false).first().copied(),
                                 recovered,
@@ -784,6 +814,100 @@ mod fallback_session_tests {
             ["UpdateInstructions", "UpdateTools", "generate_reply:early", "generate_reply:late"]
         );
     }
+    #[derive(Default)]
+    struct AvailabilityLog(Mutex<Vec<(usize, bool)>>);
+    impl ChainObserver for AvailabilityLog {
+        fn availability_changed(&self, ev: AvailabilityChanged) {
+            self.0.lock().unwrap().push((ev.index, ev.available));
+        }
+    }
+
+    async fn cancellation_case(failed_open: bool) {
+        struct CancelledOpen;
+        impl Realtime for CancelledOpen {
+            fn label(&self) -> String {
+                "cancelled-open".into()
+            }
+            fn capabilities(&self) -> RealtimeCapabilities {
+                RealtimeCapabilities { audio_output: true, ..Default::default() }
+            }
+            fn session(
+                &self,
+                _: bool,
+            ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>>
+            {
+                Box::pin(async {
+                    Err(lk_agents_abi::errors::ApiError::status(
+                        "provider cancelled",
+                        499,
+                        None,
+                        None,
+                    )
+                    .into())
+                })
+            }
+        }
+        let mut error = fatal();
+        if !failed_open && let Event::Error(e) = &mut error {
+            e.provider_error = Some(
+                lk_agents_abi::errors::ApiError::status("provider cancelled", 499, None, None)
+                    .into(),
+            );
+        }
+        let primary = scripted(vec![error]);
+        let backup: Arc<dyn Realtime> =
+            if failed_open { Arc::new(CancelledOpen) } else { Arc::new(Model(scripted(vec![]))) };
+        let changes = Arc::new(AvailabilityLog::default());
+        let model = RealtimeFallbackModel::new(
+            vec![
+                RealtimeChild::Native(Arc::new(Model(primary.clone()))),
+                RealtimeChild::Native(backup),
+            ],
+            10.0,
+            false,
+            changes.clone(),
+            WallAnchor::of(&lk_agents_abi::RealClock::default()),
+        )
+        .unwrap();
+        let session = model.session(false).await.unwrap();
+        let first = session.next_event().await.unwrap();
+        let terminal = if failed_open {
+            assert!(matches!(first, Event::Error(e) if e.recoverable));
+            session.next_event().await.unwrap()
+        } else {
+            first
+        };
+        assert_eq!(
+            *changes.0.lock().unwrap(),
+            if failed_open { vec![(0, false)] } else { vec![] },
+            "cancellation must not change the cancelled backend's health"
+        );
+        let Event::Error(error) = terminal else { panic!("cancellation was retried") };
+        assert!(!error.recoverable);
+        assert!(
+            error
+                .provider_error
+                .as_ref()
+                .is_some_and(|e| e.kind == lk_agents_abi::errors::ApiErrorKind::Cancelled),
+            "the cancellation's class and diagnostic cause must survive fallback"
+        );
+        assert_eq!(model.active_index(), 0, "cancellation must not swap providers");
+        if !failed_open {
+            assert!(!primary.closed.load(std::sync::atomic::Ordering::Acquire));
+        }
+        session.aclose().await;
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_realtime_request_does_not_swap_or_penalize_its_provider() {
+        cancellation_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_realtime_open_preserves_its_cause_without_a_health_penalty() {
+        cancellation_case(true).await;
+    }
+
     #[tokio::test]
     async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
         struct BlockedOpen(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
@@ -808,6 +932,7 @@ mod fallback_session_tests {
         }
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
+        let changes = Arc::new(AvailabilityLog::default());
         let model = RealtimeFallbackModel::new(
             vec![
                 RealtimeChild::Native(Arc::new(Model(scripted(vec![fatal()])))),
@@ -816,7 +941,7 @@ mod fallback_session_tests {
             ],
             10.0,
             false,
-            Arc::new(crate::fallback::IgnoreEvents),
+            changes.clone(),
             WallAnchor::of(&lk_agents_abi::RealClock::default()),
         )
         .unwrap();
@@ -829,6 +954,11 @@ mod fallback_session_tests {
         session.aclose().await;
         release.notify_one();
         let _ = reading.await.unwrap();
+        assert_eq!(
+            *changes.0.lock().unwrap(),
+            vec![(0, false)],
+            "a late failure after close must not announce a health penalty"
+        );
         assert!(
             session.next_event().await.is_none(),
             "session close fabricated a fatal cancellation error"
