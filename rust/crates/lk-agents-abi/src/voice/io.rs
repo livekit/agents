@@ -170,7 +170,7 @@ impl PlaybackTracker {
     }
 
     fn anchor(&self) -> WallAnchor {
-        *self.anchor.get_or_init(|| WallAnchor::of(&crate::RealClock::new()))
+        *self.anchor.get_or_init(|| WallAnchor { wall: crate::unix_now(), at: Ts::ZERO })
     }
 
     /// `on_playback_started(created_at=)`.

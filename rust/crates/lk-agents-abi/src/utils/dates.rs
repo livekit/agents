@@ -1,9 +1,6 @@
-//! `datetime.date` and `datetime.time`, valid by construction, and the injectable `date.today()`.
+//! `datetime.date` and `datetime.time`, valid by construction.
 
-use crate::Clock;
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
-use std::sync::Arc;
-use std::time::UNIX_EPOCH;
 
 #[crate::host(handwritten(extract, emit, host = "datetime.date"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -83,50 +80,6 @@ impl Time {
     /// `strftime("%I:%M %p")` -- `03:05 PM`. Midnight is `12:00 AM`, noon is `12:00 PM`.
     pub fn format_12h(self) -> String {
         self.0.format("%I:%M %p").to_string()
-    }
-}
-
-#[derive(Clone)]
-pub struct TodaySource {
-    clock: Arc<dyn Clock>,
-    /// Seconds east of UTC.
-    utc_offset_secs: i32,
-}
-
-impl std::fmt::Debug for TodaySource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TodaySource")
-            .field("today", &self.today())
-            .field("utc_offset_secs", &self.utc_offset_secs)
-            .finish()
-    }
-}
-
-impl TodaySource {
-    pub fn new(clock: Arc<dyn Clock>) -> Self {
-        TodaySource { clock, utc_offset_secs: 0 }
-    }
-
-    pub fn with_utc_offset(clock: Arc<dyn Clock>, utc_offset_secs: i32) -> Self {
-        TodaySource { clock, utc_offset_secs }
-    }
-
-    pub fn today(&self) -> Date {
-        let t = self.clock.wall();
-        let secs = match t.duration_since(UNIX_EPOCH) {
-            Ok(d) => d.as_secs() as i64,
-            // Before 1970: negative rather than a panic on a host-supplied value.
-            Err(e) => -(e.duration().as_secs() as i64),
-        };
-        let local = secs + i64::from(self.utc_offset_secs);
-        Date(chrono::DateTime::from_timestamp(local, 0).unwrap_or_default().date_naive())
-    }
-}
-
-impl Default for TodaySource {
-    /// Tests pass a `VirtualClock`.
-    fn default() -> Self {
-        TodaySource::new(Arc::new(crate::RealClock::new()))
     }
 }
 
