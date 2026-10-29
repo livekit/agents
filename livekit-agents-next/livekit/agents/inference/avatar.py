@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from livekit import rtc
 
 from .. import _core
-from .._generated.inference_avatar import LemonSliceOptions
+from .._generated.inference_avatar import LemonSliceOptions as LemonSliceOptions
 from ..job import get_job_context
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -18,6 +18,8 @@ from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOu
 from ._utils import Credentials, get_inference_headers
 
 if TYPE_CHECKING:
+    import aiohttp
+
     from ..voice import VoiceSession
 
 
@@ -61,11 +63,11 @@ class AvatarSession(BaseAvatarSession):
         *,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[LemonSliceOptions | dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[LemonSliceOptions | dict[str, object]] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: Any = None,
+        http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
