@@ -15,10 +15,6 @@ pub use buffers::*;
 pub use host_errors::*;
 pub use values::*;
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-use std::sync::RwLock;
-
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 /// Re-exported for the expansions, so a core crate needs no dependency of its own.
@@ -62,49 +58,9 @@ pub const fn same_name(a: &str, b: &str) -> bool {
     true
 }
 
-// Importing `_core` must start nothing: the forkserver imports then forks, and `fork()` clones only
-// the calling thread, so a runtime started at import would hang the child on its first `block_on`.
-
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-/// Not a `OnceLock`: a forked child must be able to re-declare itself.
-static STATE: RwLock<Option<u32>> = RwLock::new(None);
-
-fn poisoned() -> PyErr {
-    PyRuntimeError::new_err("livekit.agents._core's process state is poisoned")
-}
-
-fn forked_without_init() -> PyErr {
-    PyRuntimeError::new_err(
-        "livekit.agents._core was inherited across a fork. The Rust core cannot be used in a \
-         forked child without re-initialising it: call _core.init(role) in the child.",
-    )
-}
-
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
-/// Overwriting is safe: nothing has started.
-pub fn declare() -> PyResult<()> {
-    *STATE.write().map_err(|_| poisoned())? = Some(std::process::id());
-    Ok(())
-}
-
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
-/// Turns a silent deadlock on a runtime whose threads did not survive `fork()` into an exception.
+/// The fork guard every in-place entry passes first: the runtime's, linked by `lk-agents-py`.
 pub fn check_pid() -> PyResult<()> {
-    let pid = std::process::id();
-    // Never declared: self-declare (nothing has started; raising would break plain scripts the
-    // reference supports). The write re-checks so an explicit `init` in between is not overwritten.
-    if let Some(p) = *STATE.read().map_err(|_| poisoned())? {
-        return if p == pid { Ok(()) } else { Err(forked_without_init()) };
-    }
-    let mut state = STATE.write().map_err(|_| poisoned())?;
-    match *state {
-        Some(p) if p == pid => Ok(()),
-        Some(_) => Err(forked_without_init()),
-        None => {
-            *state = Some(pid);
-            Ok(())
-        }
-    }
+    (bridge::host_runtime().check_pid)()
 }
 
 // Autoref specialisation: `(&Fail(&e)).py_err()` resolves to [`Declared`] when `E: HostException`
@@ -142,40 +98,11 @@ impl<E: std::fmt::Display> Fallback for &Fail<'_, E> {
 
 #[cfg(test)]
 mod tests {
-    //! One process per test (nextest): `STATE` is a process global.
     use super::*;
 
-    /// `check_pid`'s refusal is a `PyErr`, so the interpreter has to exist.
     fn with_py(f: impl FnOnce(Python<'_>)) {
         Python::initialize();
         Python::attach(f)
-    }
-
-    // N402: the reference needs no initialiser, so first use must not raise.
-    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
-    #[test]
-    fn a_process_that_never_declared_itself_is_usable() {
-        with_py(|_| {
-            assert_eq!(*STATE.read().unwrap(), None, "nothing should be declared yet");
-            check_pid().expect("first use must self-declare rather than raise");
-            assert_eq!(*STATE.read().unwrap(), Some(std::process::id()));
-        });
-    }
-
-    // The failure the guard exists for, and its remedy: with `STATE` as a `OnceLock`, `init`
-    // returned the error whose remedy is this call.
-    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
-    #[test]
-    fn a_forked_child_is_refused_until_it_re_declares_itself() {
-        with_py(|_| {
-            // What a forked child inherits: a declaration from a *different* process.
-            *STATE.write().unwrap() = Some(std::process::id() ^ 0x5555);
-            let err = check_pid().expect_err("a stale declaration must be refused");
-            assert!(format!("{err}").contains("inherited across a fork"), "{err}");
-            declare().expect("the child must be able to re-declare itself");
-            declare().expect("idempotently");
-            check_pid().expect("and be usable afterwards");
-        });
     }
 
     struct Refused(&'static str);

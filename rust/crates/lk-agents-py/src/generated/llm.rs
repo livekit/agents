@@ -74,7 +74,7 @@ type ChatContextDiffsImpl = <crate::Selected as super::Implementations>::ChatCon
 #[pyfunction]
 #[pyo3(signature = (old, new))]
 pub fn compute_chat_ctx_diff(old: ::std::vec::Vec<::lk_agents_abi::ChatItem>, new: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<(::std::vec::Vec<::std::string::String>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>)> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <ChatContextDiffsImpl as ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs>::compute_chat_ctx_diff(old, new);
     Ok(out)
 }
@@ -107,7 +107,7 @@ impl FixedGate {
     #[new]
     #[pyo3(signature = (silence, *, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5))]
     fn new(#[pyo3(from_py_with = _extract_fixed_gate_new_silence)] silence: f64, #[pyo3(from_py_with = _extract_fixed_gate_new_activation_ratio)] activation_ratio: f64, #[pyo3(from_py_with = _extract_fixed_gate_new_deactivation_ratio)] deactivation_ratio: f64, #[pyo3(from_py_with = _extract_fixed_gate_new_min_silence_duration)] min_silence_duration: f64) -> PyResult<FixedGate> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::new(silence, activation_ratio, deactivation_ratio, min_silence_duration);
         Ok(FixedGate(::std::sync::Arc::new(out)))
     }
@@ -115,14 +115,14 @@ impl FixedGate {
     /// True while the frame belongs to an open burst of output.
     #[pyo3(signature = (frame))]
     fn update(&self, frame: ::lk_agents_abi::AudioFrame) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// End the open burst, keeping whatever has been learned about the model.
     fn deactivate(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::deactivate(&self.0);
         Ok(())
     }
@@ -169,7 +169,7 @@ impl AdaptiveNoiseGate {
     #[new]
     #[pyo3(signature = (*, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5, window = 10.0))]
     fn new(#[pyo3(from_py_with = _extract_adaptive_noise_gate_new_activation_ratio)] activation_ratio: f64, #[pyo3(from_py_with = _extract_adaptive_noise_gate_new_deactivation_ratio)] deactivation_ratio: f64, #[pyo3(from_py_with = _extract_adaptive_noise_gate_new_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_adaptive_noise_gate_new_window)] window: f64) -> PyResult<AdaptiveNoiseGate> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::new(activation_ratio, deactivation_ratio, min_silence_duration, window);
         Ok(AdaptiveNoiseGate(::std::sync::Arc::new(out)))
     }
@@ -177,14 +177,14 @@ impl AdaptiveNoiseGate {
     /// True while the frame belongs to an open burst of output.
     #[pyo3(signature = (frame))]
     fn update(&self, frame: ::lk_agents_abi::AudioFrame) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(&self.0, frame).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// End the open burst, keeping whatever has been learned about the model.
     fn deactivate(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::deactivate(&self.0);
         Ok(())
     }
@@ -219,7 +219,7 @@ impl DuplexRealtimeModel {
     #[new]
     #[pyo3(signature = (host, *, audio_timeout = 0.8))]
     fn new(host: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_duplex_realtime_model_new_audio_timeout)] audio_timeout: f64) -> PyResult<DuplexRealtimeModel> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let host = crate::generated::llm::DuplexHostProxy::from_host(&host)?;
         let out = <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::new(&env, host, audio_timeout).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -228,7 +228,7 @@ impl DuplexRealtimeModel {
 
     /// The realtime capabilities the model runs under.
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::capabilities(&self.0);
         Ok(out)
     }
@@ -270,7 +270,7 @@ impl FallbackLlm {
     #[new]
     #[pyo3(signature = (llms, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
     fn new(llms: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_llm_new_attempt_timeout)] attempt_timeout: f64, #[pyo3(from_py_with = _extract_fallback_llm_new_max_retry_per_llm)] max_retry_per_llm: u32, #[pyo3(from_py_with = _extract_fallback_llm_new_retry_interval)] retry_interval: f64, sticky: bool, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackLlm> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let llms = llms.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::llm::LlmProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
         let on_availability = on_availability.map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v)).transpose()?;
@@ -280,13 +280,13 @@ impl FallbackLlm {
 
     #[getter]
     fn active_index(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::active_index(&self.0);
         Ok(out)
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::aclose(&this, )
@@ -297,7 +297,7 @@ impl FallbackLlm {
 
     #[pyo3(signature = (chat_ctx_host, *, tools, tools_host = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
     fn chat<'py>(&self, py: Python<'py>, chat_ctx_host: ::lk_agents_abi::HostRef, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let tool_choice = tool_choice.map(|v| ::lk_agents_abi::python::value_from_py(&v, "tool_choice")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -328,12 +328,12 @@ pub struct FallbackLlmChunks(::lk_agents_runtime::net::source::NativeSource<::lk
 #[pymethods]
 impl FallbackLlmChunks {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::aclose(&self.0, py)
     }
 }
@@ -358,7 +358,7 @@ impl FallbackTts {
     #[new]
     #[pyo3(signature = (ttss, *, max_retry_per_tts = 2, sample_rate = None, on_availability = None))]
     fn new(ttss: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)] max_retry_per_tts: u32, #[pyo3(from_py_with = _extract_fallback_tts_new_sample_rate)] sample_rate: ::std::option::Option<u32>, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackTts> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let ttss = ttss.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::tts::TtsProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
         let on_availability = on_availability.map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v)).transpose()?;
@@ -368,34 +368,34 @@ impl FallbackTts {
 
     #[getter]
     fn active_index(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::active_index(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn capabilities(&self) -> PyResult<::lk_agents_abi::TtsCapabilities> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::capabilities(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn sample_rate(&self) -> PyResult<u32> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::sample_rate(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn num_channels(&self) -> PyResult<u16> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::num_channels(&self.0);
         Ok(out)
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::aclose(&this, )
@@ -406,7 +406,7 @@ impl FallbackTts {
 
     #[pyo3(signature = (text, conn_options = None))]
     fn synthesize<'py>(&self, py: Python<'py>, text: ::std::string::String, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, text, conn_options)
@@ -417,7 +417,7 @@ impl FallbackTts {
 
     #[pyo3(signature = (conn_options = None))]
     fn stream<'py>(&self, py: Python<'py>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options)
@@ -454,32 +454,32 @@ pub struct TtsTokenLog(pub(crate) ::std::sync::Arc<TtsTokenLogImpl>);
 impl TtsTokenLog {
     #[new]
     fn new() -> PyResult<TtsTokenLog> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::new();
         Ok(TtsTokenLog(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (text))]
     fn push(&self, text: ::std::string::String) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::push(&self.0, text);
         Ok(())
     }
 
     fn flush(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::flush(&self.0);
         Ok(())
     }
 
     fn end(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::end(&self.0);
         Ok(())
     }
 
     fn snapshot(&self) -> PyResult<(::std::vec::Vec<::std::option::Option<::std::string::String>>, bool)> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::snapshot(&self.0);
         Ok(out)
     }
@@ -499,7 +499,7 @@ impl InferenceLlm {
     #[new]
     #[pyo3(signature = (model, *, provider = None, base_url, api_key, api_secret, inference_class = None, extra_kwargs = None))]
     fn new(model: ::std::string::String, provider: ::std::option::Option<::std::string::String>, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, inference_class: ::std::option::Option<::std::string::String>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<InferenceLlm> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(&env, model, provider, base_url, api_key, api_secret, inference_class, extra_kwargs).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -511,7 +511,7 @@ impl InferenceLlm {
     /// `llm.LLM` whose `error` events report the attempts this view retries.
     #[pyo3(signature = (headers, reporter = None))]
     fn identified(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, reporter: Option<Bound<'_, PyAny>>) -> PyResult<InferenceLlm> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let reporter = reporter.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::identified(&self.0, headers, reporter);
         Ok(InferenceLlm(::std::sync::Arc::new(out)))
@@ -519,7 +519,7 @@ impl InferenceLlm {
 
     #[getter]
     fn model(&self) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::model(&self.0);
         Ok(out)
     }
@@ -527,7 +527,7 @@ impl InferenceLlm {
     /// The persistent request options, a copy.
     #[getter]
     fn extra_kwargs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::extra_kwargs(&self.0);
         Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
     }
@@ -535,7 +535,7 @@ impl InferenceLlm {
     /// Read by the next `chat()`. `extra_kwargs` replaces the persistent options.
     #[pyo3(signature = (*, model = None, extra_kwargs = None))]
     fn update_options(&self, model: ::std::option::Option<::std::string::String>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::update_options(&self.0, model, extra_kwargs);
         Ok(())
@@ -545,7 +545,7 @@ impl InferenceLlm {
     /// caller's job, read in its context.
     #[pyo3(signature = (items, *, tools, conn_options, parallel_tool_calls = None, tool_choice = None, response_format = None, extra_kwargs = None, headers = None))]
     fn chat(&self, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -572,12 +572,12 @@ pub struct InferenceLlmChunks(::lk_agents_runtime::net::source::NativeSource<::l
 #[pymethods]
 impl InferenceLlmChunks {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::recv(&self.0, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::aclose(&self.0, py)
     }
 }
@@ -595,7 +595,7 @@ impl LlmChoiceParser {
     #[new]
     #[pyo3(signature = (model))]
     fn new(model: ::std::string::String) -> PyResult<LlmChoiceParser> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::new(model);
         Ok(LlmChoiceParser(out))
     }
@@ -603,7 +603,7 @@ impl LlmChoiceParser {
     /// The chunk `choice` (one streamed choice of completion `id`) completes, if any.
     #[pyo3(signature = (id, choice))]
     fn parse(&mut self, id: ::std::string::String, choice: Bound<'_, PyAny>) -> PyResult<::std::option::Option<::lk_agents_abi::LlmChunk>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let choice = ::lk_agents_abi::python::value_from_py(&choice, "choice")?;
         let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
@@ -617,7 +617,7 @@ type CompletionWireImpl = <crate::Selected as super::Implementations>::Completio
 #[pyfunction]
 #[pyo3(signature = (chunk))]
 pub fn llm_usage_chunk(chunk: Bound<'_, PyAny>) -> PyResult<::std::option::Option<::lk_agents_abi::LlmChunk>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let chunk = ::lk_agents_abi::python::value_from_py(&chunk, "chunk")?;
     let out = <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
@@ -647,28 +647,28 @@ impl McpSession {
     #[new]
     #[pyo3(signature = (client_session_timeout_seconds))]
     fn new(#[pyo3(from_py_with = _extract_mcp_session_new_client_session_timeout_seconds)] client_session_timeout_seconds: f64) -> PyResult<McpSession> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(client_session_timeout_seconds).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(McpSession(::std::sync::Arc::new(out)))
     }
 
     #[getter]
     fn connected(&self) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connected(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (allowed))]
     fn set_allowed_tools(&self, allowed: ::std::vec::Vec<::std::string::String>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::set_allowed_tools(&self.0, allowed);
         Ok(())
     }
 
     #[pyo3(signature = (url, headers, transport, timeout, sse_read_timeout))]
     fn connect_http<'py>(&self, py: Python<'py>, url: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, transport: ::std::string::String, #[pyo3(from_py_with = _extract_mcp_session_connect_http_timeout)] timeout: f64, #[pyo3(from_py_with = _extract_mcp_session_connect_http_sse_read_timeout)] sse_read_timeout: f64) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -680,7 +680,7 @@ impl McpSession {
 
     #[pyo3(signature = (command, args, env, cwd))]
     fn connect_stdio<'py>(&self, py: Python<'py>, command: ::std::string::String, args: ::std::vec::Vec<::std::string::String>, env: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, cwd: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_stdio(&this, command, args, env, cwd)
@@ -691,7 +691,7 @@ impl McpSession {
 
     #[pyo3(signature = (transport, host_context))]
     fn connect_host<'py>(&self, py: Python<'py>, transport: Bound<'_, PyAny>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let transport = crate::generated::llm::McpTransportProxy::from_host(&transport)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -702,7 +702,7 @@ impl McpSession {
     }
 
     fn list_tools<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::list_tools(&this, )
@@ -713,7 +713,7 @@ impl McpSession {
 
     #[pyo3(signature = (name, arguments, progress, host_context))]
     fn call_tool<'py>(&self, py: Python<'py>, name: ::std::string::String, arguments: Bound<'_, PyAny>, progress: Option<Bound<'_, PyAny>>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let arguments = match ::lk_agents_abi::python::value_from_py(&arguments, "arguments")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("arguments", ": expected a dict"))) }?;
         let progress = progress.map(|v| crate::generated::llm::McpProgressProxy::from_host(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -725,7 +725,7 @@ impl McpSession {
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::close(&this, )
@@ -736,7 +736,7 @@ impl McpSession {
 
     #[getter]
     fn cleanup<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::cleanup(&self.0);
         Ok(crate::generated::records::mcp_session::mcp_cleanup_to_py(py, out)?)
     }
@@ -752,7 +752,7 @@ fn _extract_mcp_tools_timeout_check_seconds(obj: &Bound<'_, PyAny>) -> PyResult<
 #[pyfunction]
 #[pyo3(signature = (config))]
 pub fn resolve_mcp_tool_options(config: ::std::option::Option<::lk_agents_abi::llm::mcp::McpToolOptionsPatch>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptions> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::resolve_tool_options(config);
     Ok(out)
 }
@@ -760,7 +760,7 @@ pub fn resolve_mcp_tool_options(config: ::std::option::Option<::lk_agents_abi::l
 #[pyfunction]
 #[pyo3(signature = (name, description, input_schema, meta))]
 pub fn mcp_raw_schema<'py>(py: Python<'py>, name: ::std::string::String, description: ::std::option::Option<::std::string::String>, input_schema: Bound<'_, PyAny>, meta: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let input_schema = match ::lk_agents_abi::python::value_from_py(&input_schema, "input_schema")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("input_schema", ": expected a dict"))) }?;
     let meta = meta.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "meta")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("meta", ": expected a dict"))) }).transpose()?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::raw_schema(name, description, input_schema, meta);
@@ -770,7 +770,7 @@ pub fn mcp_raw_schema<'py>(py: Python<'py>, name: ::std::string::String, descrip
 #[pyfunction]
 #[pyo3(signature = (toolset_initialized, server_connected))]
 pub fn mcp_plan_setup(toolset_initialized: bool, server_connected: bool) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::plan_setup(toolset_initialized, server_connected);
     Ok(out)
 }
@@ -778,7 +778,7 @@ pub fn mcp_plan_setup(toolset_initialized: bool, server_connected: bool) -> PyRe
 #[pyfunction]
 #[pyo3(signature = (transport_type))]
 pub fn mcp_http_transport(transport_type: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(transport_type).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
@@ -786,7 +786,7 @@ pub fn mcp_http_transport(transport_type: ::std::option::Option<::std::string::S
 #[pyfunction]
 #[pyo3(signature = (tool_name, result))]
 pub fn mcp_render_result(tool_name: ::std::string::String, result: Bound<'_, PyAny>) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
     let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::render_result(tool_name, result).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
@@ -810,7 +810,7 @@ fn _extract_llm_algorithms_prepare_provider_format_thought_signatures(obj: &Boun
 #[pyfunction]
 #[pyo3(signature = (format, items, *, images = None, inject_dummy_user_message = true, inject_trailing_user_message = false, thought_signatures = None))]
 pub fn to_provider_format<'py>(py: Python<'py>, format: ::std::string::String, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, images: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::lk_agents_abi::llm::provider_format::SerializedImage>>, inject_dummy_user_message: bool, inject_trailing_user_message: bool, #[pyo3(from_py_with = _extract_llm_algorithms_prepare_provider_format_thought_signatures)] thought_signatures: ::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::vec::Vec<u8>>>) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let env = crate::process::env();
     crate::host::future_into_py(py, async move {
         let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -821,7 +821,7 @@ pub fn to_provider_format<'py>(py: Python<'py>, format: ::std::string::String, i
 #[pyfunction]
 #[pyo3(signature = (items, *, role, template))]
 pub fn convert_mid_conversation_instructions(items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, role: ::lk_agents_abi::Role, template: ::std::string::String) -> PyResult<::std::vec::Vec<(usize, ::std::option::Option<::lk_agents_abi::ChatItem>)>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::convert_mid_conversation_instructions(items, role, &template);
     Ok(out)
 }
@@ -829,7 +829,7 @@ pub fn convert_mid_conversation_instructions(items: ::std::vec::Vec<::lk_agents_
 #[pyfunction]
 #[pyo3(signature = (format, tools, *, tool_behavior = None, use_parameters_json_schema = false))]
 pub fn to_fnc_ctx<'py>(py: Python<'py>, format: ::std::string::String, tools: Bound<'_, PyAny>, tool_behavior: ::std::option::Option<::std::string::String>, use_parameters_json_schema: bool) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let tools = tools.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::value_from_py(&item, "tools") }).collect::<PyResult<Vec<_>>>())?;
     let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
@@ -905,7 +905,7 @@ impl HostRealtimeModel {
     #[new]
     #[pyo3(signature = (model))]
     fn new(model: Bound<'_, PyAny>) -> PyResult<HostRealtimeModel> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let model = crate::generated::llm::HostRealtimeProxy::from_host(&model)?;
         let out = <HostRealtimeModelImpl as ::lk_agents_abi::llm::realtime::HostRealtimeModel>::new(&env, model).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -936,7 +936,7 @@ impl NativeRealtimeModel {
     #[new]
     #[pyo3(signature = (config))]
     fn new(config: Bound<'_, PyAny>) -> PyResult<NativeRealtimeModel> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let config = crate::generated::records::realtime_options::native_realtime_config_from_py(&config)?;
         let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -945,34 +945,34 @@ impl NativeRealtimeModel {
 
     #[getter]
     fn provider(&self) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::provider(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn model(&self) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::model(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn label(&self) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::label(&self.0);
         Ok(out)
     }
 
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::capabilities(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (options))]
     fn update_options(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let options = crate::generated::records::realtime_options::realtime_options_from_py(&options)?;
         <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::update_options(&self.0, options);
         Ok(())
@@ -980,7 +980,7 @@ impl NativeRealtimeModel {
 
     #[pyo3(signature = (headers))]
     fn bind_identification(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::bind_identification(&self.0, headers);
         Ok(())
     }
@@ -1014,7 +1014,7 @@ impl RealtimeFallbackModel {
     #[new]
     #[pyo3(signature = (models, *, cooldown = 10.0, regenerate_on_swap = true, on_availability = None))]
     fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(&env, models, cooldown, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
@@ -1022,20 +1022,20 @@ impl RealtimeFallbackModel {
 
     #[getter]
     fn active_index(&self) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::active_index(&self.0);
         Ok(out)
     }
 
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::capabilities(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (*, switch_model = false))]
     fn restart<'py>(&self, py: Python<'py>, switch_model: bool) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::restart(&this, switch_model)
@@ -1065,7 +1065,7 @@ type ChatContextDictImpl = <crate::Selected as super::Implementations>::ChatCont
 #[pyfunction]
 #[pyo3(signature = (items, *, exclude_image = true, exclude_audio = true, exclude_timestamp = true, exclude_function_call = false, exclude_metrics = false, exclude_config_update = false, strip_markup = false))]
 pub fn chat_ctx_to_dict<'py>(py: Python<'py>, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, exclude_image: bool, exclude_audio: bool, exclude_timestamp: bool, exclude_function_call: bool, exclude_metrics: bool, exclude_config_update: bool, strip_markup: bool) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <ChatContextDictImpl as ::lk_agents_abi::llm::to_dict::ChatContextDict>::chat_ctx_to_dict(items, exclude_image, exclude_audio, exclude_timestamp, exclude_function_call, exclude_metrics, exclude_config_update, strip_markup).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
 }

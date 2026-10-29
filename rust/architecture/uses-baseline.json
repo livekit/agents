@@ -159,7 +159,6 @@
   "pyo3-use:rust/crates/lk-agents-abi/src/python/host_tests.rs:side_tables::make_exception:pyo3::types::PyDict::new": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/python/host_tests.rs:side_tables:pyo3::exceptions::PyRuntimeError": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/python/host_tests.rs:side_tables:pyo3::prelude": 1,
-  "pyo3-use:rust/crates/lk-agents-abi/src/python/mod.rs:<file>:pyo3::exceptions::PyRuntimeError": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/python/mod.rs:<file>:pyo3::prelude": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/python/mod.rs:<file>:pyo3_async_runtimes": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/python/mod.rs:from_host_str::impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for $t::extract:pyo3::Borrowed": 1,

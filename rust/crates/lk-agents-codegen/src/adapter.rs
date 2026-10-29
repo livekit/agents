@@ -276,7 +276,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         "    "
     };
     let guard = if m.pid.unwrap_or(c.pid) {
-        format!("{ind}    ::lk_agents_abi::python::check_pid()?;\n")
+        format!("{ind}    crate::host::check_pid()?;\n")
     } else {
         String::new()
     };
@@ -576,7 +576,7 @@ fn duplex_class(
     let (item_ty, convert) = input(&at, &param)?;
     let convert = convert.map(|c| format!("        let item = {c};\n")).unwrap_or_default();
     let err = &sink.err.with;
-    let guard = "        ::lk_agents_abi::python::check_pid()?;\n";
+    let guard = "        crate::host::check_pid()?;\n";
     let control = Class {
         name: name.clone(),
         rust_name: name.clone(),
@@ -611,7 +611,7 @@ fn source_class(name: &str, item: &Ty) -> Result<String, String> {
         format!("Ok({}.unbind())", crate::records::emit(item, "item")?)
     };
     Ok(format!(
-        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::net::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        crate::host::source::recv(&self.0, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        crate::host::source::aclose(&self.0, py)\n    }}\n}}\n",
+        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::net::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        crate::host::check_pid()?;\n        crate::host::source::recv(&self.0, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        crate::host::check_pid()?;\n        crate::host::source::aclose(&self.0, py)\n    }}\n}}\n",
         item = item.rust()
     ))
 }

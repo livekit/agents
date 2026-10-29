@@ -70,7 +70,7 @@ impl InferenceVad {
     #[new]
     #[pyo3(signature = (model_factory, *, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
     fn new(model_factory: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_inference_vad_new_min_speech_duration)] min_speech_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_prefix_padding_duration)] prefix_padding_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_max_buffered_speech)] max_buffered_speech: f64, #[pyo3(from_py_with = _extract_inference_vad_new_activation_threshold)] activation_threshold: f64, #[pyo3(from_py_with = _extract_inference_vad_new_deactivation_threshold)] deactivation_threshold: f64) -> PyResult<InferenceVad> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let model_factory = crate::generated::vad::VadModelsProxy::from_host(&model_factory)?;
         let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(&env, model_factory, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold);
@@ -80,14 +80,14 @@ impl InferenceVad {
     /// Every option, applied by each running stream before its next frame.
     #[pyo3(signature = (*, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
     fn update_options(&self, #[pyo3(from_py_with = _extract_inference_vad_update_options_min_speech_duration)] min_speech_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_prefix_padding_duration)] prefix_padding_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_max_buffered_speech)] max_buffered_speech: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_activation_threshold)] activation_threshold: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_deactivation_threshold)] deactivation_threshold: f64) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::update_options(&self.0, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold);
         Ok(())
     }
 
     /// One detection; each event carries the audio it refers to.
     fn stream(&self) -> PyResult<InferenceVadStream> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok({ let (sink, source) = out; InferenceVadStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) })
     }
@@ -114,28 +114,28 @@ pub struct InferenceVadStream(::std::boxed::Box<InferenceVadStreamImpl>, ::lk_ag
 #[pymethods]
 impl InferenceVadStream {
     fn push(&self, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         ::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
     }
 
     fn flush(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         ::lk_agents_abi::StreamSink::flush(&*self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
     }
 
     fn end_input(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         ::lk_agents_abi::StreamSink::end_input(&*self.0);
         Ok(())
     }
 
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::recv(&self.1, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         ::lk_agents_abi::StreamSink::end_input(&*self.0);
         crate::host::source::aclose(&self.1, py)
     }

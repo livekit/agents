@@ -29,7 +29,7 @@ impl TextSessionRunner {
     #[new]
     #[pyo3(signature = (root_agent, agents, max_depth))]
     fn new(root_agent: ::std::string::String, agents: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_text_session_runner_new_max_depth)] max_depth: usize) -> PyResult<TextSessionRunner> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let agents = agents.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::text_session::text_session_agent_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(&env, root_agent, agents, max_depth).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -38,7 +38,7 @@ impl TextSessionRunner {
 
     #[pyo3(signature = (request))]
     fn run(&self, request: Bound<'_, PyAny>) -> PyResult<TextSessionUpdates> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let request = crate::generated::records::text_session::text_session_request_from_py(&request)?;
         let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
@@ -47,7 +47,7 @@ impl TextSessionRunner {
     /// Acknowledge selected presentation before the child can release its parent.
     #[pyo3(signature = (delivery))]
     fn release(&self, delivery: Bound<'_, PyAny>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let delivery = crate::generated::records::text_session::text_session_delivery_from_py(&delivery)?;
         <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::release(&self.0, delivery).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
@@ -55,7 +55,7 @@ impl TextSessionRunner {
 
     #[pyo3(signature = (invocation_id, operation, message))]
     fn progress(&self, invocation_id: ::std::string::String, #[pyo3(from_py_with = _extract_text_session_runner_progress_operation)] operation: u64, message: ::std::string::String) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(&self.0, &invocation_id, operation, message).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -68,12 +68,12 @@ pub struct TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource<::l
 #[pymethods]
 impl TextSessionUpdates {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::recv(&self.0, py, |py, item| Ok(crate::generated::records::text_session::text_session_update_to_py(py, item)?.unbind()))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::aclose(&self.0, py)
     }
 }

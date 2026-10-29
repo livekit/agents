@@ -292,7 +292,7 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
     for expected in [
         "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
         "::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
-        "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        ::lk_agents_abi::python::check_pid()?;\n        ::lk_agents_abi::StreamSink::end_input(&*self.0);",
+        "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        crate::host::check_pid()?;\n        ::lk_agents_abi::StreamSink::end_input(&*self.0);",
         "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&*self.0, model)",
         "{ let (sink, source) = out; Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }",
     ] {

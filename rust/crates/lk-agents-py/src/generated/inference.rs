@@ -18,7 +18,7 @@ type InferenceCredentialsImpl = <crate::Selected as super::Implementations>::Inf
 #[pyfunction]
 #[pyo3(signature = (explicit = None, server = None))]
 pub fn inference_resolve_api_key(explicit: ::std::option::Option<::std::string::String>, server: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_key(explicit, server);
     Ok(out)
 }
@@ -27,7 +27,7 @@ pub fn inference_resolve_api_key(explicit: ::std::option::Option<::std::string::
 #[pyfunction]
 #[pyo3(signature = (explicit = None, server = None))]
 pub fn inference_resolve_api_secret(explicit: ::std::option::Option<::std::string::String>, server: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_secret(explicit, server);
     Ok(out)
 }
@@ -211,7 +211,7 @@ impl InferenceAvatar {
     #[new]
     #[pyo3(signature = (model, *, avatar_identity = None, avatar_name = None, extra_kwargs = None, base_url, api_key, api_secret, conn_options))]
     fn new(model: ::std::string::String, avatar_identity: ::std::option::Option<::std::string::String>, avatar_name: ::std::option::Option<::std::string::String>, extra_kwargs: Option<Bound<'_, PyAny>>, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, conn_options: ::lk_agents_abi::ApiConnectOptions) -> PyResult<InferenceAvatar> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
         let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::new(&env, model, avatar_identity, avatar_name, extra_kwargs, base_url, api_key, api_secret, conn_options).map_err(|e: ::lk_agents_abi::inference::avatar_session::AvatarError| <::lk_agents_abi::inference::avatar_session::AvatarError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -220,14 +220,14 @@ impl InferenceAvatar {
 
     #[getter]
     fn provider(&self) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::provider(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn avatar_identity(&self) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::avatar_identity(&self.0);
         Ok(out)
     }
@@ -235,7 +235,7 @@ impl InferenceAvatar {
     /// The gateway-generated avatar session id, once created.
     #[getter]
     fn session_id(&self) -> PyResult<::std::option::Option<::std::string::String>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::session_id(&self.0);
         Ok(out)
     }
@@ -243,7 +243,7 @@ impl InferenceAvatar {
     /// The provider's own session id while the session is held.
     #[getter]
     fn provider_session_id(&self) -> PyResult<::std::option::Option<::std::string::String>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::provider_session_id(&self.0);
         Ok(out)
     }
@@ -254,7 +254,7 @@ impl InferenceAvatar {
     /// terminated. `livekit_url` defaults to `LIVEKIT_URL`; `headers` are `get_inference_headers()`.
     #[pyo3(signature = (*, room_name, room_sid, livekit_url = None, agent_identity, headers))]
     fn create<'py>(&self, py: Python<'py>, room_name: ::std::string::String, room_sid: ::std::string::String, livekit_url: ::std::option::Option<::std::string::String>, agent_identity: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::create(&this, room_name, room_sid, livekit_url, agent_identity, headers)
@@ -268,7 +268,7 @@ impl InferenceAvatar {
     /// session held, so a second call retries.
     #[pyo3(signature = (headers))]
     fn aclose<'py>(&self, py: Python<'py>, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::aclose(&this, headers)
@@ -294,7 +294,7 @@ impl InferenceTts {
     #[new]
     #[pyo3(signature = (model, *, base_url, api_key, api_secret, conn_options, voice = None, language = None, encoding = "pcm_s16le".to_owned(), sample_rate = 24000, extra_kwargs = None, fallback = None))]
     fn new(model: ::std::string::String, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, conn_options: ::lk_agents_abi::ApiConnectOptions, voice: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, encoding: ::std::string::String, #[pyo3(from_py_with = _extract_inference_tts_new_sample_rate)] sample_rate: u32, extra_kwargs: Option<Bound<'_, PyAny>>, fallback: Option<Bound<'_, PyAny>>) -> PyResult<InferenceTts> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }).transpose()?;
         let fallback = fallback.map(|v| v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| items.iter().map(|item| { if !item.is_instance_of::<::pyo3::types::PyDict>() { return Err(::pyo3::exceptions::PyValueError::new_err("each fallback entry must be a dict")); } crate::generated::records::inference_tts::fallback_model_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
@@ -304,35 +304,35 @@ impl InferenceTts {
 
     #[pyo3(signature = (expressive))]
     fn set_expressive(&self, expressive: bool) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::set_expressive(&self.0, expressive);
         Ok(())
     }
 
     #[getter]
     fn sample_rate(&self) -> PyResult<u32> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::sample_rate(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn aligned_transcript(&self) -> PyResult<bool> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::aligned_transcript(&self.0);
         Ok(out)
     }
 
     #[pyo3(signature = (*, headers = None))]
     fn prewarm(&self, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::prewarm(&self.0, headers);
         Ok(())
     }
 
     #[pyo3(signature = (headers, reporter = None))]
     fn identified(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, reporter: Option<Bound<'_, PyAny>>) -> PyResult<InferenceTts> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let reporter = reporter.map(|v| crate::generated::tts::TtsProxy::from_host(&v)).transpose()?;
         let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::identified(&self.0, headers, reporter);
         Ok(InferenceTts(::std::sync::Arc::new(out)))
@@ -340,7 +340,7 @@ impl InferenceTts {
 
     #[pyo3(signature = (*, model = None, voice = None, language = None, extra = None))]
     fn update_options(&self, model: ::std::option::Option<::std::string::String>, voice: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, extra: Option<Bound<'_, PyAny>>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let extra = extra.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }).transpose()?;
         <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::update_options(&self.0, model, voice, language, extra);
         Ok(())
@@ -348,7 +348,7 @@ impl InferenceTts {
 
     #[pyo3(signature = (*, headers = None, conn_options = None))]
     fn stream<'py>(&self, py: Python<'py>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::stream(&this, headers, conn_options)

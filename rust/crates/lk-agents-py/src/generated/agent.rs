@@ -23,7 +23,7 @@ impl VoiceAgent {
     #[new]
     #[pyo3(signature = (definition, host, host_context))]
     fn new(definition: Bound<'_, PyAny>, host: Bound<'_, PyAny>, host_context: ::lk_agents_abi::HostRef) -> PyResult<VoiceAgent> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let definition = crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
         let host = crate::generated::agent::AgentHostProxy::from_host(&host)?;
         let out = <VoiceAgentImpl as ::lk_agents_abi::agent::VoiceAgent>::new(definition, host, host_context);
@@ -76,7 +76,7 @@ impl RunEvents {
     #[new]
     #[pyo3(signature = (events))]
     fn new(events: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<RunEvents> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::new(events);
         Ok(RunEvents(out))
     }
@@ -84,7 +84,7 @@ impl RunEvents {
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[pyo3(signature = (index, expected))]
     fn at(&self, #[pyo3(from_py_with = _extract_run_events_at_index)] index: i64, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
@@ -93,7 +93,7 @@ impl RunEvents {
     /// Advances to the next event of `expected`'s kind, or the next event when `None`.
     #[pyo3(signature = (expected))]
     fn next_event(&mut self, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::next_event(&mut self.0, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
@@ -102,7 +102,7 @@ impl RunEvents {
     /// Advances past the next event only if it meets `expected`.
     #[pyo3(signature = (expected))]
     fn skip_next_event_if(&mut self, expected: Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next_event_if(&mut self.0, expected);
         Ok(out)
@@ -110,13 +110,13 @@ impl RunEvents {
 
     #[pyo3(signature = (count))]
     fn skip_next(&mut self, #[pyo3(from_py_with = _extract_run_events_skip_next_count)] count: usize) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next(&mut self.0, count).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     fn no_more_events(&self) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::no_more_events(&self.0).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -124,7 +124,7 @@ impl RunEvents {
     /// The first event of `start..stop` meeting `expected`.
     #[pyo3(signature = (start, stop, expected))]
     fn contains(&self, #[pyo3(from_py_with = _extract_run_events_contains_start)] start: usize, #[pyo3(from_py_with = _extract_run_events_contains_stop)] stop: usize, expected: Bound<'_, PyAny>) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
@@ -134,7 +134,7 @@ impl RunEvents {
     /// the events with that one marked.
     #[pyo3(signature = (message, index))]
     fn failure(&self, message: ::std::string::String, #[pyo3(from_py_with = _extract_run_events_failure_index)] index: ::std::option::Option<usize>) -> PyResult<::std::string::String> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::failure(&self.0, message, index);
         Ok(out)
     }
@@ -158,7 +158,7 @@ impl AgentRunner {
     #[new]
     #[pyo3(signature = (definition, llm, host))]
     fn new(definition: Bound<'_, PyAny>, llm: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<AgentRunner> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let definition = crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
         let llm = crate::generated::llm::LlmProxy::from_host(&llm)?;
@@ -170,7 +170,7 @@ impl AgentRunner {
     /// Starts one invocation; nothing runs until the first pull.
     #[pyo3(signature = (request))]
     fn run(&self, request: Bound<'_, PyAny>) -> PyResult<AgentRunUpdates> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let request = crate::generated::records::agent_run::run_request_from_py(&request)?;
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
@@ -181,7 +181,7 @@ impl AgentRunner {
     /// end is dropped. Refused for an invocation this runner is not running.
     #[pyo3(signature = (invocation_id, operation, message))]
     fn progress(&self, invocation_id: ::std::string::String, #[pyo3(from_py_with = _extract_agent_runner_progress_operation)] operation: u64, message: ::std::string::String) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(&self.0, &invocation_id, operation, message).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -194,12 +194,12 @@ pub struct AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource<::lk_a
 #[pymethods]
 impl AgentRunUpdates {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::recv(&self.0, py, |py, item| Ok(crate::generated::records::agent_run::run_update_to_py(py, item)?.unbind()))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         crate::host::source::aclose(&self.0, py)
     }
 }

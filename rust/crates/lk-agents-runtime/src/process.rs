@@ -19,6 +19,11 @@ pub enum ProcessError {
     Forked,
     #[error("the native runtime failed to start: {0}")]
     Start(String),
+    #[error(
+        "livekit.agents._core was inherited across a fork. The Rust core cannot be used in a \
+         forked child without re-initialising it: call _core.init(role) in the child."
+    )]
+    Inherited,
 }
 
 struct Started {
@@ -38,9 +43,12 @@ struct State {
     frames: Option<Arc<dyn FrameReader>>,
     /// The host's time, installed once as the host loads.
     time: Option<Arc<dyn HostTime>>,
+    /// The process that declared itself the core's (`_core.init`, else its first entry).
+    declared: Option<u32>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, time: None });
+static PROCESS: Mutex<State> =
+    Mutex::new(State { started: None, frames: None, time: None, declared: None });
 
 /// The host's clock and executor. Each read resolves the caller's: a host whose
 /// running loop is on virtual time answers with that loop's.
@@ -100,11 +108,23 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
     Ok(read(started))
 }
 
+/// The fork guard every host entry passes first: a process that never declared itself does so
+/// now (the reference has no initialiser); one that inherited another's declaration across a
+/// fork is refused until it calls [`reinit`], since its runtime's threads did not survive.
+pub fn check_pid() -> Result<(), ProcessError> {
+    let pid = std::process::id();
+    match state().declared.get_or_insert(pid) {
+        declared if *declared == pid => Ok(()),
+        _ => Err(ProcessError::Inherited),
+    }
+}
+
 /// Declares this process as the runtime's owner (`_core.init` in a forked child): a runtime
 /// inherited from the parent is abandoned, never dropped, since dropping joins worker threads
 /// the child does not have. The next [`handle`] starts a fresh one.
 pub fn reinit() {
     let mut state = state();
+    state.declared = Some(std::process::id());
     if state.started.as_ref().is_some_and(|started| started.pid != std::process::id()) {
         std::mem::forget(state.started.take());
     }
@@ -193,4 +213,23 @@ pub(crate) async fn yield_now() {
         std::task::Poll::Pending
     })
     .await
+}
+
+#[cfg(test)]
+mod pid_tests {
+    use super::*;
+
+    // The failure the guard exists for, and its remedy: a declaration inherited from another
+    // process is refused until this one re-declares itself; a process that never declared is
+    // usable at once (the reference needs no initialiser).
+    #[test]
+    fn a_forked_child_is_refused_until_it_re_declares_itself() {
+        state().declared = None;
+        check_pid().expect("first use must self-declare rather than raise");
+        state().declared = Some(std::process::id() ^ 0x5555);
+        let err = check_pid().expect_err("a stale declaration must be refused");
+        assert!(err.to_string().contains("inherited across a fork"), "{err}");
+        reinit();
+        check_pid().expect("usable once re-declared");
+    }
 }

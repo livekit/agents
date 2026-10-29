@@ -9,6 +9,8 @@ use super::host_errors::capture;
 
 /// The binding's async runtime, submitted by `lk-agents-py`: the in-place expansions await on it.
 pub struct HostRuntime {
+    /// The runtime's fork guard, as a host exception.
+    pub check_pid: fn() -> PyResult<()>,
     /// A future resolving to a host value as the awaitable a `_core` coroutine method returns.
     pub future_into_py: for<'py> fn(
         Python<'py>,
@@ -22,7 +24,7 @@ fn linked() -> Option<&'static HostRuntime> {
     inventory::iter::<HostRuntime>.into_iter().next()
 }
 
-fn host_runtime() -> &'static HostRuntime {
+pub(super) fn host_runtime() -> &'static HostRuntime {
     linked().expect("no host runtime is linked (lk-agents-py)")
 }
 

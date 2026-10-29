@@ -1,13 +1,14 @@
 //! The process runtime as `_core` exposes it: `init(role)`. Everything else `_core` holds is
 //! declared beside its Rust item, in the core crate that owns it, and registers itself on the
-//! table [`register_all`] drains; the generic bridge -- the fork guard, the host handle, the side
-//! tables, host-error capture -- is `lk_agents_abi::python`, re-exported here whole.
+//! table [`register_all`] drains; the in-place bridge (side tables, host-error capture) is
+//! `lk_agents_abi::python`, re-exported here whole.
 //!
-//! Importing the module starts nothing: every entry point goes through [`check_pid`].
+//! Importing the module starts nothing: every entry point goes through the runtime's fork guard
+//! (`crate::host::check_pid`).
 
 use pyo3::prelude::*;
 
-// The fork guard and the registration table.
+// The registration table.
 pub use lk_agents_abi::python::*;
 
 // ============================================================================================
@@ -32,10 +33,9 @@ pub enum Role {
     Job,
 }
 
-// The pid a process declared, and the guard every entry point calls, live in
-// `lk_agents_abi::python` since in-place bindings (2026-09-23): a core crate's expanded items call
-// `check_pid` too, and there must be one declaration per process. The role is not kept: nothing in
-// the core branches on it yet, and a process that never declared one is a `Job`.
+// The pid a process declared, and the guard every entry point calls, are the runtime's
+// (`lk_agents_runtime::process::check_pid`). The role is not kept: nothing in the core branches on
+// it yet, and a process that never declared one is a `Job`.
 
 /// Start the core for this process. Idempotent, and re-declares across a fork.
 ///
@@ -45,9 +45,9 @@ pub enum Role {
 pub fn init(role: Role) -> PyResult<()> {
     let _ = role;
     // A forked child declaring itself abandons the parent's Tokio runtime; its own starts on use.
-    lk_agents_runtime::process::reinit();
     // the Rust `log` lines' route to Python (installed at import) survives a fork
-    lk_agents_abi::python::declare()
+    lk_agents_runtime::process::reinit();
+    Ok(())
 }
 
 lk_agents_abi::register_host!(class Role);
@@ -56,9 +56,6 @@ lk_agents_abi::register_host!(fn init);
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // The fork guard's own tests (never-declared is usable; a forked child is refused until it
-    // re-declares) moved with `STATE` to `lk_agents_abi::python`.
 
     /// Every name `dir(livekit.agents._core)` returns, minus dunders. The file's `about` says how
     /// to regenerate it.

@@ -343,8 +343,15 @@ pub fn host_spawner() -> PyResult<Arc<dyn lk_agents_abi::Spawner>> {
 
 lk_agents_abi::python::inventory::submit! {
     lk_agents_abi::python::HostRuntime {
+        check_pid,
         future_into_py: erased_future_into_py,
     }
+}
+
+/// The runtime's fork guard (`lk_agents_runtime::process::check_pid`) as a `RuntimeError`.
+pub fn check_pid() -> PyResult<()> {
+    lk_agents_runtime::process::check_pid()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 /// The process runtime's handle; a forked child's refusal raises.

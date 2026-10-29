@@ -149,7 +149,7 @@ fn fork_guards_follow_group_defaults_and_entry_overrides() {
     .expect("typed fork policy is declared for classes, function groups and entries");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let llm = &adapters.iter().find(|output| output.path == "llm.rs").unwrap().text;
-    assert_eq!(llm.matches("::lk_agents_abi::python::check_pid()?").count(), 2, "{llm}");
+    assert_eq!(llm.matches("crate::host::check_pid()?").count(), 2, "{llm}");
     for invalid in ["false", "0"] {
         let value = if invalid == "false" { "\"false\"" } else { invalid };
         let declaration = format!(
@@ -629,7 +629,7 @@ fn writable_property_keeps_its_name_validates_the_value_and_propagates_failures(
         "{adapter}"
     );
     let call = "::set_target(&self.0, count)";
-    let guard = "::lk_agents_abi::python::check_pid()?";
+    let guard = "crate::host::check_pid()?";
     assert_eq!(adapter.matches(guard).count(), 1, "only this setter overrides the PID policy");
     assert!(adapter.find(guard).unwrap() < adapter.find(call).unwrap(), "{adapter}");
     assert!(adapter.contains(&format!("{call}.map_err(")), "{adapter}");

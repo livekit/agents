@@ -23,7 +23,7 @@ impl _core_JudgeRunner {
     #[new]
     #[pyo3(signature = (llm, tools, host))]
     fn new(llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<_core_JudgeRunner> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let env = crate::process::env();
         let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
@@ -35,7 +35,7 @@ impl _core_JudgeRunner {
     /// outcomes in judge order. An unknown built-in judge is refused before any runs.
     #[pyo3(signature = (judges, chat_ctx, reference))]
     fn evaluate<'py>(&self, py: Python<'py>, judges: Bound<'_, PyAny>, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, reference: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let judges = judges.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::evals::judge_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
@@ -48,7 +48,7 @@ impl _core_JudgeRunner {
     /// Whether `message` fulfills `intent`. A provider failure raises the provider's error.
     #[pyo3(signature = (intent, message))]
     fn judge_intent<'py>(&self, py: Python<'py>, intent: ::std::string::String, message: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
+        crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
@@ -65,7 +65,7 @@ type EvaluationsImpl = <crate::Selected as super::Implementations>::Evaluations;
 #[pyfunction]
 #[pyo3(signature = (verdicts))]
 pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts).map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(crate::generated::records::evals::evaluation_score_to_py(py, out)?)
 }
@@ -73,7 +73,7 @@ pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::
 /// The judge tools' raw schemas, which the host offers a model it implements.
 #[pyfunction]
 pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas();
     Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
 }

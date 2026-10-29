@@ -337,7 +337,7 @@ pub fn keyword_search(query: ::std::string::String, docs: Bound<'_, PyAny>, #[py
 #[pyfunction]
 #[pyo3(signature = (query))]
 pub fn tool_search_validate(query: ::std::string::String) -> PyResult<()> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_validate(query).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(())
 }
@@ -345,7 +345,7 @@ pub fn tool_search_validate(query: ::std::string::String) -> PyResult<()> {
 #[pyfunction]
 #[pyo3(signature = (query, count))]
 pub fn tool_search_loaded(query: ::std::string::String, #[pyo3(from_py_with = _extract_tool_search_tool_search_loaded_count)] count: usize) -> PyResult<::std::string::String> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let out = <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_loaded(query, count).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
@@ -353,7 +353,7 @@ pub fn tool_search_loaded(query: ::std::string::String, #[pyo3(from_py_with = _e
 #[pyfunction]
 #[pyo3(signature = (arguments, known))]
 pub fn tool_proxy_arguments<'py>(py: Python<'py>, arguments: Bound<'_, PyAny>, known: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
+    crate::host::check_pid()?;
     let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
     let out = <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_proxy_arguments(arguments, known).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::lk_agents_abi::python::value_to_py(py, &x1)?])?.into_any() })
