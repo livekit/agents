@@ -4,7 +4,7 @@ use super::fallback::TtsFallbackModel;
 use crate::errors::ProviderError;
 use crate::{ApiConnectOptions, Tts};
 
-/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
+/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
 #[crate::host(class(name = "InferenceTts", native = Tts))]
 pub trait InferenceTts: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.

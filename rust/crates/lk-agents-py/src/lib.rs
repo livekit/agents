@@ -84,7 +84,7 @@ impl generated::Implementations for Selected {
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;
     type TtsTokenLog = lk_agents_runtime::inference::fallback::TokenLog;
     type FallbackTts = lk_agents_runtime::inference::fallback::FallbackTts;
-    type InferenceTts = lk_agents_runtime::inference::tts::NativeTts;
+    type InferenceTts = lk_agents_runtime::inference::tts::GatewayTts;
     type FallbackTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
     type InferenceTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
     type StreamAdapterFunctions = lk_agents_runtime::inference::tts::adapter::AdapterStreams;
@@ -160,7 +160,7 @@ impl generated::Implementations for Selected {
     type InferenceLlm = lk_agents_runtime::inference::llm::gateway::GatewayLlm;
     type FallbackStt = lk_agents_runtime::inference::fallback::FallbackStt;
     type SttStreamAdapter = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;
-    type InferenceVad = lk_agents_runtime::inference::vad::NativeVad;
+    type InferenceVad = lk_agents_runtime::inference::vad::LocalVad;
     type InferenceEot = lk_agents_runtime::inference::eot::NativeEot;
     type EotStream = lk_agents_runtime::inference::eot::DetectorStream;
     type FixedGate = lk_agents_runtime::inference::duplex::GateClass<

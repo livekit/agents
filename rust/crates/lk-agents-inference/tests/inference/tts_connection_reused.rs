@@ -14,7 +14,7 @@ use std::{
 use base64::Engine;
 use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{SimClock, Tts};
-use lk_agents_inference::tts::{NativeTts, TtsOptions};
+use lk_agents_inference::tts::{GatewayTts, TtsOptions};
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_test_support::corpus;
@@ -51,7 +51,7 @@ fn each_reply_pays_only_the_voice() {
                 api_secret: "s".into(),
                 ..Default::default()
             };
-            let voice = NativeTts::new(
+            let voice = GatewayTts::new(
                 opts,
                 Arc::new(gateway),
                 Arc::new(TokioSpawner::current()),

@@ -29,20 +29,20 @@ pub trait VadModelFactory: Send + Sync {
 }
 
 /// `env` lends the media workers that run the model and the runtime the stream tasks run on.
-pub struct NativeVad {
+pub struct LocalVad {
     /// Watched by every running stream: `update_options` reaches them before their next frame.
     opts: tokio::sync::watch::Sender<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     env: ProcessEnv,
 }
 
-impl NativeVad {
+impl LocalVad {
     pub fn new(opts: VadOptions, models: Arc<dyn VadModelFactory>, env: &ProcessEnv) -> Self {
-        NativeVad { opts: tokio::sync::watch::Sender::new(opts), models, env: env.clone() }
+        LocalVad { opts: tokio::sync::watch::Sender::new(opts), models, env: env.clone() }
     }
 
     /// The pair for callers that need the audio and lag alongside the VAD event.
-    pub fn stream_native(&self) -> Result<(VadSinkHandle, VadOutputSource), ProviderError> {
+    pub fn stream_native(&self) -> Result<(VadInput, VadOutputSource), ProviderError> {
         let unavailable = |error: String| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
@@ -57,14 +57,14 @@ impl NativeVad {
             media_pool,
             runtime,
         )?;
-        Ok((VadSinkHandle { sink }, VadOutputSource { source }))
+        Ok((VadInput { sink }, VadOutputSource { source }))
     }
 }
 
 /// `_core.InferenceVad`: the generated adapter calls this. `model_factory()` builds one host
 /// model per stream (each needs its own recurrent state); never called when the model is native.
-impl lk_agents_abi::vad::inference::InferenceVad for NativeVad {
-    type Audio = VadSinkHandle;
+impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
+    type Audio = VadInput;
     type Events = VadEventSource;
     type Env = ProcessEnv;
 
@@ -87,7 +87,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for NativeVad {
             deactivation_threshold,
         };
         let host = Arc::new(HostModels(model_factory));
-        NativeVad::new(opts, crate::local_models::vad_factory_or(host), env)
+        LocalVad::new(opts, crate::local_models::vad_factory_or(host), env)
     }
 
     fn update_options(
@@ -109,7 +109,7 @@ impl lk_agents_abi::vad::inference::InferenceVad for NativeVad {
         });
     }
 
-    fn stream(&self) -> Result<(VadSinkHandle, VadEventSource), ProviderError> {
+    fn stream(&self) -> Result<(VadInput, VadEventSource), ProviderError> {
         let (sink, source) = self.stream_native()?;
         Ok((sink, VadEventSource(source)))
     }
@@ -158,7 +158,7 @@ impl VadModel for HostModel {
     }
 }
 
-impl Vad for NativeVad {
+impl Vad for LocalVad {
     fn label(&self) -> String {
         "livekit.agents.inference.vad.VAD".into()
     }
@@ -211,11 +211,11 @@ impl StreamSource<VadEvent> for VadEventSource {
 }
 
 /// The stream's bounded audio ingress.
-pub struct VadSinkHandle {
+pub struct VadInput {
     sink: Box<dyn StreamSink<AudioFrame>>,
 }
 
-impl StreamSink<AudioFrame> for VadSinkHandle {
+impl StreamSink<AudioFrame> for VadInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.sink.push(item)
     }

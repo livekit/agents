@@ -11,9 +11,9 @@ use lk_agents_abi::{ApiConnectOptions, Clock, Tts};
 use lk_agents_net::env::ProcessEnv;
 
 use super::stream::TtsStream;
-use super::{NativeTts, TtsOptions};
+use super::{GatewayTts, TtsOptions};
 
-impl InferenceTts for NativeTts {
+impl InferenceTts for GatewayTts {
     type Stream = TtsStream;
     type Env = ProcessEnv;
 
@@ -44,7 +44,7 @@ impl InferenceTts for NativeTts {
             extra_kwargs: extra_kwargs.unwrap_or_default(),
             fallback: fallback.unwrap_or_default(),
         };
-        Ok(NativeTts::new(
+        Ok(GatewayTts::new(
             opts,
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             (env.spawner)().map_err(InvalidPayload)?,

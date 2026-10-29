@@ -1,4 +1,4 @@
-use super::NativeTts;
+use super::GatewayTts;
 use base64::Engine as _;
 use lk_agents_abi::{ApiConnectOptions, Clock, StreamSink as _, StreamSource as _, Tts};
 use lk_agents_inference::headers::Headers;
@@ -19,8 +19,8 @@ fn opts() -> TtsOptions {
     }
 }
 
-fn tts(ws: Arc<FakeWs>) -> NativeTts {
-    NativeTts::new(
+fn tts(ws: Arc<FakeWs>) -> GatewayTts {
+    GatewayTts::new(
         opts(),
         ws,
         Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
@@ -237,7 +237,7 @@ async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignme
     let mut opts = opts();
     opts.model = "inworld/inworld-tts-2".into();
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let tts = NativeTts::new(opts, ws.clone(), spawner, super::speech());
+    let tts = GatewayTts::new(opts, ws.clone(), spawner, super::speech());
     tts.set_expressive(true);
     let mut source = tts
         .synthesize("say <expr type=\"prosody\" label=\"whisper\">this</expr> now")
@@ -332,7 +332,7 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     ]));
     let opts = TtsOptions { extra_kwargs: map(&[("add_timestamps", json!(true))]), ..opts() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let client = NativeTts::new(opts, ws, spawner, super::speech());
+    let client = GatewayTts::new(opts, ws, spawner, super::speech());
     let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
         .into_iter()
         .collect();
@@ -409,7 +409,7 @@ async fn identified_views_keep_their_expressive_configuration() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let mut options = opts();
     options.model = "inworld/inworld-tts-2".into();
-    let client = NativeTts::new(
+    let client = GatewayTts::new(
         options,
         ws.clone(),
         Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),

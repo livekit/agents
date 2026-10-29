@@ -357,7 +357,7 @@ fn _extract_inference_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u3
     ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
 }
 
-/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
+/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
 #[pyclass(frozen, name = "InferenceTts", module = "livekit.agents._core")]
 pub struct InferenceTts(::std::sync::Arc<InferenceTtsImpl>);
 

@@ -1,5 +1,5 @@
 //! `inference/tts.py` -- the gateway TTS, WebSocket + JSON (§1.4). `synthesize()` is the duplex
-//! path with one push and the input closed, as in the reference, so [`NativeTts::stream`] always
+//! path with one push and the input closed, as in the reference, so [`GatewayTts::stream`] always
 //! returns `Some`. A synthesis takes a configured socket from the client's pool and gives it back
 //! once the gateway said `done`, as the reference's `ConnectionPool` does.
 //! Text is normalised, split into sentences and converted to the provider's markup here, as
@@ -86,25 +86,25 @@ impl Default for TtsOptions {
 /// One gateway TTS client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job).
 #[derive(Clone)]
-pub struct NativeTts {
+pub struct GatewayTts {
     speech: SpeechTextProcessors,
-    shared: Arc<TtsShared>,
+    shared: Arc<TtsClient>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
     /// The host provider this view serves: its `error` event is each failure the core reports.
     reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
 }
 
-impl std::ops::Deref for NativeTts {
-    type Target = TtsShared;
+impl std::ops::Deref for GatewayTts {
+    type Target = TtsClient;
 
-    fn deref(&self) -> &TtsShared {
+    fn deref(&self) -> &TtsClient {
         &self.shared
     }
 }
 
 /// What every session's view of one client shares: its options and its pooled connections.
-pub struct TtsShared {
+pub struct TtsClient {
     opts: Arc<Mutex<TtsOptions>>,
     expressive: AtomicBool,
     ws: Arc<dyn WsTransport>,
@@ -173,7 +173,7 @@ fn pool_secs(clock: &dyn Clock) -> f64 {
     clock.now().as_nanos() as f64 / 1e9
 }
 
-impl NativeTts {
+impl GatewayTts {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
@@ -184,7 +184,7 @@ impl NativeTts {
         spawner: Arc<dyn Spawner>,
         speech: SpeechTextProcessors,
     ) -> Self {
-        let shared = TtsShared {
+        let shared = TtsClient {
             opts: Arc::new(Mutex::new(opts)),
             expressive: AtomicBool::new(false),
             ws,
@@ -193,7 +193,7 @@ impl NativeTts {
             clock: lk_agents_abi::BoundClock::new(),
             connections: Arc::default(),
         };
-        NativeTts {
+        GatewayTts {
             speech,
             shared: Arc::new(shared),
             identity: Arc::default(),
@@ -210,7 +210,7 @@ impl NativeTts {
         headers: Headers,
         reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
     ) -> Self {
-        let mut view = NativeTts::new(
+        let mut view = GatewayTts::new(
             self.opts.lock().unwrap().clone(),
             self.ws.clone(),
             self.spawner.clone(),
@@ -281,13 +281,13 @@ impl NativeTts {
     pub fn stream_identified(
         &self,
         identification: Option<Headers>,
-    ) -> Result<(TtsSinkHandle, TtsSourceHandle), ProviderError> {
+    ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
         self.open(identification.as_ref())
     }
 }
 
-/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
-impl NativeTts {
+/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
+impl GatewayTts {
     /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
     /// bracket cues from the alignment.
     pub fn set_expressive(&self, expressive: bool) {
@@ -352,7 +352,7 @@ impl NativeTts {
     fn open(
         &self,
         identification: Option<&Headers>,
-    ) -> Result<(TtsSinkHandle, TtsSourceHandle), ProviderError> {
+    ) -> Result<(SynthesisInput, SynthesisOutput), ProviderError> {
         let mut opts = self.opts.lock().unwrap().clone();
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
@@ -405,8 +405,8 @@ impl NativeTts {
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 
         Ok((
-            TtsSinkHandle { text: text_tx, prep: Mutex::new(prep) },
-            TtsSourceHandle {
+            SynthesisInput { text: text_tx, prep: Mutex::new(prep) },
+            SynthesisOutput {
                 audio: audio_rx,
                 done: false,
                 stop,
@@ -418,7 +418,7 @@ impl NativeTts {
     }
 }
 
-impl Tts for NativeTts {
+impl Tts for GatewayTts {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }
@@ -465,7 +465,7 @@ impl Tts for NativeTts {
     }
 
     fn set_expressive(&self, on: bool) {
-        NativeTts::set_expressive(self, on);
+        GatewayTts::set_expressive(self, on);
     }
 
     fn prewarm(&self) {
@@ -504,7 +504,7 @@ enum TextCmd {
     Failed,
 }
 
-pub struct TtsSinkHandle {
+pub struct SynthesisInput {
     text: mpsc::Sender<TextCmd>,
     prep: Mutex<TextPrep>,
 }
@@ -517,7 +517,7 @@ struct TextPrep {
     sentences: Box<dyn SentenceSplitter>,
 }
 
-impl TtsSinkHandle {
+impl SynthesisInput {
     fn send(&self, sentences: Vec<String>) -> Result<(), ProviderError> {
         let prep = self.prep.lock().unwrap();
         for sentence in sentences {
@@ -535,7 +535,7 @@ impl TtsSinkHandle {
     }
 }
 
-impl StreamSink<String> for TtsSinkHandle {
+impl StreamSink<String> for SynthesisInput {
     fn push(&self, item: String) -> Result<(), ProviderError> {
         if item.len() > MAX_PENDING_TEXT_BYTES {
             return Err(ApiError::new("TTS text exceeds the pending text limit").into());
@@ -582,7 +582,7 @@ impl StreamSink<String> for TtsSinkHandle {
     }
 }
 
-pub struct TtsSourceHandle {
+pub struct SynthesisOutput {
     audio: mpsc::Receiver<Result<SynthesizedAudio, ApiError>>,
     done: bool,
     stop: watch::Sender<bool>,
@@ -591,7 +591,7 @@ pub struct TtsSourceHandle {
     clock: Arc<dyn Clock>,
 }
 
-impl StreamSource<SynthesizedAudio> for TtsSourceHandle {
+impl StreamSource<SynthesizedAudio> for SynthesisOutput {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
@@ -660,7 +660,7 @@ impl StreamSource<SynthesizedAudio> for TtsSourceHandle {
     }
 }
 
-impl Drop for TtsSourceHandle {
+impl Drop for SynthesisOutput {
     fn drop(&mut self) {
         let _ = self.stop.send(true);
     }

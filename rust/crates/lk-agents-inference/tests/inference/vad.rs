@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use lk_agents_abi::{AudioFrame, StreamSink, StreamSource, VadEventType};
 use lk_agents_inference::vad::machine::VadOptions;
-use lk_agents_inference::vad::{NativeVad, VadModel, VadModelFactory};
+use lk_agents_inference::vad::{LocalVad, VadModel, VadModelFactory};
 
 struct Model {
     calls: Arc<Mutex<Vec<(&'static str, ThreadId)>>>,
@@ -38,7 +38,7 @@ impl VadModelFactory for SlowFactory {
 async fn model_construction_prediction_and_reset_leave_the_runtime_thread_free() {
     let caller = std::thread::current().id();
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let vad = NativeVad::new(
+    let vad = LocalVad::new(
         VadOptions::default(),
         Arc::new(SlowFactory(calls.clone())),
         &lk_agents_inference::testkit::env(),
@@ -101,7 +101,7 @@ impl VadModelFactory for EnergyFactory {
 // machine's start and end of speech.
 #[tokio::test]
 async fn as_the_sessions_vad_it_reports_speech() {
-    let vad: Arc<dyn lk_agents_abi::Vad> = Arc::new(NativeVad::new(
+    let vad: Arc<dyn lk_agents_abi::Vad> = Arc::new(LocalVad::new(
         VadOptions::default(),
         Arc::new(EnergyFactory),
         &lk_agents_inference::testkit::env(),
@@ -131,7 +131,7 @@ async fn as_the_sessions_vad_it_reports_speech() {
 // (the reference's `end_input` closes the input channel and the stream finishes).
 #[tokio::test]
 async fn end_input_ends_the_stream_after_what_was_pushed() {
-    let vad = NativeVad::new(
+    let vad = LocalVad::new(
         VadOptions::default(),
         Arc::new(Factory),
         &lk_agents_inference::testkit::env(),
@@ -200,7 +200,7 @@ async fn closing_a_pending_model_reports_incomplete_cleanup_and_retires_queued_a
         release: blocked,
         settled: Some(settled),
     })));
-    let vad = NativeVad::new(
+    let vad = LocalVad::new(
         VadOptions::default(),
         Arc::new(factory),
         &lk_agents_inference::testkit::env(),
@@ -221,7 +221,7 @@ async fn closing_a_pending_model_reports_incomplete_cleanup_and_retires_queued_a
 
 #[tokio::test]
 async fn a_mismatched_frame_does_not_end_the_stream_or_discard_following_valid_audio() {
-    let vad = NativeVad::new(
+    let vad = LocalVad::new(
         VadOptions::default(),
         Arc::new(Factory),
         &lk_agents_inference::testkit::env(),
@@ -240,7 +240,7 @@ async fn a_mismatched_frame_does_not_end_the_stream_or_discard_following_valid_a
 
 #[tokio::test]
 async fn one_second_of_48khz_stereo_is_accepted_without_doubling_the_vad_timeline() {
-    let vad = NativeVad::new(
+    let vad = LocalVad::new(
         VadOptions::default(),
         Arc::new(Factory),
         &lk_agents_inference::testkit::env(),
@@ -261,7 +261,7 @@ async fn one_second_of_48khz_stereo_is_accepted_without_doubling_the_vad_timelin
 
 #[tokio::test]
 async fn oversized_frames_are_refused_without_ending_the_vad_stream() {
-    let vad = NativeVad::new(
+    let vad = LocalVad::new(
         VadOptions::default(),
         Arc::new(Factory),
         &lk_agents_inference::testkit::env(),
@@ -292,7 +292,7 @@ async fn saturated_vad_input_refuses_new_audio_and_still_accepts_close() {
             release: blocked,
             settled: Some(settled),
         })));
-        let vad = NativeVad::new(
+        let vad = LocalVad::new(
             VadOptions::default(),
             Arc::new(factory),
             &lk_agents_inference::testkit::env(),

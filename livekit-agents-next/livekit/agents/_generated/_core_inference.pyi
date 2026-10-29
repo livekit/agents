@@ -190,7 +190,7 @@ class InferenceAvatar:
         """
 
 class InferenceTts:
-    """`inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`."""
+    """`inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`."""
     def __init__(
         self,
         model: str,
