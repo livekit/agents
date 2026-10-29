@@ -67,6 +67,7 @@ class MotionAgent(Agent):
 
 
 class EmotionAgent(Agent):
+    """Agent that controls a Tavus avatar's facial emotion."""
     def __init__(self, persona: Persona, avatar: tavus.AvatarSession) -> None:
         super().__init__(
             instructions=compose_instructions(persona),
