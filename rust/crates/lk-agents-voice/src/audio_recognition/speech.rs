@@ -13,7 +13,7 @@ use crate::events::{
 };
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts, VadEvent, VadEventType};
+use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts, VadEvent, VadEventType, secs};
 use std::time::Duration;
 
 impl AudioRecognition {
@@ -788,7 +788,3 @@ impl AudioRecognition {
     }
 }
 
-/// Seconds, saturating at zero (a negative provider value would panic `from_secs_f64`).
-fn secs(v: f64) -> Duration {
-    if v.is_finite() && v > 0.0 { Duration::from_secs_f64(v) } else { Duration::ZERO }
-}

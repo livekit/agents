@@ -65,11 +65,7 @@ impl VideoSampler {
 
     /// [`should_sample_at`](Self::should_sample_at) for a seconds clock like `time.time()`.
     pub fn should_sample(&mut self, speaking: bool, now_secs: f64) -> bool {
-        self.should_sample_at(speaking, secs_to_ts(now_secs))
+        self.should_sample_at(speaking, Ts::ZERO.saturating_add(lk_agents_abi::secs(now_secs)))
     }
 }
 
-/// Seconds as a [`Ts`] on the same clock; saturating, so a bad host value can't panic.
-fn secs_to_ts(secs: f64) -> Ts {
-    Ts::from_nanos((secs * 1e9) as u64)
-}

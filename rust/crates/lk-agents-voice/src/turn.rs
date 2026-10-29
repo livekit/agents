@@ -190,10 +190,7 @@ fn user_turn_limit_options(kw: &UserTurnLimitKwargs) -> UserTurnLimitOptions {
     }
 }
 
-/// Seconds to a `Duration`, clamping negatives (`from_secs_f64` panics below zero).
-pub fn secs(v: f64) -> Duration {
-    Duration::from_secs_f64(v.max(0.0))
-}
+pub use lk_agents_abi::secs;
 
 /// A count, clamped: wrapping a negative would disable a guard.
 pub(crate) fn count(v: i64) -> u32 {

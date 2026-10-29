@@ -373,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_started_preparation_does_not_release_a_later_call() {
-        let time = Timebase::simulated();
+        let time = Timebase::of_clock(Arc::new(lk_agents_abi::SimClock::new()));
         let (registry, mut records) =
             Registry::new(crate::record::Stamps::new(time), Arc::new(TokioSpawner::current()));
         let tools = FakeTools::new(registry.clone());

@@ -37,11 +37,6 @@ fn truthy(v: f64) -> bool {
     v != 0.0
 }
 
-/// An epoch float back to the wall clock, for the one stamp the metrics fold owns.
-fn wall_from_secs(secs: f64) -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_secs_f64(secs.max(0.0))
-}
-
 /// The first segment's synthesis, as the metrics block reads it (`_TTSGenerationData`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TtsStats {
@@ -201,7 +196,7 @@ impl TurnAccumulator {
         let created_at = self
             .started_speaking_at
             .filter(|v| truthy(*v))
-            .map(wall_from_secs)
+            .map(|secs| lk_agents_abi::wall_from_secs(secs).unwrap_or(SystemTime::UNIX_EPOCH))
             .unwrap_or(self.reply_started_at);
         let assistant_message = (!self.forwarded_text.is_empty()).then(|| {
             let mut msg =

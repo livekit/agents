@@ -22,12 +22,6 @@ impl Timebase {
         Timebase { clock: Arc::new(RealClock::new()), virt: None }
     }
 
-    /// Tokio's clock for scheduling, a synthetic epoch for wall stamps (so a simulated run
-    /// reproduces exactly).
-    pub fn simulated() -> Self {
-        Timebase { clock: Arc::new(lk_agents_abi::SimClock::new()), virt: None }
-    }
-
     /// Shares an existing clock so the playout model and the driver agree.
     pub fn from_virtual(clock: Arc<VirtualClock>) -> Self {
         Timebase { clock: clock.clone(), virt: Some(clock) }
