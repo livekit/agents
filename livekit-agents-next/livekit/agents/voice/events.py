@@ -319,9 +319,7 @@ class RunContext(Generic[Context_T]):
         """Token usage so far; pass it to a delegated ``run(usage=ctx.usage)``."""
         if self._run is not None:
             return self._run.usage
-        from .run_result import RunUsage
-
-        return RunUsage._from_session_usage(self._call().usage)
+        return self._call()._live_usage()
 
     @property
     def execution_id(self) -> str:

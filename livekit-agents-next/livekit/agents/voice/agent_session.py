@@ -119,7 +119,7 @@ from .room_io import (
     TextInputCallback,
     TextInputEvent,
 )
-from .run_result import _VoiceRun
+from .run_result import RunUsage, _VoiceRun
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -283,6 +283,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._thread = thread
         # `ctx.execution_id` on this call: one conversational task across its turns
         self._execution_id = shortuuid("execution_")
+        # `ctx.usage` on this call, which delegated runs add to; and the session's model usage
+        # already counted in it
+        self._run_usage = RunUsage()
+        self._counted_usage = RunUsage()
         self._voice_store: Any = None
         self._store: ContextStore | None = None
         # the in-memory storage of a call with no loaded lane
@@ -428,6 +432,14 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def usage(self) -> AgentSessionUsage:
         model_usage = self._core.usage if self._core is not None else []
         return AgentSessionUsage(model_usage=[_MODEL_USAGE.validate_python(u) for u in model_usage])
+
+    def _live_usage(self) -> RunUsage:
+        """``ctx.usage`` on this call: one accumulator, brought up to the session's model usage."""
+        now = RunUsage._from_session_usage(self.usage)
+        self._run_usage.input_tokens += now.input_tokens - self._counted_usage.input_tokens
+        self._run_usage.output_tokens += now.output_tokens - self._counted_usage.output_tokens
+        self._counted_usage = now
+        return self._run_usage
 
     @property
     def _running(self) -> _core.VoiceSession:

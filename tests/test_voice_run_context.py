@@ -63,3 +63,30 @@ async def test_a_call_keeps_one_execution_id_across_its_turns() -> None:
         await session._run(user_input="again")
     (first, first_speech), (second, second_speech) = seen
     assert first == second and first_speech != second_speech
+
+
+async def test_a_delegated_run_adds_to_the_call_usage() -> None:
+    helper = Agent(
+        instructions="Answer.",
+        llm=FakeLLM(
+            fake_responses=[FakeLLMResponse(input="look", content="found", ttft=0, duration=0)]
+        ),
+    )
+    agent = Agent(instructions="Check.", name="desk")
+    requests: list[int] = []
+
+    @agent.tool
+    async def check(ctx: RunContext) -> str:
+        """Check the caller's request."""
+        if not requests:
+            await helper.run("look", usage=ctx.usage)
+        requests.append(ctx.usage.requests)
+        return f"checked {len(requests) - 1}"
+
+    async with VoiceSession(
+        llm=_calls("hello", "again"), vad=None, turn_detection="manual"
+    ) as session:
+        await session.start(agent)
+        await session._run(user_input="hello")
+        await session._run(user_input="again")
+    assert requests == [1, 1]
