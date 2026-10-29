@@ -493,8 +493,7 @@ impl SessionApi {
             agent_host,
             tools,
             tools_host,
-            tool_runner,
-            tool_retries,
+            voice_agent,
             chat_ctx,
             llm,
             tts,
@@ -522,8 +521,7 @@ impl SessionApi {
             agent,
             instructions,
             dynamic_instructions,
-            toolset: host_toolset(tools, tools_host, tool_runner),
-            tool_retries,
+            toolset: host_toolset(tools, tools_host, Some(voice_agent)),
             chat_ctx,
             llm,
             tts,
@@ -1061,10 +1059,8 @@ pub struct UpdateAgentArgs {
     pub tools: Option<Vec<lk_agents_abi::ToolSpec>>,
     #[host(kwarg(default = None))]
     pub tools_host: Option<lk_agents_abi::HostRef>,
-    #[host(kwarg(default = None))]
-    pub tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
-    /// The agent's tool retry budget (`Retries.tools`).
-    pub tool_retries: u32,
+    /// The agent as its tools are hosted: its definition (retry budgets) and its `AgentHost`.
+    pub voice_agent: Arc<dyn crate::tool_executor::AgentFrame>,
     #[host(kwarg(default = None))]
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     pub llm: Maybe<Option<Arc<dyn Llm>>>,
@@ -1097,9 +1093,9 @@ pub struct UpdateAgentArgs {
 fn host_toolset(
     tools: Option<Vec<lk_agents_abi::ToolSpec>>,
     host: Option<lk_agents_abi::HostRef>,
-    runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+    agent: Option<Arc<dyn crate::tool_executor::AgentFrame>>,
 ) -> Toolset {
-    Toolset { specs: tools.unwrap_or_default(), host, runner }
+    Toolset { specs: tools.unwrap_or_default(), host, agent }
 }
 
 /// The objects are the pool a host-backed LLM is handed beside the agent's.
@@ -1107,7 +1103,7 @@ fn session_tools(
     tools: Option<Vec<lk_agents_abi::ToolSpec>>,
     host: Option<lk_agents_abi::HostRef>,
 ) -> Option<Toolset> {
-    tools.map(|specs| Toolset { specs, host, runner: None })
+    tools.map(|specs| Toolset { specs, host, agent: None })
 }
 
 /// A host provider is attempted once per call with the leg's timeout: the engine's `Attempt`

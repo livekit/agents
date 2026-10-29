@@ -356,6 +356,10 @@ pub(crate) struct IdMint {
 }
 
 impl IdMint {
+    pub(crate) fn session(&self) -> &str {
+        &self.session
+    }
+
     pub(crate) fn mint(&mut self, prefix: &str) -> String {
         let n = self.next_speech_id().0;
         format!("{}_{prefix}_{n:04}", self.session)

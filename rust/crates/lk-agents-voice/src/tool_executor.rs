@@ -59,8 +59,8 @@ pub struct MadeCall {
     pub forbidden: bool,
     /// The step answers an `InputRequired(tool=)`.
     pub answering: Option<Answering>,
-    /// The reply's runner.
-    pub runner: Option<Arc<dyn HostToolRunner>>,
+    /// The reply's agent, which hosts its offered tools.
+    pub agent: Option<Arc<dyn AgentFrame>>,
 }
 
 /// An admitted call waiting for its step's authorization.
@@ -70,7 +70,7 @@ pub(crate) struct Deferred {
     pub(crate) step: u32,
     pub(crate) call: FunctionCall,
     pub(crate) advertised: bool,
-    pub(crate) runner: Option<Arc<dyn HostToolRunner>>,
+    pub(crate) agent: Option<Arc<dyn AgentFrame>>,
     pub(crate) go: crate::agent_session::RequestId,
 }
 
@@ -79,7 +79,7 @@ pub(crate) struct Deferred {
 #[derive(Debug)]
 pub(crate) struct StepCalls {
     pub(crate) calls: lk_agents_core::tool_calls::ToolCalls,
-    /// The tools the step's calls name, as their runners described them.
+    /// The tools the step's calls name, as their agent's host described them.
     pub(crate) tools: Vec<FunctionToolInfo>,
     /// Started calls not yet on the machine, in the model's order; each joins once it and every
     /// earlier one is described (`Some`).
@@ -92,10 +92,10 @@ pub use lk_agents_core::agent_run::CallId;
 /// The next move of a call's task, decided by the shared tool machine.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolGo {
-    /// The call starts as `item` (stamped and admitted); hosted on the reply's runner unless it
+    /// The call starts as `item` (stamped and admitted); hosted by the reply's agent unless it
     /// names a tool the request did not offer. The task first describes the call's tool: what the
     /// machine decides with.
-    Start { call: CallId, item: Box<FunctionCall>, hosted: bool },
+    Start { call: CallId, item: Box<FunctionCall>, host: Option<HostedTool> },
     /// Bind and validate these arguments (the framework's parse, with the schema's defaults).
     Prepare { call: CallId, arguments: serde_json::Map<String, serde_json::Value> },
     /// Render the read-back of the prepared arguments.
@@ -252,7 +252,7 @@ pub(crate) struct Running {
     /// driver directly, the detach in the model's order): applied, in order, once it has.
     pub(crate) early: Vec<crate::agent_session::ToolUpdate>,
     /// What runs the body: its cancel goes there.
-    pub(crate) runner: Arc<dyn HostToolRunner>,
+    pub(crate) hosted: HostedTool,
 }
 
 impl Running {
@@ -491,23 +491,73 @@ pub struct Toolset {
     /// Required when `specs` is non-empty and the LLM is host-backed: `PyLlm` cannot rebuild a
     /// Python `Tool` from a `ToolSpec`.
     pub host: Option<lk_agents_abi::HostRef>,
-    /// `None` on the session's own additions: the agent's runner runs them.
-    pub runner: Option<Arc<dyn HostToolRunner>>,
+    /// The agent hosting the tools; `None` on the session's own additions, which the agent's
+    /// host runs.
+    pub agent: Option<Arc<dyn AgentFrame>>,
 }
 
 impl std::fmt::Debug for Toolset {
-    /// Hand-written: `runner` and `host` cannot derive it.
+    /// Hand-written: `host` cannot derive it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Toolset")
             .field("tools", &self.specs.len())
             .field("host", &self.host.is_some())
-            .field("runner", &self.runner.is_some())
+            .field("agent", &self.agent)
             .finish()
     }
 }
 
-pub use lk_agents_abi::agent::FunctionToolInfo;
-pub use lk_agents_abi::llm::tool_executor::HostToolRunner;
+pub use lk_agents_abi::agent::{AgentFrame, FunctionToolInfo};
+
+/// A hosted call: the host running its callbacks and the invocation they run in, which its cancel
+/// names.
+#[derive(Clone)]
+pub struct HostedTool {
+    pub host: Arc<dyn lk_agents_abi::agent::AgentHost>,
+    pub invocation: lk_agents_abi::agent::Invocation,
+}
+
+impl HostedTool {
+    /// `call` of `speech`, the `operation`th of its session, hosted by `agent`.
+    pub(crate) fn of(
+        agent: &Arc<dyn AgentFrame>,
+        session: &str,
+        speech: &Arc<crate::speech_handle::SpeechHandle>,
+        operation: u64,
+        call: &FunctionCall,
+    ) -> HostedTool {
+        let invocation = agent.invocation(
+            format!("{session}/{}", speech.speech_id()),
+            operation,
+            Some(call.clone()),
+            lk_agents_core::approval::mark(call),
+            speech.object(),
+        );
+        HostedTool { host: Arc::clone(agent.host()), invocation }
+    }
+
+    /// Cancels the body running under this invocation.
+    pub fn cancel(&self) {
+        self.host.cancel(&self.invocation);
+    }
+}
+
+impl std::fmt::Debug for HostedTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostedTool")
+            .field("invocation_id", &self.invocation.invocation_id)
+            .field("operation", &self.invocation.operation)
+            .finish()
+    }
+}
+
+/// One invocation: the same reply's same callback.
+impl PartialEq for HostedTool {
+    fn eq(&self, other: &Self) -> bool {
+        self.invocation.invocation_id == other.invocation.invocation_id
+            && self.invocation.operation == other.invocation.operation
+    }
+}
 
 /// The one formatter: every committed `FunctionCallOutput` comes through here, from the one
 /// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
@@ -797,7 +847,7 @@ impl Driver {
             out.machine().emit(SessionEvent::Diagnostic(diagnostic));
         }
         let Some(answer) = answer else { return };
-        let limit = self.activity.tool_retries;
+        let limit = self.activity.retries().tools;
         let retried = end.executions.iter().map(|e| (e.call.name.as_str(), e.retry));
         let retries_exceeded =
             self.activity.tools.retries.entry(speech).or_default().step(retried, |_| limit);

@@ -498,7 +498,7 @@ pub mod agent_run {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn invocation_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::agent::Invocation) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::agent::Invocation { operation, invocation_id, agent_name, execution_id, frame_id, context_scope, application_context, history, function_call, approval, host_context: _ } = value;
+            let ::lk_agents_abi::agent::Invocation { operation, invocation_id, agent_name, execution_id, frame_id, context_scope, application_context, history, function_call, approval, speech, host_context: _ } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("operation", ::pyo3::IntoPyObjectExt::into_bound_py_any(operation, py)?)?;
             kwargs.set_item("invocation_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?)?;
@@ -510,6 +510,7 @@ pub mod agent_run {
             kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("function_call", match function_call { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("approval", match approval { None => py.None().into_bound(py), Some(x) => crate::generated::records::tool_report::approval_to_py(py, x)? })?;
+            kwargs.set_item("speech", match speech { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(INVOCATION.import(py, "livekit.agents._generated.agent_run", "Invocation")?.as_any(), (), Some(&kwargs))
     }
 

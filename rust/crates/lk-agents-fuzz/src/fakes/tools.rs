@@ -1,17 +1,18 @@
 //! Tool bodies: every call the product hands to the runner is an invocation with the actual
 //! `call_id`, name, speech and step; the body waits for whatever the case delivers. The runner is
-//! the host's (`HostToolRunner`), classifying what the body did, as a Python tool's runner does.
+//! the host's (`AgentHost`), classifying what the body did, as a Python agent's host does.
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::agent::{
-    ArgumentIdentity, FunctionToolInfo, PreparedArguments, ReadBack, ReadBackAnswer,
-    ToolArgumentError,
+    AgentDefinition, AgentFrame, AgentHost, ArgumentIdentity, FunctionToolInfo, Invocation,
+    OutputCandidate, OutputSpec, PreparedArguments, ReadBack, ReadBackAnswer, ToolArgumentError,
+    ValidatedOutput, VoiceAgent, VoiceAgentFrame,
 };
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
 use lk_agents_voice::speech_handle::SpeechHandle;
-use lk_agents_voice::tool_executor::{HostToolRunner, ToolOutcome, ToolReport};
+use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport};
 use tokio::sync::oneshot;
 
 use super::{Control, Registry, Slot};
@@ -67,6 +68,26 @@ impl FakeTools {
     }
 }
 
+/// `agent`'s voice frame, its tools hosted by a fresh [`FakeTools`].
+pub fn frame(registry: &Arc<Registry>, agent: &str) -> Arc<dyn AgentFrame> {
+    let definition = AgentDefinition {
+        name: agent.to_owned(),
+        instructions: String::new(),
+        dynamic_instructions: false,
+        tools: Vec::new(),
+        output: OutputSpec::Text { validated: false },
+        retries: Default::default(),
+    };
+    let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
+    let host: Arc<dyn AgentHost> = FakeTools::new(Arc::clone(registry));
+    Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs)))
+}
+
+/// The tool call a callback is about.
+fn call_of(invocation: &Invocation) -> &FunctionCall {
+    invocation.function_call.as_ref().expect("a tool callback carries its call")
+}
+
 /// The value the runner reports for call `call_id`'s `Completed` in a task: the object `run()` must
 /// return, told apart from every other call's.
 pub fn completion_value(call_id: &str) -> u64 {
@@ -108,12 +129,20 @@ pub enum Body {
     AwaitOwnSpeech(ToolOutcome),
 }
 
-impl HostToolRunner for FakeTools {
-    /// Every fixture tool; [`APPROVAL_TOOL`] requires approval with the default read-back.
-    fn describe(
-        &self,
-        name: &str,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<FunctionToolInfo>, HostError>> {
+impl AgentHost for FakeTools {
+    fn render_instructions<'a>(
+        &'a self,
+        _invocation: &'a Invocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+
+    /// The called fixture tool; [`APPROVAL_TOOL`] requires approval with the default read-back.
+    fn list_tools<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>> {
+        let name = call_of(invocation).name.as_str();
         let info = FunctionToolInfo {
             spec: tool_spec(name),
             raw_schema: false,
@@ -122,21 +151,21 @@ impl HostToolRunner for FakeTools {
             duplicate_scope: DuplicateScope::Name,
             retries: None,
         };
-        Box::pin(async move { Ok(Some(info)) })
+        Box::pin(async move { Ok(vec![info]) })
     }
 
     /// Binds nothing: the parsed arguments are the identity approval binds to, and the prepared
     /// call keeps its speech for the body.
-    fn prepare(
-        &self,
-        _call: &FunctionCall,
+    fn prepare_tool<'a>(
+        &'a self,
+        invocation: &'a Invocation,
         arguments: serde_json::Map<String, serde_json::Value>,
-        speech: &lk_agents_abi::CoreObject,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>
     {
-        let handle = Arc::clone(&speech.0)
-            .downcast::<SpeechHandle>()
-            .ok()
+        let handle = invocation
+            .speech
+            .as_ref()
+            .and_then(|speech| Arc::clone(&speech.0).downcast::<SpeechHandle>().ok())
             .filter(|h| h.created().is_some())
             .expect("a tool runs in a created speech");
         let mut prepared = self.prepared.lock().unwrap();
@@ -151,19 +180,22 @@ impl HostToolRunner for FakeTools {
     }
 
     /// The runs' approval tool reads back with the framework's default: never asked here.
-    fn read_back(
-        &self,
-        _prepared: &lk_agents_abi::HostRef,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<ReadBackAnswer, HostError>> {
+    fn read_back<'a>(
+        &'a self,
+        _invocation: &'a Invocation,
+        _prepared: &'a lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<ReadBackAnswer, HostError>> {
         Box::pin(async { Err(HostError::new("the fixture tools have no read-back function")) })
     }
 
-    fn run(
-        &self,
-        prepared: &lk_agents_abi::HostRef,
-        call: &FunctionCall,
-        _task: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<ToolReport, HostError>> {
+    fn run_tool<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+        prepared: &'a lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(ToolReport, serde_json::Map<String, serde_json::Value>), HostError>,
+    > {
         let handle = self
             .prepared
             .lock()
@@ -171,7 +203,7 @@ impl HostToolRunner for FakeTools {
             .speeches
             .remove(&prepared.id())
             .expect("a body runs on prepared arguments");
-        let call = call.clone();
+        let call = call_of(invocation).clone();
         Box::pin(async move {
             let mut outcome = self.answer(&call, &handle).await;
             // A question asked as written names its own tool to take the answer
@@ -187,13 +219,22 @@ impl HostToolRunner for FakeTools {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });
-            Ok(ToolReport { outcome, transition })
+            Ok((ToolReport { outcome, transition }, call.extra))
         })
     }
 
-    fn cancel(&self, call_id: &str) {
-        self.cancelled.lock().unwrap().insert(call_id.to_owned());
-        if let Some(slot) = self.detached.lock().unwrap().remove(call_id) {
+    fn validate_output<'a>(
+        &'a self,
+        _invocation: &'a Invocation,
+        _candidate: OutputCandidate,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<ValidatedOutput, HostError>> {
+        Box::pin(async { Err(HostError::new("a voice reply validates no output")) })
+    }
+
+    fn cancel(&self, invocation: &Invocation) {
+        let call_id = call_of(invocation).call_id.clone();
+        self.cancelled.lock().unwrap().insert(call_id.clone());
+        if let Some(slot) = self.detached.lock().unwrap().remove(&call_id) {
             self.registry.mark_closed(slot);
         }
     }
@@ -297,7 +338,7 @@ mod tests {
         let time = Timebase::simulated();
         let (registry, mut records) =
             Registry::new(crate::record::Stamps::new(time), Arc::new(TokioSpawner::current()));
-        let tools = FakeTools::new(registry);
+        let tools = FakeTools::new(registry.clone());
         let speech = Arc::new(SpeechHandle::new(SpeechId(1), true, Tx::disconnected()));
         let call = FunctionCall {
             id: "item_first".into(),
@@ -308,24 +349,27 @@ mod tests {
             extra: Default::default(),
             group_id: None,
         };
+        let frame = frame(&registry, "agent");
+        let invocation = |call: &FunctionCall| {
+            frame.invocation("s/speech_1".into(), 0, Some(call.clone()), None, speech.object())
+        };
+        let first_invocation = invocation(&call);
         let first =
-            tools.prepare(&call, Default::default(), &speech.object()).await.unwrap().unwrap();
+            tools.prepare_tool(&first_invocation, Default::default()).await.unwrap().unwrap();
         // A body takes its speech immediately, while its host preparation remains alive until
         // execution settles. Another call may be prepared during that interval.
-        let first_body = tools.run(&first.prepared, &call, false);
+        drop(tools.run_tool(&first_invocation, &first.prepared));
         let second_call = FunctionCall { call_id: "second".into(), ..call };
-        let second = tools
-            .prepare(&second_call, Default::default(), &speech.object())
-            .await
-            .unwrap()
-            .unwrap();
+        let second_invocation = invocation(&second_call);
+        let second =
+            tools.prepare_tool(&second_invocation, Default::default()).await.unwrap().unwrap();
         drop(first);
         // Check before run's assertion acquires the mutex, so the failing regression leaves
         // preparation cleanup usable rather than causing a second panic during unwinding.
         let second_is_prepared =
             tools.prepared.lock().unwrap().speeches.contains_key(&second.prepared.id());
         assert!(second_is_prepared, "the earlier body's cleanup released the later call");
-        let second_body = tools.run(&second.prepared, &second_call, false);
+        let second_body = tools.run_tool(&second_invocation, &second.prepared);
         let (report, ()) = tokio::join!(second_body, async {
             let super::super::Record::Opened {
                 detail, control: Some(Control::Tool(answer)), ..
@@ -336,7 +380,6 @@ mod tests {
             assert!(matches!(detail, Detail::Tool { call_id, .. } if call_id == "second"));
             assert!(answer.send(Body::Answer(ToolOutcome::Nothing)).is_ok());
         });
-        assert!(matches!(report.unwrap().outcome, ToolOutcome::Nothing));
-        drop(first_body);
+        assert!(matches!(report.unwrap().0.outcome, ToolOutcome::Nothing));
     }
 }

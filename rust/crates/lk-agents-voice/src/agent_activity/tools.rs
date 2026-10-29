@@ -14,9 +14,9 @@ use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{
-    APPROVAL_KEY, Batch, CallId, Deferred, Delivery, FillerRun, FunctionToolInfo, MadeCall,
-    Pending, Reply, Running, StepCalls, ToolEnd, ToolExecution, ToolGo, ToolOutcome, answer,
-    default_reply_instructions, emit_ended, pair_for,
+    APPROVAL_KEY, Batch, CallId, Deferred, Delivery, FillerRun, FunctionToolInfo, HostedTool,
+    MadeCall, Pending, Reply, Running, StepCalls, ToolEnd, ToolExecution, ToolGo, ToolOutcome,
+    answer, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
@@ -37,7 +37,7 @@ impl Driver {
     /// `InputRequired(tool=)` answer in place of the model's arguments). A call `tool_choice="none"`
     /// forbade is recorded as made and never runs. Any other starts once its step is authorized
     /// to play (a call made while another speech plays, or by a preemptive generation, waits);
-    /// hosted on the reply's runner unless it names a tool the request did not offer.
+    /// hosted by the reply's agent unless it names a tool the request did not offer.
     pub(crate) fn on_tool_made(
         &mut self,
         now: Ts,
@@ -46,7 +46,7 @@ impl Driver {
         go: RequestId,
         out: &mut Out,
     ) {
-        let MadeCall { mut call, spec, forbidden, answering, runner } = made;
+        let MadeCall { mut call, spec, forbidden, answering, agent } = made;
         let answering = answering.as_ref().map(|a| (a.tool.as_str(), a.said.as_str()));
         let admission = admit(&mut call, spec.as_slice(), forbidden, answering);
         let advertised = admission.offered();
@@ -64,8 +64,8 @@ impl Driver {
             self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name);
             return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }
-        let runner = runner.filter(|_| admission == Admission::Offered);
-        let call = Deferred { speech, step, call, advertised, runner, go };
+        let agent = agent.filter(|_| admission == Admission::Offered);
+        let call = Deferred { speech, step, call, advertised, agent, go };
         let behind = self.activity.tools.deferred.iter().any(|d| d.speech == speech);
         if !behind && handle.step_authorized(step) {
             // A start already authorized runs, interrupted or not, as the reference's executor
@@ -112,38 +112,36 @@ impl Driver {
     /// `created_at`, and it was made before the step was authorized), told to the speech, and
     /// started.
     fn start_call(&mut self, now: Ts, d: Deferred, handle: &SpeechHandle, out: &mut Out) {
-        let Deferred { speech, step, mut call, advertised, runner, go } = d;
+        let Deferred { speech, step, mut call, advertised, agent, go } = d;
         call.created_at = self.step.wall();
         if advertised {
             handle.item_added(&ChatItem::FunctionCall(call.clone()));
         }
-        let hosted = runner.is_some();
-        let id = self.on_tool_started(now, (speech, step), call.clone(), runner, true, out);
-        if let Some(id) = id {
-            let start = ToolGo::Start { call: id, item: Box::new(call), hosted };
-            out.answer(Some(go), Answer::ToolGo(start));
-        }
+        let (id, host) =
+            self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), true, out);
+        let start = ToolGo::Start { call: id, item: Box::new(call), host };
+        out.answer(Some(go), Answer::ToolGo(start));
     }
 
     // ------------------------------------------------------------------ the running set
 
     /// A started call is the run's; a hosted one enters the running set and is announced, and the
     /// away window is held off. Unless it is dropped unrun (`joins` false), it joins its step's
-    /// calls on the shared tool machine in the model's order once its tool is described: its id
-    /// there.
+    /// calls on the shared tool machine in the model's order once its tool is described. Its id,
+    /// and, hosted, the invocation its callbacks run in.
     pub(crate) fn on_tool_started(
         &mut self,
         now: Ts,
         (speech, step): (SpeechId, u32),
         call: FunctionCall,
-        runner: Option<std::sync::Arc<dyn crate::tool_executor::HostToolRunner>>,
+        agent: Option<&std::sync::Arc<dyn crate::tool_executor::AgentFrame>>,
         joins: bool,
         out: &mut Out,
-    ) -> Option<CallId> {
-        let id = joins.then(|| {
+    ) -> (CallId, Option<HostedTool>) {
+        let id = CallId(self.activity.tools.next_call);
+        self.activity.tools.next_call += 1;
+        if joins {
             let tools = &mut self.activity.tools;
-            let id = CallId(tools.next_call);
-            tools.next_call += 1;
             let answers = &tools.approval_answers;
             let step_calls = tools.steps.entry((speech, step)).or_insert_with(|| StepCalls {
                 calls: ToolCalls::new(answers.clone()),
@@ -152,13 +150,16 @@ impl Driver {
                 waiting: Default::default(),
             });
             step_calls.describing.push((id, call.clone(), None));
-            id
+        }
+        let handle = self.activity.speech_scheduler.handle(speech);
+        let hosted = agent.zip(handle).map(|(agent, handle)| {
+            HostedTool::of(agent, self.session.ids.session(), handle, id.0, &call)
         });
         out.trace(TraceToolStep::CallStarted {
             speech,
             call_id: call.call_id.clone(),
             name: call.name.clone(),
-            hosted: runner.is_some(),
+            hosted: hosted.is_some(),
         });
         // The call is the run's once it starts, whichever run is open when it is committed: one
         // answered without running (an unknown tool) too, as its output is.
@@ -168,7 +169,7 @@ impl Driver {
             let item = Box::new(lk_agents_abi::ChatItem::FunctionCall(call.clone()));
             out.machine().emit(SessionEvent::RunItemAdded { run, item });
         }
-        let Some(runner) = runner else { return id };
+        let Some(running) = hosted.clone() else { return (id, None) };
         let closing = self.session.closing_past_edge();
         out.machine().append(self.session.states.on_tool_call_started(now, closing));
         let output_id = self.session.ids.mint("item");
@@ -182,9 +183,9 @@ impl Driver {
             step,
             updates: 0,
             early: Vec::new(),
-            runner,
+            hosted: running,
         });
-        id
+        (id, hosted)
     }
 
     /// A call's tool is described: every call described in the model's order so far joins the
@@ -343,8 +344,7 @@ impl Driver {
                 .iter()
                 .find(|r| r.speech == speech && r.call.call_id == call_id)
             {
-                let runner = r.runner.clone();
-                out.machine().push(Effect::CancelTool { call_id, runner });
+                out.machine().push(Effect::CancelTool { call_id, hosted: r.hosted.clone() });
             }
         }
     }
@@ -418,8 +418,8 @@ impl Driver {
         let wall = self.step.wall();
         let mut pairs = Vec::with_capacity(live.len());
         for r in live {
-            let (call_id, runner) = (r.call.call_id.clone(), r.runner.clone());
-            out.machine().push(Effect::CancelTool { call_id, runner });
+            let (call_id, hosted) = (r.call.call_id.clone(), r.hosted.clone());
+            out.machine().push(Effect::CancelTool { call_id, hosted });
             let outcome = if self.session.closing.is_some() {
                 ToolOutcome::ToolError(SESSION_CLOSING.to_owned())
             } else {
@@ -464,7 +464,7 @@ impl Driver {
         for r in running {
             let call_id = r.call.call_id.clone();
             let id = if r.detached() { format!("{call_id}_final") } else { call_id.clone() };
-            out.machine().push(Effect::CancelTool { call_id: call_id.clone(), runner: r.runner });
+            out.machine().push(Effect::CancelTool { call_id: call_id.clone(), hosted: r.hosted });
             let closing = self.session.closing_past_edge();
             out.machine().append(self.session.states.on_tool_call_ended(now, closing));
             emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);

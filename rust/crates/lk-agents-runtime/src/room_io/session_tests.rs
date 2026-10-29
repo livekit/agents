@@ -62,7 +62,6 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
         None,
         None,
         None,
-        None,
         false,
         None,
         false,

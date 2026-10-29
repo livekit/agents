@@ -50,8 +50,6 @@ pub(crate) struct AgentActivity {
     /// The agent's `transcription_node` and `realtime_audio_output_node`.
     pub(crate) output_nodes: crate::agent_session::nodes::OutputNodes,
     pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
-    /// The agent's tool retry budget (`Retries.tools`).
-    pub(crate) tool_retries: u32,
     /// `_tool_executor`.
     pub(crate) tools: crate::tool_executor::Tools,
     pub(crate) audio_recognition: AudioRecognition,
@@ -134,14 +132,17 @@ impl AgentActivity {
         dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
         output_nodes: crate::agent_session::nodes::OutputNodes,
         toolset: crate::tool_executor::Toolset,
-        tool_retries: u32,
     ) -> String {
         self.instructions = instructions;
-        self.tool_retries = tool_retries;
         self.dynamic_instructions = dynamic_instructions;
         self.output_nodes = output_nodes;
         self.toolset = Arc::new(toolset);
         std::mem::replace(&mut self.agent, agent)
+    }
+
+    /// The running agent's retry budgets (`Agent(retries=)`).
+    pub(crate) fn retries(&self) -> lk_agents_abi::agent::Retries {
+        self.toolset.agent.as_ref().map(|a| a.definition().retries).unwrap_or_default()
     }
 
     /// What a request planned now is offered: the agent's toolset, then session additions whose

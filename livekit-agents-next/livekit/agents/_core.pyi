@@ -37,6 +37,7 @@ from ._generated._core_agent import (
     AgentRunner as AgentRunner,
     AgentRunUpdates as AgentRunUpdates,
     RunEvents as RunEvents,
+    VoiceAgent as VoiceAgent,
 )
 from ._generated._core_classes import (
     END_CALL_DESCRIPTION as END_CALL_DESCRIPTION,

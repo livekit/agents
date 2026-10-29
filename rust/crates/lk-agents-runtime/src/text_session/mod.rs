@@ -130,6 +130,7 @@ impl Driver {
                     conn_options: self.request.conn_options,
                     entry: Invocation {
                         operation: 0,
+                        speech: None,
                         invocation_id: invocation_id.clone(),
                         agent_name,
                         execution_id: Some(execution_id),

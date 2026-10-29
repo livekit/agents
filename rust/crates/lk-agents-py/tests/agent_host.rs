@@ -99,6 +99,7 @@ fn invocation(context: lk_agents_abi::HostRef) -> Invocation {
         history: Vec::new(),
         function_call: None,
         approval: None,
+        speech: None,
         host_context: Some(context),
     }
 }

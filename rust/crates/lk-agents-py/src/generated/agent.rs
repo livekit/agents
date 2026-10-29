@@ -10,6 +10,39 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/agent.rs.
+type VoiceAgentImpl = <crate::Selected as super::Implementations>::VoiceAgent;
+
+/// `_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the
+/// definition converts.
+#[pyclass(frozen, name = "VoiceAgent", module = "livekit.agents._core")]
+pub struct VoiceAgent(::std::sync::Arc<VoiceAgentImpl>);
+
+#[pymethods]
+impl VoiceAgent {
+    #[new]
+    #[pyo3(signature = (definition, host, host_context))]
+    fn new(definition: Bound<'_, PyAny>, host: Bound<'_, PyAny>, host_context: ::lk_agents_abi::HostRef) -> PyResult<VoiceAgent> {
+        ::lk_agents_abi::python::check_pid()?;
+        let definition = crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
+        let host = crate::generated::agent::AgentHostProxy::from_host(&host)?;
+        let out = <VoiceAgentImpl as ::lk_agents_abi::agent::VoiceAgent>::new(definition, host, host_context);
+        Ok(VoiceAgent(::std::sync::Arc::new(out)))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::agent::AgentFrame`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::agent::AgentFrame>(),
+        read: |obj| {
+            let this = obj.cast::<VoiceAgent>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentFrame> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
 type RunEventsImpl = <crate::Selected as super::Implementations>::RunEvents;
 

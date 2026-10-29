@@ -474,11 +474,7 @@ impl Run {
                 api.update_instructions(instructions(text)).is_ok()
             }
             Input::UpdateTools { tools } => api
-                .update_tools(
-                    Some(tool_specs(tools)),
-                    None,
-                    Some(fakes::FakeTools::new(registry.clone())),
-                )
+                .update_tools(Some(tool_specs(tools)), None, Some(fakes::frame(&registry, "tools")))
                 .is_ok(),
             Input::SetAudioInput { attach } => {
                 // A new microphone replaces the old one as a detach does: nothing said into the

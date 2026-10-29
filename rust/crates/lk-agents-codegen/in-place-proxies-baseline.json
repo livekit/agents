@@ -1,7 +1,6 @@
 [
   "::lk_agents_abi::agent::HostInstructions",
   "::lk_agents_abi::Llm",
-  "::lk_agents_abi::llm::tool_executor::HostToolRunner",
   "::lk_agents_abi::Stt",
   "::lk_agents_abi::Tts",
   "::lk_agents_abi::EotDetector",

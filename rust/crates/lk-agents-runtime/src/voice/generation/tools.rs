@@ -6,7 +6,8 @@ use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::generation::{GenEvent, ReplyContext};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
-    CallId, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, answer,
+    CallId, HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome,
+    ToolReport, answer,
 };
 use std::sync::Arc;
 
@@ -46,14 +47,12 @@ impl ToolStep {
             spec: ctx.request.tools.iter().find(|t| t.name == call.name).cloned(),
             forbidden: ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden),
             answering: ctx.answering.clone(),
-            runner: ctx.providers.toolset.runner.clone(),
+            agent: ctx.providers.toolset.agent.clone(),
         };
         let (go, first) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
         let made = GenEvent::ToolCallMade { speech, step, made: Box::new(made), go: go.id };
         shared.report_awaited(made, go);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let runner = ctx.providers.toolset.runner.clone();
-        let host_speech = handle.object();
         let spawner = Arc::clone(&shared.spawner);
         let shared = Arc::clone(shared);
         let task_owner = Arc::clone(handle);
@@ -61,13 +60,11 @@ impl ToolStep {
         let task = ctx.task;
         let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
             // Dropped unrun, or a loop gone before the start: owed nothing.
-            let Ok(ToolGo::Start { call: id, item, hosted }) = first.await else {
+            let Ok(ToolGo::Start { call: id, item, host }) = first.await else {
                 let _ = tx.send(None);
                 return;
             };
-            let runner = runner.filter(|_| hosted);
-            let call =
-                HostedCall { shared: &shared, speech, step, runner, host_speech: &host_speech };
+            let call = HostedCall { shared: &shared, speech, step, host };
             let (execution, outcome) = call.run(id, *item, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
@@ -83,13 +80,13 @@ impl ToolStep {
     }
 }
 
-/// One call's host work, each move decided by the shared tool machine in the loop.
+/// One call's host work through its agent's `AgentHost`, each move decided by the shared tool
+/// machine in the loop.
 struct HostedCall<'a> {
     shared: &'a Arc<SessionShared>,
     speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     step: u32,
-    runner: Option<Arc<dyn lk_agents_voice::tool_executor::HostToolRunner>>,
-    host_speech: &'a lk_agents_abi::CoreObject,
+    host: Option<HostedTool>,
 }
 
 impl HostedCall<'_> {
@@ -104,8 +101,13 @@ impl HostedCall<'_> {
     ) -> (ToolExecution, ToolOutcome) {
         let wall = || self.shared.time.wall();
         let mut prepared = None;
-        let tool = match &self.runner {
-            Some(runner) => runner.describe(&one.name).await.ok().flatten(),
+        let tool = match &self.host {
+            Some(h) => h
+                .host
+                .list_tools(&h.invocation)
+                .await
+                .ok()
+                .and_then(|tools| tools.into_iter().find(|t| t.spec.name == one.name)),
             None => None,
         };
         let tool = tool.map(Box::new);
@@ -124,20 +126,18 @@ impl HostedCall<'_> {
                     return (answer(&one, outcome.clone().into(), wall()), outcome);
                 }
                 Ok(ToolGo::Prepare { call, arguments }) => {
-                    let identity = match &self.runner {
-                        Some(runner) => {
-                            match runner.prepare(&one, arguments, self.host_speech).await {
-                                Ok(Ok(args)) => {
-                                    prepared = Some(args.prepared);
-                                    Ok(args.identity)
-                                }
-                                Ok(Err(refused)) => Err(PrepareFailure::Refused(refused.message)),
-                                Err(e) => {
-                                    log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
-                                    Err(PrepareFailure::Internal)
-                                }
+                    let identity = match &self.host {
+                        Some(h) => match h.host.prepare_tool(&h.invocation, arguments).await {
+                            Ok(Ok(args)) => {
+                                prepared = Some(args.prepared);
+                                Ok(args.identity)
                             }
-                        }
+                            Ok(Err(refused)) => Err(PrepareFailure::Refused(refused.message)),
+                            Err(e) => {
+                                log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
+                                Err(PrepareFailure::Internal)
+                            }
+                        },
                         None => Err(PrepareFailure::Internal),
                     };
                     let (speech, step) = (self.speech, self.step);
@@ -146,9 +146,9 @@ impl HostedCall<'_> {
                         .await;
                 }
                 Ok(ToolGo::ReadBack { call }) => {
-                    let answer = match (&self.runner, prepared.take()) {
-                        (Some(runner), Some(args)) => {
-                            runner.read_back(&args).await.map_err(|e| e.to_string())
+                    let answer = match (&self.host, prepared.take()) {
+                        (Some(h), Some(args)) => {
+                            h.host.read_back(&h.invocation, &args).await.map_err(|e| e.to_string())
                         }
                         _ => Err("no prepared arguments".to_owned()),
                     };
@@ -159,14 +159,14 @@ impl HostedCall<'_> {
                 }
                 Ok(ToolGo::Execute { item }) => {
                     one = *item;
-                    let (Some(runner), Some(args)) = (&self.runner, prepared.take()) else {
+                    let (Some(h), Some(args)) = (&self.host, prepared.take()) else {
                         let outcome = ToolOutcome::Internal;
                         return (answer(&one, outcome.clone().into(), wall()), outcome);
                     };
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
                     handle.tool_blocking(&one.call_id, &one.name);
-                    let report = runner.answer(&args, &one, task).await;
+                    let report = run_body(h, &args, &one, task).await;
                     handle.tool_returned(&one.call_id);
                     let outcome = report.outcome.clone();
                     return (answer(&one, report, wall()), outcome);
@@ -189,6 +189,36 @@ impl HostedCall<'_> {
         self.shared.report_awaited(event(call.id), call);
         next.await
     }
+}
+
+/// Runs the body on the prepared arguments, `call` carrying its approval marks. Resolves when the
+/// tool returns, raises, is cancelled, or releases the step with its first `ctx.update()`; a host
+/// that fails outside the tool's own error handling is answered as an internal error. Only a
+/// `VoiceTask`'s reply (`task`) ends a task: an ordinary tool's `Completed` is its call's output,
+/// whatever value the host handed with it.
+async fn run_body(
+    h: &HostedTool,
+    prepared: &lk_agents_abi::HostRef,
+    call: &FunctionCall,
+    task: bool,
+) -> ToolReport {
+    let invocation = lk_agents_abi::agent::Invocation {
+        function_call: Some(call.clone()),
+        approval: lk_agents_core::approval::mark(call),
+        ..h.invocation.clone()
+    };
+    let mut report = match h.host.run_tool(&invocation, prepared).await {
+        Ok((report, _)) => report,
+        Err(e) => {
+            log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
+                "the tool's host failed outside the tool's own error handling: {e}");
+            ToolOutcome::Internal.into()
+        }
+    };
+    if !task && matches!(report.outcome, ToolOutcome::Completed { .. }) {
+        report.transition = None;
+    }
+    report
 }
 
 /// Awaits the step's executions in the model's order and hands them to the driver, which decides

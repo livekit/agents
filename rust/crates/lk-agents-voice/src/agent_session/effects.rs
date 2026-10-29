@@ -355,7 +355,7 @@ pub enum Effect {
     /// The body running under `call_id` is cancelled; the driver has told its end.
     CancelTool {
         call_id: String,
-        runner: Arc<dyn crate::tool_executor::HostToolRunner>,
+        hosted: crate::tool_executor::HostedTool,
     },
 }
 

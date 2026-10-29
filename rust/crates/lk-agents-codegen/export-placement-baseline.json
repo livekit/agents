@@ -34,7 +34,6 @@
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::min_consecutive_speech_delay|host (kwarg (default = None))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::realtime_audio_output_node|host (kwarg (default = None))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::stt_node|host (kwarg (default = None))",
-  "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::tool_runner|host (kwarg (default = None))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::tools_host|host (kwarg (default = None))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::tools|host (kwarg (default = None))",
   "host|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct UpdateAgentArgs::transcription_node|host (kwarg (default = None))",

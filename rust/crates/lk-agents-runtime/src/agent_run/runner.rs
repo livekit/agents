@@ -76,6 +76,7 @@ impl AgentRunner for Runner {
             conn_options: request.conn_options,
             entry: Invocation {
                 operation: 0,
+                speech: None,
                 invocation_id: request.invocation_id,
                 agent_name: self.definition.name.clone(),
                 execution_id: Some(execution_id),

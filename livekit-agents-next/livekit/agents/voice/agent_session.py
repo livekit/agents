@@ -97,7 +97,6 @@ from .room_io import (
 )
 from .run_result import _OUTPUT_RETRY_PROMPT, VoiceRunResult
 from .speech_handle import SpeechHandle
-from .tool_executor import ToolRunner
 
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
@@ -513,8 +512,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 options=self._options,
                 tools=frame["tools"],
                 tools_host=frame["tools_host"],
-                tool_runner=frame["tool_runner"],
-                tool_retries=frame["tool_retries"],
+                voice_agent=frame["voice_agent"],
                 room_io_config=room_options._to_core() if is_given(room_options) else None,
                 video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
                 using_default_vad=self._using_default_vad,
@@ -702,7 +700,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             toolset = {
                 "tools": specs,
                 "tools_host": pool,
-                "tool_runner": ToolRunner(self, self.current_agent, pool),
+                "voice_agent": self._voice_agent(self.current_agent),
             }
         core = self._running.generate_reply(
             user_input=user_input if is_given(user_input) else None,
@@ -873,9 +871,21 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _pool(self, agent: Agent) -> list[llm.Tool | llm.Toolset]:
         return [*agent.tools, *self._tools]
 
-    def _frame(self, agent: Agent) -> dict[str, Any]:
+    def _voice_agent(self, agent: Agent, *, task: bool = False) -> _core.VoiceAgent:
+        """``agent`` as its callbacks run on this session: its definition, its ``AgentHost``
+        and the context they run in, whose binding is this session's."""
+        captured = contextvars.copy_context()
+        captured.run(_BindingContextVar.set, _VoiceBinding(self, agent, task=task))
+        return _core.VoiceAgent(
+            agent._definition(llm.ToolContext(agent.tools)),
+            agent._host,
+            (asyncio.get_running_loop(), captured),
+        )
+
+    def _frame(self, agent: Agent, *, task: bool = False) -> dict[str, Any]:
         """``agent`` as the core installs it (``update_agent``'s keywords); the core has its
-        toolsets set up (``_AgentHooks._core_setup_tools``) and reads their tools then."""
+        toolsets set up (``_AgentHooks._core_setup_tools``) and reads their tools then. ``task``:
+        it runs a ``VoiceTask``."""
         # its tools, instructions and hooks are what the core runs from now on
         agent._frozen = True
         pool = self._pool(agent)
@@ -887,8 +897,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "agent": agent.name,
             "agent_host": agent,
             "tools_host": pool,
-            "tool_runner": ToolRunner(self, agent, pool),
-            "tool_retries": agent._retries.tools,
+            "voice_agent": self._voice_agent(agent, task=task),
         }
         # every leg a node may wrap is given, so the previous frame's node never stays on it; the
         # session's STT and TTS stay as they are, under the agent's nodes
@@ -1226,7 +1235,7 @@ class VoiceTask(Generic[Output_T]):
         binding = _live_binding("VoiceTask.run()")
         session, agent = binding.session, self._agent
         reply = session._running.run_voice_task(
-            **session._frame(agent),
+            **session._frame(agent, task=True),
             origin=binding.origin,
             opens_with_reply=not agent._has_on_enter(),
         )

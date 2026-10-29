@@ -530,8 +530,7 @@ class VoiceSession:
         room_io_config: Any | None = None,
         tools: list[Any] | None = None,
         tools_host: Any | None = None,
-        tool_runner: Any | None = None,
-        tool_retries: int | None = None,
+        voice_agent: Any | None = None,
         transcription_node: Any | None = None,
         realtime_audio_output_node: Any | None = None,
         llm_node: Any | None = None,
@@ -585,8 +584,7 @@ class VoiceSession:
         agent_host: Any | None = None,
         tools: list[Any] | None = None,
         tools_host: Any | None = None,
-        tool_runner: Any | None = None,
-        tool_retries: int,
+        voice_agent: Any,
         chat_ctx: list[ChatItem] | None = None,
         llm: NotGivenOr[Any | None] = ...,
         tts: NotGivenOr[Any | None] = ...,
@@ -611,8 +609,7 @@ class VoiceSession:
         agent_host: Any | None = None,
         tools: list[Any] | None = None,
         tools_host: Any | None = None,
-        tool_runner: Any | None = None,
-        tool_retries: int,
+        voice_agent: Any,
         chat_ctx: list[ChatItem] | None = None,
         llm: NotGivenOr[Any | None] = ...,
         tts: NotGivenOr[Any | None] = ...,
@@ -639,7 +636,7 @@ class VoiceSession:
         tools: list[Any] | None = None,
         *,
         tools_host: Any | None = None,
-        tool_runner: Any | None = None,
+        voice_agent: Any | None = None,
     ) -> None: ...
     def update_turn_options(self, update: Any) -> None: ...
     def set_aec_warmup(self, duration: float | None) -> None: ...
@@ -662,7 +659,7 @@ class VoiceSession:
         chat_ctx: list[ChatItem] | None = None,
         tools: list[Any] | None = None,
         tools_host: Any | None = None,
-        tool_runner: Any | None = None,
+        voice_agent: Any | None = None,
         on_enter: bool = False,
         origin: str | None = None,
     ) -> SpeechHandle: ...

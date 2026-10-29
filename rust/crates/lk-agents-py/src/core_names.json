@@ -136,6 +136,7 @@
     "Turn",
     "UploadGate",
     "VideoFrameRef",
+    "VoiceAgent",
     "VoiceSession",
     "WARM_TRANSFER_IDENTITY",
     "WarmTransfer",

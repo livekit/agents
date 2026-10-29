@@ -71,6 +71,7 @@ impl generated::Implementations for Selected {
 
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
+    type VoiceAgent = lk_agents_abi::agent::VoiceAgentFrame;
     type WarmTransfer = lk_agents_runtime::voice::workflows::warm_transfer::WarmTransfer;
     type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;

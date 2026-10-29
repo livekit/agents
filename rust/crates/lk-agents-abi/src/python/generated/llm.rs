@@ -183,10 +183,3 @@ impl crate::python::HostProxy for dyn ::lk_agents_abi::Llm {
         crate::python::declared_proxy::<dyn ::lk_agents_abi::Llm>(obj)
     }
 }
-
-// Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
-impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::tool_executor::HostToolRunner {
-    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
-        crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::tool_executor::HostToolRunner>(obj)
-    }
-}

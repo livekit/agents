@@ -199,7 +199,6 @@ impl Driver {
             instructions: a.instructions.clone(),
             dynamic_instructions: a.dynamic_instructions.clone(),
             toolset: (*a.toolset).clone(),
-            tool_retries: a.tool_retries,
             chat_ctx: None,
             llm: kept(update.llm.is_given(), s.llm.clone()),
             tts: kept(update.tts.is_given(), s.tts.clone()),

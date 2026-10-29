@@ -502,8 +502,8 @@ argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_rep
 `interrupt`, `SpeechHandle.interrupt` and `.allow_interruptions`, `commit_user_turn`,
 `wait_for_idle(_and_hold)`, `update_agent`, `enter_task`, `update_turn_options`, `drain`,
 `aclose` then `close_io`, the `hook_*` answers, `filler_*`, `tool_update`, `dtmf_*`, `ivr_*`,
-`attach_amd`, `amd_execute`/`amd_close`, `push_video`, the io setters. Tools run through a
-`HostToolRunner` answering the marshal's report. People join and leave the fake room, and the
+`attach_amd`, `amd_execute`/`amd_close`, `push_video`, the io setters. Tools run through
+the agent's `AgentHost` answering the marshal's report. People join and leave the fake room, and the
 real room io decides what the session hears of it.
 
 Observation is a test-only probe on `SessionApi` (feature `dst`, enabled by this crate only): it

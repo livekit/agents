@@ -407,7 +407,7 @@ impl Runtime {
                     session.send(command);
                 }
             }
-            E::CancelTool { call_id, runner } => runner.cancel(&call_id),
+            E::CancelTool { hosted, .. } => hosted.cancel(),
         }
     }
 

@@ -13,6 +13,17 @@ from livekit.agents.voice.agent_host import AgentHost
 
 from .agent_run import AgentDefinition, EventExpectation, ObservedEvent, RunRequest, RunUpdate
 
+class VoiceAgent:
+    """`_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the
+    definition converts.
+    """
+    def __init__(
+        self,
+        definition: AgentDefinition,
+        host: AgentHost,
+        host_context: object,
+    ) -> None: ...
+
 class RunEvents:
     """The observed events of one invocation and the position `next_event` reads from. Each call
     returns the index of the event it matched.

@@ -14,6 +14,7 @@ use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
 use crate::{FunctionCall, ToolSpec};
+use std::sync::Arc;
 
 /// What one host callback runs within, captured when the owning operation was created (a
 /// `run()` call entry), never from whichever task dispatches it later.
@@ -34,6 +35,9 @@ pub struct Invocation {
     pub function_call: Option<FunctionCall>,
     /// The call's approval scope: the body runs on a granted read-back.
     pub approval: Option<Approval>,
+    /// The reply's speech (`_core.SpeechHandle`), for a callback a voice session runs.
+    #[host(default = None)]
+    pub speech: Option<crate::CoreObject>,
     /// The host execution context captured at the operation's entry (Python: a
     /// `contextvars.Context`); the adapter enters a copy of it for the callback.
     #[host(skip)]
@@ -68,7 +72,8 @@ impl HostContext for Invocation {
             Scope::Agent => true,
             Scope::ToolCall => self.function_call.is_some(),
             Scope::Approval => self.approval.is_some(),
-            Scope::Job | Scope::Speech => false,
+            Scope::Speech => self.speech.is_some(),
+            Scope::Job => false,
         }
     }
 }
@@ -236,6 +241,83 @@ pub struct AgentDefinition {
     pub tools: Vec<FunctionToolInfo>,
     pub output: OutputSpec,
     pub retries: Retries,
+}
+
+/// One agent as a voice session installs it (an `update_agent` frame, a `VoiceTask`): its
+/// definition, the host running its callbacks, and the host context they run in, captured when
+/// the frame was built. Only `_core.VoiceAgent` is one.
+#[crate::host(native(refused = "expected an agent's voice frame (`_core.VoiceAgent`)"))]
+pub trait AgentFrame: Send + Sync {
+    fn definition(&self) -> &AgentDefinition;
+    fn host(&self) -> &Arc<dyn AgentHost>;
+    fn host_context(&self) -> &HostRef;
+
+    /// The invocation of one callback on a voice reply: `invocation_id` names the reply,
+    /// `operation` the callback within it.
+    fn invocation(
+        &self,
+        invocation_id: String,
+        operation: u64,
+        function_call: Option<FunctionCall>,
+        approval: Option<Approval>,
+        speech: crate::CoreObject,
+    ) -> Invocation {
+        Invocation {
+            operation,
+            invocation_id,
+            agent_name: self.definition().name.clone(),
+            execution_id: None,
+            frame_id: None,
+            context_scope: None,
+            application_context: None,
+            history: Vec::new(),
+            function_call,
+            approval,
+            speech: Some(speech),
+            host_context: Some(self.host_context().clone()),
+        }
+    }
+}
+
+impl std::fmt::Debug for dyn AgentFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentFrame").field("agent", &self.definition().name).finish()
+    }
+}
+
+/// `_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the
+/// definition converts.
+#[crate::host(class(name = "VoiceAgent", native = AgentFrame))]
+pub trait VoiceAgent: AgentFrame + Sized + 'static {
+    #[host(new)]
+    fn new(definition: AgentDefinition, host: Arc<dyn AgentHost>, host_context: HostRef) -> Self;
+}
+
+/// The [`AgentFrame`] a host builds: the parts as given.
+pub struct VoiceAgentFrame {
+    definition: AgentDefinition,
+    host: Arc<dyn AgentHost>,
+    host_context: HostRef,
+}
+
+impl AgentFrame for VoiceAgentFrame {
+    fn definition(&self) -> &AgentDefinition {
+        &self.definition
+    }
+
+    fn host(&self) -> &Arc<dyn AgentHost> {
+        &self.host
+    }
+
+    fn host_context(&self) -> &HostRef {
+        &self.host_context
+    }
+}
+
+impl VoiceAgent for VoiceAgentFrame {
+    fn new(definition: AgentDefinition, host: Arc<dyn AgentHost>, host_context: HostRef) -> Self {
+        VoiceAgentFrame { definition, host, host_context }
+    }
 }
 
 /// `FunctionToolInfo`: one tool as the model and the gate see it.

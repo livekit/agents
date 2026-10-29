@@ -89,9 +89,8 @@ impl SessionApi {
         room_io_config: Option<crate::room_io::RoomIoConfig>,
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
         tools_host: Option<lk_agents_abi::HostRef>,
-        tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
-        // The first agent's tool retry budget (`Retries.tools`); `None` is the default.
-        tool_retries: Option<u32>,
+        // The first agent as its tools are hosted: its definition and its `AgentHost`.
+        voice_agent: Option<Arc<dyn crate::tool_executor::AgentFrame>>,
         transcription_node: Option<Arc<dyn NodeFactory>>,
         realtime_audio_output_node: Option<Arc<dyn NodeFactory>>,
         llm_node: Option<Arc<dyn NodeFactory>>,
@@ -188,7 +187,7 @@ impl SessionApi {
         let llm = llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
-        let toolset = host_toolset(tools, tools_host, tool_runner);
+        let toolset = host_toolset(tools, tools_host, voice_agent);
         let remote = remote_session
             .map(|port| {
                 if console.is_none() && rtc_room.is_none() {
@@ -324,7 +323,6 @@ impl SessionApi {
             room_events: None,
             room_link: Some(room_link),
             toolset,
-            tool_retries: tool_retries.unwrap_or(lk_agents_abi::agent::Retries::default().tools),
         };
 
         let mut api = SessionApi {
@@ -679,15 +677,15 @@ impl SessionApi {
         self.send(ActivityCommand::SetTranscriptionOutput(sink))
     }
 
-    /// `Agent.update_tools()` on a running agent. All three parts go together: the runner is
-    /// per-agent. The reference's follow-up `update_chat_ctx(chat_ctx.copy(tools=tools))` stays on
+    /// `Agent.update_tools()` on a running agent. All three parts go together: the agent hosts
+    /// its tools. The reference's follow-up `update_chat_ctx(chat_ctx.copy(tools=tools))` stays on
     /// the host side.
-    #[host(method(kw_only = "tools_host", send = ActivityCommand::UpdateTools(host_toolset(tools, tools_host, tool_runner))))]
+    #[host(method(kw_only = "tools_host", send = ActivityCommand::UpdateTools(host_toolset(tools, tools_host, voice_agent))))]
     pub fn update_tools(
         &self,
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
         tools_host: Option<lk_agents_abi::HostRef>,
-        tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+        voice_agent: Option<Arc<dyn crate::tool_executor::AgentFrame>>,
     ) -> Result<(), SessionRefused>;
 
     /// `AgentSession.update_options(..)` on a running session: the raw update, read into a patch
@@ -785,7 +783,7 @@ impl SessionApi {
     ///
     /// The overrides apply to this reply only. `tool_choice=None` lets the provider decide, unlike
     /// `"none"`; `chat_ctx=` replaces the history for planning; `tools=`, `tools_host=` and
-    /// `tool_runner=` go together, and only a passed `tools` pins the reply's toolset.
+    /// `voice_agent=` go together, and only a passed `tools` pins the reply's toolset.
     #[host(method(kw_only, defaults(on_enter = false)))]
     #[allow(clippy::too_many_arguments)]
     pub fn generate_reply(
@@ -797,7 +795,7 @@ impl SessionApi {
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
         tools_host: Option<lk_agents_abi::HostRef>,
-        tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+        voice_agent: Option<Arc<dyn crate::tool_executor::AgentFrame>>,
         // Decided by the host: the reference tests a `ContextVar` plus agent/session identity.
         on_enter: bool,
         origin: Option<&str>,
@@ -805,7 +803,7 @@ impl SessionApi {
         let origin = origin_of(origin)?;
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
-            tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
+            tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, voice_agent)));
         let (speech, call, reply) = self.speech_call(allow_interruptions)?;
         self.send_awaited(
             origin,

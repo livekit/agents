@@ -1,12 +1,14 @@
-"""The application callbacks of an agent invocation, run for the core (``_core.AgentRunner``).
+"""The application callbacks of an agent invocation, run for the core: a text run's
+(``_core.AgentRunner``) and a voice session's (``_core.VoiceAgent``).
 
 ``lk-agents-core``'s ``AgentRun`` decides what runs, when, and what an outcome means
 (continuation, approval, retries, phrasing); ``AgentHost`` only does host work: it binds and
 validates tool arguments, runs tool bodies and classifies what they returned or raised, renders
 the dynamic instructions, renders read-backs and validates output candidates. Each callback runs
-in a copy of the context captured when ``run()`` was entered, so the invocation it serves is the
-one ``_BindingContextVar`` holds there. The records crossing are the generated models of
-``lk_agents_abi::agent`` (``_generated.agent_run``).
+in a copy of the context captured when the invocation was entered (``run()``, or the voice frame's
+install), so what it serves is the binding ``_BindingContextVar`` holds there: a ``_TextRun`` or
+a ``_VoiceBinding``. The records crossing are the generated models of ``lk_agents_abi::agent``
+(``_generated.agent_run``).
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
+import dataclasses
 import inspect
 import uuid
 from collections.abc import Awaitable, Callable
@@ -23,6 +26,7 @@ from typing import TYPE_CHECKING, Any, get_type_hints
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
+from .. import _core
 from .._generated.agent_run import (
     ArgumentIdentity,
     ArgumentIdentityFingerprint,
@@ -46,11 +50,15 @@ from .._generated.agent_run import (
 )
 from .._generated.tool_report import (
     ToolOutcomeCancelled,
+    ToolOutcomeCompleted,
     ToolOutcomeInternal,
     ToolOutcomeInvalid,
+    ToolOutcomeModelRetry,
+    ToolOutcomeToolError,
+    ToolOutcomeUpdate,
     ToolReport,
 )
-from ..llm import FunctionCall
+from ..llm import FunctionCall, ToolContext
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     FunctionTool,
@@ -67,9 +75,10 @@ from ..llm.utils import (
     validated_arguments,
 )
 from ..log import logger
-from .agent import _BindingContextVar
+from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
 from .run_result import _tool_body
+from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -145,7 +154,8 @@ class AgentHost:
     def __init__(self, agent: Agent[Any, Any]) -> None:
         self._agent = agent
         self._output = OutputContract.of(agent)
-        # the callback task of each operation in flight, for `cancel`
+        # the callback task of each operation in flight, for `cancel`; on a voice session, the
+        # body of a tool call, which outlives its callback once its first `ctx.update()` returned
         self._running: dict[tuple[str, int], asyncio.Task[Any]] = {}
 
     async def render_instructions(self, invocation: Invocation) -> str:
@@ -167,22 +177,30 @@ class AgentHost:
         """Refresh this run's callable tools after toolset discovery."""
         from .agent_run import tool_infos
 
-        async with self._operation(invocation):
-            run = _current_run()
-            run.tools.update_tools(self._agent.tools)
-            return tool_infos(run.tools)
+        async with self._operation(invocation) as binding:
+            if isinstance(binding, _VoiceBinding):
+                return tool_infos(_voice_tools(binding))
+            binding.tools.update_tools(self._agent.tools)
+            return tool_infos(binding.tools)
 
     async def prepare_tool(
         self, invocation: Invocation, arguments: dict[str, Any]
     ) -> PreparedArguments:
         """Binds and validates the call's arguments in the call's scope (``prepare_arguments``)."""
-        async with self._operation(invocation):
-            run = _current_run()
+        async with self._operation(invocation) as binding:
             call = _function_call(invocation)
-            tool = run.tools.get_function_tool(call.name)
+            ctx: RunContext[Any]
+            if isinstance(binding, _VoiceBinding):
+                tool = _voice_tools(binding).get_function_tool(call.name)
+                assert isinstance(invocation.speech, _core.SpeechHandle)
+                speech = SpeechHandle._of(invocation.speech)
+                ctx = RunContext(function_call=call, session=binding.session, speech_handle=speech)
+            else:
+                tool = binding.tools.get_function_tool(call.name)
+                ctx = RunContext[Any](function_call=call, run=binding)
             if tool is None:
                 raise ToolArgumentError(f"unknown tool `{call.name}`")
-            return prepare_arguments(tool, arguments, RunContext[Any](function_call=call, run=run))
+            return prepare_arguments(tool, arguments, ctx)
 
     async def read_back(self, invocation: Invocation, prepared: _Prepared) -> ReadBackAnswer:
         """The tool's read-back function on the call's arguments."""
@@ -193,9 +211,12 @@ class AgentHost:
         self, invocation: Invocation, prepared: _Prepared
     ) -> tuple[ToolReport, dict[str, Any]]:
         """Runs the body, sync or async, and classifies what it returned or raised."""
-        async with self._operation(invocation):
+        async with self._operation(invocation) as binding:
             prepared.ctx._function_call = _function_call(invocation)
             prepared.ctx._operation = invocation.operation
+            if isinstance(binding, _VoiceBinding):
+                report = await self._run_voice_tool(invocation, binding, prepared)
+                return report, prepared.ctx.function_call.extra
             try:
                 body = _tool_body(self._agent, prepared.ctx.function_call.name, prepared.tool)
                 output = body(*prepared.args, **prepared.kwargs)
@@ -204,20 +225,61 @@ class AgentHost:
             except asyncio.CancelledError:
                 return ToolReport(outcome=ToolOutcomeCancelled()), prepared.ctx.function_call.extra
             except Exception as e:
-                report = tool_report(None, e)
-                if isinstance(report.outcome, ToolOutcomeInternal):
-                    logger.exception(
-                        "exception occurred while executing a tool",
-                        extra={"function": prepared.ctx.function_call.name},
-                    )
-                return report, prepared.ctx.function_call.extra
-            report = tool_report(output)
-            if isinstance(report.outcome, ToolOutcomeInvalid):
-                logger.error(
-                    f"tool `{prepared.ctx.function_call.name}` returned an invalid output",
-                    extra={"lk.pii.output": output},
+                return _classified(prepared.ctx.function_call, None, e), (
+                    prepared.ctx.function_call.extra
                 )
-            return report, prepared.ctx.function_call.extra
+            return _classified(prepared.ctx.function_call, output, None), (
+                prepared.ctx.function_call.extra
+            )
+
+    async def _run_voice_tool(
+        self, invocation: Invocation, binding: _VoiceBinding, prepared: _Prepared
+    ) -> ToolReport:
+        """A call's body on a voice session: its own task, so the call's step is released by the
+        body's first ``ctx.update()`` while the body runs on; its end then reaches the session as
+        the call's final update. In a ``VoiceTask``'s frame, a ``Completed`` ends the task once
+        validated."""
+        call = prepared.ctx.function_call
+        body = asyncio.create_task(
+            _call(
+                _tool_body(self._agent, call.name, prepared.tool, binding.session),
+                prepared.args,
+                prepared.kwargs,
+            ),
+            name=f"tool_{call.name}",
+        )
+        key = _operation_key(invocation)
+        self._running[key] = body
+        body.add_done_callback(lambda _: self._running.pop(key, None))
+        first_update = prepared.ctx._first_update
+        assert first_update is not None, "a voice tool's context takes updates"
+        await asyncio.wait({body, first_update}, return_when=asyncio.FIRST_COMPLETED)
+        if body.done():
+            report = _ended(call, body)
+            if binding.task and isinstance(report.outcome, ToolOutcomeCompleted):
+                return await self._validated_completion(prepared.ctx, body.result().value, report)
+            return report
+
+        def _final(task: asyncio.Task[Any]) -> None:
+            binding.session._core.tool_update(call.call_id, _ended(call, task))
+
+        body.add_done_callback(_final)
+        message, raw = first_update.result()
+        return ToolReport(outcome=ToolOutcomeUpdate(message=message, raw=raw))
+
+    async def _validated_completion(
+        self, ctx: RunContext[Any], value: Any, report: ToolReport
+    ) -> ToolReport:
+        """A task's ``Completed(value)`` through its agent's ``output_type`` and output
+        validators: the value the task returns, or the error its model reads and corrects."""
+        try:
+            value = TypeAdapter(self._agent.output_type).validate_python(value)
+            value = await self._agent._validate_output(ctx, value)
+        except ValidationError as e:
+            return ToolReport(outcome=ToolOutcomeToolError(message=str(e)))
+        except ModelRetry as e:
+            return ToolReport(outcome=ToolOutcomeModelRetry(message=e.message))
+        return dataclasses.replace(report, transition=value)
 
     async def validate_output(
         self, invocation: Invocation, candidate: OutputCandidate
@@ -259,7 +321,8 @@ class AgentHost:
 
 
 class _Operation:
-    """Registers the current task as the callback of one operation while it runs."""
+    """Enters one callback's binding, and registers the current task as the callback of its
+    operation while it runs."""
 
     def __init__(self, running: dict[tuple[str, int], asyncio.Task[Any]], invocation: Invocation):
         self._running = running
@@ -267,7 +330,18 @@ class _Operation:
         self._invocation = invocation
         self._token: contextvars.Token[Any] | None = None
 
-    async def __aenter__(self) -> None:
+    async def __aenter__(self) -> _TextRun | _VoiceBinding:
+        binding = _BindingContextVar.get(None)
+        if isinstance(binding, _VoiceBinding):
+            # a tool's commands are sent as its own
+            call = self._invocation.function_call
+            if call is not None:
+                binding = binding._replace(
+                    origin=f"tool:{_function_call(self._invocation).call_id}"
+                )
+            self._token = _BindingContextVar.set(binding)
+            self._register()
+            return binding
         run = copy.copy(_current_run())
         run.id = self._invocation.invocation_id
         from .._core_view import from_core_item
@@ -279,20 +353,24 @@ class _Operation:
         if run.context_scope is not None:
             run.context = self._invocation.application_context
         self._token = _BindingContextVar.set(run)
-        task = asyncio.current_task()
-        if task is not None:
-            self._running[self._key] = task
+        self._register()
 
         try:
-            run = _current_run()
             if run.frame_contexts is not None:
                 await run.frame_contexts.resolve(run)
         except BaseException:
             await self.__aexit__()
             raise
+        return run
+
+    def _register(self) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._running[self._key] = task
 
     async def __aexit__(self, *exc: object) -> None:
-        self._running.pop(self._key, None)
+        if self._running.get(self._key) is asyncio.current_task():
+            self._running.pop(self._key, None)
         if self._token is not None:
             _BindingContextVar.reset(self._token)
 
@@ -361,6 +439,50 @@ class OutputContract:
 
 async def _unexpected_value(ctx: RunContext[Any], value: Any) -> Any:
     raise RuntimeError("a str output takes no structured candidate")
+
+
+def _voice_tools(binding: _VoiceBinding) -> ToolContext:
+    """A voice frame's tools: the agent's, then the session's it lacks (a session tool added
+    since the frame was installed, as IVR's DTMF tool)."""
+    own = ToolContext(binding.agent.tools)
+    extra = [
+        tool
+        for name, tool in ToolContext(binding.session._tools).function_tools.items()
+        if own.get_function_tool(name) is None
+    ]
+    return ToolContext([*binding.agent.tools, *extra])
+
+
+async def _call(body: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    """The body, sync or async."""
+    out = body(*args, **kwargs)
+    return await out if inspect.isawaitable(out) else out
+
+
+def _ended(call: FunctionCall, task: asyncio.Task[Any]) -> ToolReport:
+    if task.cancelled():
+        return ToolReport(outcome=ToolOutcomeCancelled())
+    if (exc := task.exception()) is not None:
+        return _classified(call, None, exc)
+    return _classified(call, task.result(), None)
+
+
+def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:
+    """What the body returned or raised, classified; an internal error or an invalid output is
+    logged."""
+    report = tool_report(output, exc)
+    if isinstance(report.outcome, ToolOutcomeInternal):
+        logger.error(
+            "exception occurred while executing a tool",
+            exc_info=exc,
+            extra={"function": call.name, "call_id": call.call_id},
+        )
+    elif isinstance(report.outcome, ToolOutcomeInvalid):
+        logger.error(
+            f"tool `{call.name}` returned an invalid output",
+            extra={"call_id": call.call_id, "lk.pii.output": output},
+        )
+    return report
 
 
 def _current_run() -> _TextRun:

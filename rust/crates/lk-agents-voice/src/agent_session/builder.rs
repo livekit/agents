@@ -168,8 +168,6 @@ pub struct DriverBuilder {
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: crate::tool_executor::Toolset,
-    /// The first agent's tool retry budget.
-    pub tool_retries: u32,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     pub session_id: String,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
@@ -195,8 +193,8 @@ impl DriverBuilder {
         });
         let forward_chat_context = self.forward_chat_context;
         // An advertised tool with nothing to run it is refused here, not at the first call.
-        if !self.toolset.specs.is_empty() && self.toolset.runner.is_none() {
-            return Err(DriverError::Missing("tool_runner"));
+        if !self.toolset.specs.is_empty() && self.toolset.agent.is_none() {
+            return Err(DriverError::Missing("voice_agent"));
         }
         if let Some(llm) = &self.llm {
             llm.prewarm();
@@ -503,7 +501,6 @@ impl DriverBuilder {
             dynamic_instructions: self.dynamic_instructions.take(),
             output_nodes: std::mem::take(&mut self.output_nodes),
             toolset: Arc::new(std::mem::take(&mut self.toolset)),
-            tool_retries: self.tool_retries,
             tools: Default::default(),
             audio_recognition,
             speech_scheduler: SpeechScheduler::new(),

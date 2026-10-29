@@ -339,6 +339,7 @@ fn setup(
     };
     let entry = Invocation {
         operation: 0,
+        speech: None,
         invocation_id: "run_1".into(),
         agent_name: "scheduler".into(),
         execution_id: None,

@@ -88,6 +88,8 @@ class _VoiceBinding(NamedTuple):
     session: VoiceSession
     agent: Agent
     origin: str | None = None
+    # the agent runs a `VoiceTask`: a `Completed` from its tools, validated, ends the task
+    task: bool = False
 
     # the providers the agent's default nodes call: the session's, and the agent's own LLM
     @property
