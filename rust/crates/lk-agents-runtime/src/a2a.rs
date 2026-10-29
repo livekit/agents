@@ -118,14 +118,6 @@ impl Turn {
         &self.lane
     }
 
-    pub fn thread(&self) -> &Thread {
-        &self.thread
-    }
-
-    pub fn options(&self) -> &TurnOptions {
-        &self.opts
-    }
-
     pub fn policy_for(&self, channel: &str) -> Policy {
         resolve_policy(&self.opts.policy, channel)
     }
