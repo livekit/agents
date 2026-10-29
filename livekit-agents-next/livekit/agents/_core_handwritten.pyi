@@ -8,14 +8,12 @@ stub is then generated. The ``*Protocol`` classes describe host objects and are 
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any, Protocol
 
 from ._generated._core_classes import (
     ChatItem,
-    StartJobFields,
     Tagger,
     UploadGate,
 )
@@ -32,7 +30,6 @@ from ._generated.storage_context import ContextScope, ContextScopeWrite
 from ._generated.storage_options import Policy, TurnOptions
 from ._generated.storage_turn import TurnContext, TurnResult
 from ._generated.telemetry import SpanUpdateWire
-from ._generated.worker_options import ServerOptions
 
 # --- runtime.rs ----------------------------------------------------------------------------------
 
@@ -41,232 +38,6 @@ class Role(Enum):
     Job = ...
 
 def init(role: Role) -> None: ...
-
-# --- the worker ----------------------------------------------------------------------------------
-
-class ServerHostProtocol(Protocol):
-    """What ``ServerRuntime`` calls back into, in the generator's ``open(kind, args)`` shape: the
-    worker's callbacks (``job_request``, ``launch_job``, ``terminate_job``, ``load``, ``endpoint``)
-    and the server's (``start``: the job processes from the resolved options; ``started``,
-    ``registered``, ``idle_processes``, ``worker_load``, ``health``, ``metrics``,
-    ``close_websockets``,
-    ``join_jobs``, ``close``). The awaitable runs on the loop that constructed the runtime and is
-    cancelled when Rust drops the operation.
-    """
-
-    def open(self, kind: str, args: Any) -> Awaitable[Any]: ...
-
-class EndpointStream:
-    """One exchange stream of the endpoint data plane, positioned after its preamble."""
-
-    def read(self, max_bytes: int = 65536) -> Awaitable[bytes]: ...
-    def write(self, data: bytes) -> Awaitable[None]: ...
-    def finish(self) -> None: ...
-    def reset(self, code: int) -> None: ...
-    def stop(self, code: int) -> None: ...
-
-class EndpointServer:
-    """``AgentHttp``'s server half: one ASGI call per endpoint stream (an HTTP/1.1 exchange, or a
-    WebSocket after an upgrade), and the open WebSockets to drain."""
-
-    def __init__(self) -> None: ...
-    def serve(self, stream: Any, app: Any, request: Any) -> Awaitable[None]: ...
-    def close_websockets(
-        self, code: int = 1001, reason: str = "worker draining"
-    ) -> Awaitable[None]: ...
-
-class ServerConfig:
-    """``AgentServer``'s options, resolved against the environment; writable until it starts."""
-
-    def __init__(self, options: ServerOptions) -> None: ...
-    def update(self, options: ServerOptions) -> None: ...
-    @property
-    def ws_url(self) -> str: ...
-    @property
-    def api_key(self) -> str: ...
-    @property
-    def api_secret(self) -> str: ...
-    @property
-    def agent_name(self) -> str: ...
-    @property
-    def deployment(self) -> str: ...
-    @property
-    def cloud(self) -> bool: ...
-    @property
-    def drain_timeout(self) -> float: ...
-    @property
-    def simulation(self) -> bool: ...
-    @simulation.setter
-    def simulation(self, value: bool) -> None: ...
-
-class ServerRuntime:
-    """``AgentServer``'s lifecycle over a ``ServerHostProtocol``."""
-
-    def __init__(self, config: ServerConfig, host: ServerHostProtocol) -> None: ...
-    @property
-    def worker_id(self) -> str: ...
-    @property
-    def draining(self) -> bool: ...
-    @property
-    def http_port(self) -> int: ...
-    def run(
-        self,
-        *,
-        devmode: bool,
-        unregistered: bool,
-        has_rtc: bool,
-        has_text_doors: bool,
-        publisher: bool,
-        routes: list[dict[str, Any]],
-        has_load_fnc: bool,
-        has_on_request: bool,
-    ) -> Awaitable[None]: ...
-    def drain(self, timeout: float | None = None) -> Awaitable[None]: ...
-    def aclose(self) -> Awaitable[None]: ...
-    def job_status(self, job_id: str, status: str) -> None: ...
-    def simulate_job(
-        self,
-        room: str,
-        *,
-        fake_job: bool,
-        agent_identity: str | None = None,
-        room_info: bytes | None = None,
-        token: str | None = None,
-    ) -> Awaitable[None]: ...
-
-# --- the job process IPC (worker ipc/) -----------------------------------------------------------
-
-def ipc_pair() -> tuple[int, int]:
-    """One process's control socket: the parent's end and the child's, as descriptors the caller
-    owns (the parent's for ``ProcSupervisor``, the child's for the process's ``IpcClient``)."""
-
-class ProcHostProtocol(Protocol):
-    """Bootstrap completion and queued diagnostics; native ownership lasts through reaping."""
-
-    def _core_log(
-        self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
-    ) -> None: ...
-    async def _core_launched(self) -> None: ...
-    async def _core_launch_failed(self, cause: str) -> None: ...
-    async def _core_completed(self, exitcode: int, pid: int) -> None: ...
-
-class ProcSupervisor:
-    """The worker's side of one job process, over the socket ``fd`` it owns."""
-
-    def __init__(
-        self,
-        fd: int,
-        host: ProcHostProtocol,
-        *,
-        pid: int,
-        initialize_timeout: float,
-        close_timeout: float,
-        memory_warn_mb: float,
-        memory_limit_mb: float,
-        ping_interval: float,
-        ping_timeout: float,
-        high_ping_threshold: float,
-        killable: bool = True,
-    ) -> None: ...
-    def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> Awaitable[float]:
-        """Sends the ``Hello``; the seconds until the process was ready, ``asyncio.TimeoutError``
-        when late (a process is then killed)."""
-    @property
-    def initialized(self) -> bool: ...
-    def _core_launched_process(
-        self, pid: int, sentinel: int, method: str, owned: list[int]
-    ) -> None: ...
-    def run(self, joined: Awaitable[None], host: ProcHostProtocol) -> asyncio.Future[bool]:
-        """Owns the bootstrap operation and native process through OS exit and reaping."""
-    def _core_join(self) -> Awaitable[bool]: ...
-    def _core_wait_exit(self) -> Awaitable[bool]: ...
-    def aclose(self) -> Awaitable[None]: ...
-    def kill(self) -> Awaitable[None]: ...
-    def start_job(self, fields: StartJobFields) -> Awaitable[None]:
-        """Returns after the child accepts the typed job record."""
-    @property
-    def killed(self) -> bool: ...
-
-class IpcClient:
-    """The child's side of the parent's socket ``fd`` it owns: the initialize handshake (blocking,
-    ``initialize(http_proxy)``), then the parent's messages served to a host: it starts one job
-    and acks the shutdown."""
-
-    def __init__(
-        self, fd: int, initialize: Callable[[str | None], None], *, process: bool = False
-    ) -> None: ...
-    @property
-    def asyncio_debug(self) -> bool: ...
-    def serve(self, host: Any) -> Awaitable[None]: ...
-    def stop(self) -> None: ...
-    def aclose(self) -> Awaitable[None]: ...
-
-class JobRun:
-    """A job's run, for ``JobContext`` and ``ipc/job_proc_lazy_main.py``'s ``_JobProc``: what
-    ends it, the entrypoint's supervision, the order and bounds of the shutdown (whose steps the
-    host given to ``run`` runs, ``_core_*``), the participant entrypoints, the room connected
-    once, the API calls in flight and the recording's setup."""
-
-    def __init__(
-        self,
-        *,
-        fake_job: bool,
-        session_end_timeout: float,
-        redaction: bool,
-        url: str = "",
-        recording: bool = False,
-        session_end: Callable[..., Any] | None = None,
-        session_aclose_timeout: float = 60.0,
-    ) -> None: ...
-    def add_shutdown_callback(self, callback: Callable[..., Awaitable[None]]) -> None:
-        """``callback(reason)``, or ``callback()`` when it takes no argument, runs as the job
-        shuts down."""
-    @property
-    def observability_url(self) -> str | None: ...
-    @property
-    def buffer_logs(self) -> bool:
-        """The job buffers its logs from the start, for the recording to upload them."""
-    def shutdown(self, reason: str, user_initiated: bool) -> None: ...
-    def connected(self) -> None: ...
-    def connect(self, connect: Callable[[], Awaitable[None]]) -> Awaitable[None]: ...
-    def add_participant_entrypoint(self, entrypoint: Any, kinds: list[int]) -> None: ...
-    def participant_joined(self, ctx: Any, participant: Any, identity: str, kind: int) -> None: ...
-    def participant_left(self, attributes: dict[str, str]) -> None: ...
-    def api_call(
-        self, call: Callable[[], Awaitable[Any]], name: str, console_result: Any
-    ) -> asyncio.Future[Any]: ...
-    def close_tasks(self) -> Awaitable[None]: ...
-    def init_recording(self, options: dict[str, bool]) -> bool | None: ...
-    def claim_session(self, session: Any) -> bool: ...
-    @property
-    def primary_session(self) -> Any: ...
-    @property
-    def recording_initialized(self) -> bool: ...
-    @property
-    def redaction(self) -> bool: ...
-    def run(self, host: Any) -> Awaitable[None]: ...
-
-class ProcPool:
-    """The warm job processes of ``ipc/proc_pool.py``'s ``ProcPool`` (``host``), which makes the
-    executors (``_core_create``), reports a failed initialization (``_core_init_failed``) and
-    emits the pool's events."""
-
-    def __init__(
-        self, host: Any, *, num_idle_processes: int, initialize_timeout: float, close_timeout: float
-    ) -> None: ...
-    @property
-    def processes(self) -> list[Any]: ...
-    @property
-    def jobs_waiting(self) -> int: ...
-    @property
-    def target_idle_processes(self) -> int: ...
-    @target_idle_processes.setter
-    def target_idle_processes(self, n: int) -> None: ...
-    def start(self) -> Awaitable[None]: ...
-    def launch_job(self, info: Any) -> Awaitable[None]: ...
-    def join_jobs(self) -> Awaitable[None]:
-        """Waits until every process a job was launched on exited."""
-    def aclose(self) -> Awaitable[None]: ...
 
 # --- storage.rs ----------------------------------------------------------------------------------
 #
