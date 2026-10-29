@@ -27,14 +27,14 @@ from starlette.types import ASGIApp, Message, Scope
 from starlette.websockets import WebSocket
 
 from . import _core
-from ._core import (
+from ._generated import worker_endpoint as asgi
+from ._generated.worker_reset_codes import (
     HSR_ABORT as HSR_ABORT,
     HSR_INTERNAL as HSR_INTERNAL,
     HSR_PROTOCOL as HSR_PROTOCOL,
     HSR_REFUSED as HSR_REFUSED,
     HSR_TIMEOUT as HSR_TIMEOUT,
 )
-from ._generated import worker_endpoint as asgi
 from ._generated.worker_endpoint import (
     EndpointOptions as EndpointOptions,
     EndpointRequest as EndpointRequest,

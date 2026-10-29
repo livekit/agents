@@ -41,11 +41,6 @@ from ._generated._core_agent import (
 )
 from ._generated._core_classes import (
     END_CALL_DESCRIPTION as END_CALL_DESCRIPTION,
-    HSR_ABORT as HSR_ABORT,
-    HSR_INTERNAL as HSR_INTERNAL,
-    HSR_PROTOCOL as HSR_PROTOCOL,
-    HSR_REFUSED as HSR_REFUSED,
-    HSR_TIMEOUT as HSR_TIMEOUT,
     TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
     WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
     AcceptArguments as AcceptArguments,

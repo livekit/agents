@@ -1,16 +1,26 @@
-//! Upstream reset codes, exported to the host without a second protocol definition.
+//! Upstream reset codes, written into the host's `worker_reset_codes` module. Each value is checked
+//! against the protocol's own definition at compile time.
 
-#[crate::host(export(name = "HSR_ABORT", pid = false))]
-pub const HSR_ABORT: i32 = livekit_protocol::agent_http::HttpStreamResetCode::HsrAbort as i32;
+use livekit_protocol::agent_http::HttpStreamResetCode as Code;
 
-#[crate::host(export(name = "HSR_REFUSED", pid = false))]
-pub const HSR_REFUSED: i32 = livekit_protocol::agent_http::HttpStreamResetCode::HsrRefused as i32;
+#[crate::host(file(module = "worker_reset_codes"))]
+const _: () = ();
 
-#[crate::host(export(name = "HSR_INTERNAL", pid = false))]
-pub const HSR_INTERNAL: i32 = livekit_protocol::agent_http::HttpStreamResetCode::HsrInternal as i32;
+#[crate::host(constant)]
+pub const HSR_ABORT: i32 = 0;
+#[crate::host(constant)]
+pub const HSR_REFUSED: i32 = 1;
+#[crate::host(constant)]
+pub const HSR_INTERNAL: i32 = 2;
+#[crate::host(constant)]
+pub const HSR_TIMEOUT: i32 = 3;
+#[crate::host(constant)]
+pub const HSR_PROTOCOL: i32 = 4;
 
-#[crate::host(export(name = "HSR_TIMEOUT", pid = false))]
-pub const HSR_TIMEOUT: i32 = livekit_protocol::agent_http::HttpStreamResetCode::HsrTimeout as i32;
-
-#[crate::host(export(name = "HSR_PROTOCOL", pid = false))]
-pub const HSR_PROTOCOL: i32 = livekit_protocol::agent_http::HttpStreamResetCode::HsrProtocol as i32;
+const _: () = assert!(
+    HSR_ABORT == Code::HsrAbort as i32
+        && HSR_REFUSED == Code::HsrRefused as i32
+        && HSR_INTERNAL == Code::HsrInternal as i32
+        && HSR_TIMEOUT == Code::HsrTimeout as i32
+        && HSR_PROTOCOL == Code::HsrProtocol as i32
+);
