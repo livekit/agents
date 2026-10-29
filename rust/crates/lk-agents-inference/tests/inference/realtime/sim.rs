@@ -1,7 +1,7 @@
 //! The realtime core over the simulated server, on virtual time: a LiveKit Inference realtime
 //! session's conversation machine and connection policy (`RealtimeMachine`, `RealtimeConnection`)
-//! stepped in the order the native session's pump steps them, against [`Server`] as the corpus
-//! shows the real one. The socket is the server's typed records; the person's audio reaches it in
+//! stepped in the order the native session's pump steps them, against [`Server`] as the real
+//! one was measured. The socket is the server's typed records; the person's audio reaches it in
 //! the writer's 100 ms batches; the server answers on its own clock.
 //!
 //! A test sends commands and server-side happenings ([`Exo`], a dropped socket) at instants of
@@ -41,7 +41,7 @@ pub struct Setup {
     pub seed: u64,
     /// How long a connection takes to open.
     pub connect: Duration,
-    /// How often a response calls a tool, in percent; `None` is the corpus's rate.
+    /// How often a response calls a tool, in percent; `None` is the measured rate (8 in 94).
     pub tool_calls: Option<u8>,
 }
 
@@ -296,9 +296,9 @@ impl Sim {
                         let Link::Open { server: Some(server), .. } = &mut self.link else {
                             unreachable!()
                         };
-                        let step = server.pop(now, wall, &mut self.record).map(|delivered| {
+                        let step = server.pop(now, wall, &mut self.record).map(|event| {
                             let at = self.machine.connection_generation();
-                            self.machine.incoming_on(at, now, delivered.event)
+                            self.machine.incoming_on(at, now, event)
                         });
                         if let Some(step) = step {
                             self.stepped(generation, step);

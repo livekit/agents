@@ -1482,7 +1482,6 @@ dependencies = [
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-net",
- "lk-agents-test-support",
  "log",
  "pbjson-types",
  "prost",
@@ -1619,11 +1618,9 @@ dependencies = [
 name = "lk-agents-test-support"
 version = "0.1.0"
 dependencies = [
- "fastrand",
  "lk-agents-abi",
  "lk-agents-media",
  "lk-agents-voice",
- "serde_json",
  "tokio",
 ]
 

@@ -1,13 +1,12 @@
-//! The OpenAI Realtime server, as the real one answers the protocol's edge cases
-//! (`corpus/probes/`, `corpus/probe_realtime.py` in lk-agents-test-support), the corpus shows it
-//! behaving, and, where both are silent, the docs say: the calibrated peer the realtime core is
-//! tested against ([`super::sim`]), held to the recordings and probes ([`super::recorded`]).
+//! The OpenAI Realtime server, as the real one was measured answering the protocol and, where
+//! that is silent, as the docs say: the peer the realtime core is tested against
+//! ([`super::sim`]).
 //!
 //! Sans-IO, in the protocol's typed records: the realtime core's client frames
 //! ([`Outgoing`]) go in with the instant they arrived ([`Server::client`]), what the server does
 //! on its own accord goes in as an [`Exo`], and every server event comes out of [`Server::pop`]
 //! once it is due, as the [`Incoming`] the client decodes from it. Each event's delay after its
-//! cause is drawn from the corpus (`lk_agents_test_support::corpus`), so a reply is
+//! cause is drawn from a hand-set range around what the real server took, so a reply is
 //! created about 100 ms after its `response.create`, its first item 300 ms later, its audio in
 //! 400 ms deltas faster than real time, and `response.done` while the client is still playing
 //! most of it -- which is what made a server onset over a finished generation the common
@@ -43,14 +42,10 @@ use lk_agents_abi::{
 };
 use lk_agents_inference::realtime::{
     Incoming, TurnDetection,
-    protocol::{ResponseDone, ServerError, TranscriptionCompleted, TranscriptionUsage},
+    protocol::{ResponseDone, TranscriptionCompleted, TranscriptionUsage},
 };
 
 mod client;
-
-pub use client::event_id_of;
-
-use lk_agents_test_support::corpus::{self, draw_ms, share};
 
 /// The session's audio rate, both ways.
 pub const SAMPLE_RATE: u32 = 24_000;
@@ -100,7 +95,7 @@ pub enum Breach {
     CancelledUnprompted { response: String, generation: Option<u32> },
 }
 
-/// The nominal length of a full audio delta, as the corpus has nearly all of them.
+/// The nominal length of a full audio delta, as the real server sends nearly all of them.
 const DELTA_MS: u64 = 400;
 
 /// What a delta's PCM is long: the client plays all of it, as long as the server counts it.
@@ -109,22 +104,11 @@ const PCM_MS: u64 = DELTA_MS;
 /// The samples a delta carries.
 const DELTA_SAMPLES: usize = (DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 
-/// What the server is told to do of its own accord: the person's speech as its VAD hears it, and
-/// the ways a real server goes wrong. Mirrors `RtEvent`, which is how a case says it.
+/// What the server is told to do of its own accord.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exo {
-    SpeechStarted,
-    SpeechStopped,
-    /// A delta for a response nobody created.
-    StrayDelta,
     /// The oldest response still generating finishes now, all of it at once.
     FinishNow,
-    /// A server-side `error` event, the session staying open.
-    ServerError,
-    /// The response in progress fails: `response.done` with `status: failed`.
-    ResponseFailed,
-    /// The last user item's transcription fails.
-    TranscriptionFailed,
 }
 
 /// Server-side VAD, as the session configured it.
@@ -132,18 +116,6 @@ pub enum Exo {
 pub enum Vad {
     Semantic,
     Server,
-}
-
-/// One server event as the client receives it.
-#[derive(Clone, Debug)]
-pub struct Delivered {
-    pub event: Incoming,
-    /// The response it belongs to (its `response_id`, or `response.id`).
-    pub response: Option<String>,
-    /// A `response.done`'s `status_details.reason`.
-    pub reason: Option<&'static str>,
-    /// The item an event names on the wire where the client reads no further (`item_id`).
-    pub item: Option<String>,
 }
 
 /// An event the client reads no further than its type.
@@ -206,8 +178,6 @@ enum Body {
 struct Pending {
     resp: Option<u32>,
     body: Body,
-    reason: Option<&'static str>,
-    item: Option<String>,
 }
 
 /// One conversation item the server holds.
@@ -339,20 +309,6 @@ pub trait Hooks {
     fn breach(&mut self, breach: Breach);
 }
 
-/// Hooks that do nothing: what the conformance check runs the server with.
-pub struct NoHooks(pub u32);
-
-impl Hooks for NoHooks {
-    fn created(&mut self, _: &str) -> u32 {
-        self.0 += 1;
-        self.0
-    }
-    fn done(&mut self, _: u32) {}
-    fn produced(&mut self, _: u32, _: u16) {}
-    fn heard(&mut self, _: &[u8]) {}
-    fn breach(&mut self, _: Breach) {}
-}
-
 /// One connection's server: its conversation, input buffer and responses.
 pub struct Server {
     rng: Rng,
@@ -397,7 +353,7 @@ pub struct Server {
     /// The last user item, for a failed transcription.
     last_user: Option<String>,
     /// How often a response calls a tool, in percent, when the session offers tools: the
-    /// developer's prompt decides it. `None` is the corpus's rate.
+    /// developer's prompt decides it. `None` is the measured rate (8 in 94).
     tool_calls: Option<u8>,
     /// What this connection's ids are minted under: a real server's ids are unique across
     /// sessions, so a reconnect never names a new item as an old one.
@@ -456,12 +412,11 @@ impl Server {
     }
 
     /// The next event due at `now`, delivered at wall time `wall`.
-    pub fn pop(&mut self, now: Ts, wall: SystemTime, hooks: &mut dyn Hooks) -> Option<Delivered> {
+    pub fn pop(&mut self, now: Ts, wall: SystemTime, hooks: &mut dyn Hooks) -> Option<Incoming> {
         self.breathe(now);
         self.report(hooks);
         let (&key, _) = self.pending.iter().next().filter(|((t, _), _)| *t <= now)?;
-        let Pending { resp, body, reason, item: about } =
-            self.pending.remove(&key).expect("just seen");
+        let Pending { resp, body } = self.pending.remove(&key).expect("just seen");
         let mut event = match body {
             Body::Event(event) => event,
             Body::Audio { item, chunk } => {
@@ -540,8 +495,7 @@ impl Server {
                 _ => {}
             }
         }
-        let response = resp.map(|r| self.responses[r as usize].id.clone());
-        Some(Delivered { event, response, reason, item: about })
+        Some(event)
     }
 
     // --- what the server does of its own accord ------------------------------------------------
@@ -549,46 +503,6 @@ impl Server {
     /// True when a real server could do this now.
     pub fn exo(&mut self, now: Ts, what: Exo) -> bool {
         match what {
-            Exo::SpeechStarted => {
-                // The VAD hears only audio the client appended since the buffer was last emptied.
-                if self.config.vad.is_none() || self.speaking.is_some() || self.buffer_ms == 0 {
-                    return false;
-                }
-                let item = self.mint_item("user");
-                self.speaking = Some(item.clone());
-                self.put(now, None, Incoming::SpeechStarted { item_id: Some(item) });
-                if self.config.interrupt_response
-                    && let Some(r) = self.active
-                {
-                    let lag = draw_ms(&mut self.rng, &["realtime", "cancel_after_speech_started"]);
-                    self.cancel(later(now, lag), r, "turn_detected");
-                }
-                true
-            }
-            Exo::SpeechStopped => {
-                let Some(item) = self.speaking.take() else { return false };
-                self.seq += 1;
-                let body = Body::Event(Incoming::SpeechStopped);
-                let pending = Pending { resp: None, body, reason: None, item: Some(item.clone()) };
-                self.pending.insert((now, self.seq), pending);
-                self.own_empty = false;
-                self.commit(now, item);
-                if self.config.create_response && self.active.is_none() {
-                    let delay = draw_ms(&mut self.rng, &["realtime", "created_after_stopped"]);
-                    let r = self.respond(later(now, delay), None, None, None);
-                    self.responses[r as usize].turn = true;
-                }
-                true
-            }
-            Exo::StrayDelta => {
-                let delta = Incoming::AudioTranscriptDelta {
-                    item_id: "item_stray".into(),
-                    delta: "...".into(),
-                    start_time: None,
-                };
-                self.put(now, None, delta);
-                true
-            }
             Exo::FinishNow => {
                 let Some(r) = self.active else { return false };
                 let keys: Vec<(Ts, u64)> = self
@@ -606,29 +520,6 @@ impl Server {
                 }
                 true
             }
-            Exo::ServerError => {
-                let error = ServerError {
-                    event_id: None,
-                    code: None,
-                    type_: Some("server_error".into()),
-                    message: "The server had an error while processing your request.".into(),
-                };
-                self.put(now, None, Incoming::Error(error));
-                true
-            }
-            Exo::ResponseFailed => {
-                let Some(r) = self.active else { return false };
-                self.end(now, r, GenerationStatus::Failed, None);
-                true
-            }
-            Exo::TranscriptionFailed => {
-                let Some(item_id) = self.last_user.clone().filter(|_| self.config.transcription)
-                else {
-                    return false;
-                };
-                self.put(now, None, Incoming::TranscriptionFailed { item_id, content_index: 0 });
-                true
-            }
         }
     }
 
@@ -642,14 +533,14 @@ impl Server {
         let user = message(&item, Role::User);
         self.items.push(Item::of(&user));
         self.last_user = Some(item.clone());
-        self.put_about(later(now, 0), None, "input_audio_buffer.committed", &item);
+        self.put(later(now, 0), None, unhandled("input_audio_buffer.committed"));
         self.after(now, 1, Incoming::ItemAdded { previous_item_id: previous, item: user });
-        self.put_about(later(now, 2), None, "conversation.item.done", &item);
+        self.put(later(now, 2), None, unhandled("conversation.item.done"));
         if !self.config.transcription {
             return;
         }
         let text = UTTERANCES[self.rng.usize(0..UTTERANCES.len())];
-        let lag = draw_ms(&mut self.rng, &["realtime", "transcription_after_committed"]);
+        let lag = self.rng.u64(340..=700);
         let words: Vec<&str> = text.split(' ').collect();
         // About one delta a word, streamed over the last fifth of the wait.
         for (i, word) in words.iter().enumerate() {
@@ -703,23 +594,22 @@ impl Server {
         self.responses[r as usize].item = Some(item.clone());
         // Its place in the conversation is taken when the item is added (`pop`): a client item
         // arriving before then, a tool output or a commit, comes before it, as on the real server.
-        let mut t = later(at, draw_ms(&mut self.rng, &["realtime", "item_after_created"]));
+        let mut t = later(at, self.rng.u64(210..=730));
         let item_type = "message".to_owned();
         self.put(t, Some(r), Incoming::OutputItemAdded { item_id: item.clone(), item_type });
         let assistant = message(&item, Role::Assistant);
         self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: None, item: assistant });
-        // The first audio, after the item as the corpus measured it; the content part and the
+        // The first audio, after the item as measured; the content part and the
         // transcript's first words before it.
         let item_at = t;
-        let first_audio =
-            later(item_at, draw_ms(&mut self.rng, &["realtime", "first_audio_after_item"]));
+        let first_audio = later(item_at, self.rng.u64(210..=400));
         t = later(item_at, 15).min(first_audio);
         let audio = self.config.audio;
         let part_type = if audio { "audio" } else { "text" }.to_owned();
         self.put(t, Some(r), Incoming::ContentPartAdded { item_id: item.clone(), part_type });
 
         // The words, as transcript (or text) deltas, and the audio they become.
-        let per_char = corpus::draw(&mut self.rng, &["realtime", "audio_ms_per_char"]);
+        let per_char = self.rng.u64(40..=61) as f64;
         let audio_ms = ((text.chars().count() as f64 * per_char) as u64).max(DELTA_MS);
         let deltas = audio_ms.div_ceil(DELTA_MS) as usize;
         let words: Vec<&str> = text.split_inclusive(' ').collect();
@@ -732,17 +622,13 @@ impl Server {
             }
         };
         // The transcript's first words come with the content part, before any audio, as the
-        // corpus has them: a response cut there has words and no audio.
+        // real server sends them: a response cut there has words and no audio.
         let mut sent_words = words.len().min(2);
         if sent_words > 0 {
             self.put(t, Some(r), delta(words[..sent_words].concat()));
         }
         for chunk in 0..deltas.max(1) {
-            t = if chunk == 0 {
-                first_audio
-            } else {
-                later(t, draw_ms(&mut self.rng, &["realtime", "audio_gap"]))
-            };
+            t = if chunk == 0 { first_audio } else { later(t, self.rng.u64(20..=160)) };
             // The transcript leads the audio it describes.
             let upto = (words.len() * (chunk + 1)).div_ceil(deltas.max(1));
             if upto > sent_words {
@@ -751,23 +637,23 @@ impl Server {
             }
             if audio {
                 let chunk = u16::try_from(chunk).unwrap_or(u16::MAX);
-                self.put_body(t, Some(r), Body::Audio { item: item.clone(), chunk }, None);
+                self.put_body(t, Some(r), Body::Audio { item: item.clone(), chunk });
             }
         }
         // Now and then the server restates its rate limits, past the last audio and before the
-        // message closes, as the corpus caught it doing.
-        let (limits, of) = share(&["realtime", "rate_limits_share"]);
+        // message closes, as the real one was caught doing.
+        let (limits, of) = (1, 94);
         if self.rng.u64(0..of) < limits {
             self.put(t, Some(r), unhandled("rate_limits.updated"));
         }
         // A tool call now and then, when the session offers tools: after the words, as the
-        // corpus has them.
+        // real server sends them.
         let choice = tool_choice.or_else(|| self.config.tool_choice.clone());
         let (calls, of) = match (choice, self.tool_calls) {
             (Some(ToolChoice::Forbidden), _) => (0, 1),
             (Some(ToolChoice::Required), _) => (1, 1),
             (_, Some(percent)) => (u64::from(percent), 100),
-            (_, None) => share(&["realtime", "function_call_share"]),
+            (_, None) => (8, 94),
         };
         if !self.config.tools.is_empty() && self.rng.u64(0..of) < calls {
             let name = self.config.tools[self.rng.usize(0..self.config.tools.len())].clone();
@@ -778,17 +664,17 @@ impl Server {
             self.put(t, Some(r), Incoming::OutputItemAdded { item_id: fc.clone(), item_type });
             let call = function_call(&fc, &name, "");
             self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: Some(item), item: call });
-            self.put_about(t, Some(r), "response.function_call_arguments.delta", &fc);
+            self.put(t, Some(r), unhandled("response.function_call_arguments.delta"));
             let t2 = later(t, 30);
             self.message_done(t2, r);
             self.call_done(t2, r);
             t = t2;
         } else {
-            t = later(t, draw_ms(&mut self.rng, &["realtime", "done_after_last_audio"]) / 2);
+            t = later(t, self.rng.u64(28..=190) / 2);
             self.message_done(t, r);
         }
-        let done_at = later(t, draw_ms(&mut self.rng, &["realtime", "done_after_last_audio"]) / 2);
-        self.end_body(done_at, r, GenerationStatus::Completed, None);
+        let done_at = later(t, self.rng.u64(28..=190) / 2);
+        self.end_body(done_at, r, GenerationStatus::Completed);
         r
     }
 
@@ -804,7 +690,7 @@ impl Server {
         }
         closing.extend(["response.content_part.done", "conversation.item.done"]);
         for event_type in closing {
-            self.put_about(t, Some(r), event_type, &item);
+            self.put(t, Some(r), unhandled(event_type));
         }
         self.put(t, Some(r), Incoming::OutputItemDone { item: message(&item, Role::Assistant) });
     }
@@ -812,12 +698,12 @@ impl Server {
     /// The tool call's closing events: its arguments, item and output item.
     fn call_done(&mut self, t: Ts, r: u32) {
         let Some((fc, name)) = self.responses[r as usize].function_call.clone() else { return };
-        self.put_about(t, Some(r), "response.function_call_arguments.done", &fc);
-        self.put_about(t, Some(r), "conversation.item.done", &fc);
+        self.put(t, Some(r), unhandled("response.function_call_arguments.done"));
+        self.put(t, Some(r), unhandled("conversation.item.done"));
         self.put(t, Some(r), Incoming::OutputItemDone { item: function_call(&fc, &name, "{}") });
     }
 
-    fn end_body(&mut self, t: Ts, r: u32, status: GenerationStatus, reason: Option<&'static str>) {
+    fn end_body(&mut self, t: Ts, r: u32, status: GenerationStatus) {
         let resp = &self.responses[r as usize];
         let failed = status == GenerationStatus::Failed;
         // What it read: the instructions and the items the conversation held when it was asked.
@@ -840,11 +726,11 @@ impl Server {
                 ..TokenUsage::default()
             },
         };
-        self.put_body(t, Some(r), Body::Event(Incoming::ResponseDone(done)), reason);
+        self.put_body(t, Some(r), Body::Event(Incoming::ResponseDone(done)));
     }
 
     /// Stop a response at `t`: what was still to come is withdrawn, and it closes as `status`.
-    fn end(&mut self, t: Ts, r: u32, status: GenerationStatus, reason: Option<&'static str>) {
+    fn end(&mut self, t: Ts, r: u32, status: GenerationStatus) {
         let keep_created = !self.responses[r as usize].created;
         // What the model generated before the stop still streams out (the probes show audio
         // deltas arriving after a cancel): the message's opening and its deltas due before `t`.
@@ -902,28 +788,29 @@ impl Server {
         } else if !resp.call_closed {
             self.responses[r as usize].function_call = None;
         }
-        self.end_body(t, r, status, reason);
+        self.end_body(t, r, status);
     }
 
-    fn cancel(&mut self, t: Ts, r: u32, reason: &'static str) {
+    fn cancel(&mut self, t: Ts, r: u32) {
         // The conversation is free at once: a reply asked right after the cancel is taken, and
-        // created before the cancelled one's `response.done` (probe-cancel_then_create).
+        // created before the cancelled one's `response.done`, as the real server does.
         if self.active == Some(r) {
             self.active = None;
         }
-        self.end(t, r, GenerationStatus::Cancelled, Some(reason));
+        self.end(t, r, GenerationStatus::Cancelled);
     }
 
-    /// How long the server takes to answer a client frame: drawn from the corpus, and never
+    /// How long the server takes to answer a client frame: drawn from what it was measured
+    /// taking, and never
     /// before its answer to an earlier frame -- it processes the client's frames in order, and
     /// the client's mirror of the conversation is built on that order.
     fn answer_lag(&mut self, now: Ts) -> u64 {
-        self.answer_after(now, "error_after_client")
+        self.answer_after(now, 88..=103)
     }
 
-    /// As [`Self::answer_lag`], drawn from another of the corpus's quantities.
-    fn answer_after(&mut self, now: Ts, quantity: &str) -> u64 {
-        let lag = draw_ms(&mut self.rng, &["realtime", quantity]);
+    /// As [`Self::answer_lag`], drawn from another measured range, in ms.
+    fn answer_after(&mut self, now: Ts, range: std::ops::RangeInclusive<u64>) -> u64 {
+        let lag = self.rng.u64(range);
         let at = later(now, lag).max(self.answered);
         self.answered = at;
         at.saturating_duration_since(now).as_millis() as u64
@@ -945,20 +832,12 @@ impl Server {
     }
 
     fn put(&mut self, t: Ts, resp: Option<u32>, event: Incoming) {
-        self.put_body(t, resp, Body::Event(event), None);
+        self.put_body(t, resp, Body::Event(event));
     }
 
-    fn put_body(&mut self, t: Ts, resp: Option<u32>, body: Body, reason: Option<&'static str>) {
+    fn put_body(&mut self, t: Ts, resp: Option<u32>, body: Body) {
         self.seq += 1;
-        self.pending.insert((t, self.seq), Pending { resp, body, reason, item: None });
-    }
-
-    /// An event the client reads no further than its type, about `item`.
-    fn put_about(&mut self, t: Ts, resp: Option<u32>, event_type: &str, item: &str) {
-        self.seq += 1;
-        let body = Body::Event(unhandled(event_type));
-        let item = Some(item.to_owned());
-        self.pending.insert((t, self.seq), Pending { resp, body, reason: None, item });
+        self.pending.insert((t, self.seq), Pending { resp, body });
     }
 }
 

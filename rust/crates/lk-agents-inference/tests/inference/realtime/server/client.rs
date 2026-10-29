@@ -24,7 +24,7 @@ pub fn wire_name(frame: &Outgoing) -> &'static str {
 }
 
 /// The `event_id` a frame goes out with: a response request's is its correlation id.
-pub fn event_id_of(frame: &Outgoing) -> Option<&str> {
+fn event_id_of(frame: &Outgoing) -> Option<&str> {
     match frame {
         Outgoing::SessionUpdate { event_id, .. }
         | Outgoing::InstructionsUpdate { event_id, .. }
@@ -154,7 +154,7 @@ impl Server {
                 let unanswered = tail.and_then(|i| i.call_id.clone());
                 // Answered in the order asked: a reply cancelled at once still opens before the
                 // one asked after it.
-                let delay = self.answer_after(now, "created_after_create");
+                let delay = self.answer_after(now, 105..=150);
                 // A response's own `tool_choice` and `instructions` override the session's.
                 let r = self.respond(
                     later(now, delay),
@@ -213,7 +213,7 @@ impl Server {
                 self.items[at].pcm_ms = end.min(self.items[at].pcm_ms);
                 self.items[at].cut_ms = Some(end);
                 let lag = self.answer_lag(now);
-                self.put_about(later(now, lag), None, "conversation.item.truncated", item_id);
+                self.put(later(now, lag), None, unhandled("conversation.item.truncated"));
             }
             // xAI's `force_message`: an item type this server does not know.
             Outgoing::ForceMessage { .. } => {
@@ -257,8 +257,8 @@ impl Server {
                 }
                 // What it had generated still streams out first: a reply asked in the same breath
                 // is created before this one's `response.done` (probe-cancel_then_create).
-                let lag = self.answer_after(now, "done_after_cancel");
-                self.cancel(later(now, lag), r, "client_cancelled");
+                let lag = self.answer_after(now, 120..=150);
+                self.cancel(later(now, lag), r);
             }
             None => {
                 // Knowing when the client had been told the end of the response it names (of
@@ -319,7 +319,7 @@ impl Server {
         let lag = self.answer_lag(now);
         let added = Incoming::ItemAdded { previous_item_id: previous, item: item.clone() };
         self.after(now, lag, added);
-        self.put_about(later(now, lag), None, "conversation.item.done", &id);
+        self.put(later(now, lag), None, unhandled("conversation.item.done"));
     }
 
     fn position(&self, id: &str) -> Option<usize> {
@@ -339,7 +339,7 @@ impl Server {
 
     /// The client's frame is refused with an `error` event, and the breach is noted.
     /// `cited`: the error names the client event it refuses (`error.event_id`), as the real
-    /// server does for most refusals and not for some (`corpus/probes/probe-refusals.json`).
+    /// server does for most refusals and not for some.
     fn refuse(
         &mut self,
         now: Ts,

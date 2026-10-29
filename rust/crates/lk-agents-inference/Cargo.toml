@@ -83,8 +83,6 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["h
 livekit-token.workspace = true
 # The integration tests' fakes (`testkit`).
 lk-agents-inference = { path = ".", features = ["testkit"] }
-# The recorded provider corpus the test peers draw their timings from.
-lk-agents-test-support = { path = "../lk-agents-test-support" }
 fastrand = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util", "net", "io-util"] }
 

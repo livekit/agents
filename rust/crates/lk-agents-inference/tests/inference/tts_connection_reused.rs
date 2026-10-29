@@ -1,8 +1,8 @@
 //! A call's replies pay the gateway's connection setup once: each reply's first audio comes within
 //! the voice's own time to first audio and a budget. A latency contract on virtual time: the
 //! production LiveKit Inference TTS client over a gateway whose connection setup (handshake, TLS,
-//! upgrade) costs what a real one does and whose time to first audio is drawn from the corpus
-//! (`tts/cartesia/sonic-3/first_audio`).
+//! upgrade) costs what a real one does and whose time to first audio is drawn from what a real
+//! voice was measured taking (190-250 ms, Cartesia sonic-3's p10 to p90).
 use std::{
     sync::{
         Arc, Mutex,
@@ -18,7 +18,6 @@ use lk_agents_inference::tts::{GatewayTts, TtsOptions};
 use lk_agents_net::clock::SimClock;
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
-use lk_agents_test_support::corpus;
 use tokio::sync::mpsc;
 
 /// What opening a gateway connection costs before its first frame. Measured on calls: a reply
@@ -109,9 +108,7 @@ async fn serve(
             }
             Some("input_transcript") if !answering => {
                 answering = true;
-                let path = ["tts", "cartesia/sonic-3", "first_audio"];
-                let delay =
-                    Duration::from_millis(corpus::draw_ms(&mut shared.rng.lock().unwrap(), &path));
+                let delay = Duration::from_millis(shared.rng.lock().unwrap().u64(190..=250));
                 *shared.first_audio.lock().unwrap() = delay;
                 let (sent, sent_rx) = tokio::sync::oneshot::channel();
                 audio = Some(sent_rx);
