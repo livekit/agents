@@ -771,18 +771,6 @@ class PlaybackTracker:
     async def wait_for_playout(self) -> tuple[float, bool, str | None]: ...
 
 
-class CoreTextOutput:
-    async def capture_text(self, text: str) -> None: ...
-    async def capture_timed(
-        self,
-        text: str,
-        *,
-        start_time: float | None = None,
-        end_time: float | None = None,
-    ) -> None: ...
-    def flush(self) -> None: ...
-
-
 class TrackPublishOptions:
     """The host's view: what `_core_rtc.LocalParticipant._core_publish_audio_track` builds its
     `rtc.AudioSource`, `LocalAudioTrack` and `rtc.TrackPublishOptions` from.
@@ -950,34 +938,6 @@ class ChatRequest:
     def extra(self) -> dict[str, Any] | None: ...
     @property
     def inference_class(self) -> str | None: ...
-
-
-class MarkdownFilter:
-    def __init__(self) -> None: ...
-    def push(self, chunk: str) -> list[str]: ...
-    def flush(self) -> list[str]: ...
-
-
-class TranscriptSynchronizer:
-    """`_core.TranscriptSynchronizer`: the node every native session builds, handed to a host that
-    assembles a synchroniser by hand (the console, a custom chain), so pacing is one implementation
-    on one clock.
-    """
-
-    def __init__(
-        self,
-        next_in_chain_audio: Any,
-        next_in_chain_text: Any | None = None,
-        *,
-        speed: float = 1.0,
-    ) -> None: ...
-    @property
-    def text_output(self) -> CoreTextOutput: ...
-    @property
-    def enabled(self) -> bool: ...
-    def set_enabled(self, enabled: bool) -> None: ...
-    def rotate_segment(self) -> None: ...
-    async def aclose(self) -> None: ...
 
 
 class SessionClosing(RuntimeError):

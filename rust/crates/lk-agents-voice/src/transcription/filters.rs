@@ -384,22 +384,18 @@ pub fn has_incomplete_pattern(buffer: &str) -> bool {
 
 /// `filter_markdown` as a push accumulator. Returns the pieces per chunk, not joined: the
 /// synchroniser paces per chunk.
-#[lk_agents_abi::class(mutable)]
 #[derive(Debug)]
 pub struct MarkdownFilter {
     buffer: String,
     at_line_start: bool,
 }
 
-#[lk_agents_abi::host(object)]
 impl MarkdownFilter {
     /// At line start, as the reference's stream begins.
-    #[host(new)]
     pub fn new() -> Self {
         MarkdownFilter { buffer: String::new(), at_line_start: true }
     }
 
-    #[host(method)]
     pub fn push(&mut self, chunk: &str) -> Vec<String> {
         self.buffer.push_str(chunk);
 
@@ -437,7 +433,6 @@ impl MarkdownFilter {
     }
 
     /// End of stream: release the tail, which is now known to be a complete line.
-    #[host(method)]
     pub fn flush(&mut self) -> Vec<String> {
         if self.buffer.is_empty() {
             return Vec::new();

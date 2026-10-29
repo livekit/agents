@@ -65,39 +65,3 @@ impl AudioOutput for AudioSinkProxy {
         self.next.on_detached();
     }
 }
-
-/// A core text leg as a host object: a synchroniser's text node, which the host installs as the
-/// session's transcription output.
-pub struct CoreTextOutput(Arc<dyn TextOutput>);
-
-#[lk_agents_abi::host(object(cell = "arc"))]
-impl CoreTextOutput {
-    pub fn new(inner: Arc<dyn TextOutput>) -> Self {
-        CoreTextOutput(inner)
-    }
-
-    /// One transcript delta, downstream.
-    #[host(method)]
-    pub async fn capture_text(&self, text: String) -> std::result::Result<(), IoError> {
-        self.0.capture_text(&text).await
-    }
-
-    /// The same, with word timings -- what `json_format` publishes on the wire.
-    #[host(method(kw_only = "start_time"))]
-    pub async fn capture_timed(
-        &self,
-        text: String,
-        start_time: Option<f64>,
-        end_time: Option<f64>,
-    ) -> std::result::Result<(), IoError> {
-        self.0
-            .capture_timed(&TimedString { text, start_time, end_time, ..TimedString::default() })
-            .await
-    }
-
-    /// The segment is complete. Synchronous, as on the trait.
-    #[host(method)]
-    pub fn flush(&self) {
-        self.0.flush();
-    }
-}

@@ -1,5 +1,4 @@
 [
   "class|rust/crates/lk-agents-voice/src/agent_activity/options.rs|struct HostOptions|lk_agents_abi :: class (name = \"SessionOptions\")",
-  "class|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct SessionApi|lk_agents_abi :: class (name = \"VoiceSession\")",
-  "class|rust/crates/lk-agents-voice/src/transcription/filters.rs|struct MarkdownFilter|lk_agents_abi :: class (mutable)"
+  "class|rust/crates/lk-agents-voice/src/agent_session/api.rs|struct SessionApi|lk_agents_abi :: class (name = \"VoiceSession\")"
 ]

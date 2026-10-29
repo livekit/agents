@@ -747,37 +747,9 @@ pub struct TranscriptSynchronizer {
     anchor: lk_agents_abi::WallAnchor,
 }
 
-/// `_core.TranscriptSynchronizer`: the node every native session builds, handed to a host that
-/// assembles a synchroniser by hand (the console, a custom chain), so pacing is one implementation
-/// on one clock.
-#[lk_agents_abi::host(object(cell = "arc"))]
 impl TranscriptSynchronizer {
     pub fn new(config: SyncConfig) -> Arc<Self> {
         Arc::new(Self::build(config))
-    }
-
-    /// `next_in_chain_audio` is the host `io.AudioOutput` the audio passes through to (its
-    /// playback events pace the text); `next_in_chain_text` the host `io.TextOutput` the paced
-    /// words go to, or `None`.
-    #[host(new(kw_only = "speed", defaults(speed = 1.0)))]
-    pub fn for_host(
-        next_in_chain_audio: Arc<dyn AudioOutput>,
-        next_in_chain_text: Option<Arc<dyn TextOutput>>,
-        speed: f64,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        let tracker = Arc::clone(next_in_chain_audio.tracker());
-        let sync = Self::build(SyncConfig {
-            audio_next: next_in_chain_audio,
-            text_next: next_in_chain_text,
-            speed,
-            hyphenator: Arc::new(Liang),
-            clock: Arc::new(lk_agents_abi::RealClock::new()),
-            spawner,
-        });
-        // The host sink's playback, stamped on the clock the pacer runs on.
-        tracker.anchor_to(sync.anchor);
-        sync
     }
 
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
@@ -815,12 +787,6 @@ impl TranscriptSynchronizer {
         TranscriptSynchronizer { core, audio, text, anchor }
     }
 
-    /// The node to install as `session.output.transcription`, as a host object.
-    #[host(getter(name = "text_output"))]
-    pub fn text_leg(&self) -> crate::io::CoreTextOutput {
-        crate::io::CoreTextOutput::new(self.text_output())
-    }
-
     /// The node to install as `session.output.audio`.
     pub fn audio_output(&self) -> Arc<dyn AudioOutput> {
         self.audio.clone()
@@ -831,25 +797,21 @@ impl TranscriptSynchronizer {
         self.text.clone()
     }
 
-    #[host(getter)]
     pub fn enabled(&self) -> bool {
         self.core.enabled()
     }
 
-    #[host(method)]
     pub fn set_enabled(&self, enabled: bool) {
         self.core.step(SyncInput::Enabled(enabled));
     }
 
     /// End the live segment now and start a fresh one.
-    #[host(method)]
     pub fn rotate_segment(&self) {
         self.core.apply(SyncEvent::Rotate);
     }
 
     /// Close: end the live segment and give the forwarder [`lk_agents_abi::HOST_TEARDOWN_TIMEOUT`] to drain.
     /// `RoomIO.aclose` must close this before the transcription outputs it feeds.
-    #[host(method)]
     pub async fn aclose(&self) {
         for effect in self.core.decide(SyncEvent::Close) {
             match effect {
