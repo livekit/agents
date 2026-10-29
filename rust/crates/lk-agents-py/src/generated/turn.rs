@@ -570,7 +570,7 @@ impl ::lk_agents_abi::turn::inference::EotMetricsObserver for EotMetricsObserver
         let host = ::std::sync::Arc::clone(&self.host);
         let metrics_arg = metrics;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::metrics::e_o_t_inference_metrics_to_py(py, metrics_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::metrics::eot_inference_metrics_to_py(py, metrics_arg)?];
                 Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {

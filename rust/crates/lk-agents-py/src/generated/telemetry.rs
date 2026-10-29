@@ -179,7 +179,7 @@ fn _extract_provider_metrics_stt_stream_metrics_host(obj: &Bound<'_, PyAny>) -> 
 #[pyo3(signature = (event, start, now, audio_durations, host))]
 pub fn stt_batch_metrics<'py>(py: Python<'py>, event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_start)] start: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_now)] now: f64, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)] audio_durations: ::std::vec::Vec<f64>, #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
     let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host);
-    Ok(crate::generated::records::metrics::s_t_t_metrics_to_py(py, out)?)
+    Ok(crate::generated::records::metrics::stt_metrics_to_py(py, out)?)
 }
 
 /// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
@@ -187,7 +187,7 @@ pub fn stt_batch_metrics<'py>(py: Python<'py>, event: ::lk_agents_abi::SpeechEve
 #[pyo3(signature = (event, host))]
 pub fn stt_stream_metrics<'py>(py: Python<'py>, event: ::lk_agents_abi::SpeechEvent, #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<Bound<'py, PyAny>> {
     let out = <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [match x0 { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::s_t_t_metrics_to_py(py, x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?])?.into_any() })
+    Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [match x0 { None => py.None().into_bound(py), Some(x) => crate::generated::records::metrics::stt_metrics_to_py(py, x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?])?.into_any() })
 }
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
@@ -233,7 +233,7 @@ impl LlmMetricState {
     #[pyo3(signature = (now, failed, host))]
     fn finish<'py>(&self, py: Python<'py>, #[pyo3(from_py_with = _extract_llm_metric_state_finish_now)] now: f64, failed: bool, #[pyo3(from_py_with = _extract_llm_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         let out = <LlmMetricStateImpl as ::lk_agents_abi::telemetry::provider::LlmMetricState>::finish(&self.0, now, failed, host);
-        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::l_l_m_metrics_to_py(py, value)?)).transpose()?)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::llm_metrics_to_py(py, value)?)).transpose()?)
     }
 }
 
@@ -303,7 +303,7 @@ impl TtsMetricState {
     #[pyo3(signature = (now, start, failed, batch_text, input_tokens, output_tokens, acquire_time, connection_reused, host))]
     fn finish<'py>(&mut self, py: Python<'py>, #[pyo3(from_py_with = _extract_tts_metric_state_finish_now)] now: f64, #[pyo3(from_py_with = _extract_tts_metric_state_finish_start)] start: f64, failed: bool, batch_text: ::std::string::String, #[pyo3(from_py_with = _extract_tts_metric_state_finish_input_tokens)] input_tokens: u32, #[pyo3(from_py_with = _extract_tts_metric_state_finish_output_tokens)] output_tokens: u32, #[pyo3(from_py_with = _extract_tts_metric_state_finish_acquire_time)] acquire_time: f64, connection_reused: bool, #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)] host: (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         let out = <TtsMetricStateImpl as ::lk_agents_abi::telemetry::provider::TtsMetricState>::finish(&mut self.0, now, start, failed, batch_text, input_tokens, output_tokens, acquire_time, connection_reused, host);
-        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::t_t_s_metrics_to_py(py, value)?)).transpose()?)
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::metrics::tts_metrics_to_py(py, value)?)).transpose()?)
     }
 }
 

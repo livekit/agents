@@ -72,12 +72,3 @@ impl ModelUsageCollector {
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::usage::model_usage_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 }
-
-// Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
-
-/// `STTMetrics.total_tokens` when the host leaves it out.
-#[pyfunction]
-pub fn _core_omitted_stt_metrics_total_tokens<'py>(py: Python<'py>, record: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    let record = crate::generated::records::metrics::s_t_t_metrics_from_py(&record)?;
-    Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(record.total_tokens, py)?)
-}

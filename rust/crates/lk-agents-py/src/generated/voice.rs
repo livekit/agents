@@ -37,7 +37,7 @@ pub fn amd_resolve_max_endpointing_delay<'py>(py: Python<'py>, provided: Option<
 #[pyfunction]
 #[pyo3(signature = (prediction))]
 pub fn amd_prediction_is_human(prediction: Bound<'_, PyAny>) -> PyResult<bool> {
-    let prediction = crate::generated::records::amd::a_m_d_prediction_event_from_py(&prediction)?;
+    let prediction = crate::generated::records::amd::amd_prediction_event_from_py(&prediction)?;
     let out = <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_prediction_is_human(prediction);
     Ok(out)
 }
@@ -46,7 +46,7 @@ pub fn amd_prediction_is_human(prediction: Bound<'_, PyAny>) -> PyResult<bool> {
 #[pyfunction]
 #[pyo3(signature = (prediction))]
 pub fn amd_prediction_is_machine(prediction: Bound<'_, PyAny>) -> PyResult<bool> {
-    let prediction = crate::generated::records::amd::a_m_d_prediction_event_from_py(&prediction)?;
+    let prediction = crate::generated::records::amd::amd_prediction_event_from_py(&prediction)?;
     let out = <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_prediction_is_machine(prediction);
     Ok(out)
 }

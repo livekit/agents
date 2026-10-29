@@ -274,10 +274,14 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
     Ok(s)
 }
 
+/// `STTMetrics` -> `STT_METRICS`: an acronym run stays one word.
 fn cell(class: &str) -> String {
+    let chars: Vec<char> = class.chars().filter(|c| *c != '.').collect();
     let mut out = String::new();
-    for (i, c) in class.chars().filter(|c| *c != '.').enumerate() {
-        if c.is_uppercase() && i > 0 {
+    for (i, &c) in chars.iter().enumerate() {
+        let lower = |j: usize| chars.get(j).is_some_and(|c| c.is_lowercase());
+        let digit_or_lower = i > 0 && (lower(i - 1) || chars[i - 1].is_ascii_digit());
+        if c.is_uppercase() && i > 0 && (digit_or_lower || lower(i + 1)) {
             out.push('_');
         }
         out.extend(c.to_uppercase());
