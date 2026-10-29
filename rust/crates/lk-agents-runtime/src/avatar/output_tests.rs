@@ -260,7 +260,7 @@ async fn closing_output_releases_startup_and_refuses_later_audio() {
     let f = fixture("close_waiting_output", None, false);
     let (sent, received) = tokio::sync::oneshot::channel();
     let output = Arc::clone(&f.out);
-    let capture = TokioSpawner::current().spawn_unboxed(async move {
+    let capture = TokioSpawner::current().spawn(async move {
         let _ = sent.send(output.capture_frame(&frame()).await);
     });
     settle().await;
@@ -279,7 +279,7 @@ async fn closing_output_cancels_a_blocked_write_and_retires_its_playback_route()
     f.room.local_participant().flow_byte_writes(false);
     let (sent, received) = tokio::sync::oneshot::channel();
     let output = Arc::clone(&f.out);
-    let capture = TokioSpawner::current().spawn_unboxed(async move {
+    let capture = TokioSpawner::current().spawn(async move {
         let _ = sent.send(output.capture_frame(&frame()).await);
     });
     settle().await;
@@ -303,7 +303,7 @@ async fn cancelling_close_does_not_leave_the_avatar_playback_route_live() {
     f.room.local_participant().flow_byte_writes(false);
     let (sent, received) = tokio::sync::oneshot::channel();
     let output = Arc::clone(&f.out);
-    TokioSpawner::current().spawn_unboxed(async move {
+    TokioSpawner::current().spawn_detached(async move {
         let _ = sent.send(output.capture_frame(&frame()).await);
     });
     settle().await;
@@ -328,7 +328,7 @@ async fn close_deadline_retains_a_blocked_writer_until_its_acknowledgement() {
     f.room.local_participant().flow_byte_closes(false);
     let (sent, received) = tokio::sync::oneshot::channel();
     let output = Arc::clone(&f.out);
-    TokioSpawner::current().spawn_unboxed(async move {
+    TokioSpawner::current().spawn_detached(async move {
         let _ = sent.send(output.aclose().await);
     });
     settle().await;
