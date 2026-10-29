@@ -145,15 +145,10 @@ impl Llm for Node<dyn Llm> {
         self.below.failed(error, recoverable);
     }
 
-    fn chat<'a, 'b, 'call>(
+    fn chat<'a>(
         &'a self,
-        req: &'b ChatRequest,
-    ) -> lk_agents_abi::BoxFuture<'call, Result<LlmStream, ProviderError>>
-    where
-        'a: 'call,
-        'b: 'call,
-        Self: 'call,
-    {
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
             let stream = self.host.llm_node(req).await.map_err(final_error)?;
             Ok(Box::new(Final(stream)) as LlmStream)
@@ -204,15 +199,10 @@ impl Tts for Node<dyn Tts> {
     }
 
     /// One text, through the node all the same.
-    fn synthesize<'a, 'b, 'call>(
+    fn synthesize<'a>(
         &'a self,
-        text: &'b str,
-    ) -> lk_agents_abi::BoxFuture<'call, Result<TtsSource, ProviderError>>
-    where
-        'a: 'call,
-        'b: 'call,
-        Self: 'call,
-    {
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
             let (sink, source) = self.stream().await?;
             sink.push(text.to_owned()).map_err(final_error)?;
@@ -221,13 +211,7 @@ impl Tts for Node<dyn Tts> {
         })
     }
 
-    fn stream<'a, 'call>(
-        &'a self,
-    ) -> lk_agents_abi::BoxFuture<'call, Result<(TtsSink, TtsSource), ProviderError>>
-    where
-        'a: 'call,
-        Self: 'call,
-    {
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
         Box::pin(async move { duplex(self.host.tts_node().await) })
     }
 }
@@ -291,15 +275,10 @@ mod tests {
             "below".to_owned()
         }
 
-        fn chat<'a, 'b, 'call>(
+        fn chat<'a>(
             &'a self,
-            _req: &'b ChatRequest,
-        ) -> lk_agents_abi::BoxFuture<'call, Result<LlmStream, ProviderError>>
-        where
-            'a: 'call,
-            'b: 'call,
-            Self: 'call,
-        {
+            _req: &'a ChatRequest,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
             unreachable!("the node makes the request")
         }
     }

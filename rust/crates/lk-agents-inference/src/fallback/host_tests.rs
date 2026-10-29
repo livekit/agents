@@ -17,7 +17,6 @@ use super::FallbackLlm;
 
 struct Provider(Arc<AtomicBool>);
 
-#[async_trait::async_trait]
 impl Llm for Provider {
     fn label(&self) -> String {
         "scripted".into()
@@ -27,8 +26,13 @@ impl Llm for Provider {
         "native-model".into()
     }
 
-    async fn chat(&self, _: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        Ok(Box::new(Response { sent: false, closed: self.0.clone() }))
+    fn chat<'a>(
+        &'a self,
+        _: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            Ok(Box::new(Response { sent: false, closed: self.0.clone() }) as LlmStream)
+        })
     }
 }
 

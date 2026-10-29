@@ -194,7 +194,7 @@ fn _extract_play_state_new_fade_out(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
 
 /// A sound's monotone stop and completion handle.
 #[pyclass(frozen, name = "PlayState", module = "livekit.agents._core")]
-pub struct PlayState(pub(crate) ::std::sync::Arc<PlayStateImpl>);
+pub struct PlayState(::std::sync::Arc<PlayStateImpl>);
 
 #[pymethods]
 impl PlayState {
@@ -278,7 +278,7 @@ fn _extract_background_audio_player_on_agent_state_draw(obj: &Bound<'_, PyAny>) 
 
 /// Runtime-owned mixer and published background track.
 #[pyclass(frozen, name = "BackgroundAudioPlayer", module = "livekit.agents._core")]
-pub struct BackgroundAudioPlayer(pub(crate) ::std::sync::Arc<BackgroundAudioPlayerImpl>);
+pub struct BackgroundAudioPlayer(::std::sync::Arc<BackgroundAudioPlayerImpl>);
 
 #[pymethods]
 impl BackgroundAudioPlayer {

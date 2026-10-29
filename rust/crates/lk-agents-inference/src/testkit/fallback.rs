@@ -1,6 +1,5 @@
 //! Shared fallback provider fixtures, reused by native and composition tests.
 use crate::fallback::{ChainObserver, IgnoreEvents};
-use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
@@ -88,7 +87,6 @@ impl PolicyProvider {
     }
 }
 
-#[async_trait]
 impl Tts for PolicyProvider {
     fn label(&self) -> String {
         "policy-tts".into()
@@ -105,16 +103,23 @@ impl Tts for PolicyProvider {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(Self { conn: *conn, ..self.clone() }))
     }
-    async fn synthesize(&self, _text: &str) -> Result<TtsSource, ProviderError> {
-        self.record();
-        Ok(Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }))
+    fn synthesize<'a>(
+        &'a self,
+        _text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            self.record();
+            Ok(Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }) as TtsSource)
+        })
     }
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        self.record();
-        Ok((
-            Box::new(DiscardText),
-            Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }),
-        ))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            self.record();
+            Ok((
+                Box::new(DiscardText) as TtsSink,
+                Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }) as TtsSource,
+            ))
+        })
     }
 }
 

@@ -175,7 +175,6 @@ struct Output {
     delivered: bool,
 }
 
-#[async_trait::async_trait]
 impl Tts for FakeTts {
     fn label(&self) -> String {
         "fake::tts".into()
@@ -196,60 +195,68 @@ impl Tts for FakeTts {
         1
     }
 
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        let (sink, source) = self.stream().await?;
-        sink.push(text.into())?;
-        sink.end_input();
-        Ok(source)
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            let (sink, source) = self.stream().await?;
+            sink.push(text.into())?;
+            sink.end_input();
+            Ok(source)
+        })
     }
 
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        if self.registry.voice_down() {
-            return Err(ProviderError::Local(ApiError::new("voice provider is down")));
-        }
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let synthesis = Arc::new(Synthesis {
-            slot: OnceLock::new(),
-            registry: self.registry.clone(),
-            state: Mutex::new(SynthesisState {
-                sender: Some(sender),
-                held: false,
-                ended: false,
-                queued: vec![],
-                chunks: 0,
-                spoken: 0.0,
-                samples_per_char: 0.0,
-            }),
-            stamps: self.alignment == TtsAlignment::Words,
-        });
-        let slot = self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
-        let _ = synthesis.slot.set(slot);
-        // Each stream speaks at a pace the recorded voice had: its milliseconds a word, over the
-        // characters a word of the agent's lines takes.
-        let mut pace = fastrand::Rng::with_seed(u64::from(slot.nth) ^ 0x7061_6365);
-        let ms_per_word = crate::corpus::draw(&mut pace, &["tts", TTS_MODEL, "ms_per_word"]);
-        synthesis.state.lock().unwrap().samples_per_char =
-            ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
-        let first_audio = self.latency.as_ref().map(|rng| {
-            let ms = crate::corpus::draw_ms(
-                &mut rng.lock().unwrap(),
-                &["tts", TTS_MODEL, "first_audio"],
-            );
-            tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
-        });
-        if first_audio.is_some() {
-            self.registry.voice_due(slot.nth, first_audio);
-        }
-        Ok((
-            Box::new(InputSide(synthesis)),
-            Box::new(Output {
-                slot,
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            if self.registry.voice_down() {
+                return Err(ProviderError::Local(ApiError::new("voice provider is down")));
+            }
+            let (sender, receiver) = mpsc::unbounded_channel();
+            let synthesis = Arc::new(Synthesis {
+                slot: OnceLock::new(),
                 registry: self.registry.clone(),
-                receiver,
-                first_audio,
-                delivered: false,
-            }),
-        ))
+                state: Mutex::new(SynthesisState {
+                    sender: Some(sender),
+                    held: false,
+                    ended: false,
+                    queued: vec![],
+                    chunks: 0,
+                    spoken: 0.0,
+                    samples_per_char: 0.0,
+                }),
+                stamps: self.alignment == TtsAlignment::Words,
+            });
+            let slot =
+                self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
+            let _ = synthesis.slot.set(slot);
+            // Each stream speaks at a pace the recorded voice had: its milliseconds a word, over the
+            // characters a word of the agent's lines takes.
+            let mut pace = fastrand::Rng::with_seed(u64::from(slot.nth) ^ 0x7061_6365);
+            let ms_per_word = crate::corpus::draw(&mut pace, &["tts", TTS_MODEL, "ms_per_word"]);
+            synthesis.state.lock().unwrap().samples_per_char =
+                ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
+            let first_audio = self.latency.as_ref().map(|rng| {
+                let ms = crate::corpus::draw_ms(
+                    &mut rng.lock().unwrap(),
+                    &["tts", TTS_MODEL, "first_audio"],
+                );
+                tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
+            });
+            if first_audio.is_some() {
+                self.registry.voice_due(slot.nth, first_audio);
+            }
+            Ok((
+                Box::new(InputSide(synthesis)) as TtsSink,
+                Box::new(Output {
+                    slot,
+                    registry: self.registry.clone(),
+                    receiver,
+                    first_audio,
+                    delivered: false,
+                }) as TtsSource,
+            ))
+        })
     }
 }
 

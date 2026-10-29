@@ -50,29 +50,33 @@ struct Response {
     closed: AtomicBool,
 }
 
-#[async_trait::async_trait]
 impl Llm for FakeLlm {
     fn label(&self) -> String {
         "fake::llm".into()
     }
 
-    async fn chat(&self, request: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let slot = self.registry.register(
-            Kind::Chat,
-            Detail::Chat {
-                ctx_ids: request.chat_ctx.items.iter().map(|i| i.id().to_string()).collect(),
-                speech: None,
-                tools: request.tools.iter().map(|t| t.name.clone()).collect(),
-            },
-            Control::Chat(sender),
-        );
-        Ok(Box::new(Response {
-            slot,
-            receiver,
-            registry: self.registry.clone(),
-            closed: AtomicBool::new(false),
-        }))
+    fn chat<'a>(
+        &'a self,
+        request: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            let (sender, receiver) = mpsc::unbounded_channel();
+            let slot = self.registry.register(
+                Kind::Chat,
+                Detail::Chat {
+                    ctx_ids: request.chat_ctx.items.iter().map(|i| i.id().to_string()).collect(),
+                    speech: None,
+                    tools: request.tools.iter().map(|t| t.name.clone()).collect(),
+                },
+                Control::Chat(sender),
+            );
+            Ok(Box::new(Response {
+                slot,
+                receiver,
+                registry: self.registry.clone(),
+                closed: AtomicBool::new(false),
+            }) as LlmStream)
+        })
     }
 }
 

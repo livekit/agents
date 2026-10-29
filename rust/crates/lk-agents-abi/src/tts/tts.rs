@@ -11,7 +11,6 @@
 
 use crate::TimedString;
 use crate::errors::{ApiError, ProviderError};
-use async_trait::async_trait;
 use lk_agents_host_derive::Host;
 
 use crate::utils::stream::{StreamSink, StreamSource};
@@ -180,7 +179,6 @@ pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
     events = "metrics_collected, error",
     error(name = "TTSError", kind = "tts_error")
 ))]
-#[async_trait]
 pub trait Tts: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
@@ -269,7 +267,10 @@ pub trait Tts: Send + Sync {
         )
     )]
     #[host(await, name = "_core_synthesize")]
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError>;
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> crate::BoxFuture<'a, Result<TtsSource, ProviderError>>;
 
     /// Open a stream synthesizing text as it is pushed. Providers with the `streaming`
     /// capability override it; any other is wrapped in a `StreamAdapter`.
@@ -289,7 +290,7 @@ pub trait Tts: Send + Sync {
         )
     )]
     #[host(await, name = "_core_stream")]
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError>;
+    fn stream(&self) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
 }
 
 /// Non-retryable: wrap it in [`StreamAdapter`](crate::StreamAdapter) instead.

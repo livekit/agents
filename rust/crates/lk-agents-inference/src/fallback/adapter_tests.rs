@@ -1,7 +1,6 @@
 //! End-to-end over the three modality adapters: what a wrapped provider receives and what comes
 //! out. The chain's own machine is pinned in `tests.rs`.
 
-use async_trait::async_trait;
 use std::collections::VecDeque;
 
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
@@ -98,7 +97,6 @@ impl StreamSource<LlmChunk> for VecStream {
     }
 }
 
-#[async_trait]
 impl Llm for FakeLlm {
     fn label(&self) -> String {
         self.label.clone()
@@ -106,19 +104,24 @@ impl Llm for FakeLlm {
     fn model(&self) -> String {
         self.model.clone().unwrap_or_else(|| "unknown".into())
     }
-    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        self.seen.lock().expect("seen").push(req.conn_options);
-        if self.outages.load(Ordering::SeqCst) > 0 {
-            self.outages.fetch_sub(1, Ordering::SeqCst);
-            return Err(boom(&format!("{} is down for now", self.label)));
-        }
-        match &self.chunks {
-            None => Err(boom(&format!("{} is down", self.label))),
-            Some(c) => Ok(Box::new(VecStream {
-                left: c.iter().cloned().collect(),
-                fail_after: self.fail_after,
-            })),
-        }
+    fn chat<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            self.seen.lock().expect("seen").push(req.conn_options);
+            if self.outages.load(Ordering::SeqCst) > 0 {
+                self.outages.fetch_sub(1, Ordering::SeqCst);
+                return Err(boom(&format!("{} is down for now", self.label)));
+            }
+            match &self.chunks {
+                None => Err(boom(&format!("{} is down", self.label))),
+                Some(c) => Ok(Box::new(VecStream {
+                    left: c.iter().cloned().collect(),
+                    fail_after: self.fail_after,
+                }) as LlmStream),
+            }
+        })
     }
 }
 
@@ -246,14 +249,18 @@ impl Drop for HangingStream {
     }
 }
 
-#[async_trait]
 impl Llm for HangingLlm {
     fn label(&self) -> String {
         "hanging".into()
     }
-    async fn chat(&self, _req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        self.opened.store(true, Ordering::SeqCst);
-        Ok(Box::new(HangingStream(Arc::clone(&self.dropped))))
+    fn chat<'a>(
+        &'a self,
+        _req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            self.opened.store(true, Ordering::SeqCst);
+            Ok(Box::new(HangingStream(Arc::clone(&self.dropped))) as LlmStream)
+        })
     }
 }
 

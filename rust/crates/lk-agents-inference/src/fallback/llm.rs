@@ -191,7 +191,6 @@ impl StreamSource<LlmChunk> for FallbackLlmChunks {
     }
 }
 
-#[async_trait]
 impl<E: Env> Llm for FallbackLlm<E> {
     fn label(&self) -> String {
         "llm.FallbackAdapter".into()
@@ -214,58 +213,63 @@ impl<E: Env> Llm for FallbackLlm<E> {
         self.chain.active().inner().model()
     }
 
-    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        // Bounded, so a slow reader backpressures the provider; the text leg may not drop (§1.2d).
-        let (tx, rx) = mpsc::channel::<Result<LlmChunk, ProviderError>>(32);
+    fn chat<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            // Bounded, so a slow reader backpressures the provider; the text leg may not drop (§1.2d).
+            let (tx, rx) = mpsc::channel::<Result<LlmChunk, ProviderError>>(32);
 
-        let chain = Arc::clone(&self.chain);
-        let drain_chain = Arc::clone(&self.chain);
-        let req = req.clone();
-        let call = ChainCall {
-            conn_options: req.conn_options,
-            accepted_at: self.chain.clock().now(),
-            slot: RecoverySlot::OneShot,
-        };
+            let chain = Arc::clone(&self.chain);
+            let drain_chain = Arc::clone(&self.chain);
+            let req = req.clone();
+            let call = ChainCall {
+                conn_options: req.conn_options,
+                accepted_at: self.chain.clock().now(),
+                slot: RecoverySlot::OneShot,
+            };
 
-        let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-        let handle = self.spawner.spawn_unboxed(async move {
-            let mut tx = tx;
-            let result = chain
-                .run_cancellable(
-                    &req,
-                    call,
-                    &mut tx,
-                    stop_rx,
-                    move |index, _backend, mut stream, tx, mut stop| {
-                        let chain = Arc::clone(&drain_chain);
-                        Box::pin(async move {
-                            // Only `has_response()` chunks count as output (`llm:281-285`);
-                            // usage-only chunks do not block a retry.
-                            let outcome = forward(
-                                &chain,
-                                index,
-                                stream.as_mut(),
-                                &mut stop,
-                                tx,
-                                LlmChunk::has_response,
-                            )
-                            .await;
-                            stream.close(chain.teardown_deadline()).await;
-                            outcome
-                        }) as BoxFuture<'_, Attempt<()>>
-                    },
-                )
-                .await;
+            let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
+            let handle = self.spawner.spawn_unboxed(async move {
+                let mut tx = tx;
+                let result = chain
+                    .run_cancellable(
+                        &req,
+                        call,
+                        &mut tx,
+                        stop_rx,
+                        move |index, _backend, mut stream, tx, mut stop| {
+                            let chain = Arc::clone(&drain_chain);
+                            Box::pin(async move {
+                                // Only `has_response()` chunks count as output (`llm:281-285`);
+                                // usage-only chunks do not block a retry.
+                                let outcome = forward(
+                                    &chain,
+                                    index,
+                                    stream.as_mut(),
+                                    &mut stop,
+                                    tx,
+                                    LlmChunk::has_response,
+                                )
+                                .await;
+                                stream.close(chain.teardown_deadline()).await;
+                                outcome
+                            }) as BoxFuture<'_, Attempt<()>>
+                        },
+                    )
+                    .await;
 
-            match result {
-                Ok(ChainOutcome::Served(())) => {}
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
+                match result {
+                    Ok(ChainOutcome::Served(())) => {}
+                    Err(e) => {
+                        let _ = tx.send(Err(e)).await;
+                    }
                 }
-            }
-            let _ = done_tx.send(());
-        });
+                let _ = done_tx.send(());
+            });
 
-        Ok(Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }))
+            Ok(Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as LlmStream)
+        })
     }
 }

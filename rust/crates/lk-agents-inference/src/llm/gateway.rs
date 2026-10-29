@@ -3,7 +3,6 @@
 //! runs ahead of demand; transport observations wait in a bounded queue, stamped with the instant
 //! they were made, and are applied in that order with every deadline due before them.
 
-use async_trait::async_trait;
 use std::collections::{BTreeMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -228,7 +227,6 @@ impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
     }
 }
 
-#[async_trait]
 impl<E: Env> Llm for GatewayLlm<E> {
     fn failed(&self, error: ProviderError, recoverable: bool) {
         if let Some(reporter) = &self.reporter {
@@ -273,20 +271,26 @@ impl<E: Env> Llm for GatewayLlm<E> {
 
     /// The voice session's generation retries its own LLM calls until it delegates them to the
     /// request core, so each call here is one attempt under the session's phase limits.
-    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        req.conn_options
-            .validate()
-            .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
-        let policy =
-            RequestPolicy { max_retry: 0, ..RequestPolicy::from_options(&req.conn_options) };
-        let args = ChatArgs {
-            extra_kwargs: req.extra.clone(),
-            parallel_tool_calls: req.parallel_tool_calls,
-            tool_choice: req.tool_choice.clone(),
-            response_format: None,
-            inference_class: req.inference_class.clone(),
-        };
-        Ok(Box::new(GatewayLlm::chat(self, &req.chat_ctx, &req.tools, args, policy, None)?))
+    fn chat<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            req.conn_options
+                .validate()
+                .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+            let policy =
+                RequestPolicy { max_retry: 0, ..RequestPolicy::from_options(&req.conn_options) };
+            let args = ChatArgs {
+                extra_kwargs: req.extra.clone(),
+                parallel_tool_calls: req.parallel_tool_calls,
+                tool_choice: req.tool_choice.clone(),
+                response_format: None,
+                inference_class: req.inference_class.clone(),
+            };
+            Ok(Box::new(GatewayLlm::chat(self, &req.chat_ctx, &req.tools, args, policy, None)?)
+                as LlmStream)
+        })
     }
 }
 

@@ -9,10 +9,9 @@
 //! The seam is `LLM.chat()` (`llm/llm.py:149`), not `_run()`: the plugin builds its own `LLMStream`,
 //! so a host-backed provider keeps retry, metrics and channels in Python.
 
-use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
-use async_trait::async_trait;
 use crate::errors::ProviderError;
 use crate::utils::stream::StreamSource;
+use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
 
 /// Plain data: reflection and invocation stay Python. The host passes the dict of these keys.
 // The omission-only defaults below move to the record declaration with the records family.
@@ -75,8 +74,12 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolSpec {
             )?,
             name: item(obj, OWNER, "name")?,
             description: item_or(obj, OWNER, "description", |v| v.extract(), String::new)?,
-            json_schema: item_with(obj, OWNER, "json_schema", |v| value_from_py(v, "ToolSpec.json_schema"))?,
-            flags: ToolFlags { ignore_on_enter: item_or(obj, OWNER, "ignore_on_enter", |v| v.extract(), || false)? },
+            json_schema: item_with(obj, OWNER, "json_schema", |v| {
+                value_from_py(v, "ToolSpec.json_schema")
+            })?,
+            flags: ToolFlags {
+                ignore_on_enter: item_or(obj, OWNER, "ignore_on_enter", |v| v.extract(), || false)?,
+            },
         })
     }
 }
@@ -119,7 +122,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolChoice {
                 .ok_or_else(|| PyValueError::new_err(format!("unknown tool_choice {name:?}")));
         }
         // Strict, unlike `from_host_json`: a malformed dict raises the record's own error.
-        let d = obj.cast::<pyo3::types::PyDict>().map_err(|_| PyValueError::new_err("tool_choice must be a string or a named-tool dict"))?;
+        let d = obj.cast::<pyo3::types::PyDict>().map_err(|_| {
+            PyValueError::new_err("tool_choice must be a string or a named-tool dict")
+        })?;
         let named: crate::voice::calls::NamedToolChoice = d.extract()?;
         Ok(ToolChoice::Named(named.function.name))
     }
@@ -169,7 +174,9 @@ impl ToolChoice {
             ToolChoice::Auto => "auto".into(),
             ToolChoice::Required => "required".into(),
             ToolChoice::Forbidden => "none".into(),
-            ToolChoice::Named(name) => serde_json::json!({"type": "function", "function": {"name": name}}),
+            ToolChoice::Named(name) => {
+                serde_json::json!({"type": "function", "function": {"name": name}})
+            }
         }
     }
 
@@ -201,7 +208,8 @@ impl ChatRequest {
     /// are not rendered): the context of a request the core minted itself.
     #[host(getter)]
     pub fn chat_ctx(&self) -> serde_json::Value {
-        let opts = crate::llm::to_dict::ToDictOptions { exclude_timestamp: false, ..Default::default() };
+        let opts =
+            crate::llm::to_dict::ToDictOptions { exclude_timestamp: false, ..Default::default() };
         self.chat_ctx.to_dict(&opts, &Default::default()).unwrap_or(serde_json::Value::Null)
     }
 
@@ -274,7 +282,6 @@ impl ChatRequest {
     events = "metrics_collected, error",
     error(name = "LLMError", kind = "llm_error")
 ))]
-#[async_trait]
 pub trait Llm: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
@@ -295,7 +302,11 @@ pub trait Llm: Send + Sync {
     #[python(identity)]
     #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
-        crate::types::identity::ProviderId { label: self.label(), model: self.model(), provider: "unknown".to_owned() }
+        crate::types::identity::ProviderId {
+            label: self.label(),
+            model: self.model(),
+            provider: "unknown".to_owned(),
+        }
     }
 
     /// Pre-warm connection to the LLM service.
@@ -348,7 +359,10 @@ pub trait Llm: Send + Sync {
         )
     )]
     #[host(await, name = "_core_chat")]
-    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError>;
+    fn chat<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
 }
 
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
@@ -364,13 +378,15 @@ mod tests {
     /// A plugin-shaped provider: a module-path `label` and no model of its own.
     struct Plugin;
 
-    #[async_trait]
     impl Llm for Plugin {
         fn label(&self) -> String {
             "livekit.plugins.openai.llm.LLM".to_owned()
         }
-        async fn chat(&self, _req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-            unreachable!("this test never opens a completion")
+        fn chat<'a>(
+            &'a self,
+            _req: &'a ChatRequest,
+        ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+            Box::pin(async move { unreachable!("this test never opens a completion") })
         }
     }
 

@@ -407,7 +407,6 @@ impl TtsProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::Tts>(|obj| TtsProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::Tts for TtsProxy {
     fn label(&self) -> ::std::string::String {
         ::std::clone::Clone::clone(&self.label)
@@ -475,7 +474,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             }));
     }
 
-    async fn synthesize(&self, text: &str) -> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>, ::lk_agents_abi::errors::ProviderError> {
+    fn synthesize<'a>(&'a self, text: &str) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text.to_owned();
         let bound = ::std::clone::Clone::clone(&self.conn);
@@ -488,6 +487,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 }
                 Ok((host.bind(py).getattr("_core_synthesize")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -503,9 +503,10 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::SynthesizedAudio>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn stream(&self) -> ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>), ::lk_agents_abi::errors::ProviderError> {
+    fn stream(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
@@ -517,6 +518,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 }
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -531,6 +533,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(o.extract::<::lk_agents_abi::SynthesizedAudio>()?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }

@@ -5,7 +5,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::TimedString;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
@@ -92,7 +91,6 @@ impl StreamAdapter {
     }
 }
 
-#[async_trait]
 impl Tts for StreamAdapter {
     fn label(&self) -> String {
         format!("StreamAdapter[{}]", self.tts.label())
@@ -140,49 +138,54 @@ impl Tts for StreamAdapter {
     }
 
     /// `stream_adapter.py:58`.
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        self.tts.synthesize(text).await
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move { self.tts.synthesize(text).await })
     }
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        self.budget
-            .validate()
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-        // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
-        let (tx, rx) = mpsc::unbounded_channel();
-        // Snapshotted now, while the framework holds it fixed for this synthesis.
-        let lowering = self
-            .expressive
-            .load(Ordering::Acquire)
-            .then(|| (self.text_processor)(&self.tts.markup_provider()))
-            .flatten();
-        let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
-        let source = AdapterSource {
-            tts: self.tts.clone(),
-            budget: self.budget,
-            sentence: None,
-            sentence_audio: false,
-            report: None,
-            clock: Arc::clone(&self.clock),
-            rx,
-            splitter: (self.splitter)(lowering.is_some()),
-            lowering,
-            pending: VecDeque::new(),
-            current: None,
-            inner_closed: Closed::Clean,
-            input_done: false,
-            duration: 0.0,
-            pending_transcript: Vec::new(),
-            held: None,
-            ledger: Arc::new(Mutex::new(Ledger {
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            self.budget
+                .validate()
+                .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
+            let (tx, rx) = mpsc::unbounded_channel();
+            // Snapshotted now, while the framework holds it fixed for this synthesis.
+            let lowering = self
+                .expressive
+                .load(Ordering::Acquire)
+                .then(|| (self.text_processor)(&self.tts.markup_provider()))
+                .flatten();
+            let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
+            let source = AdapterSource {
                 tts: self.tts.clone(),
+                budget: self.budget,
+                sentence: None,
+                sentence_audio: false,
+                report: None,
                 clock: Arc::clone(&self.clock),
-                call: None,
-                calls: Vec::new(),
-            })),
-            request_id: shortuuid(""),
-            segment_id: shortuuid(""),
-        };
-        Ok((Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+                rx,
+                splitter: (self.splitter)(lowering.is_some()),
+                lowering,
+                pending: VecDeque::new(),
+                current: None,
+                inner_closed: Closed::Clean,
+                input_done: false,
+                duration: 0.0,
+                pending_transcript: Vec::new(),
+                held: None,
+                ledger: Arc::new(Mutex::new(Ledger {
+                    tts: self.tts.clone(),
+                    clock: Arc::clone(&self.clock),
+                    call: None,
+                    calls: Vec::new(),
+                })),
+                request_id: shortuuid(""),
+                segment_id: shortuuid(""),
+            };
+            Ok((Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+        })
     }
 }
 

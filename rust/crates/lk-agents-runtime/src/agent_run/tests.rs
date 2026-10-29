@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use lk_agents_abi::agent::{
@@ -79,40 +78,45 @@ impl StreamSource<LlmChunk> for Scripted {
     }
 }
 
-#[async_trait]
 impl Llm for ScriptedLlm {
     fn label(&self) -> String {
         "scripted".into()
     }
 
-    async fn chat(&self, _req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        let reply = self.replies.lock().unwrap().pop_front().expect("a scripted reply");
-        let delta = |content: Option<&str>, tool_calls| LlmChunk {
-            id: "c".into(),
-            delta: Some(ChoiceDelta {
-                role: Some(Role::Assistant),
-                content: content.map(Into::into),
-                tool_calls,
-                extra: None,
-            }),
-            usage: None,
-            flush: false,
-            node_text: false,
-        };
-        let (chunks, hang) = match reply {
-            Reply::Text(text) => (vec![delta(Some(text), vec![])], false),
-            Reply::Call(name, arguments) => {
-                let call = FunctionToolCall {
-                    name: name.into(),
-                    arguments: arguments.to_string(),
-                    call_id: format!("call_{name}"),
+    fn chat<'a>(
+        &'a self,
+        _req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            let reply = self.replies.lock().unwrap().pop_front().expect("a scripted reply");
+            let delta = |content: Option<&str>, tool_calls| LlmChunk {
+                id: "c".into(),
+                delta: Some(ChoiceDelta {
+                    role: Some(Role::Assistant),
+                    content: content.map(Into::into),
+                    tool_calls,
                     extra: None,
-                };
-                (vec![delta(None, vec![call])], false)
-            }
-            Reply::Hang => (vec![delta(Some("Thinking"), vec![])], true),
-        };
-        Ok(Box::new(Scripted { chunks: chunks.into(), hang, closed: self.closed.clone() }))
+                }),
+                usage: None,
+                flush: false,
+                node_text: false,
+            };
+            let (chunks, hang) = match reply {
+                Reply::Text(text) => (vec![delta(Some(text), vec![])], false),
+                Reply::Call(name, arguments) => {
+                    let call = FunctionToolCall {
+                        name: name.into(),
+                        arguments: arguments.to_string(),
+                        call_id: format!("call_{name}"),
+                        extra: None,
+                    };
+                    (vec![delta(None, vec![call])], false)
+                }
+                Reply::Hang => (vec![delta(Some("Thinking"), vec![])], true),
+            };
+            Ok(Box::new(Scripted { chunks: chunks.into(), hang, closed: self.closed.clone() })
+                as LlmStream)
+        })
     }
 }
 

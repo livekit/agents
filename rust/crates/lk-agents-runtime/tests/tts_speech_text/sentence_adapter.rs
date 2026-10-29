@@ -1,16 +1,15 @@
 //! Sentence adapter conformance with the production speech text transformations.
 
-use async_trait::async_trait;
 use lk_agents_abi::Tts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::SentenceSplitter;
 use lk_agents_abi::tts::stream_adapter::SplitterFactory;
-use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use lk_agents_abi::tts::tts::{SynthesizedAudio, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::utils::audio::AudioFrame;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, StreamSource};
+use lk_agents_inference::tts::sentence_adapter::StreamAdapter;
 use lk_agents_voice::tts::markup::{Markup, MarkupExt};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,7 +152,6 @@ impl FakeTts {
     }
 }
 
-#[async_trait]
 impl Tts for FakeTts {
     fn label(&self) -> String {
         "fake.FakeTTS".into()
@@ -174,27 +172,32 @@ impl Tts for FakeTts {
     fn set_expressive(&self, on: bool) {
         self.expressive.store(on, Ordering::Relaxed);
     }
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        self.calls.lock().unwrap().push(text.to_owned());
-        let n = self.calls.lock().unwrap().len();
-        let frames = (0..self.frames_per_call)
-            .map(|i| {
-                let mut a = SynthesizedAudio::new(frame(240), format!("inner-{n}"));
-                // The adapter must overwrite both of these.
-                a.is_final = i + 1 == self.frames_per_call;
-                a.segment_id = format!("inner-seg-{n}");
-                a
-            })
-            .collect();
-        Ok(Box::new(VecSource {
-            frames,
-            fail_after: self.fail_after,
-            emitted: 0,
-            closed: self.inner_closed.clone(),
-        }) as TtsSource)
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(text.to_owned());
+            let n = self.calls.lock().unwrap().len();
+            let frames = (0..self.frames_per_call)
+                .map(|i| {
+                    let mut a = SynthesizedAudio::new(frame(240), format!("inner-{n}"));
+                    // The adapter must overwrite both of these.
+                    a.is_final = i + 1 == self.frames_per_call;
+                    a.segment_id = format!("inner-seg-{n}");
+                    a
+                })
+                .collect();
+            Ok(Box::new(VecSource {
+                frames,
+                fail_after: self.fail_after,
+                emitted: 0,
+                closed: self.inner_closed.clone(),
+            }) as TtsSource)
+        })
     }
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        Err(lk_agents_abi::tts::tts::no_duplex_path(&self.label()))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move { Err(lk_agents_abi::tts::tts::no_duplex_path(&self.label())) })
     }
 }
 

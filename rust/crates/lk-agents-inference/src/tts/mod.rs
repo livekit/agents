@@ -8,9 +8,9 @@
 pub mod adapter;
 pub mod machine;
 mod ports;
+mod pump;
 pub mod sentence_adapter;
 pub mod stream;
-mod pump;
 pub use ports::TtsHost;
 pub mod wire;
 
@@ -19,7 +19,6 @@ use crate::abi::{
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
-use async_trait::async_trait;
 use lk_agents_net::transport::{
     WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url,
 };
@@ -29,9 +28,9 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
 use lk_agents_abi::tts::text::{TranscriptProcessor, TtsTextProcessorFactory};
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
-use lk_agents_net::connection_pool::ConnectionPool;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_net::connection_pool::ConnectionPool;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::pin::pin;
@@ -418,7 +417,6 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
     }
 }
 
-#[async_trait]
 impl<P: TtsTextProcessorFactory> Tts for NativeTts<P> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
@@ -474,16 +472,23 @@ impl<P: TtsTextProcessorFactory> Tts for NativeTts<P> {
     }
 
     /// `synthesize(text)` = `_synthesize_with_stream(text)`: the gateway has no one-shot endpoint.
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        let (sink, source) = self.open(None)?;
-        sink.push(text.to_owned())?;
-        sink.end_input();
-        Ok(Box::new(source))
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            let (sink, source) = self.open(None)?;
+            sink.push(text.to_owned())?;
+            sink.end_input();
+            Ok(Box::new(source) as TtsSource)
+        })
     }
 
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        self.open(None)
-            .map(|(sink, source)| (Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            self.open(None)
+                .map(|(sink, source)| (Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+        })
     }
 }
 

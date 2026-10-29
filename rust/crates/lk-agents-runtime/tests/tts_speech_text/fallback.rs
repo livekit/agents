@@ -1,6 +1,5 @@
 //! TTS fallback integration using the production speech factory.
 use super::FallbackTts;
-use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{
     ApiConnectOptions, BoxFuture, Closed, StreamSink, StreamSource, SynthesizedAudio, Ts, Tts,
@@ -55,7 +54,6 @@ impl StreamSink<String> for RecordingSink {
     }
 }
 
-#[async_trait]
 impl Tts for FakeTts {
     fn label(&self) -> String {
         self.label.clone()
@@ -69,23 +67,30 @@ impl Tts for FakeTts {
     fn num_channels(&self) -> u16 {
         self.channels
     }
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        self.pushed.lock().expect("pushed").push(text.to_owned());
-        Ok(Box::new(self.frames()))
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            self.pushed.lock().expect("pushed").push(text.to_owned());
+            Ok(Box::new(self.frames()) as TtsSource)
+        })
     }
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        if !self.streaming {
-            return Err(boom("no duplex path"));
-        }
-        let left = self.refusals.load(Ordering::SeqCst);
-        if left > 0 {
-            self.refusals.store(left.saturating_sub(1), Ordering::SeqCst);
-            return Err(boom("no socket"));
-        }
-        Ok((
-            Box::new(RecordingSink(Arc::clone(&self.pushed))) as TtsSink,
-            Box::new(self.frames()) as TtsSource,
-        ))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            if !self.streaming {
+                return Err(boom("no duplex path"));
+            }
+            let left = self.refusals.load(Ordering::SeqCst);
+            if left > 0 {
+                self.refusals.store(left.saturating_sub(1), Ordering::SeqCst);
+                return Err(boom("no socket"));
+            }
+            Ok((
+                Box::new(RecordingSink(Arc::clone(&self.pushed))) as TtsSink,
+                Box::new(self.frames()) as TtsSource,
+            ))
+        })
     }
 }
 
@@ -249,7 +254,6 @@ impl StreamSource<SynthesizedAudio> for AfterEnd {
     }
 }
 
-#[async_trait]
 impl Tts for SpeaksOnEnd {
     fn label(&self) -> String {
         "backup".into()
@@ -263,15 +267,22 @@ impl Tts for SpeaksOnEnd {
     fn num_channels(&self) -> u16 {
         1
     }
-    async fn synthesize(&self, _text: &str) -> Result<TtsSource, ProviderError> {
-        Ok(Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }))
+    fn synthesize<'a>(
+        &'a self,
+        _text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            Ok(Box::new(Frames { left: 1, rate: 24_000, channels: 1, dies: false }) as TtsSource)
+        })
     }
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        let ended = Arc::new(tokio::sync::Notify::new());
-        Ok((
-            Box::new(EndSignal(Arc::clone(&ended))) as TtsSink,
-            Box::new(AfterEnd { ended, frames: None }) as TtsSource,
-        ))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            let ended = Arc::new(tokio::sync::Notify::new());
+            Ok((
+                Box::new(EndSignal(Arc::clone(&ended))) as TtsSink,
+                Box::new(AfterEnd { ended, frames: None }) as TtsSource,
+            ))
+        })
     }
 }
 

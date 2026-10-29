@@ -984,7 +984,6 @@ impl LlmProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::Llm>(|obj| LlmProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::Llm for LlmProxy {
     fn label(&self) -> ::std::string::String {
         ::std::clone::Clone::clone(&self.label)
@@ -1027,7 +1026,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
             }));
     }
 
-    async fn chat(&self, req: &::lk_agents_abi::ChatRequest) -> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>, ::lk_agents_abi::errors::ProviderError> {
+    fn chat<'a>(&'a self, req: &::lk_agents_abi::ChatRequest) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let req_arg = ::std::clone::Clone::clone(req);
         let bound = ::std::clone::Clone::clone(&self.conn);
@@ -1040,6 +1039,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 }
                 Ok((host.bind(py).getattr("_core_chat")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -1054,6 +1054,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::LlmChunk>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }

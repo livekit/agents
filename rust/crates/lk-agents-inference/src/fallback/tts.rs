@@ -605,7 +605,6 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
     }
 }
 
-#[async_trait]
 impl<P: TtsTextProcessorFactory> Tts for FallbackTts<P> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
@@ -638,17 +637,28 @@ impl<P: TtsTextProcessorFactory> Tts for FallbackTts<P> {
         self.num_channels
     }
 
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        Ok(self.spawn_pump(TtsReq::OneShot { text: Arc::from(text) }, RecoverySlot::OneShot, None))
+    fn synthesize<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        Box::pin(async move {
+            Ok(self.spawn_pump(
+                TtsReq::OneShot { text: Arc::from(text) },
+                RecoverySlot::OneShot,
+                None,
+            ))
+        })
     }
 
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        let log = TokenLog::new();
-        let source = self.spawn_pump(
-            TtsReq::Stream { log: Arc::clone(&log) },
-            RecoverySlot::Streaming,
-            Some(Arc::clone(&log)),
-        );
-        Ok((Box::new(LoggingSink(log)) as TtsSink, source))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            let log = TokenLog::new();
+            let source = self.spawn_pump(
+                TtsReq::Stream { log: Arc::clone(&log) },
+                RecoverySlot::Streaming,
+                Some(Arc::clone(&log)),
+            );
+            Ok((Box::new(LoggingSink(log)) as TtsSink, source))
+        })
     }
 }

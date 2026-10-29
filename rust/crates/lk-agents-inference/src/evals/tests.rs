@@ -3,7 +3,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::{HostError, ProviderError, RefRegistry};
 use lk_agents_abi::{
     AgentConfigUpdate, AgentHandoffItem, ChoiceDelta, Closed, FunctionCall, FunctionCallOutput,
@@ -132,27 +131,32 @@ impl StreamSource<LlmChunk> for Chunks {
     }
 }
 
-#[async_trait]
 impl Llm for Verdicts {
     fn label(&self) -> String {
         "verdicts".into()
     }
 
-    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        let ChatItem::Message(prompt) = &req.chat_ctx.items[1] else { unreachable!() };
-        self.prompts.lock().unwrap().push(prompt.raw_text_content().unwrap_or_default());
-        self.barrier.wait().await;
-        let tool_calls = self.arguments.map_or_else(Vec::new, |arguments| {
-            vec![FunctionToolCall {
-                name: "submit_verdict".into(),
-                arguments: arguments.into(),
-                call_id: "v".into(),
-                extra: None,
-            }]
-        });
-        let delta = ChoiceDelta { content: Some("ok".into()), tool_calls, ..Default::default() };
-        let chunk = LlmChunk { id: "c".into(), delta: Some(delta), ..Default::default() };
-        Ok(Box::new(Chunks(vec![chunk])))
+    fn chat<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            let ChatItem::Message(prompt) = &req.chat_ctx.items[1] else { unreachable!() };
+            self.prompts.lock().unwrap().push(prompt.raw_text_content().unwrap_or_default());
+            self.barrier.wait().await;
+            let tool_calls = self.arguments.map_or_else(Vec::new, |arguments| {
+                vec![FunctionToolCall {
+                    name: "submit_verdict".into(),
+                    arguments: arguments.into(),
+                    call_id: "v".into(),
+                    extra: None,
+                }]
+            });
+            let delta =
+                ChoiceDelta { content: Some("ok".into()), tool_calls, ..Default::default() };
+            let chunk = LlmChunk { id: "c".into(), delta: Some(delta), ..Default::default() };
+            Ok(Box::new(Chunks(vec![chunk])) as LlmStream)
+        })
     }
 }
 
