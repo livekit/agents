@@ -73,18 +73,23 @@ The SQL adapter does not promise compatibility with arbitrary databases.
 
 ### Thread lifecycle
 
-The server-facing `Storage` trait opens shared engine handles:
+The server-facing `Storage` trait opens shared engine handles. Thread
+metadata crosses as the threads service's own `livekit-protocol` records
+(`livekit_protocol::agent::agent_thread`): `CreateRequest`, `UpdateRequest`,
+`ListRequest`/`ListResponse` and `Thread`, the same messages the Cloud threads
+service speaks, on both backends.
 
 ```rust
 #[async_trait]
 pub trait Storage: Send + Sync {
-    async fn create_thread(&self, request: CreateThread) -> Result<ThreadInfo, StorageError>;
-    async fn get_thread(&self, id: &ThreadId) -> Result<ThreadInfo, StorageError>;
-    async fn list_threads(&self, query: ThreadQuery) -> Result<ThreadPage, StorageError>;
-    async fn update_thread(&self, request: UpdateThread) -> Result<ThreadInfo, StorageError>;
-    async fn delete_thread(&self, id: &ThreadId) -> Result<(), StorageError>;
-    async fn open(&self, id: &ThreadId, holder: LeaseHolder) -> Result<Thread, StorageError>;
-    async fn close(&self) -> Result<(), StorageError>;
+    async fn create_thread(&self, request: CreateRequest) -> Result<Thread, StorageError>;
+    async fn get_thread(&self, thread_id: &str) -> Result<Thread, StorageError>;
+    async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError>;
+    async fn update_thread(&self, request: UpdateRequest) -> Result<Thread, StorageError>;
+    async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
+    async fn open(&self, thread_id: &str, holder: &str) -> Result<engine::Thread, StorageError>;
+    fn response_streams(&self) -> Arc<dyn ResponseStreams>;
+    async fn close(&self);
 }
 ```
 
@@ -93,9 +98,10 @@ pub trait Storage: Send + Sync {
 | `create_thread` | Accept optional scope, attributes and idle TTL; mint an `AT_` id and return only after its metadata and database exist. A partially created thread must not become usable. |
 | `get_thread` | Return thread metadata; unknown, deleted or expired threads fail with `NotFound` (Python `ThreadNotFound`). |
 | `list_threads` | Page thread metadata by the supported scope and cursor, with the same ordering and expiry filtering on both backends. |
-| `update_thread` | Apply explicit attribute and idle-TTL updates and return the updated metadata. This is the activity boundary that moves expiry. |
+| `update_thread` | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry. |
 | `delete_thread` | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe. |
-| `open` | Resolve an existing thread and return the shared engine's concrete `Thread` handle, bound to a worker holder. Opening alone does not acquire a lane lease. |
+| `open` | Resolve an existing thread and return the shared engine's `Thread` handle, its writes under the worker's `holder` string. Opening alone does not acquire a lane lease. |
+| `response_streams` | Where a task's response frames are kept for its subscribers: AgentDB's stream service, or `streams.sqlite` locally. |
 | `close` | Release backend-owned resources after active handles have settled; repeated close is safe. |
 
 Thread creation/deletion spans registry and database resources. Backends must
@@ -109,21 +115,23 @@ expired threads invisible.
 
 `SqliteConnection` is internal to the storage backends. AgentDB executes over its
 WebSocket data plane; local SQLite executes against a file without blocking the
-async executor. Statements, bound values and results are independent of either
-backend's wire format or driver types.
+async executor. A `Statement` is SQL with positional `?N` parameters and the
+`SqlValue`s they bind (`Null`, `Int`, `Double`, `Text`, `Blob`); a `Row` is the
+values of one result row in select order; neither depends on a backend's wire
+format or driver types.
 
 ```rust
 #[async_trait]
 pub trait SqliteConnection: Send + Sync {
-    async fn query(&self, statement: Statement) -> Result<QueryResult, StorageError>;
+    async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError>;
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError>;
-    async fn close(&self) -> Result<(), StorageError>;
+    async fn close(&self);
 }
 ```
 
 | Operation | Contract |
 | --- | --- |
-| `query` | Execute a read and return typed columns and rows, without changing the database. |
+| `query` | Execute a read and return its rows, without changing the database. |
 | `batch` | Execute ordered statements in one atomic transaction, returning each statement's rows, including `RETURNING`, and affected-row count. Success means the transaction committed. |
 | `close` | Release this connection; repeated close is safe. Backend cleanup also handles cancellation and exceptional exit. |
 
@@ -142,8 +150,8 @@ SQL and backends do not implement a separate history/task repository.
 
 | Thread operation | Returns |
 | --- | --- |
-| `list_items(query)` | A page of chat items with an optional lane filter, an opaque continuation cursor and a bounded limit |
-| `list_tasks(query)` | A page of task records with lane/status filters and explicit paging and ordering for the requested listing |
+| `list_items(lane, cursor, limit)` | A page of chat items with an optional lane filter, an opaque continuation cursor and a bounded limit |
+| `list_tasks(TaskQuery)` | A page of task records with lane/status filters and explicit paging and ordering for the requested listing |
 | `task(task_id)` | One task record, or no record if it does not exist in this thread |
 | `journal(after_id, limit)` | A page of journal events for authorized runtime/operations callers |
 
