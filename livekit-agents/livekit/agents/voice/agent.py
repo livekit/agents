@@ -1027,6 +1027,15 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             self.__inactive_ev.clear()
             suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
             pending_on_enter_task: asyncio.Task[None] | None = None
+
+            # a done callback of the result runs before those of the handles that finish
+            # after complete(), so the run tracks the resumed parent before it checks them
+            def _rewatch_suspended(_: asyncio.Future[TaskResult_T]) -> None:
+                if (run_state := session._global_run_state) and not run_state.done():
+                    for handle in [*suspended_handles, current_task]:
+                        run_state._watch_handle(handle)
+
+            self.__fut.add_done_callback(_rewatch_suspended)
             try:
                 # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
                 # AgentTasks that require user input, but session.run() can't return until
@@ -1061,7 +1070,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 # old activity — they can't complete while this AgentTask is running, and
                 # keeping them watched would block RunResult from completing. A foreground
                 # hold waiting on this task is in the same position, so its guard suspends too.
-                if run_state and not run_state.done():
+                # A task that already completed has handed them back, so they stay watched.
+                if run_state and not run_state.done() and not self.__fut.done():
                     if speech_handle and run_state._unwatch_handle(speech_handle):
                         suspended_handles.append(speech_handle)
                     for blocked in [*blocked_tasks, *session._foreground_guards]:
@@ -1078,15 +1088,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 return await asyncio.shield(self.__fut)
 
             finally:
-                # run_state could have changed after self.__fut
-                run_state = session._global_run_state
-
-                # re-watch the suspended handles so the resumed parent activity
-                # is tracked by the current RunResult again
-                if run_state and not run_state.done():
-                    for handle in [*suspended_handles, current_task]:
-                        run_state._watch_handle(handle)
-
                 if pending_on_enter_task:
                     try:
                         await asyncio.shield(pending_on_enter_task)
