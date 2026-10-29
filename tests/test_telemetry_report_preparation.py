@@ -22,10 +22,28 @@ async def test_ten_thousand_python_items_reach_the_report_and_the_host_sdk():
 
 
 @pytest.mark.asyncio
-async def test_oversize_python_item_is_refused():
+async def test_oversize_python_item_is_refused_before_native_conversion(monkeypatch):
+    from livekit.agents import _core
+
+    appended: list[object] = []
+    native = _core._core_PreparedTranscript
+
+    class Recording:
+        def __init__(self) -> None:
+            self._native = native()
+
+        def append(self, item: object) -> None:
+            appended.append(item)
+            self._native.append(item)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._native, name)
+
+    monkeypatch.setattr(_core, "_core_PreparedTranscript", Recording)
     item = llm.ChatMessage(role="user", content=["x" * (1024 * 1024)])
     with capture_reports() as capture, pytest.raises(RuntimeError, match="64 KiB"):
         await prepare(make_report([item]))
+    assert appended == []
     assert capture.uploads == {} and capture.items == {}
 
 
