@@ -9,16 +9,7 @@ use super::RunEvents;
 
 fn message(role: Role, text: &str) -> ChatItem {
     let content = vec![ChatContent::Text(text.into())];
-    ChatItem::message(
-        "m".into(),
-        role,
-        content,
-        SystemTime::UNIX_EPOCH,
-        false,
-        None,
-        None,
-        None,
-    )
+    ChatItem::message("m".into(), role, content, SystemTime::UNIX_EPOCH, false, None, None, None)
 }
 
 fn call(name: &str, arguments: &str) -> ChatItem {
@@ -28,15 +19,7 @@ fn call(name: &str, arguments: &str) -> ChatItem {
 
 fn output(text: &str, is_error: bool) -> ChatItem {
     let time = SystemTime::UNIX_EPOCH;
-    ChatItem::function_call_output(
-        "o".into(),
-        "c1".into(),
-        text.into(),
-        is_error,
-        time,
-        None,
-        true,
-    )
+    ChatItem::function_call_output("o".into(), "c1".into(), text.into(), is_error, time, None, true)
 }
 
 fn expect_call(name: &str, arguments: serde_json::Value) -> EventExpectation {

@@ -75,10 +75,8 @@ impl lk_agents_abi::agent::assertions::RunEvents for RunEvents {
     fn no_more_events(&self) -> Result<(), AssertionFailure> {
         match self.events.get(self.position) {
             None => Ok(()),
-            Some(event) => Err(self.fail(
-                &format!("Expected no more events, but found: {}", event_name(event)),
-                None,
-            )),
+            Some(event) => Err(self
+                .fail(&format!("Expected no more events, but found: {}", event_name(event)), None)),
         }
     }
 

@@ -3,8 +3,8 @@
 use lk_agents_abi::llm::tool_executor::Approval;
 
 use super::*;
-use lk_agents_abi::agent::ReadBack;
 use crate::approval;
+use lk_agents_abi::agent::ReadBack;
 
 fn cancel_tool() -> FunctionToolInfo {
     let mut t = tool(
