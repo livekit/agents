@@ -38,6 +38,8 @@ from .workflows import DtmfEvent
 __all__ = [
     "workflows",
     "EndCallTool",
+    "ToolCalledEvent",
+    "ToolCompletedEvent",
     "send_dtmf_events",
     "BM25SearchStrategy",
     "KeywordSearchStrategy",
@@ -48,6 +50,18 @@ __all__ = [
 ]
 
 
+@dataclass
+class ToolCalledEvent:
+    ctx: RunContext
+    arguments: dict[str, object]
+
+
+@dataclass
+class ToolCompletedEvent:
+    ctx: RunContext
+    output: object
+
+
 class EndCallTool(Toolset):
     def __init__(
         self,
@@ -56,8 +70,8 @@ class EndCallTool(Toolset):
         delete_room: bool = True,
         end_instructions: str | None = "say goodbye to the user",
         ignore_on_enter: bool = False,
-        on_tool_called: Callable[[Toolset.ToolCalledEvent], Awaitable[None]] | None = None,
-        on_tool_completed: Callable[[Toolset.ToolCompletedEvent], Awaitable[None]] | None = None,
+        on_tool_called: Callable[[ToolCalledEvent], Awaitable[None]] | None = None,
+        on_tool_completed: Callable[[ToolCompletedEvent], Awaitable[None]] | None = None,
     ):
         """
         This tool allows the agent to end the call and disconnect from the room.
@@ -93,9 +107,9 @@ class EndCallTool(Toolset):
         session.once("close", self._on_session_close)
 
         if self._on_tool_called:
-            await self._on_tool_called(Toolset.ToolCalledEvent(ctx=ctx, arguments={}))
+            await self._on_tool_called(ToolCalledEvent(ctx=ctx, arguments={}))
 
-        completed_ev = Toolset.ToolCompletedEvent(ctx=ctx, output=self._end_instructions)
+        completed_ev = ToolCompletedEvent(ctx=ctx, output=self._end_instructions)
         if self._on_tool_completed:
             await self._on_tool_completed(completed_ev)
 

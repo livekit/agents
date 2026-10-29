@@ -61,7 +61,7 @@ pub struct RecordDecl {
     /// `record(.., constant(type = "stt_metrics"))`: fields the model holds at a fixed value (a
     /// discriminator its readers compare), never Rust state; read past, emitted by default.
     pub constants: Vec<(String, String)>,
-    /// `persisted`: application-saved state. The model's `to_json()`/`from_json()` go through
+    /// `persisted`: application-saved state. The model's private `_to_json()`/`_from_json()` go through
     /// the record's own serde codec in Rust (`_core._core_persist_<name>`/`_core_restore_<name>`),
     /// so every variant, empty ones included, round-trips by its tag.
     pub persisted: bool,

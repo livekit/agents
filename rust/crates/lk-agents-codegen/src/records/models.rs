@@ -435,7 +435,7 @@ fn model(
             if r.persisted {
                 let (persist, restore) = r.persistence();
                 s.push_str(&format!(
-                    "\n    def to_json(self) -> str:\n        \"\"\"The saved form: restore it with ``from_json``.\"\"\"\n        from .. import _core\n\n        return _core.{persist}(self)\n\n    @classmethod\n    def from_json(cls, data: str) -> {name}:\n        \"\"\"The record ``to_json`` saved.\"\"\"\n        from .. import _core\n\n        return _core.{restore}(data)\n",
+                    "\n    def _to_json(self) -> str:\n        \"\"\"The saved form: restore it with ``_from_json``.\"\"\"\n        from .. import _core\n\n        return _core.{persist}(self)\n\n    @classmethod\n    def _from_json(cls, data: str) -> {name}:\n        \"\"\"The record ``_to_json`` saved.\"\"\"\n        from .. import _core\n\n        return _core.{restore}(data)\n",
                     name = r.name
                 ));
             }

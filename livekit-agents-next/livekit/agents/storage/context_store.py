@@ -253,10 +253,10 @@ async def save_context(context: object, *, store: ContextStore) -> None:
 
 @runtime_checkable
 class _PersistedRecord(Protocol):
-    def to_json(self) -> str: ...
+    def _to_json(self) -> str: ...
 
     @classmethod
-    def from_json(cls, data: str) -> Self: ...
+    def _from_json(cls, data: str) -> Self: ...
 
 
 @dataclass(frozen=True)
@@ -277,12 +277,12 @@ class _RecordAdapter:
         if isinstance(value, self.record):
             return value
         if isinstance(value, str):
-            return self.record.from_json(value)
+            return self.record._from_json(value)
         raise TypeError(f"expected {self.record.__qualname__} or its saved JSON")
 
     def dump_python(self, value: object, *, mode: str) -> JsonValue:
         record = self.validate_python(value)
-        return None if record is None else record.to_json()
+        return None if record is None else record._to_json()
 
 
 def _field_adapter(annotation: object) -> TypeAdapter[object] | _RecordAdapter:

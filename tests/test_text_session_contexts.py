@@ -72,7 +72,7 @@ async def test_child_contexts_restore_their_own_drafts_without_serializing_servi
     child_frame = first.state.frames[first.state.active_frame_id]
     assert child_frame.context_scope != "root"
     writes = [write.scope for write in store._scope_writes]
-    restored = TextSessionState.from_json(first.state.to_json())
+    restored = TextSessionState._from_json(first.state._to_json())
     store._close()
     store = ContextStore(scopes=writes)
     token = set_run_hooks(RunHooks(store=store))

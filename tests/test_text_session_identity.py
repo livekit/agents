@@ -28,7 +28,7 @@ async def test_text_session_stores_the_a2a_task_as_its_execution_identity() -> N
     try:
         first = await TextSession(agent=agent).run("hi")
         assert first.state.execution_id == "a2a-task"
-        restored = type(first.state).from_json(first.state.to_json())
+        restored = type(first.state)._from_json(first.state._to_json())
         second = await TextSession(agent=agent).run("monday", state=restored)
     finally:
         reset_run_hooks(token)

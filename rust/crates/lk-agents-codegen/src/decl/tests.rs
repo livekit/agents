@@ -790,7 +790,7 @@ fn a_persisted_record_saves_and_restores_through_its_rust_codec() {
     let model = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
     assert!(
         model.contains("return _core._core_persist_session_state(self)")
-            && model.contains("def from_json(cls, data: str) -> SessionState:"),
+            && model.contains("def _from_json(cls, data: str) -> SessionState:"),
         "{model}"
     );
     let err = read(

@@ -53,7 +53,7 @@
 //! | record struct | `record(.., nested_in = "Owner")` | its model is a class nested in the record struct `Owner`'s model of the same module, named `Owner.Name` (`RealtimeModelMetrics.InputTokenDetails`) |
 //! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `MIRRORED_STATES`, `IGNORED_EVENTS`) |
 //! | dispatched variant | `event`, `event(mirror = "_attr")`, `ignored` | emitted as the public event its model's `type` constant names (`mirror`: its `new_state` also kept on the session's `_attr`), or received and dropped; an unrouted member has host behaviour |
-//! | record struct | `record(.., persisted)` | application-saved state: the model gains `to_json()`/`from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
+//! | record struct | `record(.., persisted)` | application-saved state: the model gains private `_to_json()`/`_from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |
 //! | record field, tuple variant | `skip` | does not cross (emit-only records) |
 //! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`); with `skip`, Rust never sends it and the host stamps it, read back on extract |

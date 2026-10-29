@@ -28,7 +28,6 @@ from .._generated.tool_context import CONFIRM_DUPLICATE_DESCRIPTION
 from . import _provider_format
 
 if TYPE_CHECKING:
-    from ..voice.events import RunContext
     from ..voice.tool_executor import ToolHandlingOptions
 
 
@@ -54,16 +53,6 @@ class ProviderTool(Tool):
 
 
 class Toolset:
-    @dataclass
-    class ToolCalledEvent:
-        ctx: RunContext
-        arguments: dict[str, object]
-
-    @dataclass
-    class ToolCompletedEvent:
-        ctx: RunContext
-        output: object
-
     def __init__(self, *, id: str, tools: Sequence[Tool | Toolset] | None = None) -> None:
         self._id = id
         self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []

@@ -104,7 +104,7 @@ class Conversation:
 
 
 def restore(state: TextSessionState) -> TextSessionState:
-    return TextSessionState.from_json(state.to_json())
+    return TextSessionState._from_json(state._to_json())
 
 
 def history(frame: Any) -> list[Any]:
@@ -258,10 +258,10 @@ async def test_invalid_child_parameters_never_start_a_frame() -> None:
 async def test_failure_and_stream_cancellation_produce_no_replacement_state() -> None:
     agent = Agent(name="desk", instructions="Help", llm=Script(Reply("Ready"), Reply(error=True)))
     first = await TextSession(agent=agent).run("Hi")
-    saved = first.state.to_json()
+    saved = first.state._to_json()
     with pytest.raises(Exception, match="scripted failure"):
         await TextSession(agent=agent).run("Fail", state=first.state)
-    assert first.state.to_json() == saved
+    assert first.state._to_json() == saved
     started = asyncio.Event()
     blocked = Agent(name="desk", instructions="Help", llm=Script(Reply(blocked=started)))
     async with TextSession(agent=blocked).run_stream("Hi") as stream:

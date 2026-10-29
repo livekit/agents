@@ -92,15 +92,15 @@ class TextSessionState:
     frames: dict[FrameId, SessionFrame]
     next_id: int
 
-    def to_json(self) -> str:
-        """The saved form: restore it with ``from_json``."""
+    def _to_json(self) -> str:
+        """The saved form: restore it with ``_from_json``."""
         from .. import _core
 
         return _core._core_persist_text_session_state(self)
 
     @classmethod
-    def from_json(cls, data: str) -> TextSessionState:
-        """The record ``to_json`` saved."""
+    def _from_json(cls, data: str) -> TextSessionState:
+        """The record ``_to_json`` saved."""
         from .. import _core
 
         return _core._core_restore_text_session_state(data)
