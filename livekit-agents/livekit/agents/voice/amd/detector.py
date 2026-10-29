@@ -471,6 +471,15 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         logger.debug("AMD starts listening")
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        """Settle a pending verdict when the listened-to participant leaves.
+
+        Disconnects from other participants are ignored. If no verdict exists yet,
+        the result is settled as uncertain and the classifier is told the turn has
+        ended, so ``execute()`` does not wait for a greeting that will never finish.
+
+        Args:
+            participant: The remote participant that disconnected.
+        """
         if participant.identity != self._listened_identity:
             return
         if self._closed or not self._classifier or self._result is not None:
