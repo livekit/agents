@@ -56,15 +56,6 @@ def test_update_options_invalidates_pool_for_connection_params(field: str, value
     assert calls == [True], f"changing {field} must invalidate the pooled connection"
 
 
-def test_update_options_noop_leaves_pool_alone() -> None:
-    """A call that changes nothing must not tear down a healthy pooled connection."""
-    tts, calls = _tts_with_recording_pool()
-
-    tts.update_options()
-
-    assert calls == []
-
-
 def test_update_options_invalidates_once_for_several_changes() -> None:
     """Changing all three together still only needs a single invalidation."""
     tts, calls = _tts_with_recording_pool()

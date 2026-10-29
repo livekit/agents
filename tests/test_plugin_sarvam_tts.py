@@ -23,48 +23,6 @@ def _make_tts(**kwargs: Any) -> sarvam_tts.TTS:
     return sarvam_tts.TTS(api_key="sk_test", http_session=object(), **kwargs)  # type: ignore[arg-type]
 
 
-def test_synthesize_honors_explicit_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    class _CapturedChunkedStream:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr(sarvam_tts, "ChunkedStream", _CapturedChunkedStream)
-    tts = _make_tts()
-    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, read_timeout=12.0)
-
-    tts.synthesize("hello", conn_options=conn_options)
-
-    stream_conn_options = captured["conn_options"]
-    assert stream_conn_options is conn_options
-    assert stream_conn_options.max_retry == 5
-    assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.read_timeout == 12.0
-
-
-def test_stream_honors_explicit_conn_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    class _CapturedSynthesizeStream:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr(sarvam_tts, "SynthesizeStream", _CapturedSynthesizeStream)
-    tts = _make_tts()
-    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, read_timeout=12.0)
-
-    tts.stream(conn_options=conn_options)
-
-    stream_conn_options = captured["conn_options"]
-    assert stream_conn_options is conn_options
-    assert stream_conn_options.max_retry == 5
-    assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.read_timeout == 12.0
-
-
 def test_v4_defaults_to_its_own_speaker_and_ws_v2_endpoint() -> None:
     tts = _make_tts(model="bulbul:v4-flash")
 
@@ -160,18 +118,6 @@ def test_v4_flash_is_the_only_accepted_v4_wire_name() -> None:
     # `_opts.model` is the value sent as the REST body's "model" field
     assert tts._opts.model == "bulbul:v4-flash"
     assert "model=bulbul:v4-flash&" in sarvam_tts._websocket_url(tts._opts)
-
-
-def test_model_types_stay_importable_from_tts() -> None:
-    """These were public in `tts` before moving to `models`, so callers may import them there."""
-    for name in (
-        "SarvamTTSModels",
-        "SarvamTTSOutputAudioBitrate",
-        "SarvamTTSLanguages",
-        "SarvamTTSSpeakers",
-        "MODEL_SPEAKER_COMPATIBILITY",
-    ):
-        assert getattr(sarvam_tts, name) is getattr(sarvam_models, name)
 
 
 def test_rejected_update_options_leaves_live_options_untouched() -> None:

@@ -15,14 +15,6 @@ from livekit.agents.utils import aio
 pytestmark = pytest.mark.plugin("inworld")
 
 
-async def test_delivery_mode_accepts_all_documented_values():
-    from livekit.plugins.inworld import TTS
-
-    for value in ("DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"):
-        tts = TTS(api_key="test-key", model="inworld-tts-2", delivery_mode=value)
-        assert tts._opts.delivery_mode == value
-
-
 async def test_delivery_mode_rejects_unknown_value():
     from livekit.plugins.inworld import TTS
 

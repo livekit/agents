@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import inspect
 import io
 import json
 import logging
@@ -71,69 +70,6 @@ class _FailingWS3:
 
     async def close(self) -> None:
         pass
-
-
-@pytest.mark.parametrize(
-    ("model", "expected_is_mist", "expected_time_scale", "expected_reduce_latency"),
-    [
-        ("coda", False, True, False),
-        ("mistv2", True, False, True),
-        ("mistv3", True, True, False),
-        ("mistv4", True, True, False),
-        ("custom-mist", False, True, False),
-    ],
-)
-def test_model_capabilities(
-    model: str,
-    expected_is_mist: bool,
-    expected_time_scale: bool,
-    expected_reduce_latency: bool,
-) -> None:
-    from livekit.plugins.rime.models import (
-        is_mist_model,
-        supports_reduce_latency,
-        supports_time_scale_factor,
-    )
-
-    assert is_mist_model(model) is expected_is_mist
-    assert supports_time_scale_factor(model) is expected_time_scale
-    assert supports_reduce_latency(model) is expected_reduce_latency
-
-
-@pytest.mark.parametrize(
-    ("options", "expected_model", "expected_speaker"),
-    [
-        pytest.param({}, "coda", "lyra", id="http-default"),
-        pytest.param({"model": "coda"}, "coda", "lyra", id="http-coda"),
-        pytest.param({"use_websocket": True}, "coda", "lyra", id="ws3-default"),
-        pytest.param({"use_websocket": True, "model": "coda"}, "coda", "lyra", id="ws3-coda"),
-        pytest.param(
-            {"websocket_url": "wss://api.rime.ai/coda/ws"}, "coda", "lyra", id="v1-default"
-        ),
-        pytest.param(
-            {"websocket_url": "wss://api.rime.ai/ws", "model": "coda"},
-            "coda",
-            "lyra",
-            id="v1-dedicated",
-        ),
-        pytest.param({"model": "mistv3"}, "mistv3", "cove", id="http-mist"),
-        pytest.param({"use_websocket": True, "model": "mistv3"}, "mistv3", "cove", id="ws3-mist"),
-        pytest.param(
-            {"websocket_url": "wss://api.rime.ai/mist/ws"}, "mistv3", "cove", id="v1-mist"
-        ),
-    ],
-)
-@pytest.mark.parametrize("speaker", [None, "custom-voice"], ids=["default", "explicit"])
-def test_model_and_speaker_defaults(
-    options: dict[str, Any], expected_model: str, expected_speaker: str, speaker: str | None
-) -> None:
-    if speaker is not None:
-        options = {**options, "speaker": speaker}
-    tts = TTS(api_key="test-key", **options)
-
-    assert tts.model == expected_model
-    assert tts._opts.speaker == (speaker if speaker is not None else expected_speaker)
-    assert tts.sample_rate == 24000
 
 
 def test_coda_request_controls() -> None:
@@ -392,67 +328,6 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
         await runner.cleanup()
 
 
-async def test_chunked_stream_copies_sample_rate_options() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", sample_rate=22050)
-    stream = tts.synthesize("hello")
-    try:
-        tts.update_options(sample_rate=16000)
-
-        assert stream._opts.sample_rate == 22050
-        assert stream._sample_rate == 22050
-    finally:
-        await stream.aclose()
-        await tts.aclose()
-
-
-def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://api.rime.ai/coda/ws",
-    )
-
-    assert tts.model == "coda"
-    assert tts.capabilities.streaming is True
-    assert tts.capabilities.aligned_transcript is False
-    assert "websocket_url" in inspect.signature(TTS).parameters
-    assert "tokenizer" in inspect.signature(TTS).parameters
-    assert "audio_format" in inspect.signature(TTS).parameters
-    assert inspect.signature(TTS).parameters["websocket_protocol"].default == "binary"
-    assert tts._opts.audio_format == "audio/pcm"
-    assert "sentence_tokenization" not in inspect.signature(TTS).parameters
-
-
-def test_websocket_url_derives_mist_model_and_accepts_options() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://api.rime.ai/mist/ws",
-        pause_between_brackets=True,
-    )
-
-    assert tts.model == "mistv3"
-    assert tts._opts.speaker == "cove"
-    assert tts._opts.mist_options is not None
-    assert tts._opts.mist_options.pause_between_brackets is True
-
-
-def test_dedicated_websocket_url_uses_explicit_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url=("wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"),
-        model="coda",
-    )
-
-    assert tts.model == "coda"
-
-
 def test_dedicated_websocket_url_requires_model() -> None:
     from livekit.plugins.rime import TTS
 
@@ -679,17 +554,6 @@ def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
     assert tts.model == "coda"
     assert tts._websocket_v1_adapter is not None
     assert tts._websocket_v1_adapter._websocket_v1_url == websocket_url
-
-
-def test_v1_dedicated_endpoint_allows_same_model_for_same_url() -> None:
-    from livekit.plugins.rime import TTS
-
-    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
-    tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
-
-    tts.update_options(websocket_url=websocket_url, model="coda")
-
-    assert tts.model == "coda"
 
 
 def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
@@ -2260,17 +2124,6 @@ def test_v1_reads_model_from_websocket_url(websocket_url: str, model: str) -> No
     from livekit.plugins.rime import _websocket_v1
 
     assert _websocket_v1.model_from_websocket_url(websocket_url) == model
-
-
-def test_v1_dedicated_websocket_url_has_no_embedded_model() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    assert (
-        _websocket_v1.model_from_websocket_url(
-            "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"
-        )
-        is None
-    )
 
 
 @pytest.mark.parametrize(

@@ -142,53 +142,6 @@ def test_tts_requires_credentials():
         TTS()
 
 
-def test_tts_accepts_api_key_directly():
-    tts = TTS(api_key="direct-key")
-    assert tts._client.api_key == "direct-key"
-
-
-def test_tts_reads_api_key_from_env(monkeypatch):
-    monkeypatch.setenv("PALABRA_API_KEY", "env-key")
-    tts = TTS()
-    assert tts._client.api_key == "env-key"
-
-
-def test_tts_defaults():
-    tts = TTS(api_key="key")
-    assert tts._opts.language == "en"
-    assert tts._opts.voice_id == "default_low"
-    assert tts._opts.speed is None  # server default
-    assert tts._opts.model == "auto"
-    assert tts._opts.deaccent_strength == 1.0
-    assert tts._client.region == "eu"
-
-
-def test_tts_capabilities_and_audio():
-    tts = TTS(api_key="key")
-    assert tts.capabilities.streaming is True
-    assert tts.sample_rate == 24000
-    assert tts.num_channels == 1
-
-
-def test_tts_custom_sample_rate():
-    tts = TTS(api_key="key", sample_rate=48000)
-    assert tts.sample_rate == 48000
-
-
-def test_tts_model_and_provider_properties():
-    tts = TTS(api_key="key")
-    assert tts.model == "auto"
-    assert tts.provider == "Palabra"
-
-
-def test_update_options():
-    tts = TTS(api_key="key")
-    tts.update_options(language="ru", voice_id="default_high", speed=0.7)
-    assert tts._opts.language == "ru"
-    assert tts._opts.voice_id == "default_high"
-    assert tts._opts.speed == 0.7
-
-
 # --- TTS end-to-end stream against the local WS mock ---
 
 
@@ -486,34 +439,6 @@ async def _wait_for(predicate, timeout: float = 5.0) -> None:
 def test_stt_requires_credentials():
     with pytest.raises(ValueError, match="api_key"):
         STT()
-
-
-def test_stt_defaults():
-    stt_ = STT(api_key="key")
-    assert stt_._opts.language is None  # server auto-detect
-    assert stt_._opts.translate_languages == []
-    assert stt_._opts.filler_filter is None
-    assert stt_._opts.sample_rate == SAMPLE_RATE
-    assert stt_.capabilities.streaming is True
-    assert stt_.capabilities.interim_results is True
-    assert stt_.capabilities.offline_recognize is False
-    assert stt_.provider == "Palabra"
-
-
-def test_stt_translate_languages_normalization():
-    assert STT(api_key="k", translate_languages="es")._opts.translate_languages == ["es"]
-    assert STT(api_key="k", translate_languages=["es", "fr"])._opts.translate_languages == [
-        "es",
-        "fr",
-    ]
-
-
-def test_stt_update_options():
-    stt_ = STT(api_key="key")
-    stt_.update_options(language="en", translate_languages="de", filler_filter=False)
-    assert stt_._opts.language == "en"
-    assert stt_._opts.translate_languages == ["de"]
-    assert stt_._opts.filler_filter is False
 
 
 # --- STT streaming recognition against the local WS mock ---

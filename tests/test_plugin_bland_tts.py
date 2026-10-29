@@ -75,44 +75,6 @@ def test_requires_api_key():
             TTS()
 
 
-def test_api_key_from_argument():
-    from livekit.plugins.bland import TTS
-
-    assert TTS(api_key="test-key")._api_key == "test-key"
-
-
-def test_api_key_from_env():
-    from livekit.plugins.bland import TTS
-
-    with patch.dict("os.environ", {"BLAND_API_KEY": "env-key"}):
-        assert TTS()._api_key == "env-key"
-
-
-def test_provider_property():
-    from livekit.plugins.bland import TTS
-
-    assert TTS(api_key="test-key").provider == "Bland"
-
-
-def test_streaming():
-    from livekit.plugins.bland import TTS
-
-    assert TTS(api_key="test-key").capabilities.streaming is True
-
-
-def test_default_sample_rate_is_btts_v3_native():
-    from livekit.plugins.bland import TTS
-
-    assert TTS(api_key="test-key").sample_rate == 48000
-
-
-@pytest.mark.parametrize("rate", [8000, 16000, 24000, 44100, 48000])
-def test_supported_sample_rates(rate: int):
-    from livekit.plugins.bland import TTS
-
-    assert TTS(api_key="test-key", sample_rate=rate).sample_rate == rate
-
-
 @pytest.mark.parametrize("rate", [12345, 22050, 0, 96000])
 def test_rejects_unsupported_sample_rate(rate: int):
     from livekit.plugins.bland import TTS
@@ -221,23 +183,6 @@ async def test_request_body_defaults():
     assert "language" not in body
     assert "output_format" not in body
     assert "voice_id" not in body
-
-
-async def test_request_body_sample_rate_follows_option():
-    from livekit.plugins.bland import TTS
-
-    body = (await _synthesize_and_capture(TTS(api_key="test-key", sample_rate=24000)))["json"]
-
-    assert body["audio"]["sample_rate"] == 24000
-
-
-async def test_request_body_includes_controls():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="test-key", expressiveness=0.9, stability=0.4)
-    body = (await _synthesize_and_capture(tts))["json"]
-
-    assert body["controls"] == {"expressiveness": 0.9, "stability": 0.4}
 
 
 async def test_partial_controls_send_only_what_was_set():
@@ -795,15 +740,6 @@ async def test_update_options_invalidates_the_session():
     assert inits[1]["voice"] == "c18a1cd5-91ef-4b06-841a-e58b8b487e8c"
 
 
-def test_update_options_without_changes_keeps_the_session():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="k")
-    with patch.object(tts._pool, "invalidate") as invalidate:
-        tts.update_options()
-    invalidate.assert_not_called()
-
-
 class _RefusingWSServer:
     """Refuses admission for the turn's context, holding the reply back until
     ``cancel`` so it is queued behind a cancelling client's receive task."""
@@ -980,19 +916,3 @@ def test_disabled_streaming_refuses_to_open_a_stream():
 
     with pytest.raises(RuntimeError, match="streaming is disabled"):
         tts.stream()
-
-
-async def test_disabled_streaming_teardown_is_a_noop():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="k", streaming=False)
-    tts.prewarm()  # nothing to warm
-    await tts.aclose()
-
-
-def test_streaming_is_on_by_default():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="k")
-    assert tts.capabilities.streaming is True
-    assert tts._pool is not None

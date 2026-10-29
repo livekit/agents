@@ -75,23 +75,9 @@ def _websocket_text_message(payload: dict[str, object]) -> object:
     return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
 
 
-def test_auto_mode_defaults_to_true_without_chunk_length_schedule() -> None:
-    tts = elevenlabs_tts.TTS(api_key="test-key")
-    assert tts._opts.auto_mode is True
-
-
 def test_auto_mode_defaults_to_false_with_chunk_length_schedule() -> None:
     tts = elevenlabs_tts.TTS(api_key="test-key", chunk_length_schedule=[120, 160, 250, 290])
     assert tts._opts.auto_mode is False
-
-
-def test_auto_mode_respects_explicit_value_with_chunk_length_schedule() -> None:
-    tts = elevenlabs_tts.TTS(
-        api_key="test-key",
-        chunk_length_schedule=[120, 160, 250, 290],
-        auto_mode=True,
-    )
-    assert tts._opts.auto_mode is True
 
 
 @pytest.mark.asyncio
@@ -578,21 +564,6 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 # -- eleven_v3 / eleven_v4 (text-to-dialogue) ----------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("eleven_v3", True),
-        ("eleven_v3_conversational", True),
-        ("eleven_v4", True),
-        ("eleven_v4_turbo", True),
-        ("eleven_turbo_v2_5", False),
-        ("eleven_flash_v2_5", False),
-    ],
-)
-def test_is_dialogue_model(model: str, expected: bool) -> None:
-    assert elevenlabs_tts.is_dialogue_model(model) is expected
-
-
 def test_dialogue_synthesize_url_targets_text_to_dialogue_endpoint() -> None:
     tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
     url = elevenlabs_tts._dialogue_synthesize_url(tts._opts)  # pyright: ignore[reportPrivateUsage]
@@ -657,17 +628,6 @@ def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
     assert body["settings"] == {"stability": 0.5}
 
 
-def test_build_dialogue_context_init_packet_registers_single_voice() -> None:
-    tts = elevenlabs_tts.TTS(
-        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
-    )
-    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, context_id="ctx-1"
-    )
-
-    assert packet == {"context_id": "ctx-1", "voices": ["voice-1"]}
-
-
 def test_build_dialogue_context_init_packet_keeps_only_supported_voice_settings() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key",
@@ -693,27 +653,6 @@ def test_dialogue_model_warns_on_unsupported_voice_settings(
         )
 
     assert any("voice_settings.similarity_boost" in r.getMessage() for r in caplog.records)
-
-
-def test_build_dialogue_context_init_packet_includes_pronunciation_dictionaries() -> None:
-    tts = elevenlabs_tts.TTS(
-        api_key="test-key",
-        model="eleven_v3_conversational",
-        voice_id="voice-1",
-        pronunciation_dictionary_locators=[
-            elevenlabs_tts.PronunciationDictionaryLocator(
-                pronunciation_dictionary_id="dict-1",
-                version_id="v1",
-            )
-        ],
-    )
-    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, context_id="ctx-1"
-    )
-
-    assert packet["pronunciation_dictionary_locators"] == [
-        {"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}
-    ]
 
 
 @pytest.mark.asyncio

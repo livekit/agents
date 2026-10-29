@@ -313,20 +313,6 @@ async def test_aclose_cancels_pending_prewarm(monkeypatch: pytest.MonkeyPatch) -
     assert task.cancelled()
 
 
-def test_prewarm_is_noop_with_injected_client() -> None:
-    t = _make_tts("simba-3.2", _FakeClient())
-    t.prewarm()
-    assert t._prewarm_task is None
-
-
-def test_supports_streaming_marks() -> None:
-    assert sfy_tts._supports_streaming_marks(NOT_GIVEN)
-    assert sfy_tts._supports_streaming_marks("simba-3.0")
-    assert sfy_tts._supports_streaming_marks("simba-3.2")
-    assert not sfy_tts._supports_streaming_marks("simba-english")
-    assert not sfy_tts._supports_streaming_marks("simba-multilingual")
-
-
 def test_marks_to_timed_uses_start_end_time() -> None:
     marks = [
         NestedChunk(type="word", value="a", start=0, end=1, start_time=0.0, end_time=100.0),

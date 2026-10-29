@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections import deque
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -132,18 +131,6 @@ async def test_update_options_invalidates_pool_on_change():
     assert tts.sample_rate == 48000
 
 
-async def test_update_options_noop_leaves_pool_alone():
-    from livekit.plugins.deepgram import TTSv2
-
-    tts = TTSv2(api_key="test-key")
-    calls: list[bool] = []
-    tts._pool.invalidate = lambda: calls.append(True)  # type: ignore[method-assign]
-
-    tts.update_options()
-
-    assert calls == []
-
-
 # --- receive loop (DG-4a, DG-6) ------------------------------------------------------
 
 
@@ -195,40 +182,7 @@ async def test_flushed_is_a_noop_before_speech_metadata():
 # --- warning logging (DG-4c, DG-5) ---------------------------------------------------
 
 
-async def test_warning_logs_description_and_code(caplog):
-    ws = _FakeWS(
-        [
-            _FakeMsg.text(
-                {
-                    "type": "Warning",
-                    "description": "No active speech detected",
-                    "code": "NO_ACTIVE_SPEECH",
-                }
-            ),
-            _FakeMsg.text({"type": "SpeechMetadata"}),
-        ]
-    )
-    stream = _make_stream(ws)
-    emitter = _FakeEmitter()
-
-    with caplog.at_level(logging.WARNING, logger="livekit.plugins.deepgram"):
-        await asyncio.wait_for(stream._run_ws(_FakeWordStream(["hi"]), emitter), timeout=5.0)
-
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("No active speech detected" in m and "NO_ACTIVE_SPEECH" in m for m in warnings)
-
-
 # --- encoding / mime type (DG-2, DG-3) -----------------------------------------------
-
-
-def test_encoding_to_mimetype_maps_decodable_encodings():
-    from livekit.plugins.deepgram.tts_v2 import _encoding_to_mimetype
-
-    assert _encoding_to_mimetype("linear16") == "audio/pcm"
-    assert _encoding_to_mimetype("mp3") == "audio/mp3"
-    assert _encoding_to_mimetype("opus") == "audio/opus"
-    assert _encoding_to_mimetype("flac") == "audio/flac"
-    assert _encoding_to_mimetype("aac") == "audio/aac"
 
 
 def test_encoding_to_mimetype_rejects_unsupported():

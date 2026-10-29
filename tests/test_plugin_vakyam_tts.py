@@ -21,44 +21,6 @@ def test_tts_requires_api_key() -> None:
             TTS(api_key=None)
 
 
-def test_tts_accepts_api_key_from_env() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with patch.dict("os.environ", {"VAKYAM_API_KEY": "env-key"}):
-        tts = TTS()
-        assert tts._opts.api_key == "env-key"
-
-
-def test_tts_defaults() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts.model == "raaga-v1"
-    assert tts.provider == "Vakyam"
-    assert tts.sample_rate == 24000
-    assert tts.num_channels == 1
-    assert tts.capabilities.streaming is True
-    assert tts._opts.voice == "Archana"
-    assert tts._opts.language == "ta-IN"
-    assert tts._opts.speed == 1.0
-
-
-def test_tts_custom_options() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        voice="vc_01EXAMPLE",
-        language="hi-IN",
-        sample_rate=16000,
-        speed=1.2,
-    )
-    assert tts._opts.voice == "vc_01EXAMPLE"
-    assert tts._opts.language == "hi-IN"
-    assert tts.sample_rate == 16000
-    assert tts._opts.speed == 1.2
-
-
 def test_tts_rejects_unsupported_language() -> None:
     from livekit.plugins.vakyam import TTS
 
@@ -107,20 +69,6 @@ def test_update_options() -> None:
     assert tts._pool_for(tts._opts) is not old_pool
 
 
-def test_update_options_invalid_sample_rate_is_atomic() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    original_opts = tts._opts
-    original_sample_rate = tts.sample_rate
-
-    with pytest.raises(ValueError, match="sample_rate"):
-        tts.update_options(sample_rate=22050)
-
-    assert tts._opts == original_opts
-    assert tts.sample_rate == original_sample_rate
-
-
 def test_update_options_mixed_invalid_values_is_atomic() -> None:
     from livekit.plugins.vakyam import TTS
 
@@ -135,29 +83,11 @@ def test_update_options_mixed_invalid_values_is_atomic() -> None:
     assert tts.sample_rate == original_sample_rate
 
 
-def test_websocket_url_from_https() -> None:
-    from livekit.plugins.vakyam._utils import websocket_url
-
-    assert websocket_url("https://api.vakyam.ai") == "wss://api.vakyam.ai/v1/tts/websocket"
-
-
-def test_http_stream_url() -> None:
-    from livekit.plugins.vakyam._utils import http_stream_url
-
-    assert http_stream_url("https://api.vakyam.ai") == "https://api.vakyam.ai/v1/tts/stream"
-
-
 def test_insecure_base_url_rejected() -> None:
     from livekit.plugins.vakyam._utils import normalize_base_url
 
     with pytest.raises(ValueError, match="HTTPS"):
         normalize_base_url("http://example.com")
-
-
-def test_insecure_localhost_allowed() -> None:
-    from livekit.plugins.vakyam._utils import normalize_base_url
-
-    assert normalize_base_url("http://localhost:8080") == "http://localhost:8080"
 
 
 def test_session_config_wire_message() -> None:

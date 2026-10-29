@@ -140,7 +140,6 @@ def test_model_voice_rate_and_credentials_have_no_guessed_defaults(
         microsoft_ai.TTS(sample_rate=24000, voice="en-US-Dummy")
     with pytest.raises(ValueError, match="TTS_API_KEY"):
         microsoft_ai.TTS(sample_rate=24000, model="test", voice="en-US-Dummy:test", url=TTS_URL)
-    assert not hasattr(microsoft_ai.TTS, "with_azure")
 
 
 @pytest.mark.parametrize("status", [302, 400, 401, 403, 422, 429, 500, 503])

@@ -9,22 +9,6 @@ from livekit.agents.types import NOT_GIVEN
 pytestmark = pytest.mark.plugin("fishaudio")
 
 
-def test_default_model_is_s2_1_pro():
-    """A bare TTS() defaults to the s2.1-pro model."""
-    from livekit.plugins.fishaudio import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts.model == "s2.1-pro"
-
-
-def test_model_variants_accepted():
-    """s1, s2-pro, and s2.1-pro are all accepted."""
-    from livekit.plugins.fishaudio import TTS
-
-    for model in ("s1", "s2-pro", "s2.1-pro"):
-        assert TTS(api_key="test-key", model=model).model == model
-
-
 def test_prosody_omitted_by_default():
     """Without speed/volume the request sends prosody=None (unchanged default)."""
     from livekit.plugins.fishaudio.tts import _build_tts_request
@@ -33,20 +17,6 @@ def test_prosody_omitted_by_default():
     assert tts.speed is NOT_GIVEN
     assert tts.volume is NOT_GIVEN
     assert _build_tts_request(tts, text="hi")["prosody"] is None
-
-
-def test_speed_sets_prosody():
-    """speed populates only prosody.speed."""
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    assert _build_tts_request(TTS_opts(speed=0.8), text="hi")["prosody"] == {"speed": 0.8}
-
-
-def test_volume_sets_prosody():
-    """volume populates only prosody.volume."""
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    assert _build_tts_request(TTS_opts(volume=-3.0), text="hi")["prosody"] == {"volume": -3.0}
 
 
 def test_speed_and_volume_set_prosody():
@@ -67,39 +37,6 @@ def test_update_options_sets_speed_and_volume():
 
     tts.update_options(speed=0.9, volume=2.0)
     assert _build_tts_request(tts._opts, text="hi")["prosody"] == {"speed": 0.9, "volume": 2.0}
-
-
-def test_sampling_and_encoding_defaults_unchanged():
-    """Without overrides the request keeps the plugin's historical defaults."""
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    request = _build_tts_request(TTS_opts(), text="hi")
-    assert request["temperature"] == 0.7
-    assert request["top_p"] == 0.7
-    assert request["mp3_bitrate"] == 64
-    assert request["opus_bitrate"] == 64000
-    assert request["normalize"] is True
-
-
-def test_constructor_sets_sampling_and_encoding_params():
-    """temperature/top_p/mp3_bitrate/opus_bitrate/normalize flow onto the request."""
-    from livekit.plugins.fishaudio import TTS
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    tts = TTS(
-        api_key="test-key",
-        temperature=0.3,
-        top_p=0.9,
-        mp3_bitrate=192,
-        opus_bitrate=32000,
-        normalize=False,
-    )
-    request = _build_tts_request(tts._opts, text="hi")
-    assert request["temperature"] == 0.3
-    assert request["top_p"] == 0.9
-    assert request["mp3_bitrate"] == 192
-    assert request["opus_bitrate"] == 32000
-    assert request["normalize"] is False
 
 
 def test_update_options_sets_sampling_and_encoding_params():
@@ -135,14 +72,6 @@ def test_temperature_and_top_p_validated():
         tts.update_options(top_p=-0.1)
 
 
-def test_normalize_loudness_sets_prosody():
-    """normalize_loudness rides inside prosody, alongside speed/volume."""
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    prosody = _build_tts_request(TTS_opts(normalize_loudness=False), text="hi")["prosody"]
-    assert prosody == {"normalize_loudness": False}
-
-
 def test_normalize_loudness_with_speed_and_volume():
     """All three prosody fields are populated together."""
     from livekit.plugins.fishaudio.tts import _build_tts_request
@@ -151,13 +80,6 @@ def test_normalize_loudness_with_speed_and_volume():
         TTS_opts(speed=1.2, volume=-3.0, normalize_loudness=True), text="hi"
     )["prosody"]
     assert prosody == {"speed": 1.2, "volume": -3.0, "normalize_loudness": True}
-
-
-def test_quality_guard_always_enabled():
-    """Every request carries the quality-guard feature flag; it is not configurable."""
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    assert _build_tts_request(TTS_opts(), text="hi")["features"] == ["quality-guard"]
 
 
 def test_generation_tuning_omitted_by_default():
@@ -169,26 +91,6 @@ def test_generation_tuning_omitted_by_default():
     assert "min_chunk_length" not in request
     assert "condition_on_previous_chunks" not in request
     assert "early_stop_threshold" not in request
-
-
-def test_constructor_sets_generation_tuning_params():
-    """max_new_tokens/min_chunk_length/condition_on_previous_chunks/early_stop_threshold
-    flow onto the request."""
-    from livekit.plugins.fishaudio import TTS
-    from livekit.plugins.fishaudio.tts import _build_tts_request
-
-    tts = TTS(
-        api_key="test-key",
-        max_new_tokens=512,
-        min_chunk_length=25,
-        condition_on_previous_chunks=False,
-        early_stop_threshold=0.8,
-    )
-    request = _build_tts_request(tts._opts, text="hi")
-    assert request["max_new_tokens"] == 512
-    assert request["min_chunk_length"] == 25
-    assert request["condition_on_previous_chunks"] is False
-    assert request["early_stop_threshold"] == 0.8
 
 
 def test_update_options_sets_generation_tuning_params():

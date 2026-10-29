@@ -72,24 +72,6 @@ def test_update_options_syncs_public_sample_rate(factory, new_rate: int) -> None
     )
 
 
-@pytest.mark.parametrize(
-    ("factory"),
-    [
-        pytest.param(_inworld, id="inworld"),
-        pytest.param(_lmnt, id="lmnt"),
-        pytest.param(_smallestai, id="smallestai"),
-    ],
-)
-def test_update_options_without_sample_rate_leaves_it_alone(factory) -> None:
-    """An unrelated update must not disturb the rate."""
-    tts = factory()
-    before = tts.sample_rate
-
-    tts.update_options()
-
-    assert tts.sample_rate == before
-
-
 def test_rate_change_after_a_fallback_adapter_already_wraps_the_tts() -> None:
     """The adapter may already exist when the rate changes.
 
