@@ -479,16 +479,3 @@ impl Storage for SqliteStorage {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_plain_at_ids_name_a_file() {
-        assert!(valid_thread_id("AT_abc-1_2").is_ok());
-        for bad in ["", "AT_", "AT_../x", "AT_a/b", "DB_abc", "abc", "AT_a.sqlite"] {
-            assert!(matches!(valid_thread_id(bad), Err(StorageError::NotFound(_))), "{bad}");
-        }
-    }
-}

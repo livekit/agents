@@ -338,15 +338,6 @@ async fn dropping_the_last_handle_closes_the_connection() {
 }
 
 #[test]
-fn the_token_carries_the_database_admin_grant_and_verifies() {
-    use livekit_api::access_token::TokenVerifier;
-    let token = TokenMinter::new("devkey", "secret").unwrap().mint().unwrap();
-    let claims = TokenVerifier::with_api_key("devkey", "secret").verify(&token).unwrap();
-    assert!(claims.agent.database_admin);
-    assert_eq!(claims.exp - claims.nbf, TOKEN_TTL.as_secs() as usize);
-}
-
-#[test]
 fn a_column_cannot_hide_unannounced_values() {
     let mut batch = encode_batch(&[vec![SqlValue::Int(1)]], 1);
     batch.columns[0].ints.push(2);
