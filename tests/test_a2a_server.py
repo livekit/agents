@@ -807,8 +807,6 @@ async def test_endpoint_auth_and_thread_authority_are_checked_on_every_request(
 async def test_a_delegation_part_and_kind_reach_the_handler(
     thread_storage: Storage,
 ) -> None:
-    from livekit.agents.llm import ChatContext, ChatMessage
-
     seen: dict[str, Any] = {}
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -820,13 +818,24 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
     server, _ = make_server(thread_storage, handler)
     from google.protobuf import json_format
 
-    history = ChatContext([ChatMessage(role="user", content=["earlier"])])
+    # a2a.md#conversation-data-part: the narrower schema, not the stored chat context's
+    history = {
+        "items": [
+            {
+                "id": "i1",
+                "type": "message",
+                "role": "user",
+                "content": ["earlier"],
+                "created_at": 1.0,
+            }
+        ]
+    }
     msg = {
         "messageId": "m1",
         "role": "ROLE_USER",
         "parts": [
             {"text": "what is the fare"},
-            {"data": history.to_dict(exclude_timestamp=False), "metadata": {KIND: KIND_CHAT_CTX}},
+            {"data": history, "metadata": {KIND: KIND_CHAT_CTX}},
         ],
         "metadata": {KIND: "delegation"},
     }

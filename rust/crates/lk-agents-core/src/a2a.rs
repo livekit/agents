@@ -71,8 +71,10 @@ impl Message {
             return Err(StorageError::Invalid("an A2A message needs a messageId".into()));
         }
         attachments::validate_received_parts(message)?;
-        // a delegation's `chat_ctx` part is the caller's conversation, read by `caller_history_of`
-        // before the message is parsed; it is not part of the turn's text
+        // a delegation's `chat_ctx` part is the caller's conversation, validated here and read by
+        // `caller_history_of`; it is not part of the turn's text
+        caller_history::CallerHistory::from_message(message)
+            .map_err(|error| StorageError::Invalid(error.to_string()))?;
         let mut raw = message.clone();
         raw.parts.retain(|p| !is_chat_ctx_part(p));
         let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
@@ -360,6 +362,13 @@ mod tests {
         let stripped = Message::from_a2a(&with_history, 1.0, None).unwrap();
         assert_eq!(stripped.parts, vec![a2a::Part::text("fare?")]);
         assert_eq!(stripped.to_a2a().parts, vec![a2a::Part::text("fare?")]);
+        // a2a.md#conversation-data-part: the receiver validates the payload before using it
+        let unpaired = v1(json!({"messageId": "z", "role": "ROLE_USER", "parts": [
+            {"data": {"items": [{"type": "function_call", "id": "c", "call_id": "1", "name": "f",
+                "arguments": "{}", "created_at": 1.0}]},
+             "metadata": {"https://livekit.io/a2a/ext/agents/v1/kind": "chat_ctx"}},
+        ]}));
+        assert!(Message::from_a2a(&unpaired, 1.0, None).is_err());
     }
 
     // Catches: a sender's `livekit/<name>` key read as LiveKit's own (a2a.md#metadata-keys), e.g.
