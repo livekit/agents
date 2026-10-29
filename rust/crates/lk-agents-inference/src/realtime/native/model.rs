@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::llm::realtime_native::{
+use lk_agents_abi::llm::realtime::{
     NativeRealtimeConfig, RealtimeConfigurationError, RealtimeJsonOption, RealtimeOptions,
-    WebSocketRealtimeModel,
+    NativeRealtimeModel,
 };
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
@@ -53,7 +53,7 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl WebSocketRealtimeModel for WebSocketRealtime {
+impl NativeRealtimeModel for WebSocketRealtime {
     type Env = ProcessEnv;
 
     fn new(

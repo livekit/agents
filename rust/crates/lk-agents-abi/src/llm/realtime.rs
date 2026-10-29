@@ -1,8 +1,8 @@
 //! `llm/realtime.py`'s data half. The reference's stream-of-streams is flattened into [`Event`]s the
 //! host reassembles; `generate_reply`'s future becomes a `req_id` correlated with the answer event.
 
-use crate::Ts;
-use crate::{AudioFrame, ToolChoice, ToolSpec};
+use crate::errors::{ApiError, HostError};
+use crate::{ApiConnectOptions, AudioFrame, HostRef, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
 use lk_agents_host_derive::Host;
 
@@ -736,4 +736,146 @@ impl crate::python::FromHostErr for RealtimeError {
         let code = value.getattr("code").ok().and_then(|c| c.extract::<String>().ok());
         RealtimeError { message: value.to_string(), code }
     }
+}
+
+// Native realtime clients and their presence-aware option boundary.
+
+/// A supplied JSON option, including explicit null. An absent wrapper means omitted.
+#[crate::host(record(module = "realtime_options", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct RealtimeJsonOption {
+    pub value: serde_json::Value,
+}
+
+#[crate::host(record(module = "realtime_options", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct RealtimeToolChoice {
+    pub value: Option<ToolChoice>,
+}
+
+#[crate::host(record(module = "realtime_options", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct RealtimeDurationOption {
+    pub value: Option<f64>,
+}
+
+/// Omission preserves a setting; a supplied nullable wrapper clears it explicitly.
+#[crate::host(record(module = "realtime_options", extract, emit))]
+#[derive(Debug, Clone, Default)]
+pub struct RealtimeOptions {
+    #[host(default = None)]
+    pub input_audio_transcription: Option<RealtimeJsonOption>,
+    #[host(default = None)]
+    pub input_audio_noise_reduction: Option<RealtimeJsonOption>,
+    #[host(default = None)]
+    pub turn_detection: Option<RealtimeJsonOption>,
+    #[host(default = None)]
+    pub tool_choice: Option<RealtimeToolChoice>,
+    #[host(default = None)]
+    pub speed: Option<f64>,
+    #[host(default = None)]
+    pub tracing: Option<RealtimeJsonOption>,
+    #[host(default = None)]
+    pub truncation: Option<RealtimeJsonOption>,
+    #[host(default = None)]
+    pub reasoning: Option<RealtimeJsonOption>,
+    #[host(default = None)]
+    pub max_session_duration: Option<RealtimeDurationOption>,
+    #[host(default = None)]
+    pub voice: Option<String>,
+    #[host(default = None)]
+    pub max_response_output_tokens: Option<RealtimeJsonOption>,
+}
+
+#[crate::host(record(module = "realtime_options", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct NativeRealtimeConfig {
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub conn_options: ApiConnectOptions,
+    pub options: RealtimeOptions,
+    #[host(default = None)]
+    pub dialect: Option<String>,
+    #[host(default = None)]
+    pub model: Option<String>,
+    #[host(default = None)]
+    pub voice: Option<String>,
+    #[host(default = None)]
+    pub modalities: Option<Vec<String>>,
+    #[host(default = None)]
+    pub azure_deployment: Option<String>,
+    #[host(default = None)]
+    pub entra_token: Option<String>,
+    #[host(default = false)]
+    pub azure_defaults: bool,
+    #[host(default = None)]
+    pub api_secret: Option<String>,
+    #[host(default = None)]
+    pub inference_provider: Option<String>,
+    #[host(default = None)]
+    pub inference_class: Option<String>,
+    #[host(default = None)]
+    pub label: Option<String>,
+}
+
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum RealtimeConfigurationError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error(transparent)]
+    #[host(delegate)]
+    Api(#[from] ApiError),
+    #[error(transparent)]
+    #[host(delegate)]
+    Host(#[from] HostError),
+}
+
+#[crate::host(class(name = "NativeRealtimeModel", native = Realtime))]
+pub trait NativeRealtimeModel: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        config: NativeRealtimeConfig,
+    ) -> Result<Self, RealtimeConfigurationError>;
+    #[host(getter)]
+    fn provider(&self) -> String;
+    #[host(getter)]
+    fn model(&self) -> String;
+    #[host(getter)]
+    fn label(&self) -> String;
+    #[host(call)]
+    fn capabilities(&self) -> RealtimeCapabilities;
+    #[host(call)]
+    fn update_options(&self, options: RealtimeOptions);
+    #[host(call)]
+    fn bind_identification(&self, headers: Vec<(String, String)>);
+}
+
+/// The generated facade holds native resources; host provider objects use the shared bridge.
+#[crate::host(class(name = "RealtimeFallbackModel", native = Realtime))]
+pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        models: Vec<HostRef>,
+        #[host(kw, default = 10.0)] cooldown: f64,
+        #[host(default = None)] attempt_timeout: Option<f64>,
+        #[host(default = true)] regenerate_on_swap: bool,
+        #[host(default = None)] on_availability: Option<HostRef>,
+    ) -> Result<Self, RealtimeConfigurationError>;
+    #[host(getter)]
+    fn active_index(&self) -> usize;
+    #[host(call)]
+    fn capabilities(&self) -> RealtimeCapabilities;
+    #[host(await)]
+    async fn restart(&self, #[host(kw, default = false)] switch_model: bool);
 }

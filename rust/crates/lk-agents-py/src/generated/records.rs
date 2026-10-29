@@ -2864,79 +2864,79 @@ pub mod metrics {
 pub mod realtime_options {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
     static REALTIME_JSON_OPTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn realtime_json_option_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime_native::RealtimeJsonOption> {
+    pub fn realtime_json_option_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeJsonOption> {
         let py = obj.py();
             if !obj.is_instance(REALTIME_JSON_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeJsonOption")?)? {
                 return Err(super::not_a(obj, "RealtimeJsonOption"));
             }
-            Ok(::lk_agents_abi::llm::realtime_native::RealtimeJsonOption {
+            Ok(::lk_agents_abi::llm::realtime::RealtimeJsonOption {
                 value: ::lk_agents_abi::python::attr_with(obj, "RealtimeJsonOption", "value", |v| ::lk_agents_abi::python::value_from_py(v, "RealtimeJsonOption.value"))?,
             })
     }
 
-    pub fn realtime_json_option_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime_native::RealtimeJsonOption) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime_native::RealtimeJsonOption { value } = value;
+    pub fn realtime_json_option_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeJsonOption) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::RealtimeJsonOption { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
             crate::host::construct(REALTIME_JSON_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeJsonOption")?.as_any(), (), Some(&kwargs))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
     static REALTIME_TOOL_CHOICE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn realtime_tool_choice_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime_native::RealtimeToolChoice> {
+    pub fn realtime_tool_choice_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeToolChoice> {
         let py = obj.py();
             if !obj.is_instance(REALTIME_TOOL_CHOICE.import(py, "livekit.agents._generated.realtime_options", "RealtimeToolChoice")?)? {
                 return Err(super::not_a(obj, "RealtimeToolChoice"));
             }
-            Ok(::lk_agents_abi::llm::realtime_native::RealtimeToolChoice {
+            Ok(::lk_agents_abi::llm::realtime::RealtimeToolChoice {
                 value: ::lk_agents_abi::python::attr_with(obj, "RealtimeToolChoice", "value", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ToolChoice>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             })
     }
 
-    pub fn realtime_tool_choice_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime_native::RealtimeToolChoice) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime_native::RealtimeToolChoice { value } = value;
+    pub fn realtime_tool_choice_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeToolChoice) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::RealtimeToolChoice { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", match value { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(REALTIME_TOOL_CHOICE.import(py, "livekit.agents._generated.realtime_options", "RealtimeToolChoice")?.as_any(), (), Some(&kwargs))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
     static REALTIME_DURATION_OPTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn realtime_duration_option_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime_native::RealtimeDurationOption> {
+    pub fn realtime_duration_option_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeDurationOption> {
         let py = obj.py();
             if !obj.is_instance(REALTIME_DURATION_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeDurationOption")?)? {
                 return Err(super::not_a(obj, "RealtimeDurationOption"));
             }
-            Ok(::lk_agents_abi::llm::realtime_native::RealtimeDurationOption {
+            Ok(::lk_agents_abi::llm::realtime::RealtimeDurationOption {
                 value: ::lk_agents_abi::python::attr_with(obj, "RealtimeDurationOption", "value", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "RealtimeDurationOption.value")).map(Some) })?,
             })
     }
 
-    pub fn realtime_duration_option_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime_native::RealtimeDurationOption) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime_native::RealtimeDurationOption { value } = value;
+    pub fn realtime_duration_option_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeDurationOption) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::RealtimeDurationOption { value } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("value", match value { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             crate::host::construct(REALTIME_DURATION_OPTION.import(py, "livekit.agents._generated.realtime_options", "RealtimeDurationOption")?.as_any(), (), Some(&kwargs))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
     static REALTIME_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn realtime_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime_native::RealtimeOptions> {
+    pub fn realtime_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeOptions> {
         let py = obj.py();
             if !obj.is_instance(REALTIME_OPTIONS.import(py, "livekit.agents._generated.realtime_options", "RealtimeOptions")?)? {
                 return Err(super::not_a(obj, "RealtimeOptions"));
             }
-            Ok(::lk_agents_abi::llm::realtime_native::RealtimeOptions {
+            Ok(::lk_agents_abi::llm::realtime::RealtimeOptions {
                 input_audio_transcription: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_transcription", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
                 input_audio_noise_reduction: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "input_audio_noise_reduction", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
                 turn_detection: ::lk_agents_abi::python::attr_with(obj, "RealtimeOptions", "turn_detection", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::realtime_options::realtime_json_option_from_py(v)).map(Some) })?,
@@ -2951,8 +2951,8 @@ pub mod realtime_options {
             })
     }
 
-    pub fn realtime_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime_native::RealtimeOptions) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime_native::RealtimeOptions { input_audio_transcription, input_audio_noise_reduction, turn_detection, tool_choice, speed, tracing, truncation, reasoning, max_session_duration, voice, max_response_output_tokens } = value;
+    pub fn realtime_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::RealtimeOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::RealtimeOptions { input_audio_transcription, input_audio_noise_reduction, turn_detection, tool_choice, speed, tracing, truncation, reasoning, max_session_duration, voice, max_response_output_tokens } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("input_audio_transcription", match input_audio_transcription { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
             kwargs.set_item("input_audio_noise_reduction", match input_audio_noise_reduction { None => py.None().into_bound(py), Some(x) => crate::generated::records::realtime_options::realtime_json_option_to_py(py, x)? })?;
@@ -2968,16 +2968,16 @@ pub mod realtime_options {
             crate::host::construct(REALTIME_OPTIONS.import(py, "livekit.agents._generated.realtime_options", "RealtimeOptions")?.as_any(), (), Some(&kwargs))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
     static NATIVE_REALTIME_CONFIG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn native_realtime_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime_native::NativeRealtimeConfig> {
+    pub fn native_realtime_config_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::realtime::NativeRealtimeConfig> {
         let py = obj.py();
             if !obj.is_instance(NATIVE_REALTIME_CONFIG.import(py, "livekit.agents._generated.realtime_options", "NativeRealtimeConfig")?)? {
                 return Err(super::not_a(obj, "NativeRealtimeConfig"));
             }
-            Ok(::lk_agents_abi::llm::realtime_native::NativeRealtimeConfig {
+            Ok(::lk_agents_abi::llm::realtime::NativeRealtimeConfig {
                 api_key: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "api_key", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 base_url: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "base_url", |v| v.extract::<::std::string::String>())?,
                 conn_options: ::lk_agents_abi::python::attr_with(obj, "NativeRealtimeConfig", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
@@ -2996,8 +2996,8 @@ pub mod realtime_options {
             })
     }
 
-    pub fn native_realtime_config_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime_native::NativeRealtimeConfig) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::realtime_native::NativeRealtimeConfig { api_key, base_url, conn_options, options, dialect, model, voice, modalities, azure_deployment, entra_token, azure_defaults, api_secret, inference_provider, inference_class, label } = value;
+    pub fn native_realtime_config_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::realtime::NativeRealtimeConfig) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::llm::realtime::NativeRealtimeConfig { api_key, base_url, conn_options, options, dialect, model, voice, modalities, azure_deployment, entra_token, azure_defaults, api_secret, inference_provider, inference_class, label } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("api_key", match api_key { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("base_url", ::pyo3::IntoPyObjectExt::into_bound_py_any(base_url, py)?)?;

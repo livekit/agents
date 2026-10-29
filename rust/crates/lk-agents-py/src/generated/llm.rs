@@ -930,8 +930,8 @@ impl HostRealtimeModel {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
-type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::WebSocketRealtimeModel;
+// Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
+type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
 
 #[pyclass(frozen, name = "NativeRealtimeModel", module = "livekit.agents._core")]
 pub struct NativeRealtimeModel(pub(crate) ::std::sync::Arc<NativeRealtimeModelImpl>);
@@ -944,34 +944,34 @@ impl NativeRealtimeModel {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let config = crate::generated::records::realtime_options::native_realtime_config_from_py(&config)?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(NativeRealtimeModel(::std::sync::Arc::new(out)))
     }
 
     #[getter]
     fn provider(&self) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::provider(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::provider(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn model(&self) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::model(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::model(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn label(&self) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::label(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::label(&self.0);
         Ok(out)
     }
 
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
         crate::host::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::capabilities(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::capabilities(&self.0);
         Ok(out)
     }
 
@@ -979,14 +979,14 @@ impl NativeRealtimeModel {
     fn update_options(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let options = crate::generated::records::realtime_options::realtime_options_from_py(&options)?;
-        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::update_options(&self.0, options);
+        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::update_options(&self.0, options);
         Ok(())
     }
 
     #[pyo3(signature = (headers))]
     fn bind_identification(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<()> {
         crate::host::check_pid()?;
-        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::bind_identification(&self.0, headers);
+        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime::NativeRealtimeModel>::bind_identification(&self.0, headers);
         Ok(())
     }
 }
@@ -1003,7 +1003,7 @@ impl NativeRealtimeModel {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
+// Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
 type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
 
 fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
@@ -1025,20 +1025,20 @@ impl RealtimeFallbackModel {
     fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_attempt_timeout)] attempt_timeout: ::std::option::Option<f64>, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
     }
 
     #[getter]
     fn active_index(&self) -> PyResult<usize> {
         crate::host::check_pid()?;
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::active_index(&self.0);
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::active_index(&self.0);
         Ok(out)
     }
 
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
         crate::host::check_pid()?;
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::capabilities(&self.0);
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::capabilities(&self.0);
         Ok(out)
     }
 
@@ -1047,7 +1047,7 @@ impl RealtimeFallbackModel {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::restart(&this, switch_model)
+            let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime::RealtimeFallbackModel>::restart(&this, switch_model)
                 .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })

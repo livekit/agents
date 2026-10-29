@@ -135,7 +135,7 @@ impl generated::Implementations for Selected {
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
-    type WebSocketRealtimeModel = lk_agents_runtime::inference::realtime::native::WebSocketRealtime;
+    type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::WebSocketRealtime;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
     type HostRealtimeModel = lk_agents_runtime::inference::realtime::host::HostRealtimeModel;
     type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient;

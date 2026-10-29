@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
-use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
+use lk_agents_abi::llm::realtime::RealtimeConfigurationError;
 use lk_agents_abi::python::native;
 use lk_agents_abi::{HostRef, Realtime, RealtimeSession};
 use lk_agents_runtime::inference::fallback::realtime::{ChainModel, RealtimeFallbackModel};
@@ -15,7 +15,7 @@ use pyo3::prelude::*;
 
 pub struct RealtimeFallback(RealtimeFallbackModel);
 
-impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFallback {
+impl lk_agents_abi::llm::realtime::RealtimeFallbackModel for RealtimeFallback {
     type Env = ProcessEnv;
 
     fn new(
