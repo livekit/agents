@@ -12,7 +12,7 @@ use lk_agents_abi::telemetry::policy;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection;
 use lk_agents_abi::telemetry::report::{
     ChatItemProjection, EvaluationRecord, LogRecordWire, Outcome, RecordingOptions,
-    SessionReportInput, TAG_FAIL, TAG_SUCCESS,
+    SessionReportInput, TAG_FAIL, TAG_SUCCESS, Tagger as _,
 };
 use lk_agents_abi::telemetry::{HrTime, LogRecord, Severity, hr_time, hr_wall};
 use lk_agents_abi::{ChatItem, Clock};
@@ -215,11 +215,12 @@ pub fn session_records(
         };
         let tags = if capture_content {
             let mut tags: Vec<_> = tagger
-                .entries()
+                .tags
+                .iter()
                 .take(policy::SDK_PENDING_RECORDS)
                 .map(|(name, _)| name)
                 .filter(|name| name.len() <= 256)
-                .map(str::to_owned)
+                .cloned()
                 .collect();
             tags.sort();
             tags
@@ -272,8 +273,10 @@ pub fn session_records(
         }
     }
 
-    for e in
-        tagger.evaluations().iter().take(policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1))
+    for e in tagger
+        .evaluation_results
+        .iter()
+        .take(policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1))
     {
         let fields: Vec<_> = e
             .attributes()
@@ -302,7 +305,7 @@ pub fn session_records(
     }
 
     for (name, entry) in
-        tagger.entries().take(policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1))
+        tagger.tags.iter().take(policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1))
     {
         if !capture_content {
             continue;
@@ -331,7 +334,8 @@ pub fn session_records(
         m.insert("outcome".into(), Value::String(outcome_str(outcome).into()));
         // `if tagger.outcome_reason:` -- an empty reason is falsy and omits the key entirely.
         if let Some(r) = tagger
-            .outcome_reason()
+            .outcome_reason
+            .as_deref()
             .filter(|r| capture_content && !r.is_empty() && report_value_fits(r))
         {
             m.insert("reason".into(), Value::String(r.into()));
@@ -362,7 +366,7 @@ pub fn session_records(
     omitted += report
         .chat_history
         .len()
-        .saturating_add(tagger.evaluations().len())
+        .saturating_add(tagger.evaluation_results.len())
         .saturating_add(tagger.tags.len())
         .saturating_sub(policy::SDK_PENDING_RECORDS)
         .saturating_add(before - out.len());
@@ -437,23 +441,23 @@ pub struct UploadGate {
 }
 
 /// The "data recording is disabled" latch (`upload_gate.py`): one transition, one warning.
-impl UploadGate {
-    pub fn new() -> Self {
+impl lk_agents_abi::telemetry::report::UploadGate for UploadGate {
+    fn new() -> Self {
         UploadGate::default()
     }
 
     /// `reset()`. Called when a session re-initialises recording.
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.disabled = false;
         self.warned = false;
     }
 
-    pub fn disabled(&self) -> bool {
+    fn disabled(&self) -> bool {
         self.disabled
     }
 
     /// `disable()`. Returns `true` on the transition only, where the reference logs its warning.
-    pub fn disable(&mut self) -> bool {
+    fn disable(&mut self) -> bool {
         if self.disabled {
             return false;
         }
@@ -464,12 +468,12 @@ impl UploadGate {
     }
 
     /// `is_disabled_response(status_code, body)`; static because the exporter has no gate in hand.
-    pub fn is_disabled_response(status_code: u16, body: &[u8]) -> bool {
+    fn is_disabled_response(status_code: u16, body: Vec<u8>) -> bool {
         if status_code != 401 {
             return false;
         }
         // `body.decode("utf-8", "ignore").lower()`: invalid UTF-8 is dropped, not an error.
-        let text = String::from_utf8_lossy(body).to_lowercase();
+        let text = String::from_utf8_lossy(&body).to_lowercase();
         DISABLED_MARKERS.iter().any(|m| text.contains(m))
     }
 }
@@ -505,113 +509,6 @@ impl Tagger {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         Tagger { clock, tags: Vec::new(), evaluation_results: Vec::new(), outcome_reason: None }
     }
-
-    /// Python `dict` assignment: replace in place (keeping position), else append.
-    fn put(&mut self, tag: &str, metadata: Option<Value>) {
-        let entry = TagEntry { metadata, timestamp: self.clock.wall() };
-        match self.tags.iter_mut().find(|(k, _)| k == tag) {
-            Some(slot) => slot.1 = entry,
-            None => self.tags.push((tag.to_string(), entry)),
-        }
-    }
-
-    fn pop(&mut self, tag: &str) {
-        self.tags.retain(|(k, _)| k != tag);
-    }
-
-    /// Mark the session as successful; ``reason`` is kept apart from the tag.
-    // Clears any existing `lk.fail` first.
-    pub fn success(&mut self, reason: Option<impl Into<String>>) {
-        self.pop(TAG_FAIL);
-        self.put(TAG_SUCCESS, None);
-        self.outcome_reason = reason.map(Into::into);
-    }
-
-    /// Mark the session as failed; ``reason`` is kept apart from the tag.
-    pub fn fail(&mut self, reason: Option<impl Into<String>>) {
-        self.pop(TAG_SUCCESS);
-        self.put(TAG_FAIL, None);
-        self.outcome_reason = reason.map(Into::into);
-    }
-
-    /// Add a ``key:value`` tag, with optional structured metadata.
-    pub fn add(&mut self, tag: &str, metadata: Option<Value>) {
-        self.put(tag, metadata);
-    }
-
-    /// Remove a tag; removing an absent one does nothing.
-    pub fn remove(&mut self, tag: &str) {
-        self.pop(tag);
-    }
-
-    /// `tags`, in insertion order; see [`Self::sorted_tags`] for the reference's `sorted(...)`.
-    pub fn tags(&self) -> impl Iterator<Item = &str> {
-        self.tags.iter().map(|(k, _)| k.as_str())
-    }
-
-    /// `sorted(tagger.tags)` -- what the session summary record carries.
-    pub fn sorted_tags(&self) -> Vec<&str> {
-        let mut v: Vec<&str> = self.tags().collect();
-        v.sort_unstable();
-        v
-    }
-
-    /// `tagger._tags.items()`, in insertion order. This is what the tag-metadata records walk.
-    pub fn entries(&self) -> impl Iterator<Item = (&str, &TagEntry)> {
-        self.tags.iter().map(|(k, e)| (k.as_str(), e))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.tags.is_empty()
-    }
-
-    /// The judgments recorded by judge groups.
-    // The reference returns a `.copy()`; a shared slice is the Rust equivalent.
-    pub fn evaluations(&self) -> &[EvaluationRecord] {
-        &self.evaluation_results
-    }
-
-    /// ``"success"``, ``"fail"`` or ``None``.
-    // From tag presence; `lk.success` wins if both are set.
-    pub fn outcome(&self) -> Option<Outcome> {
-        if self.tags.iter().any(|(k, _)| k == TAG_SUCCESS) {
-            Some(Outcome::Success)
-        } else if self.tags.iter().any(|(k, _)| k == TAG_FAIL) {
-            Some(Outcome::Fail)
-        } else {
-            None
-        }
-    }
-
-    /// The reason given with the outcome.
-    // Only another `success`/`fail` overwrites it.
-    pub fn outcome_reason(&self) -> Option<&str> {
-        self.outcome_reason.as_deref()
-    }
-
-    /// One judgment of a judge group's result: its `lk.judge.<name>:<verdict>` tag and record.
-    pub fn record_judgment(
-        &mut self,
-        name: &str,
-        verdict: &str,
-        reasoning: &str,
-        instructions: &str,
-    ) {
-        let tag = format!("lk.judge.{name}:{verdict}");
-        self.put(&tag, None);
-        self.evaluation_results.push(EvaluationRecord {
-            name: name.to_owned(),
-            tag,
-            verdict: verdict.to_owned(),
-            reasoning: reasoning.to_owned(),
-            instructions: instructions.to_owned(),
-        });
-    }
-
-    /// `has_evals` at `job.py:320`: `bool(self._tagger.evaluations or self._tagger.outcome)`.
-    pub fn has_evals(&self) -> bool {
-        !self.evaluation_results.is_empty() || self.outcome().is_some()
-    }
 }
 
 impl lk_agents_abi::telemetry::report::Tagger for Tagger {
@@ -620,28 +517,40 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
         Tagger::new(Arc::new(lk_agents_abi::RealClock::new()))
     }
 
+    // Clears any existing `lk.fail` first.
     fn success(&mut self, reason: Option<String>) {
-        Tagger::success(self, reason);
+        self.remove(TAG_FAIL.to_owned());
+        self.add(TAG_SUCCESS.to_owned(), None);
+        self.outcome_reason = reason;
     }
 
     fn fail(&mut self, reason: Option<String>) {
-        Tagger::fail(self, reason);
+        self.remove(TAG_SUCCESS.to_owned());
+        self.add(TAG_FAIL.to_owned(), None);
+        self.outcome_reason = reason;
     }
 
+    /// Python `dict` assignment: replace in place (keeping position), else append.
     fn add(&mut self, tag: String, metadata: Option<Value>) {
-        Tagger::add(self, &tag, metadata);
+        let entry = TagEntry { metadata, timestamp: self.clock.wall() };
+        match self.tags.iter_mut().find(|(k, _)| *k == tag) {
+            Some(slot) => slot.1 = entry,
+            None => self.tags.push((tag, entry)),
+        }
     }
 
     fn remove(&mut self, tag: String) {
-        Tagger::remove(self, &tag);
+        self.tags.retain(|(k, _)| *k != tag);
     }
 
     fn tags(&self) -> BTreeSet<String> {
-        Tagger::tags(self).map(str::to_owned).collect()
+        self.tags.iter().map(|(k, _)| k.clone()).collect()
     }
 
     fn sorted_tags(&self) -> Vec<String> {
-        Tagger::sorted_tags(self).into_iter().map(str::to_owned).collect()
+        let mut v: Vec<String> = self.tags.iter().map(|(k, _)| k.clone()).collect();
+        v.sort_unstable();
+        v
     }
 
     fn entries(&self) -> Vec<(String, Option<Value>, f64)> {
@@ -655,19 +564,27 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
     }
 
     fn is_empty(&self) -> bool {
-        Tagger::is_empty(self)
+        self.tags.is_empty()
     }
 
     fn evaluations(&self) -> Vec<EvaluationRecord> {
-        Tagger::evaluations(self).to_vec()
+        self.evaluation_results.clone()
     }
 
+    // From tag presence; `lk.success` wins if both are set.
     fn outcome(&self) -> Option<Outcome> {
-        Tagger::outcome(self)
+        if self.tags.iter().any(|(k, _)| k == TAG_SUCCESS) {
+            Some(Outcome::Success)
+        } else if self.tags.iter().any(|(k, _)| k == TAG_FAIL) {
+            Some(Outcome::Fail)
+        } else {
+            None
+        }
     }
 
+    // Only another `success`/`fail` overwrites it.
     fn outcome_reason(&self) -> Option<String> {
-        Tagger::outcome_reason(self).map(str::to_owned)
+        self.outcome_reason.clone()
     }
 
     fn _core_record_judgment(
@@ -677,11 +594,20 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
         reasoning: String,
         instructions: String,
     ) {
-        self.record_judgment(&name, &verdict, &reasoning, &instructions);
+        let tag = format!("lk.judge.{name}:{verdict}");
+        self.add(tag.clone(), None);
+        self.evaluation_results.push(EvaluationRecord {
+            name,
+            tag,
+            verdict,
+            reasoning,
+            instructions,
+        });
     }
 
+    /// `has_evals` at `job.py:320`: `bool(self._tagger.evaluations or self._tagger.outcome)`.
     fn has_evals(&self) -> bool {
-        Tagger::has_evals(self)
+        !self.evaluation_results.is_empty() || self.outcome().is_some()
     }
 
     fn _core_session_records(
@@ -707,28 +633,6 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
             Some(error) => Err(error),
             None => Ok(records.into_iter().map(LogRecordWire::from).collect()),
         }
-    }
-}
-
-impl lk_agents_abi::telemetry::report::UploadGate for UploadGate {
-    fn new() -> Self {
-        UploadGate::new()
-    }
-
-    fn reset(&mut self) {
-        UploadGate::reset(self);
-    }
-
-    fn disabled(&self) -> bool {
-        UploadGate::disabled(self)
-    }
-
-    fn disable(&mut self) -> bool {
-        UploadGate::disable(self)
-    }
-
-    fn is_disabled_response(status_code: u16, body: Vec<u8>) -> bool {
-        UploadGate::is_disabled_response(status_code, &body)
     }
 }
 

@@ -20,6 +20,7 @@ use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::telemetry::report::UploadGate as UploadGateApi;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use prost::Message;
@@ -221,7 +222,10 @@ impl<E: Env> SessionReportUploader<E> {
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = response_body(response).await?;
-                    if records::UploadGate::is_disabled_response(status, &body) {
+                    if <records::UploadGate as UploadGateApi>::is_disabled_response(
+                        status,
+                        body.clone(),
+                    ) {
                         self.disabled.store(true, Ordering::Release);
                         return Ok(false);
                     }
