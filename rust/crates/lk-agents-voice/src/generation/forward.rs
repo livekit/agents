@@ -231,3 +231,102 @@ impl SegmentPlan {
             && heard.complete
     }
 }
+
+#[derive(Default)]
+pub struct SynthesisPreparation {
+    phase: PreparationPhase,
+}
+
+#[derive(Default)]
+enum PreparationPhase {
+    #[default]
+    Initial,
+    Readiness,
+    InitialPlayback,
+    FinalPlayback,
+    Started,
+    Refused,
+}
+
+pub enum PreparationEvent {
+    Begin {
+        has_tts: bool,
+        audio_enabled: bool,
+        has_audio_output: bool,
+        llm_reply: bool,
+        preemptive_tts: bool,
+        authorized: bool,
+    },
+    Ready {
+        ready: bool,
+        authorized: bool,
+    },
+    Playback {
+        accepted: bool,
+        authorized: bool,
+    },
+}
+
+pub enum PreparationEffect {
+    WaitReady,
+    WaitPlayback,
+    Start,
+    Refuse,
+}
+
+impl SynthesisPreparation {
+    /// Speculative synthesis may precede playback authorization; other output waits for playback.
+    pub fn handle(&mut self, event: PreparationEvent) -> PreparationEffect {
+        use PreparationEffect as Effect;
+        use PreparationEvent as Event;
+        use PreparationPhase as Phase;
+        match (&self.phase, event) {
+            (
+                Phase::Initial,
+                Event::Begin {
+                    has_tts,
+                    audio_enabled,
+                    has_audio_output,
+                    llm_reply,
+                    preemptive_tts,
+                    authorized,
+                },
+            ) => {
+                if has_tts && audio_enabled && has_audio_output {
+                    if llm_reply && preemptive_tts {
+                        self.check_authorization(authorized)
+                    } else {
+                        self.phase = Phase::Readiness;
+                        Effect::WaitReady
+                    }
+                } else {
+                    self.phase = Phase::InitialPlayback;
+                    Effect::WaitPlayback
+                }
+            }
+            (Phase::Readiness, Event::Ready { ready: true, authorized })
+            | (Phase::InitialPlayback, Event::Playback { accepted: true, authorized }) => {
+                self.check_authorization(authorized)
+            }
+            (Phase::FinalPlayback, Event::Playback { accepted: true, .. }) => {
+                self.phase = Phase::Started;
+                Effect::Start
+            }
+            (Phase::Started, _) => Effect::Start,
+            _ => {
+                self.phase = Phase::Refused;
+                Effect::Refuse
+            }
+        }
+    }
+
+    fn check_authorization(&mut self, authorized: bool) -> PreparationEffect {
+        if authorized {
+            self.phase = PreparationPhase::FinalPlayback;
+            PreparationEffect::WaitPlayback
+        } else {
+            self.phase = PreparationPhase::Started;
+            PreparationEffect::Start
+        }
+    }
+}

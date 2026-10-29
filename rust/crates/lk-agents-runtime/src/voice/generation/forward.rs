@@ -13,7 +13,9 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
-use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
+use lk_agents_voice::generation::forward::{
+    ForwardEffect, ForwardEvent, PreparationEffect, PreparationEvent, SynthesisPreparation,
+};
 use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind};
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
 use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
@@ -47,25 +49,37 @@ pub(super) async fn voice_leg(
     if let Voice::Tts(tts) = &voice {
         tts.set_expressive(ctx.request.expressive.is_some());
     }
-    let synthesis =
-        matches!(voice, Voice::Tts(_)) && shared.audio_enabled() && shared.audio_output().is_some();
-    if synthesis {
-        let early = matches!(ctx.source, ReplySource::Llm) && ctx.preemptive_tts;
-        let ready = early
-            || tokio::select! {
-                biased;
-                () = handle.wait_for_interrupted() => false,
-                () = handle.wait_for_scheduled() => true,
-                _ = handle.wait_for_authorization() => true,
-            };
-        if !ready {
-            return Ok(None);
-        }
-    } else if !gate.wait(shared, handle).await {
-        return Ok(None);
-    }
-    if handle.authorized() && !gate.wait(shared, handle).await {
-        return Ok(None);
+    let mut preparation = SynthesisPreparation::default();
+    let mut effect = preparation.handle(PreparationEvent::Begin {
+        has_tts: matches!(voice, Voice::Tts(_)),
+        audio_enabled: shared.audio_enabled(),
+        has_audio_output: shared.audio_output().is_some(),
+        llm_reply: matches!(ctx.source, ReplySource::Llm),
+        preemptive_tts: ctx.preemptive_tts,
+        authorized: handle.authorized(),
+    });
+    loop {
+        effect = match effect {
+            PreparationEffect::WaitReady => {
+                let ready = tokio::select! {
+                    biased;
+                    () = handle.wait_for_interrupted() => false,
+                    () = handle.wait_for_scheduled() => true,
+                    _ = handle.wait_for_authorization() => true,
+                };
+                preparation
+                    .handle(PreparationEvent::Ready { ready, authorized: handle.authorized() })
+            }
+            PreparationEffect::WaitPlayback => {
+                let accepted = gate.wait(shared, handle).await;
+                preparation.handle(PreparationEvent::Playback {
+                    accepted,
+                    authorized: handle.authorized(),
+                })
+            }
+            PreparationEffect::Start => break,
+            PreparationEffect::Refuse => return Ok(None),
+        };
     }
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     let audio_enabled = shared.audio_enabled();
