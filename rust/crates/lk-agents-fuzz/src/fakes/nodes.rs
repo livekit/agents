@@ -184,7 +184,8 @@ impl NodeFactory for FakeNodes {
         let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
         let retained = Arc::new(std::sync::Mutex::new(None::<Box<dyn Send>>));
         let released = retained.clone();
-        self.registry.world.spawn_unboxed(async move {
+        // The world's own work: the run's executor ends it with the run.
+        self.registry.world.spawn_detached(async move {
             let outcome = loop {
                 let op = tokio::select! {
                     biased;
@@ -238,7 +239,8 @@ impl NodeFactory for FakeNodes {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AudioFrame>();
         let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cleared = Arc::clone(&cut);
-        self.registry.world.spawn_unboxed(async move {
+        // The world's own work: the run's executor ends it with the run.
+        self.registry.world.spawn_detached(async move {
             while let Some(frame) = rx.recv().await {
                 if cleared.load(std::sync::atomic::Ordering::SeqCst)
                     || below.capture_frame(&frame).await.is_err()

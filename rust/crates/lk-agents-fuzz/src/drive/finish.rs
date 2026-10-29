@@ -723,11 +723,11 @@ mod tests {
     fn each_ending_is_told_apart() {
         assert_eq!(ended(|_| {}).ending, Ending::Completed);
         let violated = ended(|run| {
-            run.tasks.spawn_unboxed(async { panic!("boom") });
+            run.tasks.spawn_detached(async { panic!("boom") });
         });
         assert_eq!(violated.ending, Ending::ContractViolated, "{:?}", violated.failures);
         let deadlocked = ended(|run| {
-            run.tasks.spawn_unboxed(std::future::pending());
+            run.tasks.spawn_detached(std::future::pending());
         });
         assert!(
             matches!(&deadlocked.ending, Ending::Deadlock { evidence } if evidence.contains("nothing pending")),

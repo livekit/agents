@@ -405,7 +405,8 @@ impl Playout {
             .collect();
         if let Some(world) = &self.lagging {
             let tracker = self.tracker.clone();
-            world.spawn_unboxed(async move {
+            // The world's own work: the run's executor ends it with the run.
+            world.spawn_detached(async move {
                 for _ in 0..LAGGING_REPORT_HOPS {
                     tokio::task::yield_now().await;
                 }

@@ -29,7 +29,7 @@ use std::{
 };
 
 use lk_agents_abi::{
-    AbortHandle, ApiConnectOptions, BoxFuture, ChatContext, ChatItem, Clock, Realtime,
+    ApiConnectOptions, BoxFuture, ChatContext, ChatItem, Clock, OwnedTask, Realtime,
     RealtimeCommand, RealtimeSession, Spawner, SpawnerExt, ToolChoice, Ts,
     errors::{ApiError, ProviderError, TimeoutPhase},
     llm::realtime::{
@@ -171,7 +171,7 @@ impl Realtime for FakeRealtime {
             );
             let _ = socket.slot.set(slot);
             let pump = socket.clone();
-            let abort = self.spawner.spawn_unboxed(async move { pump.run().await });
+            let abort = self.spawner.spawn(async move { pump.run().await });
             Ok(Arc::new(Session { socket, abort }) as Arc<dyn RealtimeSession>)
         })
     }
@@ -190,7 +190,8 @@ fn attempt(now: Ts, opts: &ApiConnectOptions, connect: Duration) -> Link {
 /// The session the driver holds.
 struct Session {
     socket: Arc<Socket>,
-    abort: AbortHandle,
+    /// The socket's pump; cancelled at the close or with the session.
+    abort: OwnedTask,
 }
 
 impl RealtimeSession for Session {
@@ -226,7 +227,7 @@ impl RealtimeSession for Session {
             let _ =
                 lk_agents_abi::timeout(&*socket.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, over)
                     .await;
-            self.abort.abort();
+            self.abort.cancel();
             {
                 let mut state = socket.state.lock().unwrap();
                 socket.hang_up(&mut state);

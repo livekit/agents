@@ -46,7 +46,8 @@ impl FakeCli {
         let (mut reader, mut writer) = tokio::io::split(cli);
         let (to_agent, mut sent) =
             tokio::sync::mpsc::unbounded_channel::<proto::AgentSessionMessage>();
-        world.spawn_unboxed(async move {
+        // The world's own work: the run's executor ends it with the run.
+        world.spawn_detached(async move {
             while let Some(message) = sent.recv().await {
                 if writer.write_all(&frame(&message.encode_to_vec())).await.is_err() {
                     return;
@@ -57,7 +58,8 @@ impl FakeCli {
         let cli = FakeCli { to_agent, playing_until: Arc::default(), clock };
         let speaker = cli.clone();
         let world_inner = world.clone();
-        world.spawn_unboxed(async move {
+        // The world's own work: the run's executor ends it with the run.
+        world.spawn_detached(async move {
             let (mut pending, mut segment) = (Duration::ZERO, 0u64);
             let played = Arc::new(std::sync::atomic::AtomicU64::new(0));
             let mut decoder = FrameDecoder::new();
@@ -85,7 +87,8 @@ impl FakeCli {
                             let mut playing = speaker.playing_until.lock().unwrap();
                             *playing = Some(playing.map_or(until, |at| at.max(until)));
                             drop(playing);
-                            world_inner.spawn_unboxed(async move {
+                            // The world's own work: the run's executor ends it with the run.
+                            world_inner.spawn_detached(async move {
                                 speaker.clock.wait_until(until).await;
                                 if played.load(std::sync::atomic::Ordering::Relaxed) == this {
                                     speaker.send(Message::AudioPlaybackFinished(

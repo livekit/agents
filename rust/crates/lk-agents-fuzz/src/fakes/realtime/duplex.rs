@@ -20,7 +20,7 @@ use std::{
 
 use fastrand::Rng;
 use lk_agents_abi::{
-    AbortHandle, AudioFrame, BoxFuture, ChatContext, ChatItem, ChatMessage, Clock, CopyOptions,
+    AudioFrame, BoxFuture, ChatContext, ChatItem, ChatMessage, Clock, CopyOptions, OwnedTask,
     Realtime, RealtimeCommand, RealtimeSession, Role, Spawner, SpawnerExt, Ts,
     errors::ProviderError,
     llm::realtime::{
@@ -125,7 +125,7 @@ impl Realtime for FakeDuplex {
             let slot = self.registry.register(Kind::Realtime, Detail::None, Control::Generation);
             let _ = model.slot.set(slot);
             let pump = model.clone();
-            let abort = self.spawner.spawn_unboxed(async move { pump.run().await });
+            let abort = self.spawner.spawn(async move { pump.run().await });
             Ok(Arc::new(Session { model, abort }) as Arc<dyn RealtimeSession>)
         })
     }
@@ -466,7 +466,8 @@ fn frame(generation: u32, chunk: u16) -> AudioFrame {
 
 struct Session {
     model: Arc<Model>,
-    abort: AbortHandle,
+    /// The model's pump; cancelled at the close or with the session.
+    abort: OwnedTask,
 }
 
 impl RealtimeSession for Session {
@@ -502,7 +503,7 @@ impl RealtimeSession for Session {
                     self.model.close(&mut st);
                 }
             }
-            self.abort.abort();
+            self.abort.cancel();
             self.model.ready.notify_waiters();
             if let Some(slot) = self.model.slot.get() {
                 self.model.registry.mark_closed(*slot);

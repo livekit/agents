@@ -538,7 +538,7 @@ pub struct FakeAvatarWorker {
     /// The agent's room, and the avatar's identity in it.
     agent: Arc<FakeRoom>,
     avatar: String,
-    relaying: Mutex<Option<lk_agents_abi::AbortHandle>>,
+    relaying: Mutex<Option<lk_agents_abi::OwnedTask>>,
 }
 
 impl FakeAvatarWorker {
@@ -656,7 +656,7 @@ impl FakeAvatarWorker {
             let weak = Arc::downgrade(&me);
             let mut agent_sent = me.agent.local_participant().sent_count();
             let mut worker_sent = me.room.local_participant().sent_count();
-            spawner.spawn_unboxed(async move {
+            spawner.spawn(async move {
                 loop {
                     tokio::select! {
                         biased;
@@ -755,7 +755,7 @@ impl FakeAvatarWorker {
         record(&self.log, &self.stamps, AvatarStep::CloseAsked);
         let _ = self.runner.aclose().await;
         if let Some(relaying) = self.relaying.lock().unwrap().take() {
-            relaying.abort();
+            relaying.cancel();
         }
         self.relay.lock().unwrap().streams.clear();
         let pulls_after_close = self.generator.state.lock().unwrap().pulls_after_close;
