@@ -5,6 +5,7 @@
 //! and `turn.run(message)` takes one A2A message through its policy. The host is the door's
 //! `TurnHost`, driven through its generated proxy (`_core_handle`).
 
+use lk_agents_abi::SpawnerExt as _;
 use std::sync::Arc;
 
 use lk_agents_abi::a2a::options::TurnOptions;
@@ -292,7 +293,9 @@ impl PyThread {
     fn close(&self) {
         let thread = self.inner.clone();
         match crate::host::process_handle() {
-            Ok(runtime) => drop(runtime.spawn(async move { thread.close().await })),
+            // Detached: `close()` is synchronous for the host; the close ends on its own.
+            Ok(runtime) => lk_agents_runtime::net::task::TokioSpawner::new(runtime)
+                .spawn_detached(async move { thread.close().await }),
             Err(error) => log::warn!("the database connection could not close: {error}"),
         }
     }

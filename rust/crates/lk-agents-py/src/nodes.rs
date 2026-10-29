@@ -300,7 +300,8 @@ impl AgentNodes {
         if let Some(tasks) = tasks {
             tasks.spawn(self.spawner.as_ref(), node, drain);
         } else {
-            self.spawner.spawn_unboxed(drain);
+            // Detached: no segment owns this node; the drain ends with its output.
+            self.spawner.spawn_detached(drain);
         }
         Some(sink)
     }
@@ -747,7 +748,8 @@ fn tts_node(
     let calls = node_calls_var(py)?.call_method1("get", (py.None(),))?;
     let calls = calls.cast::<NodeCallsCell>().ok().map(|cell| Arc::clone(&cell.get().0));
     let spawner = crate::host::host_spawner()?;
-    spawner.spawn_unboxed(async move {
+    // Detached: the pump ends once the caller's input ends or its iterator is gone.
+    spawner.spawn_detached(async move {
         pump(tts.stream().await, input, output, clock, calls).await;
     });
     Ok(frames)
@@ -779,7 +781,8 @@ fn stt_node(
         caller_input(py, audio, Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)))?;
     let (output, events) = item_stream(py, speech_event)?;
     let spawner = crate::host::host_spawner()?;
-    spawner.spawn_unboxed(async move {
+    // Detached: the pump ends once the caller's input ends or its iterator is gone.
+    spawner.spawn_detached(async move {
         let label = stt.label();
         let opened = stt.stream(None, None).await.and_then(|opened| {
             opened.ok_or_else(|| {
