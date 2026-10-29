@@ -363,8 +363,8 @@ impl Clock for TestClock {
 struct ChannelTransport {
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
 
-    incoming:
-        Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>>>,
+    /// One peer per connection, in dial order.
+    incoming: Connections,
 
     sent: tokio::sync::mpsc::UnboundedSender<protocol::WorkerMessage>,
     closed: Arc<std::sync::atomic::AtomicUsize>,
@@ -410,7 +410,7 @@ impl WorkerTransport for ChannelTransport {
             .incoming
             .lock()
             .unwrap()
-            .take()
+            .pop_front()
             .ok_or_else(|| TransportError::Io("no more connections".into()))?;
         Ok(Connected {
             sink: Arc::new(ChannelSink {
@@ -423,8 +423,38 @@ impl WorkerTransport for ChannelTransport {
     }
 }
 
+type Peer = tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>;
+type Connections = Arc<
+    Mutex<
+        std::collections::VecDeque<
+            tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>,
+        >,
+    >,
+>;
+
+/// The load the host reports, its sample count, and a gate it waits on when closed.
+struct HostLoad {
+    value: Mutex<f32>,
+    samples: std::sync::atomic::AtomicUsize,
+    gated: std::sync::atomic::AtomicBool,
+    gate: tokio::sync::Semaphore,
+}
+
+impl Default for HostLoad {
+    fn default() -> Self {
+        Self {
+            value: Mutex::new(0.0),
+            samples: Default::default(),
+            gated: Default::default(),
+            gate: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
 /// Holds decisions and launches at explicit gates so tests control completion order.
 struct GatedHost {
+    load: Arc<HostLoad>,
+    launched: Arc<Mutex<Vec<crate::RunningJobInfo>>>,
     started: tokio::sync::mpsc::UnboundedSender<&'static str>,
     decisions: Arc<tokio::sync::Semaphore>,
     launches: Arc<tokio::sync::Semaphore>,
@@ -454,6 +484,7 @@ impl WorkerHost for GatedHost {
     }
     async fn launch_job(&self, info: crate::RunningJobInfo) -> Result<JobId, HostError> {
         let _guard = OperationGuard(self.dropped.clone());
+        self.launched.lock().unwrap().push(info.clone());
         self.started.send("launch").unwrap();
         self.launches.acquire().await.unwrap().forget();
         if self.failing_launches.load(std::sync::atomic::Ordering::SeqCst) {
@@ -465,11 +496,18 @@ impl WorkerHost for GatedHost {
         Ok(())
     }
     async fn user_load(&self) -> Option<f32> {
-        Some(0.0)
+        if self.load.gated.load(std::sync::atomic::Ordering::SeqCst) {
+            self.load.gate.acquire().await.unwrap().forget();
+        }
+        self.load.samples.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(*self.load.value.lock().unwrap())
     }
 }
 
 struct RuntimeRig {
+    connections: Connections,
+    load: Arc<HostLoad>,
+    launched: Arc<Mutex<Vec<crate::RunningJobInfo>>>,
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
     runtime: Worker,
     handle: WorkerClient,
@@ -487,6 +525,11 @@ fn runtime_rig() -> RuntimeRig {
 }
 
 fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
+    let cfg = WorkerConfig { load_threshold: EnvOption::Fixed(0.7), ..Default::default() };
+    runtime_rig_with(max_retry, cfg)
+}
+
+fn runtime_rig_with(max_retry: u32, cfg: WorkerConfig) -> RuntimeRig {
     let stall_writes = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (peer, incoming) = tokio::sync::mpsc::unbounded_channel();
     let (send, sent) = tokio::sync::mpsc::unbounded_channel();
@@ -496,16 +539,21 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
     let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let failing_launches = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let connections: Connections = Arc::new(Mutex::new([incoming].into()));
+    let load = Arc::new(HostLoad::default());
+    let launched = Arc::new(Mutex::new(Vec::new()));
     let (runtime, handle) = Worker::with_components(
         Arc::new(ChannelTransport {
             stall_writes: stall_writes.clone(),
-            incoming: Mutex::new(Some(incoming)),
+            incoming: connections.clone(),
             sent: send,
             closed: closed.clone(),
         }),
         runtime_cfg(max_retry),
-        WorkerConfig { load_threshold: EnvOption::Fixed(0.7), ..Default::default() },
+        cfg,
         Arc::new(GatedHost {
+            load: load.clone(),
+            launched: launched.clone(),
             started: start,
             decisions: decisions.clone(),
             launches: launches.clone(),
@@ -516,6 +564,9 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
         crate::test_support::blocking_io(),
     );
     RuntimeRig {
+        connections,
+        load,
+        launched,
         runtime,
         handle,
         peer,

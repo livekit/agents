@@ -971,6 +971,10 @@ mod write_tests {
             self.shared().clone()
         }
 
+        pub(crate) fn set_assignment_capacity(&mut self, capacity: usize) {
+            self.assignment_capacity = capacity;
+        }
+
         pub(crate) async fn sample_load_now(&mut self) -> Result<(), RuntimeError> {
             let mut outbox = Outbox::new(self.runtime_cfg.connection_timeout);
             self.sample_load();
