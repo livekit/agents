@@ -39,10 +39,6 @@ pub use driver::*;
 pub use host_events::*;
 pub use time::*;
 
-/// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.
-#[lk_agents_abi::host(export(name = "default_aec_warmup"))]
-pub const DEFAULT_AEC_WARMUP: Duration = Duration::from_secs(3);
-
 /// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
 pub(crate) struct VoiceSession {

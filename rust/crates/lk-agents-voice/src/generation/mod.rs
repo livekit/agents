@@ -30,7 +30,6 @@ pub const RUNNING_TOOL_PLACEHOLDER: &str = "The tool call is still in progress."
 pub const RUNNING_PLACEHOLDER_KEY: &str = "__lk_running_placeholder__";
 
 /// The id of the rendered prompt in every request. Must not change (persisted contexts carry it).
-#[lk_agents_abi::host(export(pid = false, name = "instructions_message_id"))]
 pub const INSTRUCTIONS_MESSAGE_ID: &str = lk_agents_core::request::INSTRUCTIONS_MESSAGE_ID;
 
 /// `remove_instructions(chat_ctx)` as a plan: the positions of every

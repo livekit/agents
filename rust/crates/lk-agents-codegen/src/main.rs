@@ -94,7 +94,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
-    "rust/crates/lk-agents-voice/src/agent_session/mod.rs",
     "rust/crates/lk-agents-abi/src/utils/clock.rs",
     "rust/crates/lk-agents-voice/src/agent_session/api.rs",
     "rust/crates/lk-agents-voice/src/agent_session/api/host.rs",
