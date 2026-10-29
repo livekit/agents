@@ -511,7 +511,7 @@ class ChatContext:
             exclude_function_call=exclude_function_call,
             exclude_metrics=exclude_metrics,
             exclude_config_update=exclude_config_update,
-            strip_expr_markup=_core.strip_expr_markup if strip_markup else None,
+            strip_markup=strip_markup,
         )
 
     @overload

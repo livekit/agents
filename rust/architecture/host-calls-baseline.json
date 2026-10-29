@@ -1,5 +1,4 @@
 [
-  "host-call:rust/crates/lk-agents-abi/src/llm/to_dict.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/bridge.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/buffers.rs",
   "host-call:rust/crates/lk-agents-abi/src/python/conversion_tests.rs",

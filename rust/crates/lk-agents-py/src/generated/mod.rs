@@ -64,6 +64,7 @@ pub trait Implementations: 'static {
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
     type NativeRealtimeModel: ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel;
+    type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
     type StreamBuffer: ::lk_agents_abi::media::codecs::StreamBuffer;
@@ -234,6 +235,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::NativeRealtimeModel>()?;
     m.add_class::<llm::RealtimeFallbackModel>()?;
+    m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
     m.add_class::<media::AudioEmitter>()?;
     m.add_class::<media::AudioDecoder>()?;
     m.add_class::<media::StreamBuffer>()?;

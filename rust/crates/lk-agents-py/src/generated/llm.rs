@@ -1021,6 +1021,19 @@ impl RealtimeFallbackModel {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/to_dict.rs.
+type ChatContextDictImpl = <crate::Selected as super::Implementations>::ChatContextDict;
+
+/// ``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with
+/// ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
+#[pyfunction]
+#[pyo3(signature = (items, *, exclude_image = true, exclude_audio = true, exclude_timestamp = true, exclude_function_call = false, exclude_metrics = false, exclude_config_update = false, strip_markup = false))]
+pub fn chat_ctx_to_dict<'py>(py: Python<'py>, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, exclude_image: bool, exclude_audio: bool, exclude_timestamp: bool, exclude_function_call: bool, exclude_metrics: bool, exclude_config_update: bool, strip_markup: bool) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <ChatContextDictImpl as ::lk_agents_abi::llm::to_dict::ChatContextDict>::chat_ctx_to_dict(items, exclude_image, exclude_audio, exclude_timestamp, exclude_function_call, exclude_metrics, exclude_config_update, strip_markup).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 
 /// [`::lk_agents_abi::llm::duplex::AudioGate`] over a host `livekit.agents.llm.AudioGate`.

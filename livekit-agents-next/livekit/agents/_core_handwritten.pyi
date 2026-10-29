@@ -8,11 +8,10 @@ stub is then generated. The ``*Protocol`` classes describe host objects and are 
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from enum import Enum
 from typing import Any, Protocol
 
-from ._generated._core_classes import ChatItem
 from ._generated.storage_class import (
     EventRow,
     InboxRow,
@@ -25,7 +24,6 @@ from ._generated.storage_class import (
 from ._generated.storage_context import ContextScope, ContextScopeWrite
 from ._generated.storage_options import Policy, TurnOptions
 from ._generated.storage_turn import TurnContext, TurnResult
-from ._generated.telemetry import SpanUpdateWire
 
 # --- runtime.rs ----------------------------------------------------------------------------------
 
@@ -193,22 +191,6 @@ def tts_node(tts: Any, text: Any, *, conn_options: Any) -> ItemStream: ...
 def stt_node(stt: Any, audio: Any, *, conn_options: Any) -> ItemStream: ...
 
 # --- lk-agents-abi llm/to_dict.rs ----------------------------------------------------------------
-
-def chat_ctx_to_dict(
-    items: list[ChatItem],
-    *,
-    exclude_image: bool = True,
-    exclude_audio: bool = True,
-    exclude_timestamp: bool = True,
-    exclude_function_call: bool = False,
-    exclude_metrics: bool = False,
-    exclude_config_update: bool = False,
-    serialize_media: Callable[[Any], Any] | None = None,
-    strip_expr_markup: Callable[[str], str] | None = None,
-) -> dict[str, Any]:
-    """``ChatContext.to_dict``: ``{"items": [...]}``, each item's JSON dump. ``serialize_media``
-    renders a frame (required only when media is kept); ``strip_expr_markup`` strips assistant
-    messages' markup."""
 
 def resolve_host_ref(id: int) -> Any:
     """The object the host interned under ``id``; read, not released."""

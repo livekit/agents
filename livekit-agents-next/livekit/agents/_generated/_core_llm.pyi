@@ -363,3 +363,18 @@ class RealtimeFallbackModel:
     def active_index(self) -> int: ...
     def capabilities(self) -> dict[str, object]: ...
     async def restart(self, *, switch_model: bool = False) -> None: ...
+
+def chat_ctx_to_dict(
+    items: Sequence[ChatItem],
+    *,
+    exclude_image: bool = True,
+    exclude_audio: bool = True,
+    exclude_timestamp: bool = True,
+    exclude_function_call: bool = False,
+    exclude_metrics: bool = False,
+    exclude_config_update: bool = False,
+    strip_markup: bool = False,
+) -> dict[str, object]:
+    """``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with
+    ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
+    """

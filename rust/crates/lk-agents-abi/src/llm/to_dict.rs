@@ -67,6 +67,7 @@ pub struct ToDictHost<'a> {
 }
 
 /// A binding contract with no reference raise.
+#[crate::host(error(kind = "ValueError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ToDictError {
     /// A frame-backed image or an audio part had to be serialized without [`ToDictHost::media`].
@@ -235,96 +236,24 @@ pub(crate) fn content_dump(m: &ChatMessage, cx: &DumpCx<'_>) -> Dumped {
     Ok(Some(Value::Array(content)))
 }
 
-/// `ChatContext.to_dict` (`chat_context.py:629`) over the core's projection.
-///
-/// `serialize_media` renders a host media object (the RTC SDK owns that serializer); it is
-/// required only when media exclusions are off. Passing `strip_expr_markup` is `strip_markup=True`.
-#[cfg(feature = "python")]
-#[pyo3::pyfunction]
-#[pyo3(signature = (
-    items,
-    *,
-    exclude_image = true,
-    exclude_audio = true,
-    exclude_timestamp = true,
-    exclude_function_call = false,
-    exclude_metrics = false,
-    exclude_config_update = false,
-    serialize_media = None,
-    strip_expr_markup = None,
-))]
-#[allow(clippy::too_many_arguments)]
-pub fn chat_ctx_to_dict<'py>(
-    py: pyo3::Python<'py>,
-    items: Vec<crate::ChatItem>,
-    exclude_image: bool,
-    exclude_audio: bool,
-    exclude_timestamp: bool,
-    exclude_function_call: bool,
-    exclude_metrics: bool,
-    exclude_config_update: bool,
-    serialize_media: Option<pyo3::Bound<'py, pyo3::PyAny>>,
-    strip_expr_markup: Option<pyo3::Bound<'py, pyo3::PyAny>>,
-) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-    use pyo3::exceptions::PyValueError;
-    use pyo3::prelude::*;
-    let ctx = ChatContext::new(items);
-    let opts = ToDictOptions {
-        exclude_image,
-        exclude_audio,
-        exclude_timestamp,
-        exclude_function_call,
-        exclude_metrics,
-        exclude_config_update,
-    };
-
-    // The core has no error channel for host raises, so the first one is parked and re-raised
-    // after the projection: a `Null` standing in for a frame would be silent data loss.
-    let raised: std::cell::RefCell<Option<PyErr>> = std::cell::RefCell::new(None);
-    let park = |e: PyErr| {
-        let mut slot = raised.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(e);
-        }
-        Value::Null
-    };
-
-    let render = |r: &MediaRef| -> Value {
-        let Some(f) = serialize_media.as_ref() else {
-            return park(PyValueError::new_err("serialize_media is required for media content"));
-        };
-        let out = crate::python::resolve_key(py, r.id())
-            .and_then(|obj| f.call1((obj,)))
-            .and_then(|v| crate::python::value_from_py(&v, "serialize_media(...)"));
-        match out {
-            Ok(v) => v,
-            Err(e) => park(e),
-        }
-    };
-    let strip = |s: &str| -> String {
-        let Some(f) = strip_expr_markup.as_ref() else { return s.to_owned() };
-        match f.call1((s,)).and_then(|v| v.extract::<String>()) {
-            Ok(v) => v,
-            Err(e) => {
-                park(e);
-                s.to_owned()
-            }
-        }
-    };
-
-    let host = ToDictHost {
-        media: Some(&render),
-        strip_expr_markup: strip_expr_markup.as_ref().map(|_| &strip as &dyn Fn(&str) -> String),
-    };
-    let value = ctx.to_dict(&opts, &host).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    if let Some(e) = raised.into_inner() {
-        return Err(e);
-    }
-    crate::python::value_to_py(py, &value)
+/// `ChatContext.to_dict` (`chat_context.py:629`) as the host calls it.
+#[crate::host(functions)]
+pub trait ChatContextDict {
+    /// ``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with
+    /// ``strip_markup`` the ``<expr/>`` dialect is stripped from assistant messages.
+    #[host(function)]
+    #[allow(clippy::too_many_arguments)]
+    fn chat_ctx_to_dict(
+        items: Vec<crate::ChatItem>,
+        #[host(kw, default = true)] exclude_image: bool,
+        #[host(default = true)] exclude_audio: bool,
+        #[host(default = true)] exclude_timestamp: bool,
+        #[host(default = false)] exclude_function_call: bool,
+        #[host(default = false)] exclude_metrics: bool,
+        #[host(default = false)] exclude_config_update: bool,
+        #[host(default = false)] strip_markup: bool,
+    ) -> Result<Map<String, Value>, ToDictError>;
 }
-
-#[cfg(feature = "python")]
-crate::register_host!(fn chat_ctx_to_dict);
 
 #[cfg(test)]
 mod wall_tests {

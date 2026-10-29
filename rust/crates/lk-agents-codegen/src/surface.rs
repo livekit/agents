@@ -25,7 +25,6 @@ const HANDWRITTEN: &[&str] = &[
     "Streams",
     "Thread",
     "Turn",
-    "chat_ctx_to_dict",
     "init",
     "resolve_host_ref",
     "stt_node",
