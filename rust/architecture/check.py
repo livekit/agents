@@ -38,8 +38,9 @@ GRAPH = {
     "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
     # The DST runs the runtime's real executors over faked ports (decision 92); providers and the
-    # network are fakes at their ABI boundary, never inference's or net's code.
-    "lk-agents-fuzz": PURE | {TEST_SUPPORT} | {"lk-agents-runtime"},
+    # network are fakes at their ABI boundary, never inference's or net's code. The A2A DST runs
+    # real storage over an in-memory database (decision 113 keeps storage DST-covered).
+    "lk-agents-fuzz": PURE | {TEST_SUPPORT} | {"lk-agents-runtime", "lk-agents-storage"},
     TEST_SUPPORT: PURE,
     "lk-agents-bench-steps": PURE,
     "lk-agents-runtime": PURE | ASYNC,

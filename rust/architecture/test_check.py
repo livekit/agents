@@ -123,6 +123,12 @@ class DependencyContracts(unittest.TestCase):
         graph = metadata({"lk-agents-fuzz": ["lk-agents-runtime"], "lk-agents-abi": []})
         self.assertNotIn("direction:lk-agents-fuzz:lk-agents-runtime", dependency_violations(graph))
 
+    def test_the_dst_may_run_real_storage(self):
+        graph = metadata({"lk-agents-fuzz": ["lk-agents-storage"], "lk-agents-abi": []})
+        self.assertNotIn("direction:lk-agents-fuzz:lk-agents-storage", dependency_violations(graph))
+        graph = metadata({"lk-agents-fuzz": ["lk-agents-inference"], "lk-agents-abi": []})
+        self.assertIn("direction:lk-agents-fuzz:lk-agents-inference", dependency_violations(graph))
+
     def test_direction_allows_only_the_documented_graph(self):
         for crate, target in (
             ("lk-agents-net", "lk-agents-media"),

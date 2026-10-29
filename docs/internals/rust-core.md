@@ -68,7 +68,7 @@ lk-agents-net -> lk-agents-core
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 fuzz, test-support, bench-steps -> sans-I/O crates + lk-agents-abi
-lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-test-support
+lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-storage (real storage under the A2A DST), lk-agents-test-support
 every crate's tests -> lk-agents-test-support
 ```
 
@@ -1035,7 +1035,8 @@ tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
 `net -> core`, `py -> abi`, async I/O crates `-> net`,
-`fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`, and
+`fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`,
+`fuzz -> storage` (the A2A DST runs real storage), and
 `-> test-support` from fuzz and every crate's tests described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
