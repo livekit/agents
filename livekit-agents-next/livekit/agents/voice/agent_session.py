@@ -95,7 +95,7 @@ from .room_io import (
     TextInputCallback,
     TextInputEvent,
 )
-from .run_result import _OUTPUT_RETRY_PROMPT, VoiceRunResult
+from .run_result import VoiceRunResult
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -651,10 +651,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
         self._running.run(
             user_input=user_input,
-            expects_output=output_type is not None,
             tool_retries=budgets.tools,
             output_retries=budgets.output,
-            retry_instructions=_OUTPUT_RETRY_PROMPT,
             origin=_origin(),
             host=result,
         )
@@ -874,12 +872,16 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return [*agent.tools, *self._tools]
 
     def _voice_agent(self, agent: Agent, *, task: bool = False) -> _core.VoiceAgent:
-        """``agent`` as its callbacks run on this session: its definition, its ``AgentHost``
-        and the context they run in, whose binding is this session's."""
+        """``agent`` as its callbacks run on this session: its definition over its tools and the
+        session's it lacks, its ``AgentHost`` and the context they run in, whose binding is this
+        session's."""
+        from .agent_host import _voice_tools
+
         captured = contextvars.copy_context()
-        captured.run(_BindingContextVar.set, _VoiceBinding(self, agent, task=task))
+        binding = _VoiceBinding(self, agent, task=task)
+        captured.run(_BindingContextVar.set, binding)
         return _core.VoiceAgent(
-            agent._definition(llm.ToolContext(agent.tools)),
+            agent._definition(_voice_tools(binding)),
             agent._host,
             (asyncio.get_running_loop(), captured),
         )

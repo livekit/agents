@@ -168,6 +168,11 @@ impl StepClock {
         lk_agents_abi::unix_secs(self.wall())
     }
 
+    /// The step's instant on both clocks, to stamp from.
+    pub(crate) fn anchor(&self) -> lk_agents_abi::WallAnchor {
+        lk_agents_abi::WallAnchor { wall: lk_agents_abi::unix_secs(self.wall), at: self.now }
+    }
+
     /// The wall time a session instant fell (or will fall) at.
     pub(crate) fn wall_at(&self, at: Ts) -> std::time::SystemTime {
         let wall = self.wall;

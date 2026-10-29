@@ -14,16 +14,17 @@ use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{
-    APPROVAL_KEY, Batch, CallId, Deferred, Delivery, FillerRun, FunctionToolInfo, HostedTool,
-    MadeCall, Pending, Reply, Running, StepCalls, ToolEnd, ToolExecution, ToolGo, ToolOutcome,
-    answer, default_reply_instructions, emit_ended, pair_for,
+    Batch, CallId, Deferred, Delivery, FillerRun, HostedTool, MadeCall, Pending, Reply, Running,
+    ToolEnd, ToolExecution, ToolGo, ToolOutcome, answer, default_reply_instructions, emit_ended,
+    pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
 use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
-use lk_agents_core::tool_calls::{Admission, Effect as Move, ToolCalls, admit};
+use lk_agents_core::agent_run::Event as RunEvent;
+use lk_agents_core::tool_calls::{Admission, admit};
 use std::time::Duration;
 
 /// `_FillerScheduler`'s log when its `say` raised: the filler ends there.
@@ -35,9 +36,10 @@ impl Driver {
 
     /// The model made a call: the core admits it (arguments a template leaked into repaired, an
     /// `InputRequired(tool=)` answer in place of the model's arguments). A call `tool_choice="none"`
-    /// forbade is recorded as made and never runs. Any other starts once its step is authorized
-    /// to play (a call made while another speech plays, or by a preemptive generation, waits);
-    /// hosted by the reply's agent unless it names a tool the request did not offer.
+    /// forbade is recorded as made and never runs. Any other joins its reply's run, and starts
+    /// once its step is authorized to play (a call made while another speech plays, or by a
+    /// preemptive generation, waits) and the run decided its first move; hosted by the reply's
+    /// agent unless it names a tool the request did not offer.
     pub(crate) fn on_tool_made(
         &mut self,
         now: Ts,
@@ -59,25 +61,23 @@ impl Driver {
                 handle.item_added(&ChatItem::FunctionCall(call.clone()));
             }
             if handle.scheduled() {
-                self.on_tool_started(now, (speech, step), call.clone(), None, false, out);
+                self.on_tool_started(now, (speech, step), call.clone(), None, out);
             }
             self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name);
             return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }
+        let Some(id) = self.reply_call_made(speech, call.clone(), out) else {
+            return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
+        };
         let agent = agent.filter(|_| admission == Admission::Offered);
-        let call = Deferred { speech, step, call, advertised, agent, go };
-        let behind = self.activity.tools.deferred.iter().any(|d| d.speech == speech);
-        if !behind && handle.step_authorized(step) {
-            // A start already authorized runs, interrupted or not, as the reference's executor
-            // starts the body right after `tool_execution_started_cb`.
-            self.start_call(now, call, &handle, out);
-        } else {
-            self.activity.tools.deferred.push(call);
-        }
+        let call = Deferred { speech, step, id, call, advertised, agent, go };
+        self.activity.tools.deferred.push(call);
+        self.settle_deferred_calls(out);
     }
 
-    /// Starts each waiting call whose step is authorized, in the model's order, and drops unrun
-    /// those whose speech was interrupted or done first. `true` when one was.
+    /// Starts each waiting call whose step is authorized and whose first move its run decided, in
+    /// the model's order, and drops unrun those whose speech was interrupted or done first.
+    /// `true` when one was.
     pub(crate) fn settle_deferred_calls(&mut self, out: &mut Out) -> bool {
         let mut settled = false;
         let mut waiting = Vec::new();
@@ -89,18 +89,22 @@ impl Driver {
                 continue;
             }
             // Authorization last: a discarded preemptive generation, or a speech interrupted
-            // while queued, drops the call unrun.
+            // while queued, drops the call unrun. A start already authorized runs, interrupted or
+            // not, as the reference's executor starts the body right after
+            // `tool_execution_started_cb`.
             let handle = self.activity.speech_scheduler.handle(d.speech).cloned();
             match handle {
-                Some(h) if h.interrupted() || h.done() => {
-                    out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone))
+                Some(h) if h.step_authorized(d.step) && self.reply_first_ready(d.speech, d.id) => {
+                    self.start_call(now, d, &h, out)
                 }
-                Some(h) if h.step_authorized(d.step) => self.start_call(now, d, &h, out),
-                Some(_) => {
+                Some(h) if !h.interrupted() && !h.done() || h.step_authorized(d.step) => {
                     waiting.push(d);
                     continue;
                 }
-                None => out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
+                Some(_) | None => {
+                    self.reply_call_dropped(d.speech);
+                    out.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone));
+                }
             }
             settled = true;
         }
@@ -110,50 +114,35 @@ impl Driver {
 
     /// `_tool_execution_started_cb`: the call is stamped with its start (history is ordered by
     /// `created_at`, and it was made before the step was authorized), told to the speech, and
-    /// started.
-    fn start_call(&mut self, now: Ts, d: Deferred, handle: &SpeechHandle, out: &mut Out) {
-        let Deferred { speech, step, mut call, advertised, agent, go } = d;
+    /// started with its first move.
+    fn start_call(&mut self, now: Ts, d: Deferred, h: &SpeechHandle, out: &mut Out) {
+        let Deferred { speech, step, id, mut call, advertised, agent, go } = d;
         call.created_at = self.step.wall();
         if advertised {
-            handle.item_added(&ChatItem::FunctionCall(call.clone()));
+            h.item_added(&ChatItem::FunctionCall(call.clone()));
         }
-        let (id, host) =
-            self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), true, out);
-        let start = ToolGo::Start { call: id, item: Box::new(call), host };
+        let first = Box::new(self.reply_call_start(speech, id, &call));
+        let host = self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), out);
+        let start = ToolGo::Start { call: id, item: Box::new(call), host, first };
         out.answer(Some(go), Answer::ToolGo(start));
     }
 
     // ------------------------------------------------------------------ the running set
 
     /// A started call is the run's; a hosted one enters the running set and is announced, and the
-    /// away window is held off. Unless it is dropped unrun (`joins` false), it joins its step's
-    /// calls on the shared tool machine in the model's order once its tool is described. Its id,
-    /// and, hosted, the invocation its callbacks run in.
+    /// away window is held off. The invocation its callbacks run in, when hosted.
     pub(crate) fn on_tool_started(
         &mut self,
         now: Ts,
         (speech, step): (SpeechId, u32),
         call: FunctionCall,
         agent: Option<&std::sync::Arc<dyn crate::tool_executor::AgentFrame>>,
-        joins: bool,
         out: &mut Out,
-    ) -> (CallId, Option<HostedTool>) {
-        let id = CallId(self.activity.tools.next_call);
-        self.activity.tools.next_call += 1;
-        if joins {
-            let tools = &mut self.activity.tools;
-            let answers = &tools.approval_answers;
-            let step_calls = tools.steps.entry((speech, step)).or_insert_with(|| StepCalls {
-                calls: ToolCalls::new(answers.clone()),
-                tools: Vec::new(),
-                describing: Vec::new(),
-                waiting: Default::default(),
-            });
-            step_calls.describing.push((id, call.clone(), None));
-        }
+    ) -> Option<HostedTool> {
         let handle = self.activity.speech_scheduler.handle(speech);
         let hosted = agent.zip(handle).map(|(agent, handle)| {
-            HostedTool::of(agent, self.session.ids.session(), handle, id.0, &call)
+            let operation = self.activity.tools.mint_operation();
+            HostedTool::of(agent, self.session.ids.session(), handle, operation, Some(&call))
         });
         out.trace(TraceToolStep::CallStarted {
             speech,
@@ -169,7 +158,7 @@ impl Driver {
             let item = Box::new(lk_agents_abi::ChatItem::FunctionCall(call.clone()));
             out.machine().emit(SessionEvent::RunItemAdded { run, item });
         }
-        let Some(running) = hosted.clone() else { return (id, None) };
+        let running = hosted.clone()?;
         let closing = self.session.closing_past_edge();
         out.machine().append(self.session.states.on_tool_call_started(now, closing));
         let output_id = self.session.ids.mint("item");
@@ -185,168 +174,38 @@ impl Driver {
             early: Vec::new(),
             hosted: running,
         });
-        (id, hosted)
+        hosted
     }
 
-    /// A call's tool is described: every call described in the model's order so far joins the
-    /// shared machine, which answers each with its first move.
-    pub(crate) fn on_tool_described(
-        &mut self,
-        (speech, step): (SpeechId, u32),
-        call: CallId,
-        tool: Option<FunctionToolInfo>,
-        go: RequestId,
-        out: &mut Out,
-    ) {
-        let Some(step_calls) = self.activity.tools.steps.get_mut(&(speech, step)) else {
-            return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
-        };
-        step_calls.waiting.insert(call, go);
-        if let Some(entry) = step_calls.describing.iter_mut().find(|(id, ..)| *id == call) {
-            entry.2 = Some(tool);
-        }
-        let ready = step_calls.describing.iter().take_while(|(.., tool)| tool.is_some()).count();
-        let mut moves = Vec::new();
-        for (id, item, tool) in step_calls.describing.drain(..ready).collect::<Vec<_>>() {
-            if let Some(tool) = tool.flatten()
-                && step_calls.tools.iter().all(|t| t.spec.name != tool.spec.name)
-            {
-                step_calls.tools.push(tool);
-            }
-            step_calls.calls.add(id, item, &step_calls.tools, &mut moves);
-        }
-        self.tool_moves(speech, step, moves, out);
-    }
-
-    /// The host prepared a call's arguments, or refused them: the shared machine admits the call
+    /// The host prepared a call's arguments, or refused them: the reply's run admits the call
     /// (approval on the validated identity, the tool's duplicate policy) or records the refusal.
     pub(crate) fn on_tool_prepared(
         &mut self,
         speech: SpeechId,
-        step: u32,
         call: CallId,
         identity: Result<ArgumentIdentity, lk_agents_core::tool_calls::PrepareFailure>,
         go: RequestId,
         out: &mut Out,
     ) {
-        let Some(step_calls) = self.activity.tools.steps.get_mut(&(speech, step)) else {
-            return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
+        let event = match identity {
+            // The call's task holds the prepared arguments: the resource is the call's.
+            Ok(identity) => RunEvent::ToolPrepared { call, prepared: ResourceId(call.0), identity },
+            Err(failure) => RunEvent::ToolPrepareFailed { call, failure },
         };
-        step_calls.waiting.insert(call, go);
-        // Approval reads every agent's calls with their latest outputs.
-        let history = self.session.chat_ctx.items();
-        let (calls, tools) = (&mut step_calls.calls, &step_calls.tools);
-        let mut moves = Vec::new();
-        match identity {
-            Ok(identity) => {
-                let prepared = ResourceId(call.0);
-                calls.prepared(call, prepared, identity, tools, history, &mut moves);
-            }
-            Err(error) => calls.prepare_failed(call, error, tools, history, &mut moves),
-        }
-        self.tool_moves(speech, step, moves, out);
+        self.reply_call_asks(speech, call, go, event, out);
     }
 
-    /// A call's read-back answered: the shared machine settles the call on it.
+    /// A call's read-back answered: the reply's run settles the call on it.
     pub(crate) fn on_read_back(
         &mut self,
         speech: SpeechId,
-        step: u32,
         call: CallId,
-        answer: Result<ReadBackAnswer, String>,
+        result: Result<ReadBackAnswer, String>,
         go: RequestId,
         out: &mut Out,
     ) {
-        let Some(step_calls) = self.activity.tools.steps.get_mut(&(speech, step)) else {
-            return out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
-        };
-        step_calls.waiting.insert(call, go);
-        let history = self.session.chat_ctx.items();
-        let mut moves = Vec::new();
-        step_calls.calls.read_back(call, answer, &step_calls.tools, history, &mut moves);
-        self.tool_moves(speech, step, moves, out);
-    }
-
-    /// The shared machine's moves for a step's calls: each waiting call task is told its next one,
-    /// and a call that settled without its body is told how. A duplicate the tool replaces is
-    /// cancelled.
-    fn tool_moves(&mut self, speech: SpeechId, step: u32, moves: Vec<Move>, out: &mut Out) {
-        let Some(step_calls) = self.activity.tools.steps.get_mut(&(speech, step)) else { return };
-        let mut cancels = Vec::new();
-        let mut marked = Vec::new();
-        for m in moves {
-            let (call, go) = match m {
-                Move::Prepare { call, arguments, .. } => {
-                    (call, ToolGo::Prepare { call, arguments })
-                }
-                Move::ReadBack { call, .. } => (call, ToolGo::ReadBack { call }),
-                Move::Execute { call, function_call, .. } => {
-                    // A cut call is committed as it ran: its grant is spent.
-                    let running = self.activity.tools.running.iter_mut();
-                    if let Some(r) = running
-                        .filter(|r| r.speech == speech)
-                        .find(|r| r.call.call_id == function_call.call_id)
-                    {
-                        r.call = function_call.clone();
-                    }
-                    marked.push(function_call.clone());
-                    let call_id = function_call.call_id.clone();
-                    out.trace(TraceToolStep::CallAdmitted { speech, call_id });
-                    (call, ToolGo::Execute { item: Box::new(function_call) })
-                }
-                Move::Cancel { call } => {
-                    cancels.extend(step_calls.calls.item(call).map(|c| c.call_id.clone()));
-                    continue;
-                }
-                // The voice lifecycle tells the call's progress; prepared arguments are the
-                // call task's, released when it is told it will not run.
-                Move::ReleaseArguments { .. } | Move::Emit(_) | Move::ArgumentsRepaired { .. } => {
-                    continue;
-                }
-            };
-            if let Some(request) = step_calls.waiting.remove(&call) {
-                out.answer(Some(request), Answer::ToolGo(go));
-            }
-        }
-        let settled: Vec<CallId> = (step_calls.waiting.keys().copied())
-            .filter(|id| step_calls.calls.settled(*id).is_some())
-            .collect();
-        for id in settled {
-            let (Some(request), Some(item), Some(settled)) = (
-                step_calls.waiting.remove(&id),
-                step_calls.calls.item(id),
-                step_calls.calls.settled(id),
-            ) else {
-                continue;
-            };
-            marked.push(item.clone());
-            let go = ToolGo::Settled {
-                item: Box::new(item.clone()),
-                outcome: settled.outcome.clone(),
-                retry: settled.retry,
-            };
-            out.answer(Some(request), Answer::ToolGo(go));
-        }
-        // The run told the call as it started: a call approval marked is told again, in place.
-        if let Some(run) = self.session.runs.current()
-            && self.session.runs.owns(crate::run_result::Owned::Speech(speech))
-        {
-            for call in marked.into_iter().filter(|c| c.extra.contains_key(APPROVAL_KEY)) {
-                let item = Box::new(ChatItem::FunctionCall(call));
-                out.machine().emit(SessionEvent::RunItemAdded { run: run.clone(), item });
-            }
-        }
-        for call_id in cancels {
-            if let Some(r) = self
-                .activity
-                .tools
-                .running
-                .iter()
-                .find(|r| r.speech == speech && r.call.call_id == call_id)
-            {
-                out.machine().push(Effect::CancelTool { call_id, hosted: r.hosted.clone() });
-            }
-        }
+        let event = RunEvent::ReadBackRendered { call, result };
+        self.reply_call_asks(speech, call, go, event, out);
     }
 
     /// A blocking call leaves the running set; a detached one stays until its `ToolUpdate::Final`.
@@ -354,19 +213,19 @@ impl Driver {
     pub(crate) fn on_tool_ended(
         &mut self,
         now: Ts,
-        (speech, step, call): (SpeechId, u32, Option<CallId>),
+        (speech, call): (SpeechId, Option<CallId>),
         call_id: String,
         end: ToolEnd,
         message: Option<String>,
         outcome: ToolOutcome,
         out: &mut Out,
     ) {
-        // The shared machine sees the body's answer as it arrives: a later duplicate is admitted
-        // against what still runs.
-        if let Some(call) = call
-            && let Some(step_calls) = self.activity.tools.steps.get_mut(&(speech, step))
-        {
-            step_calls.calls.body_settled(call, outcome, &mut Vec::<Move>::new());
+        // The reply's run sees the body's answer as it arrives: a later duplicate is admitted
+        // against what still runs. A call answered for a task that never did (aborted, or
+        // stopped by the close) is not the run's to settle.
+        match call {
+            Some(call) => self.reply_event(speech, RunEvent::ToolSettled { call, outcome }, out),
+            None => self.reply_call_dropped(speech),
         }
         out.trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
@@ -428,7 +287,7 @@ impl Driver {
             let execution = answer(&r.call, outcome.clone().into(), wall);
             self.on_tool_ended(
                 now,
-                (speech, r.step, None),
+                (speech, None),
                 r.call.call_id.clone(),
                 execution.end,
                 (!execution.output.output.is_empty()).then(|| execution.output.output.clone()),
@@ -632,8 +491,9 @@ impl Driver {
             .filter(|i| matches!(i, ChatItem::FunctionCallOutput(o) if waits(o)))
             .cloned()
             .collect();
-        self.activity.tools.approval_answers =
-            lk_agents_core::request::answer_pending_input(&mut waiting, text);
+        let approval_answers = lk_agents_core::request::answer_pending_input(&mut waiting, text);
+        self.replies_answered(&approval_answers, out);
+        self.activity.tools.approval_answers = approval_answers;
         for item in waiting {
             self.replace_item(item, out);
         }

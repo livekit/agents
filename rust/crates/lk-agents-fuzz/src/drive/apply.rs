@@ -474,7 +474,11 @@ impl Run {
                 api.update_instructions(instructions(text)).is_ok()
             }
             Input::UpdateTools { tools } => api
-                .update_tools(Some(tool_specs(tools)), None, Some(fakes::frame(&registry, "tools")))
+                .update_tools(
+                    Some(tool_specs(tools)),
+                    None,
+                    Some(fakes::frame(&registry, "tools", tools)),
+                )
                 .is_ok(),
             Input::SetAudioInput { attach } => {
                 // A new microphone replaces the old one as a detach does: nothing said into the
@@ -643,13 +647,11 @@ impl Run {
                     })
                     .is_ok()
             }
-            Input::Run { user_input, expects_output, retries } => api
+            Input::Run { user_input, retries } => api
                 .run(
                     user_input.clone().map(|UserText(t)| t),
-                    *expects_output,
                     lk_agents_abi::agent::Retries::default().tools,
                     retries.0,
-                    "Please try again.".into(),
                     None,
                     None,
                 )

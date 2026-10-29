@@ -201,6 +201,13 @@ impl VoiceSession {
         self.closing.as_ref().map(|c| c.phase)
     }
 
+    /// The close drains or went past: no reply plans a follow-up.
+    pub(crate) fn closing_drained(&self) -> bool {
+        let before =
+            |p: ClosePhase| matches!(p, ClosePhase::Requested | ClosePhase::Exiting { .. });
+        self.close_phase().is_some_and(|p| !before(p))
+    }
+
     /// Past the hard edge no command may take effect any more.
     pub(crate) fn closing_past_edge(&self) -> bool {
         self.close_phase().is_some_and(ClosePhase::past_edge)
@@ -416,8 +423,6 @@ pub struct SessionShared {
     /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
     /// reader selects on it, or one parked on an idle source would outlive the session.
     pub closing: tokio::sync::watch::Sender<bool>,
-    /// A drain close while tools run: outputs are committed and no follow-up step is planned.
-    pub draining: tokio::sync::watch::Sender<bool>,
     /// The host runs hooks (`hook_bound`): a step waits for `function_tools_executed`'s handlers.
     pub hook_host: bool,
     /// Never `tokio::spawn`.

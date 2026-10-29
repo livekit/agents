@@ -11,6 +11,7 @@ pub mod io;
 pub mod options;
 pub mod realtime;
 pub mod recognition;
+pub(crate) mod reply_run;
 pub mod scheduling;
 pub mod speech;
 pub mod tools;
@@ -62,10 +63,9 @@ pub(crate) struct AgentActivity {
     /// it, and keep their source once the close's edge released the speech.
     pub(crate) speech_agents: BTreeMap<SpeechId, (String, SpeechKind)>,
     pub(crate) finished: BTreeSet<SpeechId>,
-    /// Per tool step: whether the activity that made the speech drains, so the step's reply
-    /// offers no tools.
-    pub(crate) tools_committed: BTreeMap<(SpeechId, u32), bool>,
-    /// Replies waiting for their step's or predecessor's commit before they are planned.
+    /// The speeches whose tools a step committed: what they said is on the record.
+    pub(crate) tools_committed: BTreeSet<SpeechId>,
+    /// Replies waiting for their predecessor's commit before their first step is planned.
     pub(crate) reply_plans:
         std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
@@ -446,7 +446,7 @@ impl Driver {
         };
         a.speech_agents.retain(|s, _| keep(s));
         a.finished.retain(|s| keep(s));
-        a.tools_committed.retain(|(s, _), _| keep(s));
+        a.tools_committed.retain(|s| keep(s));
     }
 
     /// The history records an agent leaves when it takes over: `AgentHandoff`, then
@@ -550,6 +550,7 @@ impl Driver {
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
+        self.reply_recorded(&item, &source, out);
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit, out);
     }

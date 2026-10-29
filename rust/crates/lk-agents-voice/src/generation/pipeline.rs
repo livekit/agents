@@ -110,9 +110,7 @@ impl ReplyContext {
                 Some(replan) => StartEffect::RequestPlan(super::ReplyPlan {
                     speech,
                     after: replan.after,
-                    step: None,
                     spec: replan.spec,
-                    pending: Vec::new(),
                     tool_choice: self.tool_choice.clone(),
                 }),
                 None => StartEffect::Run,

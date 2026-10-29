@@ -2,12 +2,12 @@
 
 use lk_agents_abi::FunctionCall;
 use lk_agents_core::tool_calls::PrepareFailure;
+use lk_agents_voice::agent_session::Answer;
 use lk_agents_voice::agent_session::SessionShared;
-use lk_agents_voice::generation::{GenEvent, ReplyContext};
+use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
-    CallId, HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome,
-    ToolReport, answer,
+    HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, ToolReport, answer,
 };
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ impl ToolStep {
             answering: ctx.answering.clone(),
             agent: ctx.providers.toolset.agent.clone(),
         };
-        let (go, first) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
+        let (go, first) = shared.open_call(Answer::tool_go);
         let made = GenEvent::ToolCallMade { speech, step, made: Box::new(made), go: go.id };
         shared.report_awaited(made, go);
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -60,18 +60,17 @@ impl ToolStep {
         let task = ctx.task;
         let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
             // Dropped unrun, or a loop gone before the start: owed nothing.
-            let Ok(ToolGo::Start { call: id, item, host }) = first.await else {
+            let Ok(ToolGo::Start { call: id, item, host, first }) = first.await else {
                 let _ = tx.send(None);
                 return;
             };
-            let call = HostedCall { shared: &shared, speech, step, host };
-            let (execution, outcome) = call.run(id, *item, &handle, task).await;
+            let call = HostedCall { shared: &shared, speech, host };
+            let (execution, outcome) = call.run(*item, *first, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
             let (call_id, end) = (execution.call.call_id.clone(), execution.end);
             let call = Some(id);
-            let ended =
-                GenEvent::ToolCallEnded { speech, step, call, call_id, end, message, outcome };
+            let ended = GenEvent::ToolCallEnded { speech, call, call_id, end, message, outcome };
             shared.report(ended);
             let _ = tx.send(Some(execution));
         });
@@ -80,39 +79,27 @@ impl ToolStep {
     }
 }
 
-/// One call's host work through its agent's `AgentHost`, each move decided by the shared tool
-/// machine in the loop.
+/// One call's host work through its agent's `AgentHost`, each move decided by its reply's run
+/// in the loop.
 struct HostedCall<'a> {
     shared: &'a Arc<SessionShared>,
     speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
-    step: u32,
     host: Option<HostedTool>,
 }
 
 impl HostedCall<'_> {
-    /// Describes the call's tool, then prepares, reads back or runs the call as told, until it is
-    /// answered: the execution and the outcome the machine records.
+    /// Prepares, reads back or runs the call as told, from its `first` move until it is
+    /// answered: the execution and the outcome the run records.
     async fn run(
         &self,
-        call: CallId,
         mut one: FunctionCall,
+        first: ToolGo,
         handle: &SpeechHandle,
         task: bool,
     ) -> (ToolExecution, ToolOutcome) {
         let wall = || self.shared.time.wall();
         let mut prepared = None;
-        let tool = match &self.host {
-            Some(h) => h
-                .host
-                .list_tools(&h.invocation)
-                .await
-                .ok()
-                .and_then(|tools| tools.into_iter().find(|t| t.spec.name == one.name)),
-            None => None,
-        };
-        let tool = tool.map(Box::new);
-        let (speech, step) = (self.speech, self.step);
-        let mut go = self.ask(|go| GenEvent::ToolDescribed { speech, step, call, tool, go }).await;
+        let mut go = Ok(first);
         loop {
             match go {
                 // A loop gone answers nothing: the call never ran.
@@ -140,10 +127,8 @@ impl HostedCall<'_> {
                         },
                         None => Err(PrepareFailure::Internal),
                     };
-                    let (speech, step) = (self.speech, self.step);
-                    go = self
-                        .ask(|go| GenEvent::ToolPrepared { speech, step, call, identity, go })
-                        .await;
+                    let speech = self.speech;
+                    go = self.ask(|go| GenEvent::ToolPrepared { speech, call, identity, go }).await;
                 }
                 Ok(ToolGo::ReadBack { call }) => {
                     let answer = match (&self.host, prepared.take()) {
@@ -152,9 +137,9 @@ impl HostedCall<'_> {
                         }
                         _ => Err("no prepared arguments".to_owned()),
                     };
-                    let (speech, step) = (self.speech, self.step);
+                    let speech = self.speech;
                     go = self
-                        .ask(|go| GenEvent::ReadBackRendered { speech, step, call, answer, go })
+                        .ask(|go| GenEvent::ReadBackRendered { speech, call, answer, go })
                         .await;
                 }
                 Ok(ToolGo::Execute { item }) => {
@@ -171,10 +156,8 @@ impl HostedCall<'_> {
                     let outcome = report.outcome.clone();
                     return (answer(&one, report, wall()), outcome);
                 }
-                Ok(ToolGo::Settled { item, outcome, retry }) => {
-                    let mut execution = answer(&item, outcome.clone().into(), wall());
-                    execution.retry = retry;
-                    return (execution, outcome);
+                Ok(ToolGo::Settled { item, outcome }) => {
+                    return (answer(&item, outcome.clone().into(), wall()), outcome);
                 }
             }
         }
@@ -185,7 +168,7 @@ impl HostedCall<'_> {
         &self,
         event: impl FnOnce(lk_agents_voice::agent_session::RequestId) -> GenEvent,
     ) -> Result<ToolGo, lk_agents_voice::agent_session::api::Unanswered> {
-        let (call, next) = self.shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
+        let (call, next) = self.shared.open_call(Answer::tool_go);
         self.shared.report_awaited(event(call.id), call);
         next.await
     }
@@ -222,16 +205,20 @@ async fn run_body(
 }
 
 /// Awaits the step's executions in the model's order and hands them to the driver, which decides
-/// the step. `None` when nothing ran.
+/// the step; a model reply's step waits for what its run does next when the task `continues`.
+/// `None` when the task does not go on from it.
 pub(crate) async fn run_tools(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     tools: ToolStep,
     forwarded_text_empty: bool,
+    continues: bool,
 ) -> Option<StepNext> {
-    // A never-adopted preemptive generation's calls never started and are owed nothing.
-    if tools.is_empty() || !handle.scheduled() {
+    // A never-adopted preemptive generation's calls never started and are owed nothing; a `say`
+    // has no run.
+    let model = matches!(ctx.source, ReplySource::Llm | ReplySource::Realtime);
+    if !handle.scheduled() || (tools.is_empty() && !model) {
         return None;
     }
 
@@ -254,7 +241,6 @@ pub(crate) async fn run_tools(
                 let execution = answer(&d.call, missing.clone().into(), shared.time.wall());
                 shared.report(GenEvent::ToolCallEnded {
                     speech: handle.id(),
-                    step: handle.num_steps(),
                     call: None,
                     call_id: d.call.call_id.clone(),
                     end: execution.end,
@@ -275,11 +261,11 @@ pub(crate) async fn run_tools(
         user_metrics: ctx.user_metrics.clone(),
     });
     let (speech, step) = (handle.id(), handle.num_steps());
-    if end.executions.is_empty() {
+    if !continues {
         shared.report(GenEvent::ToolsFinished { speech, step, end, answer: None });
         return None;
     }
-    let (call, next) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_step);
+    let (call, next) = shared.open_call(Answer::tool_step);
     let finished = GenEvent::ToolsFinished { speech, step, end, answer: Some(call.id) };
     shared.report_awaited(finished, call);
     // A loop gone answers nothing: the reply ends.

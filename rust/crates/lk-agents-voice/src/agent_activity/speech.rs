@@ -586,7 +586,7 @@ impl Driver {
             ReplySource::Realtime => None,
             source => self.session.expressive_guide(matches!(source, ReplySource::Llm)),
         };
-        let plan = crate::generation::PlanSpec {
+        let mut plan = crate::generation::PlanSpec {
             record: spec.chat_ctx.clone(),
             new_message: spec.new_message.clone(),
             instructions: spec.instructions_override.clone(),
@@ -599,6 +599,36 @@ impl Driver {
             text_output_enabled: self.session.outputs.shows_transcription(),
             expressive,
         };
+
+        // A reply created while a speech is being cut is requested once that speech's item is on
+        // the record (the cut settles within the interruption watchdog). One created while a
+        // speech plays is requested now, on the record as it stands, as the reference's reply
+        // task copies the context at creation: the playing speech's item may be seconds away.
+        let after = self.current_handle().filter(|h| !h.done() && h.interrupted()).map(|h| h.id());
+
+        let (id, handle) = self.new_speech(spec.host_handle.as_ref(), spec.allow_interruptions);
+
+        self.activity.note_speech_agent(id, kind);
+
+        // A model reply runs as one `AgentRun`, which names its first step's message and adds
+        // the tools its output takes; the open run's own replies spend its budgets.
+        let realtime = matches!(spec.source, ReplySource::Realtime);
+        let opened = if is_reply || realtime {
+            let budgets = (kind.user_initiated().then(|| self.session.runs.budgets()).flatten())
+                .unwrap_or_else(|| self.activity.retries());
+            let invocation_id = handle.speech_id().to_owned();
+            let kind = (realtime, self.activity.voice_tasks.running());
+            self.open_reply_run(id, invocation_id, &turn_toolset, budgets, &plan, kind, out)
+        } else {
+            None
+        };
+        let message_id = match opened {
+            Some((message_id, tools)) => {
+                plan.tools = tools;
+                message_id
+            }
+            None => self.session.ids.mint("item"),
+        };
         let request = match &spec.source {
             ReplySource::Llm
             | ReplySource::Text(_)
@@ -608,7 +638,7 @@ impl Driver {
             // is no TTS leg, but the words still go on the text stream.
             ReplySource::Realtime => crate::generation::Request {
                 chat_ctx: record,
-                tools: turn_toolset.specs.clone(),
+                tools: plan.tools.clone(),
                 tts_enabled: false,
                 text_output_enabled: self.session.outputs.shows_transcription(),
                 instructions_hash: crate::generation::stable_hash(&instructions),
@@ -616,11 +646,6 @@ impl Driver {
             },
         };
 
-        // A reply created while a speech is being cut is requested once that speech's item is on
-        // the record (the cut settles within the interruption watchdog). One created while a
-        // speech plays is requested now, on the record as it stands, as the reference's reply
-        // task copies the context at creation: the playing speech's item may be seconds away.
-        let after = self.current_handle().filter(|h| !h.done() && h.interrupted()).map(|h| h.id());
         let replan = match (after, &spec.source) {
             (Some(after), ReplySource::Llm) => {
                 Some(crate::generation::Replan { after, spec: plan })
@@ -635,11 +660,6 @@ impl Driver {
             | (None, _) => None,
         };
 
-        let (id, handle) = self.new_speech(spec.host_handle.as_ref(), spec.allow_interruptions);
-
-        self.activity.note_speech_agent(id, kind);
-
-        let message_id = self.session.ids.mint("item");
         let ctx = ReplyContext {
             preemptive_tts: self.session.config.effective.turn.preemptive.enabled()
                 && self.session.config.effective.turn.preemptive.preemptive_tts(),
@@ -734,7 +754,8 @@ impl Driver {
                 }
             }
 
-            // One step's words are done, before its tools run.
+            // One step's words are done, before its tools run; the reply's run reads them once
+            // they are on the record.
             GenEvent::StepSpoken {
                 speech,
                 step,
@@ -743,11 +764,8 @@ impl Driver {
                 tools_running,
                 item,
             } => {
-                if tools_running {
-                    self.activity.set_tools_in_flight(speech, true);
-                } else {
-                    self.activity.set_tools_in_flight(speech, false);
-                }
+                self.activity.set_tools_in_flight(speech, tools_running);
+                let text = item.as_ref().and_then(|m| m.raw_text_content());
                 self.step_spoken(
                     now,
                     speech,
@@ -758,6 +776,7 @@ impl Driver {
                     item,
                     out,
                 );
+                self.reply_spoken(speech, text, out);
             }
             GenEvent::Trace(step) => out.trace(step),
             GenEvent::ProviderFailed { speech, leg, recoverable, error } => {
@@ -826,17 +845,17 @@ impl Driver {
             GenEvent::ToolCallMade { speech, step, made, go } => {
                 self.on_tool_made(now, (speech, step), *made, go, out);
             }
-            GenEvent::ToolDescribed { speech, step, call, tool, go } => {
-                self.on_tool_described((speech, step), call, tool.map(|t| *t), go, out);
+            GenEvent::ToolPrepared { speech, call, identity, go } => {
+                self.on_tool_prepared(speech, call, identity, go, out);
             }
-            GenEvent::ToolPrepared { speech, step, call, identity, go } => {
-                self.on_tool_prepared(speech, step, call, identity, go, out);
+            GenEvent::ReadBackRendered { speech, call, answer, go } => {
+                self.on_read_back(speech, call, answer, go, out);
             }
-            GenEvent::ReadBackRendered { speech, step, call, answer, go } => {
-                self.on_read_back(speech, step, call, answer, go, out);
+            GenEvent::ToolCallEnded { speech, call, call_id, end, message, outcome } => {
+                self.on_tool_ended(now, (speech, call), call_id, end, message, outcome, out);
             }
-            GenEvent::ToolCallEnded { speech, step, call, call_id, end, message, outcome } => {
-                self.on_tool_ended(now, (speech, step, call), call_id, end, message, outcome, out);
+            GenEvent::OutputValidated { speech, validation, verdict, value } => {
+                self.on_output_validated(speech, validation, verdict, value, out);
             }
         }
     }
@@ -853,22 +872,10 @@ impl Driver {
                     .speech_scheduler
                     .handle(plan.speech)
                     .is_none_or(|handle| handle.interrupted() || handle.done());
-            let committed = match plan.step {
-                Some(step) => self.activity.tools_committed.contains_key(&(plan.after, step)),
-                None => {
-                    self.activity.finished.contains(&plan.after)
-                        || self
-                            .activity
-                            .speech_scheduler
-                            .handle(plan.after)
-                            .is_none_or(|handle| handle.done())
-                        || self
-                            .activity
-                            .tools_committed
-                            .keys()
-                            .any(|(speech, _)| *speech == plan.after)
-                }
-            };
+            let committed = self.activity.finished.contains(&plan.after)
+                || (self.activity.speech_scheduler.handle(plan.after))
+                    .is_none_or(|handle| handle.done())
+                || self.activity.tools_committed.contains(&plan.after);
             if !cancelled && !committed {
                 waiting.push_back((call, plan));
                 continue;
@@ -878,22 +885,11 @@ impl Driver {
                 None
             } else {
                 let instructions = self.activity.instructions.render(Some(Modality::Audio));
-                let request = plan.spec.plan_pending(
-                    &self.session.chat_ctx.agent_chat_ctx(),
-                    &instructions,
-                    &plan.pending,
-                    self.step.wall(),
-                );
-                let draining = plan.step.is_some_and(|step| {
-                    self.activity.tools_committed.get(&(plan.after, step)) == Some(&true)
-                });
+                let record = self.session.chat_ctx.agent_chat_ctx();
+                let request = plan.spec.plan(&record, &instructions, self.step.wall());
                 Some(Box::new(crate::generation::PlannedReply {
                     request,
-                    tool_choice: if draining {
-                        Some(lk_agents_abi::ToolChoice::Forbidden)
-                    } else {
-                        plan.tool_choice
-                    },
+                    tool_choice: plan.tool_choice,
                 }))
             };
             out.answer(Some(call), Answer::ReplyPlan(reply));
@@ -1073,7 +1069,7 @@ impl Driver {
         // The release at `Authorized` can miss a pause taken in the same instant, which would
         // leave the sink paused until the close.
         self.release_paused_speech(speech, out);
-        self.activity.tools.retries.remove(&speech);
+        self.reply_released(speech, out);
         self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.

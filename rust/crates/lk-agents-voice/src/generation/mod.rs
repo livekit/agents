@@ -769,19 +769,17 @@ impl PlanSpec {
     }
 }
 
-/// A reply's request to be planned against the core's accepted record and instructions, once
-/// `after` is on that record: finished, or (with `step`) that step's tools committed.
+/// A reply's first request, planned against the core's accepted record and instructions once
+/// `after` is on that record: finished, or its tools committed.
 #[derive(Debug)]
 pub struct ReplyPlan {
     pub speech: SpeechId,
     pub after: SpeechId,
-    pub step: Option<u32>,
     pub spec: PlanSpec,
-    pub pending: Vec<ChatItem>,
     pub tool_choice: Option<lk_agents_abi::ToolChoice>,
 }
 
-/// The core's answer to a [`ReplyPlan`]; a draining activity's follow-up offers no tools.
+/// A planned model step: the core's answer to a [`ReplyPlan`], or a reply's next step.
 #[derive(Debug)]
 pub struct PlannedReply {
     pub request: Request,
@@ -837,8 +835,8 @@ pub enum GenEvent {
         metrics: Option<Box<lk_agents_abi::metrics::base::LlmMetrics>>,
     },
 
-    /// A step's tools are over. Awaited (`answer`) with the step's
-    /// [`StepNext`](crate::tool_executor::StepNext) when any of them ran.
+    /// A model step's calls are over (it may have made none). Awaited (`answer`) with the reply's
+    /// [`StepNext`](crate::tool_executor::StepNext) when the task goes on from it.
     ToolsFinished {
         speech: SpeechId,
         /// `Source::{ToolCall, ToolOutput}` carry it.
@@ -892,20 +890,10 @@ pub enum GenEvent {
         made: Box<crate::tool_executor::MadeCall>,
         go: crate::agent_session::RequestId,
     },
-    /// The runner described the call's tool; `None` for a name the request did not offer or the
-    /// runner does not have. Awaited with the call's next move.
-    ToolDescribed {
-        speech: SpeechId,
-        step: u32,
-        call: crate::tool_executor::CallId,
-        tool: Option<Box<crate::tool_executor::FunctionToolInfo>>,
-        go: crate::agent_session::RequestId,
-    },
     /// The host bound and validated the call's arguments, or did not prepare them. Awaited with
     /// the call's next move.
     ToolPrepared {
         speech: SpeechId,
-        step: u32,
         call: crate::tool_executor::CallId,
         identity: Result<
             lk_agents_abi::agent::ArgumentIdentity,
@@ -916,21 +904,26 @@ pub enum GenEvent {
     /// The tool's read-back function answered. Awaited with the call's settlement.
     ReadBackRendered {
         speech: SpeechId,
-        step: u32,
         call: crate::tool_executor::CallId,
         answer: Result<lk_agents_abi::agent::ReadBackAnswer, String>,
         go: crate::agent_session::RequestId,
     },
     /// As the call's answer arrives; `message` is `None` when there is nothing to say. `call`:
-    /// the shared machine's id, once the call was prepared.
+    /// its id in the reply's run, once it started.
     ToolCallEnded {
         speech: SpeechId,
-        step: u32,
         call: Option<crate::tool_executor::CallId>,
         call_id: String,
         end: crate::tool_executor::ToolEnd,
         message: Option<String>,
         outcome: crate::tool_executor::ToolOutcome,
+    },
+    /// The reply's agent validated an output candidate; `value` is what it accepted.
+    OutputValidated {
+        speech: SpeechId,
+        validation: lk_agents_abi::agent::run::ValidationId,
+        verdict: lk_agents_core::agent_run::OutputVerdict,
+        value: Option<lk_agents_abi::HostRef>,
     },
     /// `recoverable` when the budget retries it. Then the close policy.
     ProviderFailed {

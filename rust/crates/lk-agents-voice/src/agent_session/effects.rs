@@ -206,7 +206,6 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         | Effect::Outputs(_)
         | Effect::Tap(_)
         | Effect::SessionView(_)
-        | Effect::Draining
         | Effect::Closing
         | Effect::SttConversationItem { .. }
         | Effect::SpeechStart { .. }
@@ -231,6 +230,7 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         Effect::CancelTool { call_id, .. } => {
             Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
         }
+        Effect::ValidateOutput { .. } => return None,
     };
     Some(step)
 }
@@ -280,7 +280,6 @@ pub enum Effect {
     Outputs(crate::agent_session::Outputs),
     Tap(crate::agent_session::SystemTap),
     SessionView(Arc<crate::agent_session::SessionView>),
-    Draining,
     Closing,
     SttConversationItem {
         stt: ResourceId,
@@ -352,6 +351,14 @@ pub enum Effect {
     /// The body running under `call_id` is cancelled; the driver has told its end.
     CancelTool {
         call_id: String,
+        hosted: crate::tool_executor::HostedTool,
+    },
+    /// The reply's agent validates an output candidate of `speech`'s run, reported as
+    /// [`GenEvent::OutputValidated`](crate::generation::GenEvent::OutputValidated).
+    ValidateOutput {
+        speech: crate::agent_activity::scheduling::SpeechId,
+        validation: lk_agents_abi::agent::run::ValidationId,
+        candidate: lk_agents_abi::agent::OutputCandidate,
         hosted: crate::tool_executor::HostedTool,
     },
 }

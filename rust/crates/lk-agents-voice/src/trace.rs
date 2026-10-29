@@ -627,8 +627,6 @@ pub enum HandoffStep {
     RunOwned { run: crate::events::RunId, what: crate::run_result::Owned },
     /// The run let go of something it owned (`_unwatch_handle`).
     RunReleased { run: crate::events::RunId, what: crate::run_result::Owned },
-    /// Nothing owned left and no output: the run re-prompted the model (`_maybe_retry_output`).
-    RunRetried { run: crate::events::RunId, attempt: u32 },
     /// accepted output recorded the run's output (`_maybe_run_final_output`).
     RunOutput { speech: SpeechId, ok: bool },
 }
@@ -966,8 +964,7 @@ impl Step {
                 | HandoffStep::AgentUpdated { .. }
                 | HandoffStep::HookFinished { .. }
                 | HandoffStep::RunOwned { .. }
-                | HandoffStep::RunReleased { .. }
-                | HandoffStep::RunRetried { .. } => None,
+                | HandoffStep::RunReleased { .. } => None,
             },
             Step::Close(_) | Step::Detector(_) | Step::Room(_) => None,
         }

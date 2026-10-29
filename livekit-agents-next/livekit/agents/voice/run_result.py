@@ -44,12 +44,6 @@ if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
 
-_OUTPUT_RETRY_PROMPT = (
-    "You have not provided the final output yet. Call the appropriate function "
-    "to do so; a plain text response alone is not enough."
-)
-
-
 Run_T = TypeVar("Run_T")
 Output_T = TypeVarDefault("Output_T", default=Any)
 

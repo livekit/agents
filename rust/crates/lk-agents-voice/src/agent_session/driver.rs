@@ -597,12 +597,9 @@ impl Driver {
         // Scheduled in the same cycle as the wake that changed it.
         self.pump_schedule(now, &mut out);
         let mut effects = self.settle_step(out);
-        // The run's settle check, after the wake's own effects; a re-prompt is scheduled in
-        // this cycle.
+        // The run's settle check, after the wake's own effects.
         let mut out = self.out();
-        if self.run_check(now, &mut out) {
-            self.pump_schedule(now, &mut out);
-        }
+        self.run_check(&mut out);
         self.settle_waiters(now, &mut out);
         // What the waiters started (a background tool's deferred reply, a filler's say) is scheduled
         // in this cycle too, or it waits, the floor free, for some unrelated wake.
@@ -857,4 +854,3 @@ pub enum DriverError {
     #[error("the session has no {0}")]
     Missing(&'static str),
 }
-

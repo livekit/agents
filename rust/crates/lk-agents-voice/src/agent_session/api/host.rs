@@ -1185,20 +1185,13 @@ impl SessionApi {
     pub fn run(
         &self,
         user_input: Option<String>,
-        expects_output: bool,
         tool_retries: u32,
         output_retries: u32,
-        retry_instructions: String,
         origin: Option<&str>,
         host: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), CommandRefused> {
-        let spec = crate::run_result::RunSpec {
-            user_input,
-            expects_output,
-            retries: lk_agents_abi::agent::Retries { tools: tool_retries, output: output_retries },
-            retry_instructions,
-            host,
-        };
+        let retries = lk_agents_abi::agent::Retries { tools: tool_retries, output: output_retries };
+        let spec = crate::run_result::RunSpec { user_input, retries: Some(retries), host };
         Ok(self.send_from(origin_of(origin)?, Command::Run(Box::new(spec)))?)
     }
 

@@ -178,8 +178,7 @@ class AgentHost:
         from .agent_run import tool_infos
 
         async with self._operation(invocation) as binding:
-            if isinstance(binding, _VoiceBinding):
-                return tool_infos(_voice_tools(binding))
+            assert not isinstance(binding, _VoiceBinding), "a voice frame carries its tools"
             binding.tools.update_tools(self._agent.tools)
             return tool_infos(binding.tools)
 
@@ -284,14 +283,21 @@ class AgentHost:
     async def validate_output(
         self, invocation: Invocation, candidate: OutputCandidate
     ) -> ValidatedOutput:
-        """The output contract and the output validators on a candidate."""
-        async with self._operation(invocation):
-            ctx = RunContext[Any](function_call=None, run=_current_run())
+        """The output contract and the output validators on a candidate; the accepted value is
+        kept for the run (a text output's too)."""
+        async with self._operation(invocation) as binding:
+            ctx: RunContext[Any]
+            if isinstance(binding, _VoiceBinding):
+                assert isinstance(invocation.speech, _core.SpeechHandle)
+                speech = SpeechHandle._of(invocation.speech)
+                ctx = RunContext(function_call=None, session=binding.session, speech_handle=speech)
+            else:
+                ctx = RunContext[Any](function_call=None, run=binding)
             try:
                 if isinstance(candidate, OutputCandidateText):
-                    text = await self._agent._validate_output(ctx, candidate.text)
+                    text = str(await self._agent._validate_output(ctx, candidate.text))
                     return ValidatedOutputAccepted(
-                        text=str(text), value=None, serialized=SerializedOutput(value=str(text))
+                        text=text, value=text, serialized=SerializedOutput(value=text)
                     )
                 value = await self._output.accept(ctx, candidate.value)
                 value = await self._agent._validate_output(ctx, value)

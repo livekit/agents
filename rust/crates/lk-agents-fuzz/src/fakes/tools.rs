@@ -68,19 +68,31 @@ impl FakeTools {
     }
 }
 
-/// `agent`'s voice frame, its tools hosted by a fresh [`FakeTools`].
-pub fn frame(registry: &Arc<Registry>, agent: &str) -> Arc<dyn AgentFrame> {
+/// `agent`'s voice frame over the fixture `tools`, hosted by a fresh [`FakeTools`].
+pub fn frame(registry: &Arc<Registry>, agent: &str, tools: &[String]) -> Arc<dyn AgentFrame> {
     let definition = AgentDefinition {
         name: agent.to_owned(),
         instructions: String::new(),
         dynamic_instructions: false,
-        tools: Vec::new(),
+        tools: tools.iter().map(|name| tool_info(name)).collect(),
         output: OutputSpec::Text { validated: false },
         retries: Default::default(),
     };
     let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
     let host: Arc<dyn AgentHost> = FakeTools::new(Arc::clone(registry));
     Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs)))
+}
+
+/// The fixture tool `name`; [`APPROVAL_TOOL`] requires approval with the default read-back.
+fn tool_info(name: &str) -> FunctionToolInfo {
+    FunctionToolInfo {
+        spec: tool_spec(name),
+        raw_schema: false,
+        needs_approval: (name == APPROVAL_TOOL).then_some(ReadBack::Default),
+        on_duplicate: DuplicateMode::Allow,
+        duplicate_scope: DuplicateScope::Name,
+        retries: None,
+    }
 }
 
 /// The tool call a callback is about.
@@ -142,15 +154,7 @@ impl AgentHost for FakeTools {
         &'a self,
         invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>> {
-        let name = call_of(invocation).name.as_str();
-        let info = FunctionToolInfo {
-            spec: tool_spec(name),
-            raw_schema: false,
-            needs_approval: (name == APPROVAL_TOOL).then_some(ReadBack::Default),
-            on_duplicate: DuplicateMode::Allow,
-            duplicate_scope: DuplicateScope::Name,
-            retries: None,
-        };
+        let info = tool_info(&call_of(invocation).name);
         Box::pin(async move { Ok(vec![info]) })
     }
 
@@ -349,9 +353,9 @@ mod tests {
             extra: Default::default(),
             group_id: None,
         };
-        let frame = frame(&registry, "agent");
+        let frame = frame(&registry, "agent", &[]);
         let invocation =
-            |call: &FunctionCall| HostedTool::of(&frame, "s", &speech, 0, call).invocation;
+            |call: &FunctionCall| HostedTool::of(&frame, "s", &speech, 0, Some(call)).invocation;
         let first_invocation = invocation(&call);
         let first =
             tools.prepare_tool(&first_invocation, Default::default()).await.unwrap().unwrap();

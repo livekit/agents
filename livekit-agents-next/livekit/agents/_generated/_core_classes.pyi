@@ -683,10 +683,8 @@ class VoiceSession:
         self,
         *,
         user_input: str | None,
-        expects_output: bool,
         tool_retries: int,
         output_retries: int,
-        retry_instructions: str,
         origin: str | None = None,
         host: Any | None = None,
     ) -> None: ...

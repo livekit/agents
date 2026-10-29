@@ -373,7 +373,6 @@ impl DriverBuilder {
             conn: self.conn,
             queue: queue.clone(),
             closing,
-            draining: tokio::sync::watch::channel(false).0,
             hook_host: self.hook_bound.is_some(),
             spawner: Arc::clone(&self.spawner),
             frames: Arc::new(FrameTable::new()),

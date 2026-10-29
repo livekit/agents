@@ -2,8 +2,10 @@
 
 use super::Runtime;
 use super::legs::PendingLeg;
+use lk_agents_abi::agent::ValidatedOutput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{HOST_TEARDOWN_TIMEOUT, SpawnerExt};
+use lk_agents_core::agent_run::OutputVerdict;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::effects::{Effect, StreamKind};
 use lk_agents_voice::agent_session::{HostEvent, Input, SystemTap};
@@ -192,9 +194,6 @@ impl Runtime {
             E::Tap(tap) => self.peer.publish(tap),
             E::SessionView(view) => {
                 self.shared.view.send_replace(view);
-            }
-            E::Draining => {
-                self.shared.draining.send_replace(true);
             }
             E::Closing => {
                 self.shared.closing.send_replace(true);
@@ -404,6 +403,22 @@ impl Runtime {
                 }
             }
             E::CancelTool { hosted, .. } => hosted.cancel(),
+            E::ValidateOutput { speech, validation, candidate, hosted } => {
+                let shared = Arc::clone(&self.shared);
+                self.shared.spawner.spawn_unboxed(async move {
+                    let validated =
+                        hosted.host.validate_output(&hosted.invocation, candidate).await;
+                    let (verdict, value) = match validated {
+                        Ok(ValidatedOutput::Accepted { text, value, .. }) => {
+                            (OutputVerdict::Accepted { text }, value)
+                        }
+                        Ok(ValidatedOutput::Retry(reason)) => (OutputVerdict::Retry(reason), None),
+                        Ok(ValidatedOutput::Failed(error)) => (OutputVerdict::Failed(error), None),
+                        Err(e) => (OutputVerdict::Failed(e.to_string()), None),
+                    };
+                    shared.report(GenEvent::OutputValidated { speech, validation, verdict, value });
+                });
+            }
         }
     }
 

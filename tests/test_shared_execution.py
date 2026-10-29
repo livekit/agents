@@ -194,14 +194,6 @@ def run(request: pytest.FixtureRequest) -> Entrypoint:
     return request.param  # type: ignore[no-any-return]
 
 
-# VoiceSession.run accepts output outside AgentRun: no output validators, no final_result, no
-# output retries. These vectors flip once a call's reply composes the shared AgentRun.
-VOICE_OUTPUT_GAP = pytest.mark.xfail(
-    strict=True, reason="a call's reply does not run AgentRun's output acceptance yet"
-)
-OUTPUT_ENTRYPOINTS = [*ENTRYPOINTS[:2], pytest.param(_voice, id="voice", marks=VOICE_OUTPUT_GAP)]
-
-
 async def test_a_plain_reply_is_the_output(run: Entrypoint) -> None:
     agent = Agent(name="desk", instructions="Help", llm=Script(Reply("Hello there.")))
     settled = await run(agent, "Hi")
@@ -802,7 +794,6 @@ async def test_a_none_result_continues_in_text_and_asks_no_reply_on_a_call(run: 
     settled.expect.no_more_events()
 
 
-@pytest.mark.parametrize("run", OUTPUT_ENTRYPOINTS)
 async def test_an_output_validator_retries_then_replaces_the_accepted_output(
     run: Entrypoint,
 ) -> None:
@@ -826,7 +817,6 @@ async def test_an_output_validator_retries_then_replaces_the_accepted_output(
     )
 
 
-@pytest.mark.parametrize("run", OUTPUT_ENTRYPOINTS)
 async def test_an_output_that_keeps_failing_exhausts_only_its_output_retries(
     run: Entrypoint,
 ) -> None:
@@ -842,7 +832,6 @@ async def test_an_output_that_keeps_failing_exhausts_only_its_output_retries(
     assert len(model.requests) == 2
 
 
-@pytest.mark.parametrize("run", OUTPUT_ENTRYPOINTS)
 async def test_a_typed_output_is_validated_and_retried_before_acceptance(run: Entrypoint) -> None:
     from pydantic import BaseModel
 
@@ -863,9 +852,6 @@ async def test_a_typed_output_is_validated_and_retried_before_acceptance(run: En
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="the transcription-only path does not deliver a verbatim question"
-)
 async def test_a_verbatim_voice_question_reaches_the_transcription_output() -> None:
     from .fake_io import FakeTextOutput
 

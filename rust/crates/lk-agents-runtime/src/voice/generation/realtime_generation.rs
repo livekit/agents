@@ -19,7 +19,7 @@ use lk_agents_voice::generation::realtime::{
 use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
 use lk_agents_voice::io::RealtimeAudioNode;
 use lk_agents_voice::speech_handle::SpeechHandle;
-use lk_agents_voice::tool_executor::{NextStep, StepNext};
+use lk_agents_voice::tool_executor::StepNext;
 use lk_agents_voice::trace::GenerationStep;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -212,10 +212,8 @@ pub(crate) async fn realtime_generation_task(
         request_ids,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await else {
-        return Ok(StepOutcome::Done(finished));
-    };
-    Ok(deliver_realtime(shared, handle, wake, decision, finished))
+    let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty, true).await;
+    Ok(deliver_realtime(shared, handle, wake, next, has_calls, finished))
 }
 
 /// The step failed: the server keeps only what the person heard of it before the failure.
@@ -231,20 +229,25 @@ fn heard_until(
     error
 }
 
+/// The run's next step is the server's to generate: asked once the commit pushed what it reads.
 fn deliver_realtime(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     wake: &Tx,
-    decision: StepNext,
+    next: Option<StepNext>,
+    has_calls: bool,
     finished: Finished,
 ) -> StepOutcome {
     let speech = handle.id();
     // The outputs went to the server with the commit (`finish_tools`).
-    let (ask, tool_choice) = match decision.next {
-        NextStep::Reply(req) => (true, Some(req.tool_choice)),
+    let (ask, tool_choice) = match next {
+        Some(StepNext::Reply(next)) => (true, next.planned.tool_choice),
         // The user barged in over the tool call: the answer is committed and not spoken.
-        NextStep::Done | NextStep::Interrupted => (false, None),
+        None | Some(StepNext::Done | StepNext::Interrupted) => (false, None),
     };
+    if !ask && !has_calls {
+        return StepOutcome::Done(finished);
+    }
     if ask {
         handle.step();
         shared.report(GenEvent::ToolStep { speech, step: handle.num_steps() });

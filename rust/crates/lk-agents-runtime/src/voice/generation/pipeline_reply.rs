@@ -5,8 +5,8 @@ use super::llm::{SegEvent, produce_segments};
 use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
 use crate::voice::generation::realtime_generation::realtime_generation_task;
+use lk_agents_abi::ChatMessage;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{ChatItem, ChatMessage};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 pub(crate) use lk_agents_voice::generation::pipeline::Finished;
@@ -16,7 +16,7 @@ use lk_agents_voice::generation::pipeline::{
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
 use lk_agents_voice::speech_handle::SpeechHandle;
-use lk_agents_voice::tool_executor::NextStep;
+use lk_agents_voice::tool_executor::{NextReply, StepNext};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -102,20 +102,10 @@ async fn run(
         };
         match outcome {
             StepOutcome::Done(finished) => return Ok(finished),
-            StepOutcome::Again { request, pending } => {
-                // Read pre-increment by `next_step` for the budget.
-                let spoken_step = handle.num_steps();
+            StepOutcome::Again(next) => {
                 handle.step();
                 shared.report(GenEvent::ToolStep { speech: handle.id(), step: handle.num_steps() });
-                let Some(next) =
-                    follow_up(shared, handle, &ctx, spoken_step, request, pending).await
-                else {
-                    return Ok(Finished {
-                        outcome: empty_outcome(shared, &ctx, true),
-                        interrupted: true,
-                    });
-                };
-                ctx = next;
+                ctx = follow_up(&ctx, *next);
             }
             StepOutcome::Next(finished) => last = Some(finished),
             StepOutcome::Released => {
@@ -131,11 +121,8 @@ async fn run(
 /// What one step decided. A going-again step's `TurnOutcome` is dropped: one completion per turn.
 pub(crate) enum StepOutcome {
     Done(Finished),
-    /// `pending` is what this step produced, which the loop may not have committed yet.
-    Again {
-        request: lk_agents_voice::tool_executor::ReplyRequest,
-        pending: Vec<ChatItem>,
-    },
+    /// The reply's run planned its next step.
+    Again(Box<NextReply>),
     Next(Finished),
     /// Nothing more will be spoken (interrupted while parked, or an empty follow-up).
     Released,
@@ -234,7 +221,7 @@ async fn pipeline_reply_task_impl(
                 let tools_running = has_tools && !handle.interrupted();
                 step_spoken(shared, handle, handle.interrupted(), has_tools, tools_running, None);
             }
-            let _ = run_tools(shared, handle, ctx, tools, true).await;
+            let _ = run_tools(shared, handle, ctx, tools, true, false).await;
             return Err(e);
         }
     };
@@ -246,7 +233,7 @@ async fn pipeline_reply_task_impl(
             handle.clear_authorization();
             step_spoken(shared, handle, true, !tools.is_empty(), false, None);
         }
-        let _ = run_tools(shared, handle, ctx, tools, true).await;
+        let _ = run_tools(shared, handle, ctx, tools, true, false).await;
         let outcome = empty_outcome(shared, ctx, true);
         return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
     };
@@ -271,65 +258,21 @@ async fn pipeline_reply_task_impl(
         tools_running,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await else {
-        return Ok(StepOutcome::Done(finished));
-    };
-    // A drain close during the tools: outputs are committed and no follow-up is requested.
-    let draining = *shared.draining.borrow();
-    let follow_up = match decision.next {
-        NextStep::Done => None,
-        NextStep::Interrupted => {
-            let outcome = finished.outcome;
-            return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
+    let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty, true).await;
+    Ok(match next {
+        None | Some(StepNext::Done) => StepOutcome::Done(finished),
+        Some(StepNext::Interrupted) => {
+            StepOutcome::Done(Finished { outcome: finished.outcome, interrupted: true })
         }
-        NextStep::Reply(request) => Some(request),
-    };
-    match follow_up {
-        Some(request) if !draining => {
-            // What this step produced, for the next request, in case the loop has not committed it.
-            let message = finished.outcome.assistant_message.map(ChatItem::Message);
-            let pending = message.into_iter().chain(decision.commit).collect();
-            Ok(StepOutcome::Again { request, pending })
-        }
-        Some(_) | None => Ok(StepOutcome::Done(finished)),
-    }
+        Some(StepNext::Reply(next)) => StepOutcome::Again(next),
+    })
 }
 
-/// The follow-up step's context over the loop's published frame (inline-task merges and
-/// `update_instructions` included); `pending` covers what is not yet committed. The same tools
-/// are advertised (`tool_choice` stops loops) and a pinned toolset is kept.
-async fn follow_up(
-    shared: &Arc<SessionShared>,
-    handle: &Arc<SpeechHandle>,
-    prev: &ReplyContext,
-    spoken_step: u32,
-    request: lk_agents_voice::tool_executor::ReplyRequest,
-    pending: Vec<ChatItem>,
-) -> Option<ReplyContext> {
-    let planned = request_plan(
-        shared,
-        lk_agents_voice::generation::ReplyPlan {
-            speech: handle.id(),
-            after: handle.id(),
-            step: Some(spoken_step),
-            spec: lk_agents_voice::generation::PlanSpec {
-                record: None,
-                new_message: None,
-                instructions: None,
-                turn_instructions: None,
-                tools: prev.request.tools.clone(),
-                on_enter: false,
-                running_tool_calls: Vec::new(),
-                audio_output_enabled: prev.request.tts_enabled,
-                text_output_enabled: prev.request.text_output_enabled,
-                expressive: prev.request.expressive.clone(),
-            },
-            pending,
-            tool_choice: Some(request.tool_choice),
-        },
-    )
-    .await?;
-    Some(ReplyContext {
+/// The follow-up step's context, as the reply's run planned it over the loop's published frame
+/// (inline-task merges and `update_instructions` included). A pinned toolset is kept.
+fn follow_up(prev: &ReplyContext, next: NextReply) -> ReplyContext {
+    let NextReply { planned, message_id, previous_user_metrics } = next;
+    ReplyContext {
         preemptive_tts: prev.preemptive_tts,
         request: planned.request,
         replan: None,
@@ -340,13 +283,12 @@ async fn follow_up(
         toolset: prev.toolset.clone(),
         providers: prev.providers.clone(),
         // Carried over when this turn forwarded no text, for `e2e_latency`.
-        user_metrics: request.previous_user_metrics.or_else(|| prev.user_metrics.clone()),
-        // A fresh id: this step commits its own assistant message.
-        message_id: shared.mint_item_id(),
+        user_metrics: previous_user_metrics.or_else(|| prev.user_metrics.clone()),
+        message_id,
         speech: prev.speech,
         answering: None,
         task: prev.task,
-    })
+    }
 }
 
 /// The runtime owns the waiter; the core owns when the accepted record is ready.

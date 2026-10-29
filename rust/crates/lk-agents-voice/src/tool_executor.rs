@@ -6,7 +6,6 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle}
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::RunningToolCall;
 use crate::trace::{CoreStep, ToolStep};
-use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, MetricsReport, ToolChoice, Ts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,17 +32,16 @@ pub(crate) struct Tools {
     pub(crate) handling: BTreeMap<HookId, Handling>,
     /// `InputRequired(tool=)`: the person's next turn is a call of this tool.
     pub(crate) claim: Option<Claim>,
-    /// Each tool step's calls on the shared machine, until the step's tools are committed.
-    pub(crate) steps: BTreeMap<(SpeechId, u32), StepCalls>,
-    /// The waiting calls the person's latest message answered: the only read-backs a step started
-    /// since can consume.
+    /// Each live model reply's `AgentRun`, which decides its steps.
+    pub(crate) replies: BTreeMap<SpeechId, crate::agent_activity::reply_run::ReplyRun>,
+    /// The waiting calls the person's latest message answered: the only read-backs a reply
+    /// started since can consume.
     pub(crate) approval_answers: std::collections::BTreeSet<String>,
-    /// Mints the steps' [`CallId`]s.
-    pub(crate) next_call: u64,
-    /// Each live reply's tool retry budget, one for its steps as for an `agent.run()` invocation.
-    pub(crate) retries: BTreeMap<SpeechId, lk_agents_core::tool_outcome::ToolRetries>,
+    /// Mints the hosted callbacks' operations, unique in the session.
+    pub(crate) next_operation: u64,
     /// Calls made before their step was authorized to play, in the model's order: started once
-    /// it is, dropped unrun if the speech is interrupted or done first.
+    /// it is and their run decided their first move, dropped unrun if the speech is interrupted
+    /// or done first.
     pub(crate) deferred: Vec<Deferred>,
     /// The calls `tool_choice="none"` dropped, by step, reported when the step's tools finish.
     pub(crate) dropped: BTreeMap<(SpeechId, u32), Vec<String>>,
@@ -68,42 +66,30 @@ pub struct MadeCall {
 pub(crate) struct Deferred {
     pub(crate) speech: SpeechId,
     pub(crate) step: u32,
+    /// Its id in the reply's run.
+    pub(crate) id: CallId,
     pub(crate) call: FunctionCall,
     pub(crate) advertised: bool,
     pub(crate) agent: Option<Arc<dyn AgentFrame>>,
     pub(crate) go: crate::agent_session::RequestId,
 }
 
-/// One step's calls as `lk_agents_core::tool_calls` decides them, and the call tasks waiting
-/// for their next move.
-#[derive(Debug)]
-pub(crate) struct StepCalls {
-    pub(crate) calls: lk_agents_core::tool_calls::ToolCalls,
-    /// The tools the step's calls name, as their agent's host described them.
-    pub(crate) tools: Vec<FunctionToolInfo>,
-    /// Started calls not yet on the machine, in the model's order; each joins once it and every
-    /// earlier one is described (`Some`).
-    pub(crate) describing: Vec<(CallId, FunctionCall, Option<Option<FunctionToolInfo>>)>,
-    pub(crate) waiting: BTreeMap<CallId, crate::agent_session::RequestId>,
-}
-
 pub use lk_agents_core::agent_run::CallId;
 
-/// The next move of a call's task, decided by the shared tool machine.
+/// The next move of a call's task, decided by its reply's run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolGo {
-    /// The call starts as `item` (stamped and admitted); hosted by the reply's agent unless it
-    /// names a tool the request did not offer. The task first describes the call's tool: what the
-    /// machine decides with.
-    Start { call: CallId, item: Box<FunctionCall>, host: Option<HostedTool> },
+    /// The call starts as `item` (stamped and admitted) with its `first` move; hosted by the
+    /// reply's agent unless it names a tool the request did not offer.
+    Start { call: CallId, item: Box<FunctionCall>, host: Option<HostedTool>, first: Box<ToolGo> },
     /// Bind and validate these arguments (the framework's parse, with the schema's defaults).
     Prepare { call: CallId, arguments: serde_json::Map<String, serde_json::Value> },
     /// Render the read-back of the prepared arguments.
     ReadBack { call: CallId },
     /// Run the body; `item` carries the call's approval marks.
     Execute { item: Box<FunctionCall> },
-    /// Settled without its body: `item` as recorded, and whether it spends a retry.
-    Settled { item: Box<FunctionCall>, outcome: ToolOutcome, retry: bool },
+    /// Settled without its body: `item` as recorded.
+    Settled { item: Box<FunctionCall>, outcome: ToolOutcome },
     /// The call does not run: dropped unrun before it started (`tool_choice="none"`, a speech
     /// interrupted or done before its step was authorized), or the step's calls are over.
     Gone,
@@ -126,6 +112,12 @@ pub struct Answering {
 }
 
 impl Tools {
+    /// A new hosted callback's operation.
+    pub(crate) fn mint_operation(&mut self) -> u64 {
+        self.next_operation += 1;
+        self.next_operation
+    }
+
     /// `_RunningTasks` as the planner reads it: every hosted call not yet ended, in start order.
     pub(crate) fn running_tool_calls(&self) -> Vec<RunningToolCall> {
         self.running
@@ -327,8 +319,6 @@ pub(crate) struct Handling {
     pub(crate) step: u32,
     /// With its `tools_executed` event, as issued.
     pub(crate) decision: StepDecision,
-    /// The reply task waiting for the step's [`StepNext`].
-    pub(crate) answer: crate::agent_session::RequestId,
 }
 
 /// A step's tools as the reply task awaited them: the executions in the model's order and the
@@ -345,12 +335,25 @@ pub struct StepEnd {
     pub user_metrics: Option<MetricsReport>,
 }
 
-/// What a step's tools leave the reply task: its next step, and the items they produced for the
-/// follow-up's request (calls, then outputs), which the driver may not have planned against yet.
-#[derive(Debug, Clone, PartialEq)]
-pub struct StepNext {
-    pub next: NextStep,
-    pub commit: Vec<ChatItem>,
+/// What a model step leaves the reply task, as the reply's run decided it.
+#[derive(Debug)]
+pub enum StepNext {
+    /// The reply is over.
+    Done,
+    /// The reply is over, cut by the person.
+    Interrupted,
+    /// The reply goes on with this step, its words a new assistant message (`message_id`).
+    Reply(Box<NextReply>),
+}
+
+/// A reply's next model step.
+#[derive(Debug)]
+pub struct NextReply {
+    pub planned: crate::generation::PlannedReply,
+    pub message_id: String,
+    /// Carried over when the step before forwarded no text, so `e2e_latency` can still be
+    /// computed.
+    pub previous_user_metrics: Option<MetricsReport>,
 }
 
 /// `FunctionCall.extra` key on a call of a tool that requires approval: `asked` when it returned
@@ -411,8 +414,6 @@ pub struct ToolExecution {
     pub raw_update: Option<String>,
     /// What the person gets because of this call, once its output is committed.
     pub delivery: Option<Delivery>,
-    /// Invalid or unknown arguments, or `ModelRetry`: spends the tool's retry budget.
-    pub retry: bool,
 }
 
 impl ToolExecution {
@@ -549,14 +550,15 @@ pub struct HostedTool {
 }
 
 impl HostedTool {
-    /// `call` of `speech`, the `operation`th of its session, hosted by `agent`: the invocation of
-    /// one callback on a voice reply, which `{session}/{speech}` names.
+    /// A callback of `speech` (for `call`, or on its output), the `operation`th of its session,
+    /// hosted by `agent`: the invocation of one callback on a voice reply, which
+    /// `{session}/{speech}` names.
     pub fn of(
         agent: &Arc<dyn AgentFrame>,
         session: &str,
         speech: &Arc<crate::speech_handle::SpeechHandle>,
         operation: u64,
-        call: &FunctionCall,
+        call: Option<&FunctionCall>,
     ) -> HostedTool {
         let invocation = lk_agents_abi::agent::Invocation {
             operation,
@@ -567,8 +569,8 @@ impl HostedTool {
             context_scope: None,
             application_context: None,
             history: Vec::new(),
-            function_call: Some(call.clone()),
-            approval: lk_agents_core::approval::mark(call),
+            function_call: call.cloned(),
+            approval: call.and_then(lk_agents_core::approval::mark),
             speech: Some(speech.object()),
             host_context: Some(agent.host_context().clone()),
         };
@@ -615,12 +617,11 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
     output.reply_required = shape.reply_required;
     let mut call = call.clone();
     let end = ToolEnd::of(&outcome);
-    let retry = matches!(outcome, ToolOutcome::ModelRetry(_));
     // A completion the host validated for a VoiceTask asks for no reply: the parent gets the floor.
     if let (ToolOutcome::Completed { .. }, Some(value)) = (&outcome, &transition) {
         output.reply_required = false;
         let delivery = Some(Delivery::Complete(value.clone()));
-        return ToolExecution { call, output, end, raw_update: None, delivery, retry };
+        return ToolExecution { call, output, end, raw_update: None, delivery };
     }
     let delivery = match outcome {
         ToolOutcome::Update { raw, .. } => {
@@ -630,7 +631,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
                 serde_json::Value::Bool(true),
             );
             let raw_update = Some(raw);
-            return ToolExecution { call, output, end, raw_update, delivery: None, retry };
+            return ToolExecution { call, output, end, raw_update, delivery: None };
         }
         ToolOutcome::InputRequired { question, verbatim, tool } => {
             Some(Delivery::Ask(Ask { question, verbatim, tool }))
@@ -638,7 +639,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
         other => lk_agents_core::tool_outcome::verbatim(&other)
             .map(|text| Delivery::Say(text.to_owned())),
     };
-    ToolExecution { call, output, end, raw_update: None, delivery, retry }
+    ToolExecution { call, output, end, raw_update: None, delivery }
 }
 
 pub use lk_agents_abi::voice::events::ToolsExecutedEvent;
@@ -685,11 +686,9 @@ pub struct StepDecision {
     pub deliveries: Vec<Delivery>,
     max_steps_reached: bool,
     /// The second interruption read.
-    interrupted: bool,
+    pub(crate) interrupted: bool,
     /// A call completed a VoiceTask: the step has no follow-up, whatever the outputs ask.
     completes: bool,
-    /// A tool spent its retry budget: no follow-up either.
-    pub retries_exceeded: Option<RunError>,
     previous_user_metrics: Option<MetricsReport>,
 }
 
@@ -700,10 +699,7 @@ impl StepDecision {
         self.commit = commit_of(&event.function_calls, &event.function_call_outputs);
         if self.next != NextStep::Interrupted {
             self.next = next_of(
-                event.has_tool_reply()
-                    && !self.interrupted
-                    && !self.completes
-                    && self.retries_exceeded.is_none(),
+                event.has_tool_reply() && !self.interrupted && !self.completes,
                 self.max_steps_reached,
                 self.previous_user_metrics.clone(),
             );
@@ -743,8 +739,6 @@ pub struct StepInputs<'a> {
     /// This step forwarded no text; see [`ReplyRequest::previous_user_metrics`].
     pub forwarded_text_empty: bool,
     pub user_metrics: Option<MetricsReport>,
-    /// The reply's [`ToolRetries`](lk_agents_core::tool_outcome::ToolRetries) after this step.
-    pub retries_exceeded: Option<RunError>,
 }
 
 pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
@@ -791,7 +785,6 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         interrupted: inputs.interrupted,
         completes: (inputs.tool_output.iter())
             .any(|o| matches!(o.delivery, Some(Delivery::Complete(_)))),
-        retries_exceeded: inputs.retries_exceeded,
         previous_user_metrics: inputs
             .forwarded_text_empty
             .then(|| inputs.user_metrics.clone())
@@ -826,7 +819,6 @@ fn quiet(next: NextStep) -> StepDecision {
         max_steps_reached: false,
         interrupted: false,
         completes: false,
-        retries_exceeded: None,
         previous_user_metrics: None,
     }
 }
@@ -868,9 +860,10 @@ fn interrupted_tool_output(out: &ToolExecution) -> FunctionCallOutput {
 }
 
 impl Driver {
-    /// A step's tools are over: the step is decided on what they returned, after the host's
-    /// `function_tools_executed` handlers when it runs any. Calls `tool_choice="none"` dropped
-    /// are reported; a step that ran nothing has no `answer` and nothing to decide.
+    /// A model step's calls are over: the step is decided on what they returned, after the
+    /// host's `function_tools_executed` handlers when it runs any, and the reply's run decides
+    /// what follows. Calls `tool_choice="none"` dropped are reported. `answer`: the reply task
+    /// waiting for its next step.
     pub(crate) fn on_tools_finished(
         &mut self,
         now: Ts,
@@ -885,17 +878,9 @@ impl Driver {
                 .with("speech_id", speech.0.to_string());
             out.machine().emit(SessionEvent::Diagnostic(diagnostic));
         }
-        let Some(answer) = answer else { return };
-        // The step's tools as their host described them carry their own `retries=`; a run's reply
-        // spends the run's budget.
-        let budget = (self.session.runs.retries_of(speech))
-            .unwrap_or_else(|| self.activity.retries())
-            .tools;
-        let tools = &mut self.activity.tools;
-        let described = tools.steps.get(&(speech, step)).map(|s| s.tools.as_slice()).unwrap_or(&[]);
-        let retried = end.executions.iter().map(|e| (e.call.name.as_str(), e.retry));
-        let retries_exceeded =
-            tools.retries.entry(speech).or_default().step(retried, described, budget);
+        if !self.reply_step_ended(speech, answer, out) {
+            return;
+        }
         let decision = next_step(StepInputs {
             tool_output: &end.executions,
             interrupted_before_tools: end.interrupted_before_tools,
@@ -904,7 +889,6 @@ impl Driver {
             max_tool_steps: end.max_tool_steps,
             forwarded_text_empty: end.forwarded_text_empty,
             user_metrics: end.user_metrics,
-            retries_exceeded,
         });
         // With a host running hooks, `function_tools_executed` is its to emit, and the step waits
         // for what the handlers leave.
@@ -916,12 +900,12 @@ impl Driver {
             let call = crate::agent_session::HookCall::FunctionToolsExecuted { id, speech, event };
             let wait = self.hook_wait();
             if self.issue_hook(now, call, Some(wait), out) {
-                let handling = Handling { speech, step, decision, answer };
+                let handling = Handling { speech, step, decision };
                 self.activity.tools.handling.insert(id, handling);
                 return;
             }
         }
-        self.finish_tools(speech, step, decision, answer, false, out);
+        self.finish_tools(speech, step, decision, false, out);
     }
 
     /// The host's `function_tools_executed` handlers answered under `hook` (`left`: each output's
@@ -933,7 +917,7 @@ impl Driver {
         left: Option<Vec<bool>>,
         out: &mut Out,
     ) {
-        let Some(Handling { speech, step, mut decision, answer }) =
+        let Some(Handling { speech, step, mut decision }) =
             self.activity.tools.handling.remove(&hook)
         else {
             return;
@@ -950,18 +934,17 @@ impl Driver {
                 ));
             }
         }
-        self.finish_tools(speech, step, decision, answer, true, out);
+        self.finish_tools(speech, step, decision, true, out);
     }
 
-    /// A step's tools are decided and `function_tools_executed` handled: the results committed
-    /// with whether the activity drains, what the calls owe the person delivered, and the reply
-    /// task (`answer`) told its next step. `hosted`: the host emitted the event itself.
+    /// A step's tools are decided and `function_tools_executed` handled: the results committed,
+    /// what the calls owe the person delivered, and the reply's run given the floor's verdict.
+    /// `hosted`: the host emitted the event itself.
     fn finish_tools(
         &mut self,
         speech: SpeechId,
         step: u32,
         decision: StepDecision,
-        answer: crate::agent_session::RequestId,
         hosted: bool,
         out: &mut Out,
     ) {
@@ -971,10 +954,9 @@ impl Driver {
             commit,
             warnings,
             deliveries,
-            retries_exceeded,
+            interrupted,
             ..
         } = decision;
-        let next = StepNext { next, commit: commit.clone() };
         // On a realtime session the outputs go to the server with the commit (the model's context
         // lives there; the call is the server's own), before anything this commit lets go -- a
         // reply that waited on these tools, the follow-up -- asks the server for a reply that must
@@ -1013,12 +995,7 @@ impl Driver {
             }
             self.commit_item(item, source, Visibility::Both, out);
         }
-        // `self.scheduling_paused`: the activity that made the speech drains: paused, or left
-        // behind by a handoff.
-        let draining = self.activity.speech_scheduler.is_paused()
-            || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
-        // The step's follow-up plans against the activity once this is published.
-        self.activity.tools_committed.insert((speech, step), draining);
+        self.activity.tools_committed.insert(speech);
         self.activity.set_tools_in_flight(speech, false);
         self.publish_activity();
         // Before the follow-up is let go, so a verbatim result is heard before the reply to it.
@@ -1040,16 +1017,14 @@ impl Driver {
             }));
         }
         out.trace(ToolStep::Finished { speech, committed: n });
-        if let Some(error) = retries_exceeded {
-            self.tool_retries_exceeded(speech, error, out);
-        }
         // Not the host's to emit: after the commit, as before any hook existed for it.
         if let Some(executed) = executed
             && !hosted
         {
             out.machine().emit(SessionEvent::FunctionToolsExecuted(Box::new(executed)));
         }
-        out.answer(Some(answer), crate::agent_session::Answer::ToolStep(next));
+        // The follow-up plans against the activity as published here.
+        self.reply_step_decided(speech, next, interrupted, out);
     }
 
     /// Another live speech is in its tools. One awaiting a VoiceTask waits on the person, through

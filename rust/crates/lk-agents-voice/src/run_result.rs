@@ -21,25 +21,21 @@ use std::sync::Arc;
 pub struct RunSpec {
     /// The run's opening reply; `None` owns whatever follows (e.g. `on_enter`).
     pub user_input: Option<String>,
-    /// `output_type is not None`: a run ending without output is re-prompted.
-    pub expects_output: bool,
-    /// The run's budgets (`run(retries=)` over the agent's): its replies' tools spend `tools`,
-    /// and a run ending without output is re-prompted up to `output` times.
-    pub retries: Retries,
-    /// The per-turn system message of the re-prompt.
-    pub retry_instructions: String,
+    /// The run's budgets (`run(retries=)` over the agent's), which its replies spend; `None`
+    /// spends the agent's.
+    pub retries: Option<Retries>,
     /// The host's own object for the run (its `RunResult`), handed back on every run event.
     pub host: Option<HostRef>,
 }
 
-/// What a tool handed accepted output from inside a speech (`_maybe_run_final_output`).
+/// What a speech's reply settled on, for the run ending on the speech.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunOutput {
-    /// `complete(result)`: the interned result object.
+    /// The output the reply's agent accepted, or a tool's `complete(result)`.
     Value(HostRef),
     /// `complete(exception)`: the interned exception, which the run raises.
     Error(HostRef),
-    /// The speech's reply ended on a framework outcome (a tool spent its retries).
+    /// The reply ended on a framework outcome (retries spent, a validator failed).
     Failed(RunError),
     /// A tool asked the person (`InputRequired`).
     Ask { question: String, verbatim: bool, answer_tool: Option<String> },
@@ -63,18 +59,12 @@ struct OpenRun {
     owned: BTreeSet<Owned>,
     /// `__last_speech_handle`: its error and output decide the verdict.
     last: Option<Arc<SpeechHandle>>,
-    expects_output: bool,
-    budgets: Retries,
-    retries_left: u32,
-    retries: u32,
-    retry_instructions: String,
+    budgets: Option<Retries>,
 }
 
 pub(super) enum Decided {
     /// Still owed something, or nothing was released since the last check.
     Open,
-    /// Nothing is owned, the run expects an output and the last speech produced none: re-prompt.
-    Retry { run: RunId, attempt: u32, instructions: String },
     /// Nothing is owned: the run is over.
     Settled { run: RunRef, outcome: RunOutcome, speech: Option<Arc<SpeechHandle>> },
 }
@@ -105,11 +95,7 @@ impl Runs {
             run: run.clone(),
             owned: BTreeSet::new(),
             last: None,
-            expects_output: spec.expects_output,
             budgets: spec.retries,
-            retries_left: spec.retries.output,
-            retries: 0,
-            retry_instructions: spec.retry_instructions.clone(),
         });
         Ok(run)
     }
@@ -119,10 +105,9 @@ impl Runs {
         self.open.as_ref().map(|r| r.run.clone())
     }
 
-    /// The open run's budgets, when it owns `speech`.
-    pub(crate) fn retries_of(&self, speech: SpeechId) -> Option<Retries> {
-        let r = self.open.as_ref()?;
-        r.owned.contains(&Owned::Speech(speech)).then_some(r.budgets)
+    /// The open run's budgets, which the speeches it owns spend.
+    pub(crate) fn budgets(&self) -> Option<Retries> {
+        self.open.as_ref().and_then(|r| r.budgets)
     }
 
     pub(super) fn owns(&self, what: Owned) -> bool {
@@ -158,7 +143,7 @@ impl Runs {
             return Decided::Open;
         }
         self.dirty = false;
-        let Some(r) = self.open.as_mut() else { return Decided::Open };
+        let Some(r) = self.open.as_ref() else { return Decided::Open };
         if !r.owned.is_empty() {
             return Decided::Open;
         }
@@ -175,19 +160,7 @@ impl Runs {
             (false, Some(RunOutput::Ask { question, verbatim, answer_tool })) => {
                 RunOutcome::InputRequired { question, verbatim, answer_tool }
             }
-            (false, None) => {
-                // Only the no-output case retries, and only with a speech to read.
-                if r.expects_output && speech.is_some() && r.retries_left > 0 {
-                    r.retries_left -= 1;
-                    r.retries += 1;
-                    return Decided::Retry {
-                        run: r.run.id,
-                        attempt: r.retries,
-                        instructions: r.retry_instructions.clone(),
-                    };
-                }
-                RunOutcome::Completed { final_output: None }
-            }
+            (false, None) => RunOutcome::Completed { final_output: None },
         };
         let run = r.run.clone();
         self.open = None;
@@ -215,34 +188,18 @@ impl Driver {
         // Before the reply, so the run's start precedes its items on the host stream.
         out.machine().emit(SessionEvent::RunStarted { run });
         if let Some(text) = spec.user_input {
-            self.run_reply(now, Some(text), None, out);
+            self.run_reply(now, Some(text), out);
         }
     }
 
     /// The run's own `generate_reply(..)`, pipeline or realtime; owned like any session reply.
-    fn run_reply(
-        &mut self,
-        now: Ts,
-        user_input: Option<String>,
-        instructions: Option<String>,
-        out: &mut Out,
-    ) {
+    fn run_reply(&mut self, now: Ts, user_input: Option<String>, out: &mut Out) {
         if self.activity.rt_session.is_some() {
-            self.realtime_reply(now, user_input, instructions, None, None, None, false, out);
+            self.realtime_reply(now, user_input, None, None, None, None, false, out);
             return;
         }
-        let _ = self.generate_reply_speech(
-            now,
-            user_input,
-            instructions,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            out,
-        );
+        let _ = self
+            .generate_reply_speech(now, user_input, None, None, None, None, None, false, None, out);
     }
 
     pub(crate) fn run_own(&mut self, what: Owned, out: &mut Out) {
@@ -269,14 +226,9 @@ impl Driver {
         }
     }
 
-    /// A tool of `speech` spent its retry budget and the reply ended: a run settling on the speech
-    /// fails with it, as `agent.run()` does.
-    pub(crate) fn tool_retries_exceeded(
-        &mut self,
-        speech: SpeechId,
-        error: RunError,
-        out: &mut Out,
-    ) {
+    /// The reply of `speech` ended on a framework failure (a budget spent, a validator failed): a
+    /// run settling on the speech fails with it, as `agent.run()` does.
+    pub(crate) fn run_failed(&mut self, speech: SpeechId, error: RunError, out: &mut Out) {
         if let RunError::ToolRetriesExceeded { tool, retries } = &error {
             let d = DiagnosticEvent::error(crate::events::diagnostics::TOOL_RETRIES_EXCEEDED)
                 .with("function", tool.clone())
@@ -321,19 +273,10 @@ impl Driver {
         }
     }
 
-    /// The settle check after every wake; returns whether a re-prompt was created.
-    pub(crate) fn run_check(&mut self, now: Ts, out: &mut Out) -> bool {
-        match self.session.runs.decide() {
-            Decided::Open => false,
-            Decided::Retry { run, attempt, instructions } => {
-                out.trace(HandoffStep::RunRetried { run, attempt });
-                self.run_reply(now, None, Some(instructions), out);
-                true
-            }
-            Decided::Settled { run, outcome, speech } => {
-                out.machine().emit(SessionEvent::RunSettled { run, outcome, speech });
-                false
-            }
+    /// The settle check after every wake.
+    pub(crate) fn run_check(&mut self, out: &mut Out) {
+        if let Decided::Settled { run, outcome, speech } = self.session.runs.decide() {
+            out.machine().emit(SessionEvent::RunSettled { run, outcome, speech });
         }
     }
 

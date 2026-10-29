@@ -165,8 +165,6 @@ impl Driver {
     /// edge follows.
     fn close_drain(&mut self, now: Ts, out: &mut Out) {
         self.enter_close_phase(ClosePhase::Draining, Some(HOST_TEARDOWN_TIMEOUT), now, out);
-        // No reply plans a follow-up once the close began.
-        out.machine().push(Effect::Draining);
         self.pause_scheduling(now, PauseCause::Close, out);
     }
 
