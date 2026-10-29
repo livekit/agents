@@ -28,7 +28,8 @@ again when left empty.
 | `llm` | Session default when the agent does not select a model; supports a realtime model |
 | `stt`, `tts`, `vad` | Session-owned recognition, synthesis, and voice activity models |
 | `turn_detection`, `endpointing_opts` | Session-owned turn completion and endpointing policy |
-| Interruption and delivery options | Session-owned interruption handling, pacing, and expressive speech |
+| `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`) and `preemptive_generation` in one dict |
+| `tools` | tools and toolsets every agent of the call is offered, besides its own |
 | `context` | the application object; marked fields require explicit loading and saving |
 | `thread` | the call's durable thread, `ctx.thread`; omitted, the history is kept in memory and not saved |
 
@@ -39,6 +40,31 @@ retains the current history when no replacement is supplied.
 In a tool on a call, `ctx.live_session` is the call (`say()`,
 `generate_reply()`), and `ctx.thread` is the durable thread, the same
 object a text handler gets. Outside a call `ctx.live_session` is `None`.
+
+| Member | What |
+|---|---|
+| `start(agent, room=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking |
+| `say(text)`, `generate_reply(instructions=, user_input=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle` |
+| `interrupt()` | stop the current speech |
+| `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
+| `history` | the call's conversation, a `ChatContext`; empty on a new thread |
+| `current_agent` | the agent speaking now |
+| `on(event, callback)` | subscribe to a session event, below |
+| `aclose()`, `async with` | end the call's session |
+
+| Event | Payload | When |
+|---|---|---|
+| `"user_input_transcribed"` | `UserInputTranscribedEvent`: `transcript`, `is_final` | speech recognition produced a transcript |
+| `"conversation_item_added"` | `ConversationItemAddedEvent`: `item` | a message or agent handoff joined `history` |
+| `"function_tools_executed"` | `FunctionToolsExecutedEvent`: `function_calls`, `function_call_outputs` | a reply's tool calls settled |
+| `"speech_created"` | `SpeechCreatedEvent`: `speech_handle`, `source`, `user_initiated` | the agent scheduled a speech |
+| `"agent_state_changed"` | `AgentStateChangedEvent`: `old_state`, `new_state` | the agent moved between `initializing`, `idle`, `listening`, `thinking` and `speaking` |
+| `"user_state_changed"` | `UserStateChangedEvent`: `old_state`, `new_state` | the person moved between `speaking`, `listening` and `away` |
+| `"session_usage_updated"` | `SessionUsageUpdatedEvent`: `usage` | model usage grew |
+| `"error"` | `ErrorEvent`: `error`, `source` | a provider failed; `error.recoverable` says whether the call goes on |
+| `"close"` | `CloseEvent`: `reason`, `error` | the session closed |
+
+The event types are exported from `livekit.agents`.
 
 ## Updating a live session
 

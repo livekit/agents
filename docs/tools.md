@@ -37,6 +37,10 @@ a module-level agent. `@function_tool` declares a reusable tool function;
 - Reads per-run data from `ctx.context`, never from module
   globals that change.
 
+`@function_tool(raw_schema={"name": ..., "description": ..., "parameters": {...}})`
+declares a tool from a JSON schema instead of a signature: the function
+takes `raw_arguments: dict`, optionally after `ctx`, and validates them itself.
+
 ### Retries
 
 Arguments that fail validation and `ModelRetry` from the body send the model
@@ -346,6 +350,9 @@ member_services = Agent(..., tools=[Cards(), rewards])
 | `Toolset(id=, tools=)` | a group of tools; a subclass adds its `@function_tool` methods |
 | `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `VoiceSession(tools=)` |
 | `MCPToolset(id=, mcp_server=, tool_options=)` | the tools of an MCP server, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
+| `MCPServerHTTP(url, headers=, allowed_tools=, transport_type=, timeout=, sse_read_timeout=, client_session_timeout_seconds=)` | an MCP server over streamable HTTP, or SSE (`transport_type="sse"`); `timeout` bounds the connect and `client_session_timeout_seconds` one request |
+| `MCPServerStdio(command, args, env=, cwd=, client_session_timeout_seconds=)` | an MCP server run as a child process |
+| `MCPToolOptions(retries=, flags=, on_duplicate=, duplicate_scope=, report_progress=)` | one MCP tool's options, keyed by tool name in `tool_options`; `report_progress` turns the server's progress into `ctx.update()` |
 
 A toolset connects per run of the agent: `setup()` when the agent's
 activity starts, a call or a run, and `aclose()` when its last using activity

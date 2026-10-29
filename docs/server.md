@@ -6,7 +6,8 @@ requests; voice entrypoints attach a `VoiceSession` to a room. Both receive
 runtime thread/storage access, while application context loading and saving
 remain explicit.
 
-Voice entrypoints accept `on_simulation_end`, called with a `SimulationContext`
+Voice entrypoints accept `on_session_end`, called with the `JobContext` once
+the job's session has ended, and `on_simulation_end`, called with a `SimulationContext`
 after a simulated conversation finishes. It exposes the simulator verdict and
 lets application checks veto the result. See [testing and simulations](testing.md#simulations)
 for registration, context fields and verdict semantics.
@@ -97,6 +98,28 @@ state, passes it to `session.run()`, and saves the returned state.
 in the supplied order before job readiness. `setup_fnc` initializes
 process-local resources after preloading. Import failures stop initialization
 and identify the module; see [Python preloading](internals/rust-core.md#python-preloading).
+
+The entrypoint module runs the server with `cli.run_app(server)`, which serves
+the subcommands `lk agent dev|start|console` invokes:
+
+```python
+from livekit.agents import AgentServer, cli
+
+server = AgentServer(storage=AgentDBStorage())
+server.add(front_desk, back_office)
+
+if __name__ == "__main__":
+    cli.run_app(server)
+```
+
+| `AgentServer` option | What |
+| --- | --- |
+| `agent_name`, `storage`, `preload_modules`, `setup_fnc` | see above and below |
+| `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
+| `num_idle_processes` | job processes kept warm ahead of dispatch |
+| `load_threshold` | the load (0 to 1) above which the worker stops taking jobs |
+| `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
+| `drain_timeout` | how long a draining worker waits for its running jobs |
 
 The agent is named once, `AgentServer(agent_name=)`: the lane every door of
 the server writes, and the first segment of every door's address,

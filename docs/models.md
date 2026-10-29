@@ -5,6 +5,21 @@ Pass `conn_options=APIConnectOptions(...)` to a model operation or a provider
 that accepts a default policy. An explicitly supplied policy replaces that
 default in full.
 
+## Model strings
+
+`Agent(llm=)` and `VoiceSession(stt=, llm=, tts=)` take a model instance or a
+LiveKit Inference model string: `"provider/model"`, with an optional
+`:language` for STT and `:voice` for TTS. A string is
+`inference.LLM(model)`, `inference.STT(model)` or `inference.TTS(model)` from
+`livekit.agents.inference`; an `llm=` string naming a realtime model is its
+realtime model. Construct the class directly for its other options. Provider
+plugins (`livekit.plugins.<provider>`) supply the same interfaces.
+
+```python
+agent = Agent(instructions="...", llm="google/gemma-4-31b-it")
+session = VoiceSession(stt="deepgram/nova-3:en", tts="cartesia/sonic-3:<voice>")
+```
+
 ## Connection options
 
 `APIConnectOptions` is immutable and exported from `livekit.agents`.
@@ -50,7 +65,25 @@ disturbing its accepted pull. `aclose()` requests cancellation and waits for
 bounded cleanup. A cleanup deadline leaves the framework responsible for
 late resources and emits a diagnostic observation.
 
-## Connection pools for plugins
+## Plugin authors
+
+A provider plugin implements the model interfaces and registers itself with
+`livekit.agents.Plugin`. These names are its contract; applications use the
+plugin's classes, not these bases.
+
+| Module | Names |
+| --- | --- |
+| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk`, `ChoiceDelta`, `CompletionUsage`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events; duplex: `DuplexModel`, `DuplexSession`, `DuplexCapabilities`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
+| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent`, `STTCapabilities`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `AudioEmitter`, `TTSCapabilities`; each module's `FallbackAdapter` |
+| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http` |
+| `livekit.agents.utils` | `ConnectionPool`, `AudioBuffer`, `http_context`, `aio` |
+| `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)` |
+
+In a plugin's own retry loop, `async with conn_options.total_deadline():`
+bounds the operation by `total_timeout`, and `conn_options.interval_for_retry(n)`
+is the delay before retry `n`.
+
+### Connection pools
 
 `livekit.agents.utils.ConnectionPool` takes `conn_options=` for prewarming.
 Its `connect_cb` receives the resolved `APIConnectOptions` and applies the
