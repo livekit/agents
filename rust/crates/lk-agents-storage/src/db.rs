@@ -1,7 +1,5 @@
-//! The thread database's operations as plans: each operation is the statements of one atomic
-//! batch (or one read) plus the typed decoding of its answer. The runtime executes a [`Plan`] on
-//! a connection and hands the [`BatchResult`] back to its [`Decode`]; nothing here performs I/O,
-//! reads a clock or mints an id: lease tokens, timestamps and run ids are supplied.
+//! The thread database's batched operations: each sends the statements of one atomic batch on a
+//! connection and decodes its answer. Lease tokens, timestamps and run ids are supplied.
 
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use lk_agents_abi::storage::journal::JournalEvent;
@@ -10,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::run::TaskState;
 use crate::schema::*;
 use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, Table, first_cell};
-use crate::{StorageError, TaskWrite};
+use crate::{SqliteConnection, StorageError, TaskWrite};
 
 /// The largest `tasks/list` page A2A allows.
 const MAX_TASK_PAGE: i64 = 100;
@@ -109,18 +107,6 @@ pub struct Committed {
     pub task: Option<TaskRow>,
 }
 
-/// Statements sent as one atomic batch, and how to read its answer.
-pub struct Plan<D> {
-    pub statements: Vec<Statement>,
-    pub decoder: D,
-}
-
-/// The typed reading of one plan's batch answer.
-pub trait Decode {
-    type Output;
-    fn decode(self, out: &BatchResult) -> Result<Self::Output, StorageError>;
-}
-
 /// A batch under construction; `add` answers the index of the statement's result.
 #[derive(Default)]
 struct Batch(Vec<Statement>);
@@ -129,26 +115,6 @@ impl Batch {
     fn add<S: Bind>(&mut self, s: S) -> usize {
         self.0.push(s.bind());
         self.0.len() - 1
-    }
-
-    fn plan<D>(self, decoder: D) -> Plan<D> {
-        Plan { statements: self.0, decoder }
-    }
-}
-
-/// One read statement and the decoding of each of its rows.
-pub struct Read<T> {
-    pub statement: Statement,
-    decode_row: fn(&Row) -> Result<T, StorageError>,
-}
-
-impl<T> Read<T> {
-    fn new<S: Bind>(s: S, decode_row: fn(&Row) -> Result<T, StorageError>) -> Self {
-        Self { statement: s.bind(), decode_row }
-    }
-
-    pub fn decode(&self, rows: &[Row]) -> Result<Vec<T>, StorageError> {
-        rows.iter().map(self.decode_row).collect()
     }
 }
 
@@ -161,37 +127,29 @@ pub fn bootstrap() -> Vec<Statement> {
     out
 }
 
-/// Whether the schema version table exists, without provoking a missing-table error.
-pub fn schema_exists() -> Statement {
-    SelectSchemaExists {}.bind()
-}
-
-/// Validate the catalog probe's one boolean scalar before choosing initialization.
-pub fn decode_schema_exists(rows: &[Row]) -> Result<bool, StorageError> {
-    if let [row] = rows {
-        match row.as_slice() {
-            [SqlValue::Int(0)] => return Ok(false),
-            [SqlValue::Int(1)] => return Ok(true),
-            _ => {}
+/// The schema version the database holds, `None` before any SDK wrote it; the catalog is probed
+/// first, so a missing table is never provoked. A version this client does not write is
+/// refused, behind or ahead.
+pub(crate) async fn schema_version(
+    conn: &dyn SqliteConnection,
+) -> Result<Option<i64>, StorageError> {
+    let catalog = conn.query(SelectSchemaExists {}.bind()).await?;
+    match catalog.as_slice() {
+        [row] if row.as_slice() == [SqlValue::Int(0)] => return Ok(None),
+        [row] if row.as_slice() == [SqlValue::Int(1)] => {}
+        _ => {
+            return Err(StorageError::Unavailable(
+                "schema catalog probe did not return one boolean".into(),
+            ));
         }
     }
-    Err(StorageError::Unavailable("schema catalog probe did not return one boolean".into()))
-}
-
-/// The version of an existing schema.
-pub fn schema_version() -> Statement {
-    SelectSchemaVersion {}.bind()
-}
-
-/// The schema version a probe read: `None` before any SDK wrote it; a version this client does
-/// not write is refused, behind or ahead.
-pub fn decode_schema_version(rows: &[Row]) -> Result<Option<i64>, StorageError> {
-    match first_cell(rows).and_then(SqlValue::as_i64) {
+    let rows = conn.query(SelectSchemaVersion {}.bind()).await?;
+    match first_cell(&rows).and_then(SqlValue::as_i64) {
         Some(v) if v == THREAD_SCHEMA_VERSION => Ok(Some(v)),
         Some(v) => Err(StorageError::Invalid(format!(
             "database schema is version {v}, this client writes {THREAD_SCHEMA_VERSION}"
         ))),
-        None => Ok(None),
+        None => Err(StorageError::Invalid("schema_version has no valid version".into())),
     }
 }
 
@@ -246,21 +204,13 @@ pub enum AcquireOutcome {
     },
 }
 
-pub struct AcquireDecode {
-    fence: Fence,
-    submitted: Option<usize>,
-    take: usize,
-    committed: usize,
-    pickup: Option<usize>,
-    items: usize,
-    lane: usize,
-    tasks: usize,
-    context_scopes: usize,
-}
-
 /// Takes the lease and loads the lane, one atomic batch, `schema` prepended for a fresh
 /// database. A retried `run_id` loads as `already_committed` and writes nothing.
-pub fn acquire(req: &Acquire<'_>, schema: Vec<Statement>) -> Plan<AcquireDecode> {
+pub(crate) async fn acquire(
+    conn: &dyn SqliteConnection,
+    req: &Acquire<'_>,
+    schema: Vec<Statement>,
+) -> Result<AcquireOutcome, StorageError> {
     let (lane, token) = (req.lane, req.token);
     let mut b = Batch(schema);
     b.0.push(Statement::raw(crate::context::db::SCHEMA));
@@ -289,56 +239,37 @@ pub fn acquire(req: &Acquire<'_>, schema: Vec<Statement>) -> Plan<AcquireDecode>
     let tasks = b.add(SelectTasks { lane, limit: req.tasks_limit });
     b.0.push(crate::context::db::select(lane));
     let context_scopes = b.0.len() - 1;
+    let out = conn.batch(b.0).await?;
+
+    let submitted = submitted.map(|i| out.at(i).map(|r| r.rows_affected() > 0)).transpose()?;
+    let Some(version) = out.at(take)?.first_int() else {
+        return Ok(AcquireOutcome::Held { submitted }); // the reads are discarded
+    };
+    let lane_row = out
+        .at(lane_row)?
+        .rows()
+        .first()
+        .ok_or_else(|| StorageError::Unavailable("acquire: no lane row".into()))?;
+    let picked_up = match pickup {
+        Some(i) => out.at(i)?.rows_affected() > 0,
+        None => false,
+    };
     let fence = Fence {
         lane: lane.to_owned(),
         holder: req.holder.to_owned(),
         token: token.to_owned(),
-        version: 0,
+        version,
     };
-    b.plan(AcquireDecode {
+    Ok(AcquireOutcome::Acquired(Box::new(Acquired {
         fence,
+        already_committed: !out.at(committed)?.rows().is_empty(),
+        lane: LaneRow::from_row(lane_row)?,
+        items: rows(&out, items, ItemRow::from_row)?,
+        tasks: rows(&out, tasks, TaskRow::from_row)?,
+        context_scopes: crate::context::db::from_rows(out.at(context_scopes)?.rows())?,
         submitted,
-        take,
-        committed,
-        pickup,
-        items,
-        lane: lane_row,
-        tasks,
-        context_scopes,
-    })
-}
-
-impl Decode for AcquireDecode {
-    type Output = AcquireOutcome;
-
-    fn decode(self, out: &BatchResult) -> Result<AcquireOutcome, StorageError> {
-        let submitted = match self.submitted {
-            Some(i) => Some(out.at(i)?.rows_affected() > 0),
-            None => None,
-        };
-        let Some(version) = out.at(self.take)?.first_int() else {
-            return Ok(AcquireOutcome::Held { submitted }); // the reads are discarded
-        };
-        let lane_row = out
-            .at(self.lane)?
-            .rows()
-            .first()
-            .ok_or_else(|| StorageError::Unavailable("acquire: no lane row".into()))?;
-        let picked_up = match self.pickup {
-            Some(i) => out.at(i)?.rows_affected() > 0,
-            None => false,
-        };
-        Ok(AcquireOutcome::Acquired(Box::new(Acquired {
-            fence: Fence { version, ..self.fence },
-            already_committed: !out.at(self.committed)?.rows().is_empty(),
-            lane: LaneRow::from_row(lane_row)?,
-            items: rows(out, self.items, ItemRow::from_row)?,
-            tasks: rows(out, self.tasks, TaskRow::from_row)?,
-            context_scopes: crate::context::db::from_rows(out.at(self.context_scopes)?.rows())?,
-            submitted,
-            picked_up,
-        })))
-    }
+        picked_up,
+    })))
 }
 
 fn rows<T>(
@@ -358,14 +289,7 @@ pub enum Receive {
     Duplicate(Option<String>),
 }
 
-pub struct ReceiveDecode {
-    inbox: usize,
-    take: usize,
-    existing: usize,
-}
-
-/// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the lease
-/// attempt under `token`.
+/// The message a receive inserts, with its `submitted` task row.
 pub struct ReceiveInput<'a> {
     pub task_id: &'a str,
     pub message: &'a a2a::Message,
@@ -373,13 +297,16 @@ pub struct ReceiveInput<'a> {
     pub internal: Option<&'a TaskInternal>,
 }
 
-pub fn receive(
+/// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the lease
+/// attempt under `token`.
+pub(crate) async fn receive(
+    conn: &dyn SqliteConnection,
     lane: &str,
     holder: &str,
     token: &str,
     lease_secs: i64,
     input: ReceiveInput<'_>,
-) -> Plan<ReceiveDecode> {
+) -> Result<Receive, StorageError> {
     let ReceiveInput { task_id, message, data, internal } = input;
     let message_id = message.message_id.as_str();
     let mut b = Batch::default();
@@ -394,144 +321,70 @@ pub fn receive(
     });
     let take = b.add(TakeLeaseForMessage { lane, holder, token, lease_secs, message_id, task_id });
     let existing = b.add(SelectInboxTask { lane, message_id });
-    b.plan(ReceiveDecode { inbox, take, existing })
-}
+    let out = conn.batch(b.0).await?;
 
-impl Decode for ReceiveDecode {
-    type Output = Receive;
-
-    fn decode(self, out: &BatchResult) -> Result<Receive, StorageError> {
-        let crate::sql::StatementResult::Exec { rows_affected, .. } = out.at(self.inbox)? else {
-            return Err(StorageError::Unavailable(
-                "receive: the inbox insert answered rows".into(),
-            ));
-        };
-        if *rows_affected == 0 {
-            let task_id = first_cell(out.at(self.existing)?.rows())
-                .and_then(SqlValue::as_str)
-                .map(str::to_owned);
-            return Ok(Receive::Duplicate(task_id));
-        }
-        Ok(Receive::Received(out.at(self.take)?.first_int()))
+    let crate::sql::StatementResult::Exec { rows_affected, .. } = out.at(inbox)? else {
+        return Err(StorageError::Unavailable("receive: the inbox insert answered rows".into()));
+    };
+    if *rows_affected == 0 {
+        let task_id =
+            first_cell(out.at(existing)?.rows()).and_then(SqlValue::as_str).map(str::to_owned);
+        return Ok(Receive::Duplicate(task_id));
     }
-}
-
-/// A turn's `submitted` row, before the lease is tried; changes nothing when its task or message
-/// id already had one.
-pub fn submit(lane: &str, task: &TaskWrite) -> Statement {
-    submitted_task(lane, task).bind()
-}
-
-/// Records a worker waiting under `interrupt`, only while the lease is held.
-pub fn set_waiter(lane: &str, holder: &str) -> Statement {
-    SetWaiter { lane, holder }.bind()
-}
-
-/// Pushes the lease out while its token is still this one.
-pub fn extend(fence: &Fence, lease_secs: i64) -> Statement {
-    ExtendLease { lane: &fence.lane, holder: &fence.holder, token: &fence.token, lease_secs }.bind()
-}
-
-/// Releases without writing anything else but, when given, the `run_ended` event of `run_id`:
-/// the path of a run that failed or was already committed.
-pub fn release(fence: &Fence, ended: Option<(&str, &EventWrite)>) -> Vec<Statement> {
-    let (lane, token) = (fence.lane.as_str(), fence.token.as_str());
-    let mut b = Batch::default();
-    if let Some((run_id, e)) = ended {
-        let payload = SqlValue::json(&e.payload);
-        b.add(InsertRunEnded { lane, token, ts_ms: e.ts_ms, run_id, payload });
-    }
-    b.add(ReleaseLease { lane, token });
-    b.0
-}
-
-/// Releases when no inbox row is pending past `drained_id`; one row changed means released.
-pub fn release_if_drained(fence: &Fence) -> Statement {
-    ReleaseLeaseIfDrained { lane: &fence.lane, token: &fence.token }.bind()
-}
-
-pub struct CheckpointDecode {
-    waiter: usize,
-    status: usize,
+    Ok(Receive::Received(out.at(take)?.first_int()))
 }
 
 /// A turn's checkpoint, one batch: the lane's waiter and the task's status.
-pub fn checkpoint(lane: &str, task_id: &str) -> Plan<CheckpointDecode> {
+pub(crate) async fn checkpoint(
+    conn: &dyn SqliteConnection,
+    lane: &str,
+    task_id: &str,
+) -> Result<(Option<String>, Option<TaskState>), StorageError> {
     let mut b = Batch::default();
     let waiter = b.add(SelectWaiter { lane });
     let status = b.add(SelectTaskStatus { lane, task_id });
-    b.plan(CheckpointDecode { waiter, status })
+    let out = conn.batch(b.0).await?;
+    let waiter = first_cell(out.at(waiter)?.rows()).and_then(SqlValue::as_str).map(str::to_owned);
+    let status = first_cell(out.at(status)?.rows())
+        .map(TaskState::from_cell)
+        .transpose()
+        .map_err(StorageError::Unavailable)?;
+    Ok((waiter, status))
 }
 
-impl Decode for CheckpointDecode {
-    type Output = (Option<String>, Option<TaskState>);
-
-    fn decode(self, out: &BatchResult) -> Result<Self::Output, StorageError> {
-        let waiter =
-            first_cell(out.at(self.waiter)?.rows()).and_then(SqlValue::as_str).map(str::to_owned);
-        let status = first_cell(out.at(self.status)?.rows())
-            .map(TaskState::from_cell)
-            .transpose()
-            .map_err(StorageError::Unavailable)?;
-        Ok((waiter, status))
-    }
-}
-
-pub struct PickupDecode {
-    before: usize,
-    moved: usize,
-}
-
-/// Takes a `submitted` or `working` row to `working`, one atomic batch.
-pub fn pickup(lane: &str, task_id: &str) -> Plan<PickupDecode> {
+/// Takes a `submitted` or `working` row to `working`, one atomic batch. The status the row had
+/// (`working` means a dead holder had it); `None` when it is terminal or missing.
+pub(crate) async fn pickup(
+    conn: &dyn SqliteConnection,
+    lane: &str,
+    task_id: &str,
+) -> Result<Option<TaskState>, StorageError> {
     let mut b = Batch::default();
     let before = b.add(SelectPickupStatus { lane, task_id });
     let moved = b.add(PickupTask { lane, task_id });
-    b.plan(PickupDecode { before, moved })
-}
-
-impl Decode for PickupDecode {
-    /// The status the row had (`working` means a dead holder had it); `None` when it is
-    /// terminal or missing.
-    type Output = Option<TaskState>;
-
-    fn decode(self, out: &BatchResult) -> Result<Option<TaskState>, StorageError> {
-        if out.at(self.moved)?.rows_affected() == 0 {
-            return Ok(None);
-        }
-        first_cell(out.at(self.before)?.rows())
-            .map(TaskState::from_cell)
-            .transpose()
-            .map_err(StorageError::Unavailable)
+    let out = conn.batch(b.0).await?;
+    if out.at(moved)?.rows_affected() == 0 {
+        return Ok(None);
     }
+    first_cell(out.at(before)?.rows())
+        .map(TaskState::from_cell)
+        .transpose()
+        .map_err(StorageError::Unavailable)
 }
 
-pub struct CancelDecode {
-    row: usize,
-}
-
-/// `tasks/cancel`, one batch: the conditional transition, then the row as it is after.
-pub fn cancel(lane: &str, task_id: &str, metadata: &Map<String, Value>) -> Plan<CancelDecode> {
+/// `tasks/cancel`, one batch: the conditional transition, then the row as it is after:
+/// `canceled`, or unchanged when it was already terminal; `None` when the lane has no such task.
+pub(crate) async fn cancel(
+    conn: &dyn SqliteConnection,
+    lane: &str,
+    task_id: &str,
+    metadata: &Map<String, Value>,
+) -> Result<Option<TaskRow>, StorageError> {
     let mut b = Batch::default();
     b.add(CancelTask { lane, task_id, metadata: SqlValue::json(metadata) });
     let row = b.add(SelectTask { lane, task_id });
-    b.plan(CancelDecode { row })
-}
-
-impl Decode for CancelDecode {
-    /// The row after: `canceled`, or unchanged when it was already terminal; `None` when the
-    /// lane has no such task.
-    type Output = Option<TaskRow>;
-
-    fn decode(self, out: &BatchResult) -> Result<Option<TaskRow>, StorageError> {
-        out.at(self.row)?.rows().first().map(TaskRow::from_row).transpose()
-    }
-}
-
-/// A `working` row whose holder died ends `failed` with the given status message.
-pub fn fail_orphan(lane: &str, task_id: &str, status_message: &a2a::Message) -> Statement {
-    let status_message = SqlValue::json(status_message);
-    FailOrphan { lane, task_id, status_message }.bind()
+    let out = conn.batch(b.0).await?;
+    out.at(row)?.rows().first().map(TaskRow::from_row).transpose()
 }
 
 /// A lease and how long it lasts, for a fenced commit.
@@ -541,22 +394,15 @@ pub struct Fenced<'a> {
     pub keep: Option<i64>,
 }
 
-pub struct CommitDecode {
-    fence: Option<Fence>,
-    lane: String,
-    lane_row: usize,
-    read_task: Option<usize>,
-}
-
 /// A run's writes, one batch: fenced on the lease (and renewing it when kept), else
-/// append-only. `schema` is prepended for a fresh database. A state over [`STATE_LIMIT`] is
-/// refused before anything is sent.
-pub fn commit(
+/// append-only. A state over [`STATE_LIMIT`] is refused before anything is sent.
+/// `VersionConflict` when the fenced run outlived its lease: nothing was written.
+pub(crate) async fn commit(
+    conn: &dyn SqliteConnection,
     lane: &str,
     c: &Commit,
     fenced: Option<Fenced<'_>>,
-    schema: Vec<Statement>,
-) -> Result<Plan<CommitDecode>, StorageError> {
+) -> Result<Committed, StorageError> {
     let mut scopes: std::collections::BTreeMap<_, _> =
         c.context_scopes.iter().map(|scope| (&scope.scope_id, scope)).collect();
     for write in &c.scope_writes {
@@ -571,7 +417,7 @@ pub fn commit(
             "context writes require an exclusive managed turn".into(),
         ));
     }
-    let mut b = Batch(schema);
+    let mut b = Batch::default();
     if !c.app_writes.is_empty() {
         if let Some(Fenced { fence, .. }) = &fenced {
             // arbitrary SQL cannot be made conditional on the fence: abort the batch instead
@@ -676,36 +522,24 @@ pub fn commit(
         None => b.add(SelectLane { lane }),
     };
     let read_task = c.read_task.as_ref().map(|id| b.add(SelectTask { lane, task_id: id }));
-    let fence = fenced.map(|f| f.fence.clone());
-    Ok(b.plan(CommitDecode { fence, lane: lane.to_owned(), lane_row, read_task }))
-}
+    let out = conn.batch(b.0).await?;
 
-impl Decode for CommitDecode {
-    type Output = Committed;
-
-    /// `VersionConflict` when the fenced run outlived its lease: nothing was written.
-    fn decode(self, out: &BatchResult) -> Result<Committed, StorageError> {
-        let version = match self.fence {
-            Some(_) => out.at(self.lane_row)?.first_int(),
-            None => out
-                .at(self.lane_row)?
-                .rows()
-                .first()
-                .map(LaneRow::from_row)
-                .transpose()?
-                .map(|l| l.version),
-        };
-        let task = match self.read_task {
-            Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
-            None => None,
-        };
-        match (self.fence, version) {
-            (_, Some(version)) => Ok(Committed { version, task }),
-            (Some(fence), None) => {
-                Err(StorageError::VersionConflict { lane: self.lane, expected: fence.version })
-            }
-            (None, None) => Err(StorageError::Unavailable("commit: no lane row".into())),
+    let version = match fenced {
+        Some(_) => out.at(lane_row)?.first_int(),
+        None => {
+            out.at(lane_row)?.rows().first().map(LaneRow::from_row).transpose()?.map(|l| l.version)
         }
+    };
+    let task = match read_task {
+        Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
+        None => None,
+    };
+    match (fenced, version) {
+        (_, Some(version)) => Ok(Committed { version, task }),
+        (Some(Fenced { fence, .. }), None) => {
+            Err(StorageError::VersionConflict { lane: lane.to_owned(), expected: fence.version })
+        }
+        (None, None) => Err(StorageError::Unavailable("commit: no lane row".into())),
     }
 }
 
@@ -720,80 +554,76 @@ pub enum Resolution {
     Rejected,
 }
 
-pub struct ResolveDecode {
-    fence: Option<Fence>,
-    committed: usize,
-    lane: usize,
-    task: Option<usize>,
-}
-
 /// Looks up the authoritative record of `run_id` after a lost acknowledgment, one batch: its
 /// `run_ended`, the lane's fence, and the answer task.
-pub fn resolve_commit(
+pub(crate) async fn resolve_commit(
+    conn: &dyn SqliteConnection,
     lane: &str,
     run_id: &str,
     fence: Option<&Fence>,
     read_task: Option<&str>,
-) -> Plan<ResolveDecode> {
+) -> Result<Resolution, StorageError> {
     let mut b = Batch::default();
     let committed = b.add(SelectCommittedRun { lane, run_id });
     let lane_fence = b.add(SelectFence { lane });
     let task = read_task.map(|task_id| b.add(SelectTask { lane, task_id }));
-    b.plan(ResolveDecode { fence: fence.cloned(), committed, lane: lane_fence, task })
+    let out = conn.batch(b.0).await?;
+    let committed = !out.at(committed)?.rows().is_empty();
+    let task = match task {
+        Some(i) if committed => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
+        _ => None,
+    };
+    Ok(resolution(fence, committed, out.at(lane_fence)?.rows().first(), task))
 }
 
-impl Decode for ResolveDecode {
-    type Output = Resolution;
-
-    fn decode(self, out: &BatchResult) -> Result<Resolution, StorageError> {
-        let row = out.at(self.lane)?.rows().first();
-        let version = row.and_then(|r| r.first()).and_then(SqlValue::as_i64).unwrap_or(0);
-        let token = row.and_then(|r| r.get(1)).and_then(SqlValue::as_str);
-        if !out.at(self.committed)?.rows().is_empty() {
-            let task = match self.task {
-                Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
-                None => None,
-            };
-            // the version this run's commit made, not the lane's now: others may have
-            // committed since
-            let version = self.fence.as_ref().map_or(version, |f| f.version + 1);
-            return Ok(Resolution::Committed(Committed { version, task }));
-        }
-        Ok(match self.fence {
-            // an append-only batch that did not land can be sent again
-            None => Resolution::NotApplied,
-            Some(f) if f.version == version && token == Some(f.token.as_str()) => {
-                Resolution::NotApplied
-            }
-            Some(_) => Resolution::Rejected,
-        })
+/// The resolution of a run whose `run_ended` is there (`committed`) or not, given the lane's
+/// fence row as it stands now.
+fn resolution(
+    fence: Option<&Fence>,
+    committed: bool,
+    lane: Option<&Row>,
+    task: Option<TaskRow>,
+) -> Resolution {
+    let version = lane.and_then(|r| r.first()).and_then(SqlValue::as_i64).unwrap_or(0);
+    let token = lane.and_then(|r| r.get(1)).and_then(SqlValue::as_str);
+    if committed {
+        // the version this run's commit made, not the lane's now: others may have committed
+        // since
+        let version = fence.map_or(version, |f| f.version + 1);
+        return Resolution::Committed(Committed { version, task });
     }
-}
-
-pub struct ListTasksDecode {
-    page: usize,
-    count: usize,
-    page_size: i64,
-    order: TaskOrder,
-    filters: String,
+    match fence {
+        // an append-only batch that did not land can be sent again
+        None => Resolution::NotApplied,
+        Some(f) if f.version == version && token == Some(f.token.as_str()) => {
+            Resolution::NotApplied
+        }
+        Some(_) => Resolution::Rejected,
+    }
 }
 
 /// One page of the thread's tasks in `q.order`. A page token is opaque, bound to the filters
 /// and order it was made under: another listing's token is refused.
-pub fn list_tasks(q: &TaskQuery) -> Result<Plan<ListTasksDecode>, StorageError> {
-    let filters = task_filters(q);
+pub(crate) async fn list_tasks(
+    conn: &dyn SqliteConnection,
+    q: &TaskQuery,
+) -> Result<TaskPage, StorageError> {
+    let order = match q.order {
+        TaskOrder::Updated => "u",
+        TaskOrder::Inserted => "i",
+    };
+    let status = q.status.map_or("*", TaskState::as_str);
+    // the filters and order a page token is bound to, as its prefix
+    let filters =
+        format!("{order}:{status}:{}:{}:", q.updated_after, q.lane.as_deref().unwrap_or("*"));
+    let invalid =
+        || StorageError::Invalid(format!("page token {:?} for this listing", q.page_token));
     let position = q
         .page_token
         .as_deref()
         .filter(|t| !t.is_empty())
-        .map(|token| {
-            token.strip_prefix(&filters).ok_or_else(|| {
-                StorageError::Invalid(format!("page token {token:?} for this listing"))
-            })
-        })
+        .map(|token| token.strip_prefix(&filters).ok_or_else(invalid))
         .transpose()?;
-    let invalid =
-        || StorageError::Invalid(format!("page token {:?} for this listing", q.page_token));
     let (lane, status, updated_after) =
         (q.lane.as_deref(), q.status.map(TaskState::as_str), q.updated_after);
     let page_size = q.page_size.clamp(1, MAX_TASK_PAGE);
@@ -828,50 +658,33 @@ pub fn list_tasks(q: &TaskQuery) -> Result<Plan<ListTasksDecode>, StorageError> 
         }
     };
     let count = b.add(CountThreadTasks { lane, status, updated_after });
-    Ok(b.plan(ListTasksDecode { page, count, page_size, order: q.order, filters }))
-}
+    let out = conn.batch(b.0).await?;
 
-/// The filters and order a task page token is bound to, as its prefix.
-fn task_filters(q: &TaskQuery) -> String {
-    let order = match q.order {
-        TaskOrder::Updated => "u",
-        TaskOrder::Inserted => "i",
-    };
-    let status = q.status.map_or("*", TaskState::as_str);
-    format!("{order}:{status}:{}:{}:", q.updated_after, q.lane.as_deref().unwrap_or("*"))
-}
-
-impl Decode for ListTasksDecode {
-    type Output = TaskPage;
-
-    fn decode(self, out: &BatchResult) -> Result<TaskPage, StorageError> {
-        let (mut tasks, mut positions) = (Vec::new(), Vec::new());
-        for row in out.at(self.page)?.rows() {
-            match self.order {
-                TaskOrder::Updated => tasks.push(TaskRow::from_row(row)?),
-                TaskOrder::Inserted => {
-                    let pos = row.first().and_then(SqlValue::as_i64);
-                    let pos =
-                        pos.ok_or_else(|| StorageError::Unavailable("a task page row".into()))?;
-                    positions.push(pos);
-                    tasks.push(TaskRow::from_row(&row[1..].to_vec())?);
-                }
+    let (mut tasks, mut positions) = (Vec::new(), Vec::new());
+    for row in out.at(page)?.rows() {
+        match q.order {
+            TaskOrder::Updated => tasks.push(TaskRow::from_row(row)?),
+            TaskOrder::Inserted => {
+                let pos = row.first().and_then(SqlValue::as_i64);
+                let pos = pos.ok_or_else(|| StorageError::Unavailable("a task page row".into()))?;
+                positions.push(pos);
+                tasks.push(TaskRow::from_row(&row[1..].to_vec())?);
             }
         }
-        let more = tasks.len() as i64 > self.page_size;
-        tasks.truncate(self.page_size as usize);
-        let next_page_token = match (tasks.last(), self.order) {
-            (Some(last), TaskOrder::Updated) if more => {
-                format!("{}{}:{}", self.filters, last.updated_at, last.task_id)
-            }
-            (Some(_), TaskOrder::Inserted) if more => {
-                format!("{}{}", self.filters, positions[tasks.len() - 1])
-            }
-            _ => String::new(),
-        };
-        let total_size = out.at(self.count)?.first_int().unwrap_or(0);
-        Ok(TaskPage { tasks, next_page_token, page_size: self.page_size, total_size })
     }
+    let more = tasks.len() as i64 > page_size;
+    tasks.truncate(page_size as usize);
+    let next_page_token = match (tasks.last(), q.order) {
+        (Some(last), TaskOrder::Updated) if more => {
+            format!("{filters}{}:{}", last.updated_at, last.task_id)
+        }
+        (Some(_), TaskOrder::Inserted) if more => {
+            format!("{filters}{}", positions[tasks.len() - 1])
+        }
+        _ => String::new(),
+    };
+    let total_size = out.at(count)?.first_int().unwrap_or(0);
+    Ok(TaskPage { tasks, next_page_token, page_size, total_size })
 }
 
 /// One page of the thread's items in insertion order, and the cursor of the next page when
@@ -893,116 +706,46 @@ pub struct PagedItem {
 /// The largest item page.
 const MAX_ITEM_PAGE: i64 = 500;
 
-/// A page cursor: opaque to callers, bound to the lane filter it was made under.
-fn item_cursor(lane: Option<&str>, pos: i64) -> String {
-    format!("{}:{pos}", lane.unwrap_or("*"))
-}
-
-pub struct ItemPageDecode {
-    lane: Option<String>,
-    limit: i64,
-}
-
-/// One page of the thread's items after `cursor`, of `lane` when given. A cursor made under
-/// another filter is refused.
-pub fn list_items(
+/// One page of the thread's items after `cursor`, of `lane` when given. A cursor, opaque to
+/// callers, is bound to the lane filter it was made under: another filter's is refused.
+pub(crate) async fn list_items(
+    conn: &dyn SqliteConnection,
     lane: Option<&str>,
     cursor: Option<&str>,
     limit: i64,
-) -> Result<Plan<ItemPageDecode>, StorageError> {
+) -> Result<ItemPage, StorageError> {
+    let scope = lane.unwrap_or("*");
     let after = match cursor {
         None => 0,
         Some(c) => c
             .rsplit_once(':')
-            .filter(|(scope, _)| *scope == lane.unwrap_or("*"))
+            .filter(|(s, _)| *s == scope)
             .and_then(|(_, pos)| pos.parse().ok())
             .ok_or_else(|| StorageError::Invalid(format!("item cursor {c:?} for this listing")))?,
     };
     let limit = limit.clamp(1, MAX_ITEM_PAGE);
-    let mut b = Batch::default();
-    b.add(SelectItemsAfter { lane, after, limit: limit + 1 });
-    Ok(b.plan(ItemPageDecode { lane: lane.map(str::to_owned), limit }))
-}
-
-impl Decode for ItemPageDecode {
-    type Output = ItemPage;
-
-    fn decode(self, out: &BatchResult) -> Result<ItemPage, StorageError> {
-        let mut items = Vec::new();
-        let mut last = 0;
-        for row in out.at(0)?.rows() {
-            let pos = row.first().and_then(SqlValue::as_i64);
-            let lane = row.get(1).and_then(SqlValue::as_str);
-            let (Some(pos), Some(lane)) = (pos, lane) else {
-                return Err(StorageError::Unavailable("an item page row".into()));
-            };
-            if items.len() as i64 == self.limit {
-                return Ok(ItemPage { items, next: Some(item_cursor(self.lane.as_deref(), last)) });
-            }
-            let item = ItemRow::from_row(&row[2..].to_vec())?;
-            items.push(PagedItem { seq: pos, lane: lane.to_owned(), item });
-            last = pos;
+    let rows = conn.query(SelectItemsAfter { lane, after, limit: limit + 1 }.bind()).await?;
+    let mut items = Vec::new();
+    let mut last = 0;
+    for row in &rows {
+        let pos = row.first().and_then(SqlValue::as_i64);
+        let row_lane = row.get(1).and_then(SqlValue::as_str);
+        let (Some(pos), Some(row_lane)) = (pos, row_lane) else {
+            return Err(StorageError::Unavailable("an item page row".into()));
+        };
+        if items.len() as i64 == limit {
+            return Ok(ItemPage { items, next: Some(format!("{scope}:{last}")) });
         }
-        Ok(ItemPage { items, next: None })
+        let item = ItemRow::from_row(&row[2..].to_vec())?;
+        items.push(PagedItem { seq: pos, lane: row_lane.to_owned(), item });
+        last = pos;
     }
+    Ok(ItemPage { items, next: None })
 }
 
-/// The journal, every lane, after the event `after_id`.
-pub fn events(after_id: i64, limit: i64) -> Read<EventRow> {
-    Read::new(SelectEvents { after_id, limit }, EventRow::from_row)
-}
-
-/// One task, whichever lane it is on.
-pub fn thread_task(task_id: &str) -> Read<TaskRow> {
-    Read::new(SelectThreadTask { task_id }, TaskRow::from_row)
-}
-
-pub fn lanes() -> Read<LaneRow> {
-    Read::new(SelectLanes {}, LaneRow::from_row)
-}
-
-/// The lane's whole history.
-pub fn history(lane: &str) -> Read<ItemRow> {
-    Read::new(SelectItems { lane }, ItemRow::from_row)
-}
-
-pub fn lane_info(lane: &str) -> Read<LaneRow> {
-    Read::new(SelectLane { lane }, LaneRow::from_row)
-}
-
-/// The newest task rows, of one status when given.
-pub fn tasks(lane: &str, status: Option<TaskState>, limit: i64) -> Read<TaskRow> {
-    match status {
-        Some(s) => {
-            Read::new(SelectTasksByStatus { lane, status: s.as_str(), limit }, TaskRow::from_row)
-        }
-        None => Read::new(SelectTasks { lane, limit }, TaskRow::from_row),
-    }
-}
-
-pub fn task(lane: &str, task_id: &str) -> Read<TaskRow> {
-    Read::new(SelectTask { lane, task_id }, TaskRow::from_row)
-}
-
-/// The task an A2A `messageId` created.
-pub fn task_for_message(lane: &str, message_id: &str) -> Read<TaskRow> {
-    Read::new(SelectTaskForMessage { lane, message_id }, TaskRow::from_row)
-}
-
-/// The inbox rows in `id` order: every one, or only those above `drained_id`.
-pub fn inbox(lane: &str, pending: bool) -> Read<InboxRow> {
-    match pending {
-        true => Read::new(SelectInboxPending { lane }, InboxRow::from_row),
-        false => Read::new(SelectInbox { lane }, InboxRow::from_row),
-    }
-}
-
-/// The lane's journal after the event `after_id`.
-pub fn lane_events(lane: &str, after_id: i64) -> Read<EventRow> {
-    Read::new(SelectLaneEvents { lane, after_id }, EventRow::from_row)
-}
-
-fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSubmittedTask<'a> {
+/// A turn's `submitted` row, before the lease is tried; changes nothing when its task or message
+/// id already had one.
+pub(crate) fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSubmittedTask<'a> {
     InsertSubmittedTask {
         lane,
         task_id: &task.task_id,
@@ -1027,15 +770,12 @@ mod tests {
         }
     }
 
-    /// The lookup's answer: whether `run_ended` is there, and the lane's version and token.
-    fn answer(committed: bool, version: i64, token: Option<&str>) -> BatchResult {
-        let ended = if committed { vec![vec![SqlValue::Int(1)]] } else { vec![] };
-        let lane = vec![vec![SqlValue::Int(version), token.map_or(SqlValue::Null, Into::into)]];
-        BatchResult { results: vec![StatementResult::Rows(ended), StatementResult::Rows(lane)] }
+    fn lane(version: i64, token: Option<&str>) -> Row {
+        vec![SqlValue::Int(version), token.map_or(SqlValue::Null, Into::into)]
     }
 
-    fn resolve(fence: Option<&Fence>, out: BatchResult) -> Resolution {
-        resolve_commit("front-desk", "r1", fence, None).decoder.decode(&out).unwrap()
+    fn resolve(fence: Option<&Fence>, committed: bool, lane: Row) -> Resolution {
+        resolution(fence, committed, Some(&lane), None)
     }
 
     // Decision 39: a lost acknowledgment is decided by the run's own record, never guessed.
@@ -1043,16 +783,16 @@ mod tests {
     fn a_lost_commit_resolves_by_its_run_ended_and_the_fence() {
         let f = fence();
         let committed = Resolution::Committed(Committed { version: 4, task: None });
-        assert_eq!(resolve(Some(&f), answer(true, 4, None)), committed);
+        assert_eq!(resolve(Some(&f), true, lane(4, None)), committed);
         // found by the storage DST: the lane moved on after the lost commit; the run still
         // reports the version its own commit made
-        assert_eq!(resolve(Some(&f), answer(true, 9, Some("lease_c"))), committed);
-        assert_eq!(resolve(Some(&f), answer(false, 3, Some("lease_a"))), Resolution::NotApplied);
-        assert_eq!(resolve(Some(&f), answer(false, 3, Some("lease_b"))), Resolution::Rejected);
-        assert_eq!(resolve(Some(&f), answer(false, 4, None)), Resolution::Rejected);
-        assert_eq!(resolve(None, answer(false, 0, None)), Resolution::NotApplied);
+        assert_eq!(resolve(Some(&f), true, lane(9, Some("lease_c"))), committed);
+        assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_a"))), Resolution::NotApplied);
+        assert_eq!(resolve(Some(&f), false, lane(3, Some("lease_b"))), Resolution::Rejected);
+        assert_eq!(resolve(Some(&f), false, lane(4, None)), Resolution::Rejected);
+        assert_eq!(resolve(None, false, lane(0, None)), Resolution::NotApplied);
         // an answer missing a statement's result is malformed, not an empty success
         let short = BatchResult { results: vec![StatementResult::Rows(vec![])] };
-        assert!(resolve_commit("front-desk", "r1", Some(&f), None).decoder.decode(&short).is_err());
+        assert!(short.at(1).is_err());
     }
 }

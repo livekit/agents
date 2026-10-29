@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::db::{
-    self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced,
-    ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery,
+    self, Acquire, AcquireOutcome, Acquired, Commit, Committed, EventWrite, Fenced, ItemPage,
+    Receive, Resolution, TaskPage, TaskQuery,
 };
 use crate::lease::{LanePoll, lease_secs};
 use crate::run::{
     self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunUsage,
     RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
-use crate::schema::{EventRow, InboxRow, ItemRow, LaneRow, THREAD_SCHEMA_VERSION, TaskRow};
-use crate::sql::Statement;
+use crate::schema::*;
+use crate::sql::{Bind, Row, SqlValue, Statement, Table};
 use crate::{Fence, StorageError, TaskWrite};
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
@@ -91,7 +91,7 @@ impl Thread {
         let holder = format!("{holder}/{}", shortuuid("")).into();
         let thread = Self { conn, thread_id: thread_id.into(), timing, schema, holder };
         if thread.schema_missing() {
-            let found = thread.probe_schema().await?;
+            let found = db::schema_version(&*thread.conn).await?;
             *thread.schema.lock().expect("schema") = found;
         }
         Ok(thread)
@@ -126,24 +126,11 @@ impl Thread {
         *self.schema.lock().expect("schema") = Some(THREAD_SCHEMA_VERSION);
     }
 
-    /// The version the database holds; `None` before any SDK wrote it.
-    async fn probe_schema(&self) -> Result<Option<i64>, StorageError> {
-        let catalog = self.conn.query(db::schema_exists()).await?;
-        if !db::decode_schema_exists(&catalog)? {
-            return Ok(None);
-        }
-        let rows = self.conn.query(db::schema_version()).await?;
-        match db::decode_schema_version(&rows)? {
-            Some(version) => Ok(Some(version)),
-            None => Err(StorageError::Invalid("schema_version has no valid version".into())),
-        }
-    }
-
     /// A competing initializer may have committed while this batch failed. Only an
     /// authoritative supported schema permits retry. A failed probe explains the failure better
     /// than the batch's error, except an `Uncertain` batch, which may still have applied.
     async fn reconcile_schema(&self, original: StorageError) -> Result<(), StorageError> {
-        match self.probe_schema().await {
+        match db::schema_version(&*self.conn).await {
             Ok(Some(_)) => Ok(()),
             Ok(None) => Err(original),
             Err(_) if matches!(original, StorageError::Uncertain(_)) => Err(original),
@@ -157,7 +144,7 @@ impl Thread {
         if !self.schema_missing() {
             return Ok(true);
         }
-        match self.probe_schema().await? {
+        match db::schema_version(&*self.conn).await? {
             Some(_) => {
                 self.schema_applied();
                 Ok(true)
@@ -184,38 +171,32 @@ impl Thread {
         Ok(())
     }
 
-    /// One read; a database with no schema holds nothing.
-    pub(crate) async fn read<T>(&self, read: Read<T>) -> Result<Vec<T>, StorageError> {
+    /// One read's rows, each decoded; a database with no schema holds nothing.
+    async fn read<S: Bind, T>(
+        &self,
+        statement: S,
+        decode: fn(&Row) -> Result<T, StorageError>,
+    ) -> Result<Vec<T>, StorageError> {
         if !self.refresh_schema().await? {
             return Ok(Vec::new());
         }
-        let rows = self.conn.query(read.statement.clone()).await?;
-        read.decode(&rows)
-    }
-
-    /// One plan's batch and its decoding.
-    pub(crate) async fn execute<D: Decode>(
-        &self,
-        plan: Plan<D>,
-    ) -> Result<D::Output, StorageError> {
-        let out = self.conn.batch(plan.statements).await?;
-        plan.decoder.decode(&out)
+        self.conn.query(statement.bind()).await?.iter().map(decode).collect()
     }
 
     /// One write statement; how many rows it changed.
-    pub(crate) async fn exec(&self, statement: Statement) -> Result<i64, StorageError> {
-        let out = self.conn.batch(vec![statement]).await?;
+    pub(crate) async fn exec<S: Bind>(&self, statement: S) -> Result<i64, StorageError> {
+        let out = self.conn.batch(vec![statement.bind()]).await?;
         Ok(out.at(0)?.rows_affected())
     }
 
-    /// The journal, every lane, after the event `after_id`.
+    /// The journal, every lane, after the event `after_id`, at most `limit` events.
     pub async fn journal(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
-        self.read(db::events(after_id, limit)).await
+        self.read(SelectEvents { after_id, limit }, EventRow::from_row).await
     }
 
     /// One task, whichever lane it is on.
     pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
-        Ok(self.read(db::thread_task(task_id)).await?.into_iter().next())
+        Ok(self.read(SelectThreadTask { task_id }, TaskRow::from_row).await?.into_iter().next())
     }
 
     /// One page of the thread's tasks, last updated first, as A2A `tasks/list` answers it.
@@ -223,11 +204,11 @@ impl Thread {
         if !self.refresh_schema().await? {
             return Ok(TaskPage::default());
         }
-        self.execute(db::list_tasks(q)?).await
+        db::list_tasks(&*self.conn, q).await
     }
 
     pub async fn lanes(&self) -> Result<Vec<LaneRow>, StorageError> {
-        self.read(db::lanes()).await
+        self.read(SelectLanes {}, LaneRow::from_row).await
     }
 
     /// One page of the thread's committed items in insertion order, of `lane` when given,
@@ -241,7 +222,7 @@ impl Thread {
         if !self.refresh_schema().await? {
             return Ok(ItemPage { items: Vec::new(), next: None });
         }
-        self.execute(db::list_items(lane, cursor, limit)?).await
+        db::list_items(&*self.conn, lane, cursor, limit).await
     }
 
     /// A direct field store's committed scope snapshot. Initialization remains runtime-owned.
@@ -280,8 +261,9 @@ impl Lane {
         self.thread.ensure_schema().await?;
         let token = shortuuid("lease_");
         let holder = format!("{holder}/{token}");
-        let plan = db::receive(&self.name, &holder, &token, self.thread.timing.secs(), input);
-        let received = self.thread.execute(plan).await?;
+        let lease_secs = self.thread.timing.secs();
+        let conn = &*self.thread.conn;
+        let received = db::receive(conn, &self.name, &holder, &token, lease_secs, input).await?;
         let lease = match received {
             Receive::Received(Some(version)) => Some(Lease::new(
                 self.thread.clone(),
@@ -296,20 +278,20 @@ impl Lane {
     /// already had one.
     pub async fn submit(&self, task: &TaskWrite) -> Result<bool, StorageError> {
         self.thread.ensure_schema().await?;
-        Ok(self.thread.exec(db::submit(&self.name, task)).await? > 0)
+        Ok(self.thread.exec(db::submitted_task(&self.name, task)).await? > 0)
     }
 
     /// The `concurrent` policy's append-only write: no lease, no fence, no version bump.
     pub async fn append(&self, commit: &Commit) -> Result<Committed, StorageError> {
         self.thread.ensure_schema().await?;
-        self.thread.execute(db::commit(&self.name, commit, None, Vec::new())?).await
+        db::commit(&*self.thread.conn, &self.name, commit, None).await
     }
 
     /// Records a worker waiting under `interrupt`; `false` when the lease is not held, in which
     /// case the caller acquires instead.
     pub async fn set_waiter(&self, holder: &str) -> Result<bool, StorageError> {
         self.thread.ensure_schema().await?;
-        Ok(self.thread.exec(db::set_waiter(&self.name, holder)).await? > 0)
+        Ok(self.thread.exec(SetWaiter { lane: &self.name, holder }).await? > 0)
     }
 
     /// A turn's checkpoint, one batch: the lane's waiter and the task's status.
@@ -317,13 +299,13 @@ impl Lane {
         &self,
         task_id: &str,
     ) -> Result<(Option<String>, Option<TaskState>), StorageError> {
-        self.thread.execute(db::checkpoint(&self.name, task_id)).await
+        db::checkpoint(&*self.thread.conn, &self.name, task_id).await
     }
 
     /// Takes a `submitted` or `working` row to `working`. The status it had (`working` means a
     /// dead holder had it), `None` when the row is terminal or missing.
     pub async fn pickup(&self, task_id: &str) -> Result<Option<TaskState>, StorageError> {
-        self.thread.execute(db::pickup(&self.name, task_id)).await
+        db::pickup(&*self.thread.conn, &self.name, task_id).await
     }
 
     /// A `working` row whose holder died ends `failed` with the given status message.
@@ -332,16 +314,18 @@ impl Lane {
         task_id: &str,
         status_message: &a2a::Message,
     ) -> Result<bool, StorageError> {
-        Ok(self.thread.exec(db::fail_orphan(&self.name, task_id, status_message)).await? > 0)
+        let status_message = SqlValue::json(status_message);
+        Ok(self.thread.exec(FailOrphan { lane: &self.name, task_id, status_message }).await? > 0)
     }
 
     /// The whole history; how another lane reads it.
     pub async fn history(&self) -> Result<Vec<ItemRow>, StorageError> {
-        self.thread.read(db::history(&self.name)).await
+        self.thread.read(SelectItems { lane: &self.name }, ItemRow::from_row).await
     }
 
     pub async fn info(&self) -> Result<Option<LaneRow>, StorageError> {
-        Ok(self.thread.read(db::lane_info(&self.name)).await?.into_iter().next())
+        let lane = SelectLane { lane: &self.name };
+        Ok(self.thread.read(lane, LaneRow::from_row).await?.into_iter().next())
     }
 
     /// The newest task rows, of one status when given.
@@ -350,11 +334,19 @@ impl Lane {
         status: Option<TaskState>,
         limit: i64,
     ) -> Result<Vec<TaskRow>, StorageError> {
-        self.thread.read(db::tasks(&self.name, status, limit)).await
+        let lane = &self.name;
+        match status {
+            Some(status) => {
+                let by_status = SelectTasksByStatus { lane, status: status.as_str(), limit };
+                self.thread.read(by_status, TaskRow::from_row).await
+            }
+            None => self.thread.read(SelectTasks { lane, limit }, TaskRow::from_row).await,
+        }
     }
 
     pub async fn task(&self, task_id: &str) -> Result<Option<TaskRow>, StorageError> {
-        Ok(self.thread.read(db::task(&self.name, task_id)).await?.into_iter().next())
+        let task = SelectTask { lane: &self.name, task_id };
+        Ok(self.thread.read(task, TaskRow::from_row).await?.into_iter().next())
     }
 
     /// The task an A2A `messageId` created.
@@ -362,17 +354,23 @@ impl Lane {
         &self,
         message_id: &str,
     ) -> Result<Option<TaskRow>, StorageError> {
-        Ok(self.thread.read(db::task_for_message(&self.name, message_id)).await?.into_iter().next())
+        let task = SelectTaskForMessage { lane: &self.name, message_id };
+        Ok(self.thread.read(task, TaskRow::from_row).await?.into_iter().next())
     }
 
     /// The inbox rows in `id` order: every one, or only those above `drained_id`.
     pub async fn inbox(&self, pending: bool) -> Result<Vec<InboxRow>, StorageError> {
-        self.thread.read(db::inbox(&self.name, pending)).await
+        let lane = &self.name;
+        match pending {
+            true => self.thread.read(SelectInboxPending { lane }, InboxRow::from_row).await,
+            false => self.thread.read(SelectInbox { lane }, InboxRow::from_row).await,
+        }
     }
 
     /// The lane's journal after the event `after_id`.
     pub async fn journal(&self, after_id: i64) -> Result<Vec<EventRow>, StorageError> {
-        self.thread.read(db::lane_events(&self.name, after_id)).await
+        let events = SelectLaneEvents { lane: &self.name, after_id };
+        self.thread.read(events, EventRow::from_row).await
     }
 
     /// The last `limit` runs, newest first; the `submitted` insert before a lease is
@@ -398,7 +396,7 @@ impl Lane {
         metadata: Map<String, Value>,
     ) -> Result<Option<TaskRow>, StorageError> {
         self.thread.ensure_schema().await?;
-        self.thread.execute(db::cancel(self.name(), task_id, &metadata)).await
+        db::cancel(&*self.thread.conn, self.name(), task_id, &metadata).await
     }
 
     /// Takes the lane and loads it. The run commits with [`Run::commit`] and ends by error with
@@ -516,11 +514,12 @@ impl Lane {
             // creator's DDL is retried without it
             let bootstrap = self.thread.bootstrap();
             let initializing = !bootstrap.is_empty();
-            let outcome = match self.thread.execute(db::acquire(&req, bootstrap)).await {
+            let conn = &*self.thread.conn;
+            let outcome = match db::acquire(conn, &req, bootstrap).await {
                 Err(error) if initializing => {
                     self.thread.reconcile_schema(error).await?;
                     self.thread.schema_applied();
-                    self.thread.execute(db::acquire(&req, Vec::new())).await
+                    db::acquire(conn, &req, Vec::new()).await
                 }
                 out => out,
             }?;
@@ -736,7 +735,7 @@ impl Run {
                 let keep = opts.keep_lease;
                 let wait = opts.resolve_wait;
                 let commit = self.writes(opts)?;
-                match self.lane.thread.execute(self.commit_plan(&commit, keep)?).await {
+                match self.send(&commit, keep).await {
                     Err(StorageError::Uncertain(why)) => {
                         log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
                         let resolved = self.resolve(&commit, keep, wait).await;
@@ -758,9 +757,8 @@ impl Run {
     /// at its fence (`VersionConflict`); otherwise an application statement was refused.
     async fn refused_commit(&self, commit: &Commit, why: String) -> StorageError {
         let fence = self.lease.as_ref().map(Lease::fence);
-        let lookup =
-            db::resolve_commit(self.lane.name(), &self.run_id, fence, commit.read_task.as_deref());
-        match self.lane.thread.execute(lookup).await {
+        let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
+        match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
             Ok(Resolution::Rejected) => StorageError::VersionConflict {
                 lane: self.lane.name().to_owned(),
                 expected: fence.map_or(0, |f| f.version),
@@ -769,16 +767,13 @@ impl Run {
         }
     }
 
-    fn commit_plan(
-        &self,
-        commit: &Commit,
-        keep: bool,
-    ) -> Result<Plan<db::CommitDecode>, StorageError> {
+    /// Sends the run's one write, fenced on its lease when it holds one.
+    async fn send(&self, commit: &Commit, keep: bool) -> Result<Committed, StorageError> {
         let fenced = self.lease.as_ref().map(|lease| Fenced {
             fence: lease.fence(),
             keep: keep.then(|| self.lane.thread.timing.secs()),
         });
-        db::commit(self.lane.name(), commit, fenced, Vec::new())
+        db::commit(&*self.lane.thread.conn, self.lane.name(), commit, fenced).await
     }
 
     /// A commit whose acknowledgment was lost, resolved by the run's identity: committed (its
@@ -796,13 +791,8 @@ impl Run {
         let mut poll = LanePoll::new(epoch.elapsed(), wait);
         let mut last: String;
         loop {
-            let lookup = db::resolve_commit(
-                self.lane.name(),
-                &self.run_id,
-                fence,
-                commit.read_task.as_deref(),
-            );
-            match self.lane.thread.execute(lookup).await {
+            let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
+            match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
                 Ok(Resolution::Committed(committed)) => return Ok(committed),
                 Ok(Resolution::Rejected) => {
                     return Err(StorageError::VersionConflict {
@@ -810,14 +800,12 @@ impl Run {
                         expected: fence.map_or(0, |f| f.version),
                     });
                 }
-                Ok(Resolution::NotApplied) => {
-                    match self.lane.thread.execute(self.commit_plan(commit, keep)?).await {
-                        Err(StorageError::Uncertain(why) | StorageError::Unavailable(why)) => {
-                            last = why
-                        }
-                        out => return out,
+                Ok(Resolution::NotApplied) => match self.send(commit, keep).await {
+                    Err(StorageError::Uncertain(why) | StorageError::Unavailable(why)) => {
+                        last = why
                     }
-                }
+                    out => return out,
+                },
                 Err(e) => last = e.to_string(),
             }
             let Some(at) = poll.next(epoch.elapsed()) else {

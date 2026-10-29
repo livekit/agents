@@ -11,8 +11,10 @@ use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::watch;
 
-use crate::db::{self, EventWrite};
+use crate::db::EventWrite;
 use crate::engine::Thread;
+use crate::schema::{ExtendLease, InsertRunEnded, ReleaseLease, ReleaseLeaseIfDrained};
+use crate::sql::{Bind, SqlValue};
 use crate::{Fence, StorageError};
 
 pub use lk_agents_abi::storage::thread::LanePoll;
@@ -65,7 +67,7 @@ impl Lease {
             let mut renewal = Renewal::new(timing.ttl, timing.renew_interval, epoch.elapsed());
             loop {
                 tokio::time::sleep_until(epoch + renewal.wake_at()).await;
-                let extend = db.exec(db::extend(&fence, timing.secs()));
+                let extend = db.exec(extend(&fence, timing.secs()));
                 let outcome = match tokio::time::timeout(renewal.attempt_timeout(), extend).await {
                     Ok(Ok(rows)) => Ok(rows > 0),
                     Ok(Err(e)) => Err(e),
@@ -111,7 +113,14 @@ impl Lease {
 
     /// Releases without writing anything else but, when given, the `run_ended` event of `run_id`.
     pub async fn release(&self, ended: Option<(&str, &EventWrite)>) -> Result<(), StorageError> {
-        self.inner.db.conn().batch(db::release(&self.inner.fence, ended)).await?;
+        let Fence { lane, token, .. } = &self.inner.fence;
+        let mut batch = Vec::new();
+        if let Some((run_id, e)) = ended {
+            let payload = SqlValue::json(&e.payload);
+            batch.push(InsertRunEnded { lane, token, ts_ms: e.ts_ms, run_id, payload }.bind());
+        }
+        batch.push(ReleaseLease { lane, token }.bind());
+        self.inner.db.conn().batch(batch).await?;
         Ok(())
     }
 
@@ -119,14 +128,19 @@ impl Lease {
     /// pending keeps the lease, extended; a lease another holder took is `LeaseLost`.
     pub async fn release_if_drained(&self) -> Result<bool, StorageError> {
         let (db, fence) = (&self.inner.db, &self.inner.fence);
-        if db.exec(db::release_if_drained(fence)).await? > 0 {
+        if db.exec(ReleaseLeaseIfDrained { lane: &fence.lane, token: &fence.token }).await? > 0 {
             return Ok(true);
         }
-        if db.exec(db::extend(fence, db.timing.secs())).await? == 0 {
+        if db.exec(extend(fence, db.timing.secs())).await? == 0 {
             return Err(StorageError::LeaseLost(format!("lease on lane {} was taken", fence.lane)));
         }
         Ok(false)
     }
+}
+
+/// Pushes the lease out while its token is still this one.
+fn extend(fence: &Fence, lease_secs: i64) -> ExtendLease<'_> {
+    ExtendLease { lane: &fence.lane, holder: &fence.holder, token: &fence.token, lease_secs }
 }
 
 /// The default lease TTL, measured on the database's clock.
