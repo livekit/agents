@@ -88,7 +88,9 @@ def main() -> None:
     for pkg in packages:
         pkg_args.extend(["-p", pkg])
 
-    uv = ["uv", "run", "--group", "typing", *uv_run_args]
+    # Every extra: the plugins it checks and the SDKs prepare_sdk_types.py inspects (sphn, riva)
+    # are optional dependencies of livekit-agents-next, absent from a plain environment.
+    uv = ["uv", "run", "--all-extras", "--group", "typing", *uv_run_args]
     preparation = subprocess.run(
         [*uv, "python", "scripts/prepare_sdk_types.py"], cwd=repo_root
     ).returncode
