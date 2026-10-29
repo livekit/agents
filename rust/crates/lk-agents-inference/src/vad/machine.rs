@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 use crate::abi::AudioFrame;
 use lk_agents_abi::{VadEvent, VadEventType};
-use lk_agents_media::{AudioFormat, FrameResampler, Quality};
+use lk_agents_media::{AudioFormat, FrameResampler, Quality, pcm_bytes, pcm_samples};
 
 /// `VAD_WINDOW_SAMPLES`, from `livekit.local_inference`. Silero's frame size at 16 kHz.
 pub const VAD_WINDOW_SAMPLES: usize = 512;
@@ -236,10 +236,10 @@ impl VadMachine {
         }
 
         let frame = if frame.num_channels > 1 {
-            let pcm = samples(&frame.data).collect::<Vec<_>>();
+            let pcm = pcm_samples(&frame.data);
             let mono = lk_agents_media::downmix_mono(&pcm, frame.num_channels);
             AudioFrame::new(
-                lk_agents_media::pcm_bytes(&mono),
+                pcm_bytes(&mono),
                 frame.sample_rate,
                 1,
                 mono.len() as u32,
@@ -251,12 +251,12 @@ impl VadMachine {
             // Empty is normal (soxr buffers), and a failed push is also empty rather than a panic.
             Some(resampler) => {
                 for converted in resampler.push(&frame).unwrap_or_default() {
-                    self.inference.extend(samples(&converted.data));
+                    self.inference.extend(pcm_samples(&converted.data));
                 }
             }
-            None => self.inference.extend(samples(&frame.data)),
+            None => self.inference.extend(pcm_samples(&frame.data)),
         }
-        self.input.extend(samples(&frame.data));
+        self.input.extend(pcm_samples(&frame.data));
         Ok(self.next_predict())
     }
 
@@ -333,7 +333,7 @@ impl VadMachine {
                 raw_accumulated_silence: self.silence_threshold_duration,
                 raw_accumulated_speech: self.speech_threshold_duration,
             },
-            frames: vec![mono(pcm(&window_input), self.input_sample_rate)],
+            frames: vec![mono(pcm_bytes(&window_input), self.input_sample_rate)],
             extra_inference_time: self.extra_inference_time,
             slow_inference,
         });
@@ -403,7 +403,7 @@ impl VadMachine {
                 raw_accumulated_speech: 0.0,
             },
             frames: vec![mono(
-                pcm(&self.speech_buffer[..self.speech_buffer_index]),
+                pcm_bytes(&self.speech_buffer[..self.speech_buffer_index]),
                 self.input_sample_rate,
             )],
             extra_inference_time: self.extra_inference_time,
@@ -422,14 +422,6 @@ pub struct SampleRateMismatch {
 pub(crate) fn mono(data: Vec<u8>, sample_rate: u32) -> AudioFrame {
     let samples_per_channel = (data.len() / 2) as u32;
     AudioFrame::new(data, sample_rate, 1, samples_per_channel)
-}
-
-fn samples(bytes: &[u8]) -> impl Iterator<Item = i16> + '_ {
-    bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]))
-}
-
-fn pcm(samples: &[i16]) -> Vec<u8> {
-    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
 }
 
 #[cfg(test)]
