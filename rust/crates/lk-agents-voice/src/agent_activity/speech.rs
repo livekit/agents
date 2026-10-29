@@ -12,9 +12,7 @@ use crate::agent_session::{
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
-use crate::generation::{
-    EndOfSpeech, Instructions, TurnInstructions, TurnOutcome as GenTurnOutcome, end_of_speech,
-};
+use crate::generation::{EndOfSpeech, TurnOutcome as GenTurnOutcome, end_of_speech};
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Handling;
@@ -39,7 +37,7 @@ pub(crate) const SAY_WITHOUT_TTS_REFUSED: &str = "trying to generate speech from
 
 pub(crate) struct SpeechSpec {
     pub(crate) new_message: Option<ChatMessage>,
-    pub(crate) turn_instructions: Option<TurnInstructions>,
+    pub(crate) turn_instructions: Option<String>,
     pub(crate) source: ReplySource,
     /// Already resolved against the session default: the loop does not re-resolve options.
     pub(crate) allow_interruptions: bool,
@@ -393,16 +391,12 @@ impl Driver {
         let wall = self.step.wall();
         let new_message = user_input
             .map(|text| ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall));
-        let turn_instructions = instructions.map(|text| TurnInstructions {
-            instructions: Instructions::plain(text),
-            message_id: self.session.ids.mint("item"),
-        });
         let interruptible = self.session.config.effective.turn.interruption.enabled();
         self.start_speech(
             now,
             SpeechSpec {
                 new_message,
-                turn_instructions,
+                turn_instructions: instructions,
                 on_enter,
                 tool_choice,
                 chat_ctx,

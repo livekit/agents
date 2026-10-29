@@ -11,7 +11,7 @@ use crate::agent_session::{Answer, RequestId};
 use crate::agent_session::{Driver, FillerSource, HookCall, HookId, ToolUpdate};
 use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
-use crate::generation::{ReplySource, TurnInstructions};
+use crate::generation::ReplySource;
 use crate::tool_executor::{
     APPROVAL_KEY, Batch, CallId, Delivery, FillerRun, FunctionToolInfo, Pending, Reply, Running,
     StepCalls, ToolEnd, ToolExecution, ToolGo, ToolOutcome, answer, default_reply_instructions,
@@ -19,8 +19,9 @@ use crate::tool_executor::{
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
+use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{ChatItem, FunctionCall, Ts};
+use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
 use lk_agents_core::tool_calls::{Effect as Move, ToolCalls};
 use std::time::Duration;
 
@@ -522,24 +523,23 @@ impl Driver {
                 if let Some(asking) = asking {
                     self.session.runs.outputs.insert(asking, output);
                 }
-                self.activity.tools.pending_input = Some(ask);
             }
         }
     }
 
-    /// The person's message answers the call an `InputRequired` left open: written as that call's
-    /// output; the request planner presents an approval answer as a call not yet run.
+    /// The person's message answers every call an `InputRequired` left waiting, by the core's
+    /// rule (the request planner applies the same one): written as those calls' outputs.
     pub(crate) fn answer_pending_input(&mut self, text: &str, out: &mut Out) {
-        let tools = &mut self.activity.tools;
-        tools.approval_answers = tools.pending_input.iter().map(|a| a.call_id.clone()).collect();
-        let Some(ask) = self.activity.tools.pending_input.take() else { return };
-        let Some(ChatItem::FunctionCallOutput(mut output)) =
-            self.session.chat_ctx.item(&ask.output_id).cloned()
-        else {
-            return;
-        };
-        output.output = text.to_owned();
-        self.replace_item(ChatItem::FunctionCallOutput(output), out);
+        let waits = |o: &FunctionCallOutput| o.output.starts_with(WAITING_PREFIX);
+        let mut waiting: Vec<ChatItem> = (self.session.chat_ctx.items())
+            .filter(|i| matches!(i, ChatItem::FunctionCallOutput(o) if waits(o)))
+            .cloned()
+            .collect();
+        self.activity.tools.approval_answers =
+            lk_agents_core::request::answer_pending_input(&mut waiting, text);
+        for item in waiting {
+            self.replace_item(item, out);
+        }
     }
 
     /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the
@@ -587,14 +587,10 @@ impl Driver {
             let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
             return self.realtime_reply(now, None, Some(text), None, tool_choice, None, false, out);
         }
-        let message_id = self.session.ids.mint("item");
         let handle = self.start_speech(
             now,
             SpeechSpec {
-                turn_instructions: Some(TurnInstructions {
-                    instructions: crate::generation::Instructions::plain(text),
-                    message_id,
-                }),
+                turn_instructions: Some(text),
                 tool_choice: Some(lk_agents_abi::ToolChoice::Forbidden),
                 chat_ctx,
                 ..SpeechSpec::new(

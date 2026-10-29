@@ -31,13 +31,11 @@ pub(crate) struct Tools {
     pub(crate) fillers: BTreeMap<FillerId, FillerRun>,
     /// The steps whose `function_tools_executed` handlers the host runs, until they answer.
     pub(crate) handling: BTreeMap<HookId, Handling>,
-    /// The call an `InputRequired` left open: the person's next message is its output.
-    pub(crate) pending_input: Option<Ask>,
     /// `InputRequired(tool=)`: the person's next turn is a call of this tool.
     pub(crate) claim: Option<Claim>,
     /// Each tool step's calls on the shared machine, until the step's tools are committed.
     pub(crate) steps: BTreeMap<(SpeechId, u32), StepCalls>,
-    /// The pending call the person's latest message answered: the only read-back a step started
+    /// The waiting calls the person's latest message answered: the only read-backs a step started
     /// since can consume.
     pub(crate) approval_answers: std::collections::BTreeSet<String>,
     /// Mints the steps' [`CallId`]s.
@@ -356,9 +354,6 @@ pub(crate) fn pair_for(
     };
     let mut execution = answer(&call, report, wall);
     execution.output.id = mint();
-    if let Some(Delivery::Ask(ask)) = &mut execution.delivery {
-        ask.output_id = execution.output.id.clone();
-    }
     execution
 }
 
@@ -405,8 +400,8 @@ impl ToolExecution {
 pub enum Delivery {
     /// A verbatim result: said as written, the model reads that it was delivered.
     Say(String),
-    /// `InputRequired`: the question asked, and the person's next message written as the output
-    /// `output_id` of the call `call_id` (the approval's read-back included).
+    /// `InputRequired`: the question asked; the person's next message is written as the output
+    /// of every call left waiting (the approval's read-back included).
     Ask(Ask),
     /// A VoiceTask tool's validated `Completed(value)`: the task ends with the value, and its
     /// agent says nothing more about it.
@@ -415,8 +410,6 @@ pub enum Delivery {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ask {
-    pub call_id: String,
-    pub output_id: String,
     pub question: String,
     pub verbatim: bool,
     /// `InputRequired(tool=)`: the tool the answer goes to.
@@ -517,13 +510,9 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
             let raw_update = Some(raw);
             return ToolExecution { call, output, end, raw_update, delivery: None, retry };
         }
-        ToolOutcome::InputRequired { question, verbatim, tool } => Some(Delivery::Ask(Ask {
-            call_id: call.call_id.clone(),
-            output_id: output.id.clone(),
-            question,
-            verbatim,
-            tool,
-        })),
+        ToolOutcome::InputRequired { question, verbatim, tool } => {
+            Some(Delivery::Ask(Ask { question, verbatim, tool }))
+        }
         other => lk_agents_core::tool_outcome::verbatim(&other)
             .map(|text| Delivery::Say(text.to_owned())),
     };

@@ -267,14 +267,6 @@ pub struct RunningToolCall {
     pub output_id: String,
 }
 
-/// The `instructions=` argument of one turn, with the id for the system message it becomes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnInstructions {
-    pub instructions: Instructions,
-    /// Minted by the caller. An ordinary system message, not [`INSTRUCTIONS_MESSAGE_ID`].
-    pub message_id: String,
-}
-
 #[derive(Debug, Clone)]
 pub struct RequestInputs<'a> {
     /// Read, never written.
@@ -283,13 +275,12 @@ pub struct RequestInputs<'a> {
     pub pending: &'a [ChatItem],
     pub new_message: Option<&'a ChatMessage>,
     pub instructions: &'a str,
-    /// `generate_reply(instructions=..)`.
-    pub turn_instructions: Option<&'a TurnInstructions>,
+    /// `generate_reply(instructions=..)`: a system message for this request alone.
+    pub turn_instructions: Option<&'a str>,
     pub tools: &'a [ToolSpec],
     /// This reply runs inside the agent's `on_enter`: the `IGNORE_ON_ENTER` tools are withheld.
     pub on_enter: bool,
     pub running_tool_calls: &'a [RunningToolCall],
-    pub modality: Modality,
     /// `session.output.audio_enabled`; exactly [`Request::tts_enabled`].
     pub audio_output_enabled: bool,
     pub text_output_enabled: bool,
@@ -314,8 +305,8 @@ pub struct Request {
 }
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// Assemble one request. Order matters: stale prompts removed, pending and new items by
-/// `created_at`, prompt first, per-turn instructions, expressive guide, placeholders last.
+/// Assemble one request: pending and new items by `created_at`, the expressive guide and the
+/// running placeholders, then the core's plan (prompt first, per-turn instructions last).
 pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
     let RequestInputs {
         record,
@@ -326,7 +317,6 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
         tools,
         on_enter,
         running_tool_calls,
-        modality,
         audio_output_enabled,
         text_output_enabled,
         now,
@@ -334,7 +324,6 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
     } = inputs;
 
     let mut ctx = record.copy(&CopyOptions::default());
-    ctx.items.retain(|item| item.id() != INSTRUCTIONS_MESSAGE_ID);
 
     let known: std::collections::HashSet<String> =
         ctx.items.iter().map(|it| it.id().to_owned()).collect();
@@ -350,15 +339,6 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
         }
         ctx.insert(msg.clone());
     }
-    if let Some(turn) = turn_instructions {
-        ctx.push(ChatMessage::text(
-            &turn.message_id,
-            Role::System,
-            turn.instructions.render(Some(modality)),
-            now,
-        ));
-    }
-
     // On, the guide replaces last turn's instead of stacking; off, it goes and past turns lose
     // their markup.
     match expressive {
@@ -380,7 +360,7 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
         instructions,
         tools,
         on_enter,
-        turn_instructions: None,
+        turn_instructions,
         created_at: now,
     });
     Request {
@@ -742,7 +722,7 @@ pub struct PlanSpec {
     pub new_message: Option<lk_agents_abi::ChatMessage>,
     /// `None` renders the frame's instructions.
     pub instructions: Option<String>,
-    pub turn_instructions: Option<crate::generation::TurnInstructions>,
+    pub turn_instructions: Option<String>,
     pub tools: Vec<lk_agents_abi::ToolSpec>,
     pub on_enter: bool,
     pub running_tool_calls: Vec<crate::generation::RunningToolCall>,
@@ -774,11 +754,10 @@ impl PlanSpec {
             pending,
             new_message: self.new_message.as_ref(),
             instructions: self.instructions.as_deref().unwrap_or(instructions),
-            turn_instructions: self.turn_instructions.as_ref(),
+            turn_instructions: self.turn_instructions.as_deref(),
             tools: &self.tools,
             on_enter: self.on_enter,
             running_tool_calls: &self.running_tool_calls,
-            modality: lk_agents_abi::Modality::Audio,
             audio_output_enabled: self.audio_output_enabled,
             text_output_enabled: self.text_output_enabled,
             now,
@@ -1041,7 +1020,6 @@ mod expressive_tests {
             tools: &[],
             on_enter: false,
             running_tool_calls: &[],
-            modality: Modality::Audio,
             audio_output_enabled: true,
             text_output_enabled: true,
             now,
