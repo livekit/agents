@@ -615,12 +615,9 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
     }
 
     fn entries(&self) -> Vec<(String, Option<Value>, f64)> {
-        let seconds = |at: SystemTime| {
-            at.duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |since| since.as_secs_f64())
-        };
         self.tags
             .iter()
-            .map(|(k, e)| (k.clone(), e.metadata.clone(), seconds(e.timestamp)))
+            .map(|(k, e)| (k.clone(), e.metadata.clone(), lk_agents_abi::unix_secs(e.timestamp)))
             .collect()
     }
 

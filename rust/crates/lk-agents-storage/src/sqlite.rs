@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
+use lk_agents_abi::unix_now;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::StorageError;
@@ -245,16 +246,12 @@ impl SqliteStorage {
         let rows = self.registry.query(select).await?;
         let row = rows.first().ok_or_else(|| StorageError::NotFound(thread_id.into()))?;
         let (record, expires_at) = thread_record(row)?;
-        if expires_at != 0 && expires_at <= unix_now() {
+        if expires_at != 0 && expires_at <= unix_now() as i64 {
             self.delete_thread(thread_id).await?;
             return Err(StorageError::NotFound(thread_id.into()));
         }
         Ok(record)
     }
-}
-
-fn unix_now() -> i64 {
-    lk_agents_abi::unix_now() as i64
 }
 
 fn timestamp(secs: i64) -> Option<pbjson_types::Timestamp> {
@@ -301,7 +298,7 @@ impl Storage for SqliteStorage {
             Databases::Directory(_) => None,
             Databases::Memory { connections } => Some(connections.lock().await),
         };
-        let now = unix_now();
+        let now = unix_now() as i64;
         let idle_ttl = ttl_secs(request.idle_ttl.as_ref());
         let attributes: HashMap<&String, &String> =
             request.attributes.iter().filter(|(_, v)| !v.is_empty()).collect();
@@ -364,7 +361,7 @@ impl Storage for SqliteStorage {
             .into(),
             params: vec![
                 request.scope.as_str().into(),
-                unix_now().into(),
+                (unix_now() as i64).into(),
                 before_at.into(),
                 before_id.into(),
                 i64::from(limit + 1).into(),
@@ -397,7 +394,7 @@ impl Storage for SqliteStorage {
             Some(d) => ttl_secs(Some(d)),
             None => ttl_secs(current.idle_ttl.as_ref()),
         };
-        let now = unix_now();
+        let now = unix_now() as i64;
         let update = Statement {
             sql: "UPDATE threads SET attributes = ?2, last_active = ?3, idle_ttl = ?4, \
                   expires_at = ?5 WHERE thread_id = ?1"

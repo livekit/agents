@@ -25,7 +25,7 @@ impl Pump {
             );
             let configuration = connection_configuration(&self.create_frame, &self.headers);
             let (mut reused, mut expired) =
-                self.connections.lock().unwrap().take(pool_secs(&*self.clock));
+                self.connections.lock().unwrap().take(self.clock.now().as_secs_f64());
             if reused.as_ref().is_some_and(|(_, connection)| {
                 connection.configuration != configuration
                     || connection.session_id != self.session_id
@@ -57,7 +57,7 @@ impl Pump {
                             &self.create_frame,
                         )
                         .await?;
-                        let id = self.connections.lock().unwrap().opened(pool_secs(&*self.clock));
+                        let id = self.connections.lock().unwrap().opened(self.clock.now().as_secs_f64());
                         Ok((
                             id,
                             Connection {

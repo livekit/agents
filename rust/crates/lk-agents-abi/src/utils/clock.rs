@@ -7,15 +7,40 @@ use std::time::{Duration, SystemTime};
 
 use tokio::sync::Notify;
 
-/// `t` as `time.time()` reads it: seconds since the Unix epoch, zero for anything before it.
+/// `t` as `time.time()` reads it: seconds since the Unix epoch, negative before it.
 pub fn unix_secs(t: SystemTime) -> f64 {
-    t.duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+    match t.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => d.as_secs_f64(),
+        Err(before) => -before.duration().as_secs_f64(),
+    }
+}
+
+/// The inverse of [`unix_secs`]; `None` for a value no wall clock returns (NaN, infinities, out of
+/// range), never a panic.
+pub fn wall_from_secs(secs: f64) -> Option<SystemTime> {
+    let magnitude = Duration::try_from_secs_f64(secs.abs()).ok()?;
+    if secs < 0.0 {
+        SystemTime::UNIX_EPOCH.checked_sub(magnitude)
+    } else {
+        SystemTime::UNIX_EPOCH.checked_add(magnitude)
+    }
 }
 
 #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `time.time()`, for code with no clock of its own.
 pub fn unix_now() -> f64 {
     unix_secs(SystemTime::now())
+}
+
+/// `int(time.time() * 1000)`: whole Unix milliseconds, for code with no clock of its own.
+pub fn unix_now_ms() -> i64 {
+    (unix_now() * 1000.0) as i64
+}
+
+/// Seconds from a host value as a `Duration`: zero for NaN or a non-positive value, at most 1e9 s
+/// (+inf included), so a deadline built from it never overflows.
+pub fn secs(s: f64) -> Duration {
+    if s.is_nan() || s <= 0.0 { Duration::ZERO } else { Duration::from_secs_f64(s.min(1e9)) }
 }
 
 /// Nanoseconds since the session started. Not `Instant`, so tests can virtualise time.
@@ -30,6 +55,10 @@ impl Ts {
     }
     pub const fn as_nanos(self) -> u64 {
         self.0
+    }
+
+    pub fn as_secs_f64(self) -> f64 {
+        self.0 as f64 / 1e9
     }
 
     /// Saturating: a past deadline is normal and must not panic on a host value.
@@ -498,4 +527,56 @@ mod tests {
         assert_eq!(c.nudged(later), later);
     }
 
+}
+
+#[cfg(test)]
+mod wall_tests {
+    use super::{unix_secs, wall_from_secs};
+
+    // Catches: converting `created_at` through anything coarser than f64 (the 1e-6 `_summarize`
+    // nudge must survive).
+    #[test]
+    fn a_wall_clock_stamp_survives_the_round_trip_including_the_summarize_nudge() {
+        let now = 1_767_225_600.123_456_7_f64; // a real `time.time()` magnitude
+        assert_eq!(unix_secs(wall_from_secs(now).unwrap()), now);
+
+        let nudged = now + 1e-6;
+        assert!(nudged > now, "the f64 itself must be distinguishable");
+        assert!(
+            wall_from_secs(nudged).unwrap() > wall_from_secs(now).unwrap(),
+            "a 1us nudge collapsed on the way into SystemTime"
+        );
+        assert_eq!(unix_secs(wall_from_secs(nudged).unwrap()), nudged);
+    }
+
+    // Below ~4.5e6 s an f64 is finer than `SystemTime`'s nanosecond, so such stamps quantize; no
+    // real `time.time()` is there.
+    // Catches: "fixing" that by rounding or a coarser representation.
+    #[test]
+    fn sub_nanosecond_stamps_quantize_and_real_wall_clocks_do_not() {
+        // Below the boundary: an f64 with more precision than a nanosecond loses the excess.
+        let tiny = 0.745_466_620_754_925_9_f64;
+        assert_ne!(unix_secs(wall_from_secs(tiny).unwrap()), tiny, "the boundary moved");
+        assert_eq!(unix_secs(wall_from_secs(tiny).unwrap()), 0.745_466_621);
+
+        // Above it -- every value `time.time()` can return -- the round trip is exact.
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        for _ in 0..100_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let now = 1.7e9 + (seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0e8;
+            assert_eq!(unix_secs(wall_from_secs(now).unwrap()), now, "{now} did not survive");
+        }
+    }
+
+    // Catches: `Duration::from_secs_f64` panicking on a host-supplied nan/inf/negative.
+    #[test]
+    fn a_nonsensical_created_at_is_none_not_a_panic() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e30] {
+            assert!(wall_from_secs(bad).is_none(), "{bad} should not be accepted");
+        }
+        // ...but a pre-epoch stamp is representable, and round-trips.
+        assert_eq!(unix_secs(wall_from_secs(-1.5).unwrap()), -1.5);
+    }
 }

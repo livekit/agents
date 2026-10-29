@@ -294,7 +294,7 @@ impl RealtimeMachine {
         };
         let created = self.response_created_at.take()?;
         let first = self.first_token_at.take();
-        let duration = secs(now) - secs(created);
+        let duration = now.as_secs_f64() - created.as_secs_f64();
         let tokens = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
         let metrics = RealtimeModelMetrics {
             label: self.label.clone(),
@@ -302,7 +302,7 @@ impl RealtimeMachine {
             timestamp: self.wall_secs(created),
             duration,
             session_duration: 0.0,
-            ttft: first.map_or(RealtimeModelMetrics::NO_TTFT, |f| secs(f) - secs(created)),
+            ttft: first.map_or(RealtimeModelMetrics::NO_TTFT, |f| f.as_secs_f64() - created.as_secs_f64()),
             cancelled: status == GenerationStatus::Cancelled,
             input_tokens: tokens(usage.input_tokens),
             output_tokens: tokens(usage.output_tokens),
@@ -1082,11 +1082,6 @@ enum Generation {
     },
     /// `_DiscardedGeneration`: cancelled before it surfaced; its trailing events are skipped.
     Discarded,
-}
-
-/// A session-clock instant in seconds, for durations between two of them.
-fn secs(t: Ts) -> f64 {
-    t.as_nanos() as f64 / 1e9
 }
 
 struct EventIds {

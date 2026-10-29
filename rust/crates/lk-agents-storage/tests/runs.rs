@@ -402,10 +402,6 @@ async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
-}
-
 /// Waiters run in the order their messages' rows were submitted: a later message cannot take a
 /// free lane while an older one still waits for it.
 async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: Backend) {
@@ -444,7 +440,7 @@ async fn a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost
     lease.stop();
     tokio::time::sleep(Duration::from_millis(2100)).await;
     let expired = lane.info().await.unwrap().unwrap();
-    assert!(expired.lease_until <= unix_now(), "the lease lapsed");
+    assert!(expired.lease_until <= lk_agents_abi::unix_now() as i64, "the lease lapsed");
     lease.keep_alive();
     let renewed = tokio::time::timeout(Duration::from_secs(2), async {
         loop {

@@ -11,24 +11,6 @@ use crate::llm::chat_context::{
     ChatContent, ChatItem, ChatMessage, Extra, ImageSource, InferenceDetail, Role,
 };
 
-/// The `time.time()` float the reference stores. Pre-epoch stamps come back negative.
-pub fn epoch_secs(at: SystemTime) -> f64 {
-    match at.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(d) => d.as_secs_f64(),
-        Err(before) => -before.duration().as_secs_f64(),
-    }
-}
-
-/// `None` for a value no wall clock returns (NaN, infinities, out of range); never panics.
-pub fn wall_from_secs(secs: f64) -> Option<SystemTime> {
-    let magnitude = std::time::Duration::try_from_secs_f64(secs.abs()).ok()?;
-    if secs < 0.0 {
-        SystemTime::UNIX_EPOCH.checked_sub(magnitude)
-    } else {
-        SystemTime::UNIX_EPOCH.checked_add(magnitude)
-    }
-}
-
 /// `chat_context.py:630`. The seventh flag, `strip_markup`, is [`ToDictHost::strip_expr_markup`]:
 /// the flag and the stripper are one decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,7 +150,7 @@ impl ModelDump for Extra {
 
 impl ModelDump for SystemTime {
     fn model_dump(&self, _: &DumpCx<'_>, _: &'static str) -> Dumped {
-        Ok(Some(epoch_secs(*self).into()))
+        Ok(Some(crate::unix_secs(*self).into()))
     }
 }
 
@@ -224,58 +206,6 @@ pub trait ChatContextDict {
         #[host(default = false)] exclude_config_update: bool,
         #[host(default = false)] strip_markup: bool,
     ) -> Result<Map<String, Value>, ToDictError>;
-}
-
-#[cfg(test)]
-mod wall_tests {
-    use super::{epoch_secs, wall_from_secs};
-
-    // Catches: converting `created_at` through anything coarser than f64 (the 1e-6 `_summarize`
-    // nudge must survive).
-    #[test]
-    fn a_wall_clock_stamp_survives_the_round_trip_including_the_summarize_nudge() {
-        let now = 1_767_225_600.123_456_7_f64; // a real `time.time()` magnitude
-        assert_eq!(epoch_secs(wall_from_secs(now).unwrap()), now);
-
-        let nudged = now + 1e-6;
-        assert!(nudged > now, "the f64 itself must be distinguishable");
-        assert!(
-            wall_from_secs(nudged).unwrap() > wall_from_secs(now).unwrap(),
-            "a 1us nudge collapsed on the way into SystemTime"
-        );
-        assert_eq!(epoch_secs(wall_from_secs(nudged).unwrap()), nudged);
-    }
-
-    // Below ~4.5e6 s an f64 is finer than `SystemTime`'s nanosecond, so such stamps quantize; no
-    // real `time.time()` is there.
-    // Catches: "fixing" that by rounding or a coarser representation.
-    #[test]
-    fn sub_nanosecond_stamps_quantize_and_real_wall_clocks_do_not() {
-        // Below the boundary: an f64 with more precision than a nanosecond loses the excess.
-        let tiny = 0.745_466_620_754_925_9_f64;
-        assert_ne!(epoch_secs(wall_from_secs(tiny).unwrap()), tiny, "the boundary moved");
-        assert_eq!(epoch_secs(wall_from_secs(tiny).unwrap()), 0.745_466_621);
-
-        // Above it -- every value `time.time()` can return -- the round trip is exact.
-        let mut seed = 0x2545_F491_4F6C_DD1Du64;
-        for _ in 0..100_000 {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            let now = 1.7e9 + (seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0e8;
-            assert_eq!(epoch_secs(wall_from_secs(now).unwrap()), now, "{now} did not survive");
-        }
-    }
-
-    // Catches: `Duration::from_secs_f64` panicking on a host-supplied nan/inf/negative.
-    #[test]
-    fn a_nonsensical_created_at_is_none_not_a_panic() {
-        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e30] {
-            assert!(wall_from_secs(bad).is_none(), "{bad} should not be accepted");
-        }
-        // ...but a pre-epoch stamp is representable, and round-trips.
-        assert_eq!(epoch_secs(wall_from_secs(-1.5).unwrap()), -1.5);
-    }
 }
 
 #[cfg(test)]

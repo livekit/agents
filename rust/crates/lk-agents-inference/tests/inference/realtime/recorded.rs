@@ -657,10 +657,6 @@ fn probes() -> Vec<(String, Value)> {
     out
 }
 
-fn secs(t: Ts) -> f64 {
-    t.as_nanos() as f64 / 1e9
-}
-
 /// Server ids to the probe's ordinals (`item0`, `resp1`, `call0`), minted in the order the
 /// probe's recorder meets them, so `@item1` in a frame names the same item in both.
 #[derive(Default)]
@@ -898,7 +894,7 @@ fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, V
     let mut clock = Ts::ZERO;
     server.connect(clock);
     loop {
-        let now = secs(clock);
+        let now = clock.as_secs_f64();
         // Deliver what is due now.
         while let Some(delivered) = server.pop(clock, SystemTime::UNIX_EPOCH, &mut hooks) {
             let frame = wire(&delivered);

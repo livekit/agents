@@ -120,14 +120,13 @@ pub use vad::events::{VadEvent, VadEventType};
 // `metrics::base::Metadata` is deliberately not at the root, beside the unrelated `MetricsMetadata`.
 pub use llm::to_dict::{
     DumpCx, DumpMap, DumpValue, Dumped, ModelDump, ToDictError, ToDictHost, ToDictOptions,
-    epoch_secs, wall_from_secs,
 };
 pub use metrics::base::{EotInferenceMetrics, InterruptionMetrics};
 pub use tts::timed::TimedString;
 
 pub use utils::clock::{
-    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, simulated_epoch,
-    timeout, unix_now, unix_secs,
+    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, secs,
+    simulated_epoch, timeout, unix_now, unix_now_ms, unix_secs, wall_from_secs,
 };
 pub use utils::filters::FilterError;
 pub use utils::frame::FrameId;

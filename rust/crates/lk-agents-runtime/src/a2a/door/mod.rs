@@ -20,7 +20,8 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::schema::TaskRow;
-use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
+use lk_agents_abi::unix_now_ms;
+use lk_agents_storage::{Storage, Thread, shortuuid};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -376,7 +377,7 @@ impl Inner {
                 let row = rpc::unknown_thread_task(
                     &shortuuid("AST_"),
                     &self.lane,
-                    now_ms(),
+                    unix_now_ms(),
                     shortuuid("msg_"),
                 );
                 return Ok(rpc::unpersisted(id, &row, &unknown, streaming, history));

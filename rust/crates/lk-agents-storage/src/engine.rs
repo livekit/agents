@@ -26,7 +26,8 @@ use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWr
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;
-use crate::{SqliteConnection, now_ms, shortuuid};
+use crate::{SqliteConnection, shortuuid};
+use lk_agents_abi::unix_now_ms;
 
 /// How long a lease lasts and how often its holder renews it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,7 +499,7 @@ impl Lane {
                 run_id: &opts.run_id,
                 task_id: &opts.task_id,
                 run_started: EventWrite::run_started(
-                    now_ms(),
+                    unix_now_ms(),
                     &RunStarted {
                         task_id: Some(opts.task_id.clone()),
                         stream_id: Some(opts.task_id.clone()),
@@ -600,7 +601,7 @@ pub struct EventLog {
 
 impl EventLog {
     pub fn append(&mut self, r#type: &str, payload: Value) {
-        self.new.push(EventWrite { ts_ms: now_ms(), r#type: r#type.to_owned(), payload });
+        self.new.push(EventWrite { ts_ms: unix_now_ms(), r#type: r#type.to_owned(), payload });
     }
 }
 
@@ -696,7 +697,7 @@ impl Run {
             usage: self.usage,
             outcome: self.outcome,
             reason: self.reason.as_deref(),
-            now_ms: now_ms(),
+            now_ms: unix_now_ms(),
             drained_id: opts.drained_id,
             answer_task: opts.answer_task,
         })?;
@@ -849,7 +850,7 @@ impl Run {
             return lease.release(None).await;
         }
         let ended =
-            EventWrite::run_ended(now_ms(), &RunEnded { outcome, reason: Some(reason.into()) });
+            EventWrite::run_ended(unix_now_ms(), &RunEnded { outcome, reason: Some(reason.into()) });
         if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
             log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }

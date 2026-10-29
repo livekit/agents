@@ -342,6 +342,7 @@ mod tests {
         VerdictOutcome,
     };
     use super::*;
+    use lk_agents_abi::secs;
     use lk_agents_abi::metrics::usage::ModelUsage;
     use lk_agents_abi::{ChatItem, Clock};
     use std::sync::atomic::AtomicBool;
@@ -483,10 +484,6 @@ mod tests {
         let events = Arc::new(Events(Mutex::new(Vec::new())));
         client.start(ct, events.clone()).await.unwrap();
         (host, client, ht, events)
-    }
-
-    fn secs(s: f64) -> Duration {
-        Duration::from_secs_f64(s)
     }
 
     async fn nap(d: Duration) {

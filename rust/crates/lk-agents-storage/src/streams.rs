@@ -18,7 +18,8 @@ use tokio::sync::Notify;
 use crate::StorageError;
 use crate::sql::{SqlValue, Statement, StatementResult};
 use crate::sqlite::FileConnection;
-use crate::{SqliteConnection, now_ms, shortuuid};
+use crate::{SqliteConnection, shortuuid};
+use lk_agents_abi::unix_now_ms;
 
 pub use lk_agents_abi::storage::StreamInfo;
 
@@ -92,7 +93,7 @@ impl LocalStreams {
         let rows = conn
             .query(statement(
                 "SELECT closed FROM streams WHERE stream_id = ?1 AND expires_at > ?2",
-                vec![stream_id.into(), now_ms().into()],
+                vec![stream_id.into(), unix_now_ms().into()],
             ))
             .await?;
         Ok(rows.first().map(|r| r.first().and_then(SqlValue::as_i64) == Some(1)))
@@ -112,7 +113,7 @@ impl ResponseStreams for LocalStreams {
     async fn create(&self, ttl: Option<Duration>) -> Result<StreamInfo, StorageError> {
         let stream_id = shortuuid("AST_");
         let ttl_ms = i64::try_from(ttl.unwrap_or(DEFAULT_TTL).as_millis()).unwrap_or(i64::MAX);
-        let expires_at = now_ms().saturating_add(ttl_ms);
+        let expires_at = unix_now_ms().saturating_add(ttl_ms);
         self.conn
             .batch(vec![statement(
                 "INSERT INTO streams (stream_id, expires_at) VALUES (?1, ?2)",
@@ -130,7 +131,7 @@ impl ResponseStreams for LocalStreams {
 SELECT ?1, COALESCE((SELECT MAX(seq) FROM records WHERE stream_id = ?1), 0) + 1, ?2
 WHERE EXISTS (SELECT 1 FROM streams WHERE stream_id = ?1 AND closed = 0 AND expires_at > ?3)
 RETURNING seq",
-                vec![stream_id.into(), record.to_vec().into(), now_ms().into()],
+                vec![stream_id.into(), record.to_vec().into(), unix_now_ms().into()],
             )])
             .await?;
         let seq = match out.results.first() {
@@ -156,7 +157,7 @@ RETURNING seq",
             .conn
             .batch(vec![statement(
                 "UPDATE streams SET closed = 1 WHERE stream_id = ?1 AND expires_at > ?2",
-                vec![stream_id.into(), now_ms().into()],
+                vec![stream_id.into(), unix_now_ms().into()],
             )])
             .await?;
         self.appended.notify_waiters();

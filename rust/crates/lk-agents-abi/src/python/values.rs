@@ -218,7 +218,7 @@ pub fn wall_from_py(secs: f64, path: &str) -> PyResult<std::time::SystemTime> {
 
 /// Pre-epoch is negative.
 pub fn wall_to_py(at: std::time::SystemTime) -> f64 {
-    crate::epoch_secs(at)
+    crate::unix_secs(at)
 }
 
 /// For arguments where `None` is a value: `Agent(llm=None)` means "no LLM", not "unchanged". A

@@ -2,8 +2,8 @@
 //! Both outgoing selection and incoming validation use this schema; decoding never stores history.
 
 use lk_agents_abi::a2a_protocol as a2a;
+use lk_agents_abi::{unix_secs, wall_from_secs};
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::chat_context::{
@@ -173,7 +173,7 @@ impl CallerHistory {
                                 _ => None,
                             })
                             .collect(),
-                        created_at: seconds(message.created_at),
+                        created_at: unix_secs(message.created_at),
                         interrupted: message.interrupted,
                         extra: selected_extra(&message.extra, sharing),
                     }
@@ -184,7 +184,7 @@ impl CallerHistory {
                         call_id: call.call_id.clone(),
                         name: call.name.clone(),
                         arguments: call.arguments.clone(),
-                        created_at: seconds(call.created_at),
+                        created_at: unix_secs(call.created_at),
                         group_id: call.group_id.clone(),
                         extra: selected_extra(&call.extra, sharing),
                     }
@@ -197,7 +197,7 @@ impl CallerHistory {
                         call_id: output.call_id.clone(),
                         output: output.output.clone(),
                         is_error: output.is_error,
-                        created_at: seconds(output.created_at),
+                        created_at: unix_secs(output.created_at),
                         name: (!output.name.is_empty()).then(|| output.name.clone()),
                         reply_required: output.reply_required,
                     }
@@ -233,7 +233,7 @@ impl CallerHistory {
                         id.clone(),
                         *role,
                         content.iter().cloned().map(ChatContent::Text).collect(),
-                        time(*created_at).expect("validated timestamp"),
+                        wall_from_secs(*created_at).expect("validated timestamp"),
                     );
                     message.interrupted = *interrupted;
                     message.extra = extra.clone();
@@ -252,7 +252,7 @@ impl CallerHistory {
                     call_id: call_id.clone(),
                     name: name.clone(),
                     arguments: arguments.clone(),
-                    created_at: time(*created_at).expect("validated timestamp"),
+                    created_at: wall_from_secs(*created_at).expect("validated timestamp"),
                     group_id: group_id.clone(),
                     extra: extra.clone(),
                 }),
@@ -270,7 +270,7 @@ impl CallerHistory {
                         call_id.clone(),
                         output.clone(),
                         *is_error,
-                        time(*created_at).expect("validated timestamp"),
+                        wall_from_secs(*created_at).expect("validated timestamp"),
                     );
                     output.name = name.clone().unwrap_or_default();
                     output.reply_required = *reply_required;
@@ -331,7 +331,7 @@ impl CallerHistory {
             if id.is_empty() || !ids.insert(id.as_str()) {
                 return Err(HistoryError("item IDs must be nonempty and unique".into()));
             }
-            if time(created_at).is_none() {
+            if wall_from_secs(created_at).is_none() {
                 return Err(HistoryError("created_at must be finite Unix seconds".into()));
             }
         }
@@ -339,22 +339,6 @@ impl CallerHistory {
             return Err(HistoryError("a function call is missing its output".into()));
         }
         Ok(())
-    }
-}
-
-fn seconds(value: SystemTime) -> f64 {
-    match value.duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs_f64(),
-        Err(error) => -error.duration().as_secs_f64(),
-    }
-}
-
-fn time(seconds: f64) -> Option<SystemTime> {
-    let duration = Duration::try_from_secs_f64(seconds.abs()).ok()?;
-    if seconds.is_sign_negative() {
-        UNIX_EPOCH.checked_sub(duration)
-    } else {
-        UNIX_EPOCH.checked_add(duration)
     }
 }
 

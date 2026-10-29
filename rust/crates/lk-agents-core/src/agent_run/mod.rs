@@ -577,7 +577,7 @@ impl AgentRun {
 
     fn stamp(&self, now: Ts) -> SystemTime {
         let secs = self.input.wall.seconds(now);
-        SystemTime::UNIX_EPOCH + Duration::try_from_secs_f64(secs.max(0.0)).unwrap_or_default()
+        lk_agents_abi::wall_from_secs(secs.max(0.0)).unwrap_or(SystemTime::UNIX_EPOCH)
     }
 
     fn start(&mut self, now: Ts, fx: &mut Vec<Effect>) {

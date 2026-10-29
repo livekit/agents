@@ -1,7 +1,7 @@
 //! One job process's supervisor: the IPC connection, health sampling and cleanup ownership around
 //! [`Supervision`].
 
-use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_abi::{OwnedTask, SpawnerExt, unix_now_ms};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,10 +52,6 @@ pub enum MemoryError {
 }
 
 const QUEUE: usize = 16;
-
-pub fn time_ms() -> i64 {
-    (lk_agents_abi::unix_now() * 1000.0 + 0.5) as i64
-}
 
 enum Command {
     Input(Input),
@@ -277,7 +273,7 @@ impl Driver {
         while !self.state.cleaned() {
             let now = Instant::now();
             if self.state.wake_at().is_some_and(|at| at <= now.duration_since(self.origin)) {
-                let effects = self.state.tick(now.duration_since(self.origin), time_ms());
+                let effects = self.state.tick(now.duration_since(self.origin), unix_now_ms());
                 self.execute(effects, &mut sampling);
                 self.publish();
                 continue;
@@ -393,7 +389,7 @@ impl Driver {
 
     fn apply(&mut self, input: Input, sampling: &mut Sampling) {
         let effects =
-            self.state.handle(Instant::now().duration_since(self.origin), time_ms(), input);
+            self.state.handle(Instant::now().duration_since(self.origin), unix_now_ms(), input);
         self.execute(effects, sampling);
     }
 
@@ -414,7 +410,7 @@ impl Driver {
                     if let Err(error) = self.writes.try_send((id, message)) {
                         queue.extend(self.state.handle(
                             Instant::now().duration_since(self.origin),
-                            time_ms(),
+                            unix_now_ms(),
                             Input::Written {
                                 id,
                                 result: Err(Arc::new(WireError::Unexpected(format!(
@@ -429,7 +425,7 @@ impl Driver {
                     let begun = self.begin_kill();
                     queue.extend(self.state.handle(
                         Instant::now().duration_since(self.origin),
-                        time_ms(),
+                        unix_now_ms(),
                         Input::KillBegun(begun),
                     ));
                 }
@@ -437,7 +433,7 @@ impl Driver {
                     let result = if self.host.is_alive() { self.host.kill() } else { Ok(()) };
                     queue.extend(self.state.handle(
                         Instant::now().duration_since(self.origin),
-                        time_ms(),
+                        unix_now_ms(),
                         Input::KillFinished(result),
                     ));
                 }
@@ -456,7 +452,7 @@ impl Driver {
                         Ok(receipt) => *sampling = Some(receipt),
                         Err(_) => queue.extend(self.state.handle(
                             Instant::now().duration_since(self.origin),
-                            time_ms(),
+                            unix_now_ms(),
                             Input::Sampled(Sample::Failed),
                         )),
                     }

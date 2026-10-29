@@ -124,10 +124,7 @@ pub fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
     Ok(())
 }
 
-/// Seconds as a `Duration`: zero when negative or NaN.
-pub fn secs(s: f64) -> Duration {
-    if s.is_nan() || s <= 0.0 { Duration::ZERO } else { Duration::from_secs_f64(s.min(1e9)) }
-}
+pub use lk_agents_abi::secs;
 
 /// `round(x, digits)`: Python rounds the exact binary value half to even, as formatting does.
 pub(super) fn round(x: f64, digits: usize) -> f64 {

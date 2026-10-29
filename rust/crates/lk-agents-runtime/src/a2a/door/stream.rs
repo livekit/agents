@@ -12,7 +12,8 @@ use lk_agents_storage::StorageError;
 use lk_agents_storage::schema::TaskRow;
 use tokio::sync::{Mutex, mpsc};
 
-use lk_agents_storage::{ResponseStreams, now_ms, shortuuid};
+use lk_agents_abi::unix_now_ms;
+use lk_agents_storage::{ResponseStreams, shortuuid};
 
 pub type Sender = mpsc::Sender<Result<DoorFrame, DoorError>>;
 
@@ -72,7 +73,7 @@ impl Publisher {
 
     /// The turn's answer, then the stream closes.
     pub async fn finish(&self, result: &TurnResult) -> Result<(), StorageError> {
-        let events = self.state.lock().await.0.finish(result, &self.context, now_ms());
+        let events = self.state.lock().await.0.finish(result, &self.context, unix_now_ms());
         self.emit(events, &result.task.task_id).await?;
         self.streams.close(&self.stream_id).await
     }
@@ -80,7 +81,7 @@ impl Publisher {
     /// The message's task is durable, before admission waits or application work.
     pub async fn accepted(&self, task: &TaskRow) -> Result<(), StorageError> {
         let task_id = self.continuing.as_deref().unwrap_or(&task.task_id);
-        let announced = self.state.lock().await.0.announce(task_id, &self.context, now_ms());
+        let announced = self.state.lock().await.0.announce(task_id, &self.context, unix_now_ms());
         self.emit(announced.into_iter().collect(), task_id).await
     }
 
@@ -90,7 +91,7 @@ impl Publisher {
             return Ok(());
         };
         let published =
-            self.state.lock().await.0.event(event, &self.context, shortuuid("msg_"), now_ms());
+            self.state.lock().await.0.event(event, &self.context, shortuuid("msg_"), unix_now_ms());
         self.emit(published.into_iter().collect(), task_id).await
     }
 }

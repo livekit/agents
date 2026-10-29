@@ -7,7 +7,7 @@ use tokio::io::{AsyncWriteExt, DuplexStream};
 use tokio::net::UnixStream;
 use tokio::time::Instant;
 
-use super::supervisor::time_ms;
+use lk_agents_abi::unix_now_ms;
 use super::supervisor::{
     Extra, KILL_GRACE, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB, WarnGate,
 };
@@ -274,11 +274,11 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     sup.supervise().await;
     let ToChild::Ping { sent_ms } = recv(&mut child).await else { panic!() };
     assert_eq!(start.elapsed(), Duration::ZERO);
-    assert!((time_ms() - sent_ms as i64).abs() < 5_000);
+    assert!((unix_now_ms() - sent_ms as i64).abs() < 5_000);
     assert!(matches!(recv(&mut child).await, ToChild::Ping { .. }));
     assert_eq!(start.elapsed(), Duration::from_millis(2500));
 
-    write(&mut child, &ToParent::Pong { sent_ms: (time_ms() - 2_000) as u64 }).await.unwrap();
+    write(&mut child, &ToParent::Pong { sent_ms: (unix_now_ms() - 2_000) as u64 }).await.unwrap();
     while host.find("process is unresponsive").is_none() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -287,7 +287,7 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     let ExtraValue::Int(delay) = extra[0].1 else { panic!() };
     assert!(extra[0].0 == "delay" && delay >= 2_000);
 
-    write(&mut child, &ToParent::Pong { sent_ms: time_ms() as u64 }).await.unwrap();
+    write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(host.messages().iter().filter(|m| *m == "process is unresponsive").count(), 1);
 }
@@ -301,7 +301,7 @@ async fn missing_pongs_kill_the_process_after_ping_timeout() {
     sup.supervise().await;
     // one pong at 60 s moves the deadline to 150 s
     tokio::time::sleep(Duration::from_secs(60)).await;
-    write(&mut child, &ToParent::Pong { sent_ms: time_ms() as u64 }).await.unwrap();
+    write(&mut child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
     let drain = tokio::spawn(async move { while read::<ToChild, _>(&mut child).await.is_ok() {} });
     while host.kills.load(Ordering::SeqCst) == 0 {
         tokio::time::sleep(Duration::from_millis(100)).await;

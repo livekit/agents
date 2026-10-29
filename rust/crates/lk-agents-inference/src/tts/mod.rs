@@ -168,10 +168,6 @@ impl Connections {
     }
 }
 
-fn pool_secs(clock: &dyn Clock) -> f64 {
-    clock.now().as_nanos() as f64 / 1e9
-}
-
 impl GatewayTts {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
@@ -255,7 +251,7 @@ impl GatewayTts {
             );
             if let Ok((sender, receiver)) = opened.await {
                 let mut connections = connections.lock().unwrap();
-                let id = connections.opened(pool_secs(&*clock));
+                let id = connections.opened(clock.now().as_secs_f64());
                 connections
                     .give_back(id, Connection { sender, receiver, session_id, configuration });
             }

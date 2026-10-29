@@ -32,12 +32,6 @@ use tokio::sync::{mpsc, watch};
 
 const LANE: &str = "front-desk";
 
-fn now_secs() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
-}
-
 /// A user's A2A v1 message, as protobuf JSON.
 fn a2a(text: &str, message_id: &str, channel: Option<&str>, task_id: Option<&str>) -> Value {
     let mut msg = json!({
@@ -365,7 +359,7 @@ impl Fake {
                 Ok(text(output))
             }
             Behavior::Tool { entered, gate } => {
-                let t = now_secs();
+                let t = lk_agents_abi::unix_now();
                 let mut items =
                     vec![user_item(&message_text, t), call_item("lookup", "c1", t + 1e-6)];
                 entered.set();
@@ -386,7 +380,7 @@ impl Fake {
                 })
             }
             Behavior::Ask => {
-                let t = now_secs();
+                let t = lk_agents_abi::unix_now();
                 Ok(HandlerOutput {
                     new_items: vec![
                         user_item(&message_text, t),

@@ -55,7 +55,7 @@ impl MarkupFunctions for SpeechMarkup {
                 p.preserved,
                 p.system_prompt.to_owned(),
                 p.user_content,
-                lk_agents_abi::epoch_secs(p.created_at),
+                lk_agents_abi::unix_secs(p.created_at),
             )
         })
     }
