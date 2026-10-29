@@ -61,6 +61,7 @@ _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "quota_exceeded": (429, None),
     "model_mismatch": (400, False),
     "invalid_event": (400, False),
+    "tool_not_allowed": (400, False),  # hosted tools other than web search (agent-gateway#1790)
     "unknown_model": (400, False),
     "no_ws_deployments": (400, False),
     "no_ws_tag_match": (400, False),
