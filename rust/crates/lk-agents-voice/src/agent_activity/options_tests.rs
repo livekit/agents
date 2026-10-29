@@ -4,7 +4,6 @@ pub(crate) fn kwargs(turn_detection: Option<TurnDetectionKwarg>) -> SessionKwarg
     SessionKwargs {
         turn_handling: Some(TurnHandlingKwargs { turn_detection, ..Default::default() }),
         stt_context_options: HostValue::NotGiven,
-        tool_handling: HostValue::NotGiven,
         max_tool_steps: 3,
         use_tts_aligned_transcript: Maybe::NotGiven,
         tts_text_transforms: Maybe::NotGiven,

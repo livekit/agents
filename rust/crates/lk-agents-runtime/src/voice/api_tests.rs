@@ -703,7 +703,6 @@ fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
     SessionKwargs {
         turn_handling: Some(TurnHandlingKwargs { turn_detection: None, ..Default::default() }),
         stt_context_options: HostValue::NotGiven,
-        tool_handling: HostValue::NotGiven,
         max_tool_steps: 3,
         use_tts_aligned_transcript: Maybe::NotGiven,
         tts_text_transforms: Maybe::NotGiven,

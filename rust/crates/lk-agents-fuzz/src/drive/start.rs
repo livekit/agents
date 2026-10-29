@@ -549,7 +549,6 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
             }),
         }),
         stt_context_options: HostValue::NotGiven,
-        tool_handling: HostValue::NotGiven,
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
         use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
         tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),

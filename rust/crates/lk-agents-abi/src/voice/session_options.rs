@@ -433,11 +433,6 @@ pub struct SessionKwargs {
         type_import = ".keyterms:STTContextOptions"
     )]
     pub stt_context_options: HostValue,
-    #[python(
-        ty = "NotGivenOr[ToolHandlingOptions]",
-        type_import = "..voice.tool_executor:ToolHandlingOptions"
-    )]
-    pub tool_handling: HostValue,
     pub max_tool_steps: i64,
     #[python(ty = "NotGivenOr[bool]")]
     pub use_tts_aligned_transcript: lk_agents_abi::Maybe<bool>,
@@ -524,7 +519,7 @@ debug_record!(InterruptionKwargs {
 debug_record!(UserTurnLimitKwargs { ; max_words, max_duration });
 
 debug_record!(SessionKwargs {
-    turn_handling, stt_context_options, tool_handling, max_tool_steps, min_consecutive_speech_delay,
+    turn_handling, stt_context_options, max_tool_steps, min_consecutive_speech_delay,
     expressive, ivr_detection, user_away_timeout, transcription_timeout,
     session_close_transcript_timeout, conn_options;
     use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration
@@ -949,7 +944,6 @@ mod host {
                     Err(_) => None,
                 },
                 stt_context_options: item(obj, OWNER, "stt_context_options")?,
-                tool_handling: item(obj, OWNER, "tool_handling")?,
                 max_tool_steps: item(obj, OWNER, "max_tool_steps")?,
                 use_tts_aligned_transcript: item(obj, OWNER, "use_tts_aligned_transcript")?,
                 tts_text_transforms: item(obj, OWNER, "tts_text_transforms")?,

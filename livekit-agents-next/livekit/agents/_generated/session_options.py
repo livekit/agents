@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..voice.agent_session import SessionConnectOptions, TextTransforms
-    from ..voice.tool_executor import ToolHandlingOptions
     from ..voice.turn import EndpointingOptions, TurnDetectionMode, TurnHandlingOptions
     from .expressive import ExpressiveOptions
     from .keyterms import STTContextOptions
@@ -32,7 +31,6 @@ class SessionKwargs(TypedDict):
     turn_handling: NotGivenOr[TurnHandlingOptions]
     """`turn_handling=`, as written. `None` is `NOT_GIVEN`."""
     stt_context_options: NotGivenOr[STTContextOptions]
-    tool_handling: NotGivenOr[ToolHandlingOptions]
     max_tool_steps: int
     use_tts_aligned_transcript: NotGivenOr[bool]
     tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None]

@@ -285,7 +285,6 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     let SessionKwargs {
         turn_handling: _,
         stt_context_options: _,
-        tool_handling: _,
         max_tool_steps,
         use_tts_aligned_transcript,
         tts_text_transforms,

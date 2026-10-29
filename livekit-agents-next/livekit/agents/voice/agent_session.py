@@ -130,7 +130,6 @@ _HOOK_BOUND = 15.0
 _OPTION_DEFAULTS: dict[str, Any] = {
     "turn_handling": NOT_GIVEN,
     "stt_context_options": NOT_GIVEN,
-    "tool_handling": NOT_GIVEN,
     "max_tool_steps": 3,
     "use_tts_aligned_transcript": NOT_GIVEN,
     "tts_text_transforms": NOT_GIVEN,
@@ -203,11 +202,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             turn_detection, endpointing_opts: The session's turn completion and endpointing
                 policy, as ``update_options`` changes them.
             options: The session options the core resolves: ``turn_handling``,
-                ``stt_context_options``, ``tool_handling``, ``max_tool_steps``,
-                ``use_tts_aligned_transcript``, ``tts_text_transforms``,
-                ``min_consecutive_speech_delay``, ``expressive``, ``aec_warmup_duration``,
-                ``ivr_detection``, ``user_away_timeout``, ``transcription_timeout``,
-                ``session_close_transcript_timeout``.
+                ``stt_context_options``, ``max_tool_steps``, ``use_tts_aligned_transcript``,
+                ``tts_text_transforms``, ``min_consecutive_speech_delay``, ``expressive``,
+                ``aec_warmup_duration``, ``ivr_detection``, ``user_away_timeout``,
+                ``transcription_timeout``, ``session_close_transcript_timeout``.
         """
         super().__init__()
         if unknown := options.keys() - _OPTION_DEFAULTS.keys():
