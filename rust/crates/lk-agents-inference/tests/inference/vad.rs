@@ -313,9 +313,7 @@ async fn saturated_vad_input_refuses_new_audio_and_still_accepts_close() {
 
 #[tokio::test]
 async fn vad_admission_leaves_capacity_for_image_and_recording_work() {
-    use lk_agents_media::pool::{
-        JobClass, MediaPoolError, MediaPoolLimits, MediaPool,
-    };
+    use lk_agents_media::pool::{JobClass, MediaPool, MediaPoolError, MediaPoolLimits};
 
     let media_pool = MediaPool::new(MediaPoolLimits::default()).unwrap();
     let models =

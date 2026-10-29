@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamSink, StreamSource, Ts};
-use lk_agents_media::pool::{MediaJob, JobClass, MediaPool};
+use lk_agents_media::pool::{JobClass, MediaJob, MediaPool};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 

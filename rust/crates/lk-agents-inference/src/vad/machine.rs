@@ -238,12 +238,7 @@ impl VadMachine {
         let frame = if frame.num_channels > 1 {
             let pcm = pcm_samples(&frame.data);
             let mono = lk_agents_media::downmix_mono(&pcm, frame.num_channels);
-            AudioFrame::new(
-                pcm_bytes(&mono),
-                frame.sample_rate,
-                1,
-                mono.len() as u32,
-            )
+            AudioFrame::new(pcm_bytes(&mono), frame.sample_rate, 1, mono.len() as u32)
         } else {
             frame
         };

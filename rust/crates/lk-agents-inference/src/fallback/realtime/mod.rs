@@ -116,10 +116,9 @@ impl RealtimeFallbackModel {
                     .to_owned(),
             );
         }
-        let caps = merge_capabilities(
-            &children.iter().map(ChainModel::capabilities).collect::<Vec<_>>(),
-        )
-        .map_err(|e| e.to_string())?;
+        let caps =
+            merge_capabilities(&children.iter().map(ChainModel::capabilities).collect::<Vec<_>>())
+                .map_err(|e| e.to_string())?;
         Ok(RealtimeFallbackModel {
             children,
             caps,

@@ -207,5 +207,8 @@ pub fn media_pool() -> Result<Arc<dyn lk_agents_abi::media::pool::MediaExecutor>
 
 /// The test's Tokio runtime and wall clock, with [`media_pool`] as its media pool.
 pub fn env() -> lk_agents_net::env::ProcessEnv {
-    lk_agents_net::env::ProcessEnv { media_pool, ..lk_agents_net::env::ProcessEnv::current_runtime() }
+    lk_agents_net::env::ProcessEnv {
+        media_pool,
+        ..lk_agents_net::env::ProcessEnv::current_runtime()
+    }
 }

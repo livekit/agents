@@ -78,13 +78,10 @@ impl Delivery {
             result = (|| {
                 self.retained
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
-                        retained
-                            .checked_add(bytes)
-                            .filter(|total| *total <= AUDIO_BYTES)
+                        retained.checked_add(bytes).filter(|total| *total <= AUDIO_BYTES)
                     })
                     .map_err(|_| {
-                        ApiError::new("realtime event audio limit exceeded")
-                            .with_retryable(false)
+                        ApiError::new("realtime event audio limit exceeded").with_retryable(false)
                     })?;
                 let queued =
                     QueuedEvent { event: event.take(), bytes, retained: self.retained.clone() };

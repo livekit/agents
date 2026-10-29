@@ -13,7 +13,8 @@ use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 
 use super::{
     CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,
-    EotTransport, LocalEotModel, LocalTransport, MetricsCallback, TransportFactory, MountedTransport,
+    EotTransport, LocalEotModel, LocalTransport, MetricsCallback, MountedTransport,
+    TransportFactory,
 };
 use lk_agents_net::env::ProcessEnv;
 

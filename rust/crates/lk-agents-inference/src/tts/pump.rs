@@ -57,7 +57,8 @@ impl Pump {
                             &self.create_frame,
                         )
                         .await?;
-                        let id = self.connections.lock().unwrap().opened(self.clock.now().as_secs_f64());
+                        let id =
+                            self.connections.lock().unwrap().opened(self.clock.now().as_secs_f64());
                         Ok((
                             id,
                             Connection {

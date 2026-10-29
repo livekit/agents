@@ -15,7 +15,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
-    EotWarning, SinkEvent, TransportPrediction, MountedTransport,
+    EotWarning, MountedTransport, SinkEvent, TransportPrediction,
 };
 use lk_agents_net::env::MediaPoolSource;
 

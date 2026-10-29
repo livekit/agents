@@ -90,7 +90,7 @@ async fn cancelling_close_keeps_the_runtime_owner_until_context_retirement_settl
 
 #[tokio::test]
 async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
-    use lk_agents_media::pool::{JobClass, MediaPoolLimits, MediaPool};
+    use lk_agents_media::pool::{JobClass, MediaPool, MediaPoolLimits};
     let media_pool =
         MediaPool::new(MediaPoolLimits { formatting: 1, ..Default::default() }).unwrap();
     let held = media_pool.try_admit(JobClass::Formatting).unwrap();
@@ -188,7 +188,7 @@ async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_
 #[tokio::test]
 async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure() {
     use lk_agents_abi::llm::realtime::{CancelReply, Interrupt, PushAudio};
-    use lk_agents_media::pool::{JobClass, MediaPoolLimits, MediaPool};
+    use lk_agents_media::pool::{JobClass, MediaPool, MediaPoolLimits};
     use lk_agents_net::transport::WsMessage;
 
     let media_pool =

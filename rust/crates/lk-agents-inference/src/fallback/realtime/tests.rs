@@ -209,10 +209,7 @@ async fn cancellation_case(failed_open: bool) {
         if failed_open { Arc::new(CancelledOpen) } else { Arc::new(Model(scripted(vec![]))) };
     let changes = Arc::new(AvailabilityLog::default());
     let model = RealtimeFallbackModel::new(
-        vec![
-            ChainModel::Native(Arc::new(Model(primary.clone()))),
-            ChainModel::Native(backup),
-        ],
+        vec![ChainModel::Native(Arc::new(Model(primary.clone()))), ChainModel::Native(backup)],
         10.0,
         false,
         changes.clone(),
@@ -362,10 +359,7 @@ async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_child
     let primary = scripted(vec![fatal()]);
     let backup = Arc::new(FailsToOpen(Default::default()));
     let model = RealtimeFallbackModel::new(
-        vec![
-            ChainModel::Native(Arc::new(Model(primary))),
-            ChainModel::Native(backup.clone()),
-        ],
+        vec![ChainModel::Native(Arc::new(Model(primary))), ChainModel::Native(backup.clone())],
         0.0,
         false,
         Arc::new(crate::fallback::IgnoreEvents),

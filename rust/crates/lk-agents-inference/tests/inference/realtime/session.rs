@@ -21,8 +21,8 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::RealClock;
 use lk_agents_inference::realtime::native::{
-    AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, WebSocketRealtime, OPENAI,
-    OptionsPatch, SeqIds, XAI,
+    AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, OPENAI, OptionsPatch,
+    SeqIds, WebSocketRealtime, XAI,
 };
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
 use lk_agents_net::task::TokioSpawner;
@@ -32,7 +32,9 @@ use serde_json::json;
 /// rather than as a hung CI job.
 const BOUND: Duration = Duration::from_secs(5);
 
-async fn next_event(session: &lk_agents_inference::realtime::native::WebSocketRealtimeSession) -> Event {
+async fn next_event(
+    session: &lk_agents_inference::realtime::native::WebSocketRealtimeSession,
+) -> Event {
     tokio::time::timeout(BOUND, session.next_event())
         .await
         .expect("the driver produced no event within the bound")

@@ -74,7 +74,8 @@ async fn decoded_stereo_is_normalized_before_delivery_to_a_mono_input() {
 #[tokio::test]
 async fn file_decoding_preserves_audio_and_reports_file_and_codec_failures() {
     let media_pool = media_pool();
-    let open = |path: String| AudioDecoder::open_file(&media_pool, path, false, 24_000, 1, limits());
+    let open =
+        |path: String| AudioDecoder::open_file(&media_pool, path, false, 24_000, 1, limits());
     let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
     let file = AudioFile::wav("service", &pcm);
     let mut decoder = open(file.path()).unwrap();

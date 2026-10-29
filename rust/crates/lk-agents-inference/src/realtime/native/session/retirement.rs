@@ -120,14 +120,11 @@ pub(super) async fn run(
                 return;
             }
         };
-        let permit = match media_pool.try_admit(lk_agents_media::pool::JobClass::Formatting)
-        {
+        let permit = match media_pool.try_admit(lk_agents_media::pool::JobClass::Formatting) {
             Ok(permit) => permit,
             Err(_) => {
                 // Do not move a destructor-bearing owner into a closure until admission succeeds.
-                media_pool
-                    .wait_for_capacity(lk_agents_media::pool::JobClass::Formatting)
-                    .await;
+                media_pool.wait_for_capacity(lk_agents_media::pool::JobClass::Formatting).await;
                 retained = Some(shared);
                 continue;
             }

@@ -302,7 +302,8 @@ impl RealtimeMachine {
             timestamp: self.wall_secs(created),
             duration,
             session_duration: 0.0,
-            ttft: first.map_or(RealtimeModelMetrics::NO_TTFT, |f| f.as_secs_f64() - created.as_secs_f64()),
+            ttft: first
+                .map_or(RealtimeModelMetrics::NO_TTFT, |f| f.as_secs_f64() - created.as_secs_f64()),
             cancelled: status == GenerationStatus::Cancelled,
             input_tokens: tokens(usage.input_tokens),
             output_tokens: tokens(usage.output_tokens),

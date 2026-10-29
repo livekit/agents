@@ -6,7 +6,7 @@ use std::time::Duration;
 use lk_agents_abi::RealClock;
 use lk_agents_abi::llm::realtime::GenerationDone;
 use lk_agents_inference::realtime::native::{
-    AudioDelta, Event, GenerationCreated, WebSocketRealtime, OPENAI,
+    AudioDelta, Event, GenerationCreated, OPENAI, WebSocketRealtime,
 };
 use lk_agents_inference::testkit::NoImages;
 use lk_agents_net::task::TokioSpawner;

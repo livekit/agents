@@ -35,6 +35,6 @@ pub use session::{
     EotAction, EotDegrade, EotFlush, EotResolve, EotSession, EotStartInference, EotSwapToLocal,
     EotWarn, TransportPrediction,
 };
-pub use shell::{PredictionChannel, PROVIDER, SinkEvent, MountedTransport};
+pub use shell::{MountedTransport, PROVIDER, PredictionChannel, SinkEvent};
 pub use stream::{DetectorStream, EotStream, MetricsCallback, TransportFactory};
 pub use transport::{EotTransport, PredictionListener};

@@ -6,8 +6,8 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime_native::{
-    NativeRealtimeConfig, WebSocketRealtimeModel, RealtimeConfigurationError, RealtimeJsonOption,
-    RealtimeOptions,
+    NativeRealtimeConfig, RealtimeConfigurationError, RealtimeJsonOption, RealtimeOptions,
+    WebSocketRealtimeModel,
 };
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
