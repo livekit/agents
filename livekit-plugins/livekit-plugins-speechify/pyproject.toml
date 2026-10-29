@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.8.6",
+    "livekit-agents[codecs]>=1.8.10",
     "speechify-api>=4.0.0",
     # The client we own and pass into speechify-api. The SDK still depends on httpx v1.
     "httpx2>=2.12,<3",

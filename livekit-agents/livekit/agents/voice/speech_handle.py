@@ -306,6 +306,9 @@ class SpeechHandle:
     def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)
 
+    def _remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+        self._item_added_callbacks.discard(callback)
+
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
         for item in items:
             for cb in list(self._item_added_callbacks):

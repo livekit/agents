@@ -22,7 +22,7 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.chat_context import Instructions
+from ..llm.chat_context import DYNAMIC_INSTRUCTIONS_MESSAGE_ID, Instructions
 from ..log import logger
 from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, otel_metrics, trace_types, tracer
 from ..types import (
@@ -1015,6 +1015,7 @@ async def _execute_tools_task(
                     fnc_call: llm.FunctionCall,
                     tool_description: str | None,
                     agent_label: str,
+                    run_ctx: RunContext,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -1037,14 +1038,23 @@ async def _execute_tools_task(
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+                        if run_ctx._suppress_reply:
+                            # a silent update() keeps the output item but asks for no speech
+                            output.fnc_call_out.reply_required = False
+                        # set only when the tool released through update(): the step that
+                        # answers a report is bound by what the report asked for
+                        output.reply_tool_choice = run_ctx._reply_tool_choice
                     except BaseException as e:
                         if isinstance(e, ToolError):
+                            # Keep detail out of the message body so redaction can
+                            # drop it (a log body cannot be redacted). Same pattern
+                            # as the invalid-arguments warning above.
                             logger.warning(
-                                "ToolError while executing tool: %s",
-                                e.message,
+                                "ToolError while executing tool",
                                 extra={
                                     "function": fnc_call.name,
                                     "speech_id": speech_handle.id,
+                                    "lk.pii.error": e.message,
                                 },
                             )
                         elif not isinstance(e, StopResponse):
@@ -1081,6 +1091,7 @@ async def _execute_tools_task(
                         fnc_call,
                         _tool_description(function_tool),
                         activity.agent.label,
+                        run_ctx,
                     ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
@@ -1156,6 +1167,8 @@ class ToolExecutionOutput:
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
+    reply_tool_choice: llm.ToolChoice | None = None
+    """Tool choice of the reply to this output: ``"none"`` for a report from ``update()``"""
 
 
 def make_tool_output(
@@ -1282,6 +1295,9 @@ INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
 The ID of the instructions message in the chat context. (only for stateless LLMs)
 """
 
+# DYNAMIC_INSTRUCTIONS_MESSAGE_ID lives in llm.chat_context: the provider formatters that
+# take one system text fold that message back into the preamble, and truncate() keeps it
+
 
 def update_instructions(
     chat_ctx: ChatContext,
@@ -1293,41 +1309,75 @@ def update_instructions(
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
-    Instructions are resolved to a plain string using the given modality before storage.
+    Instructions are rendered for the given modality before storage. A ``dynamic`` section
+    becomes its own system message right after the instructions message, so the
+    instructions message stays identical across calls and can end a cached prompt prefix.
+    Inside one system message the per-call text would defeat the cache: with tools in the
+    request, a cache breakpoint partway through a system message is not matched.
     """
-    text = (
-        instructions.render(modality=modality)
-        if isinstance(instructions, Instructions)
-        else instructions
-    )
+    if isinstance(instructions, Instructions):
+        text = instructions.render_static(modality=modality)
+        dynamic = instructions.dynamic or None
+    else:
+        text, dynamic = instructions, None
 
-    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
-    if idx is not None:
-        if chat_ctx.items[idx].type == "message":
-            chat_ctx.items[idx] = llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID,
-                role="system",
-                content=[text],
-                created_at=chat_ctx.items[idx].created_at,
-            )
-        else:
-            raise ValueError(
-                "expected the instructions inside the chat_ctx to be of type 'message'"
-            )
-    elif add_if_missing:
+    _remove_by_id(chat_ctx, DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+    idx = _update_instructions_message(chat_ctx, text=text, add_if_missing=add_if_missing)
+    if idx is not None and dynamic:
         chat_ctx.items.insert(
-            0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text]),
+            idx + 1,
+            llm.ChatMessage(id=DYNAMIC_INSTRUCTIONS_MESSAGE_ID, role="system", content=[dynamic]),
         )
 
 
+def _update_instructions_message(
+    chat_ctx: ChatContext, *, text: str, add_if_missing: bool
+) -> int | None:
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
+        if chat_ctx.items[idx].type != "message":
+            raise ValueError(
+                "expected the instructions inside the chat_ctx to be of type 'message'"
+            )
+        chat_ctx.items[idx] = llm.ChatMessage(
+            id=INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[text],
+            created_at=chat_ctx.items[idx].created_at,
+        )
+        return idx
+    if add_if_missing:
+        chat_ctx.items.insert(
+            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text])
+        )
+        return 0
+    return None
+
+
+def mark_instructions_cache_boundary(chat_ctx: ChatContext) -> None:
+    """End the instructions message with a :class:`llm.CacheBreakpoint`.
+
+    Run on a turn's working copy, never on the stored history. ``ChatContext.copy()``
+    shares message objects, so the message is replaced rather than edited in place.
+    """
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is None:
+        return
+    msg = chat_ctx.items[idx]
+    if msg.type != "message" or (msg.content and isinstance(msg.content[-1], llm.CacheBreakpoint)):
+        return
+    chat_ctx.items[idx] = msg.model_copy(update={"content": [*msg.content, llm.CacheBreakpoint()]})
+
+
 def remove_instructions(chat_ctx: ChatContext) -> None:
+    _remove_by_id(chat_ctx, INSTRUCTIONS_MESSAGE_ID)
+    _remove_by_id(chat_ctx, DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+
+
+def _remove_by_id(chat_ctx: ChatContext, item_id: str) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
-    while True:
-        if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
-            chat_ctx.items.remove(msg)
-        else:
-            break
+    while (msg := chat_ctx.get_by_id(item_id)) is not None:
+        chat_ctx.items.remove(msg)
 
 
 EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID = "lk.expressive.instructions"  #  value must not change

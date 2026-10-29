@@ -112,19 +112,19 @@ def test_model_capabilities(
         pytest.param({"use_websocket": True}, "coda", "lyra", id="ws3-default"),
         pytest.param({"use_websocket": True, "model": "coda"}, "coda", "lyra", id="ws3-coda"),
         pytest.param(
-            {"websocket_url": "wss://api.rime.ai/coda/ws"}, "coda", "lyra", id="v1-default"
-        ),
-        pytest.param(
-            {"websocket_url": "wss://api.rime.ai/ws", "model": "coda"},
+            {"websocket_url": "wss://coda.api.rime.ai/ws", "model": "coda"},
             "coda",
             "lyra",
-            id="v1-dedicated",
+            id="v1-public-coda",
+        ),
+        pytest.param(
+            {"websocket_url": "wss://mist.api.rime.ai/ws", "model": "mistv3"},
+            "mistv3",
+            "cove",
+            id="v1-public-mist",
         ),
         pytest.param({"model": "mistv3"}, "mistv3", "cove", id="http-mist"),
         pytest.param({"use_websocket": True, "model": "mistv3"}, "mistv3", "cove", id="ws3-mist"),
-        pytest.param(
-            {"websocket_url": "wss://api.rime.ai/mist/ws"}, "mistv3", "cove", id="v1-mist"
-        ),
     ],
 )
 @pytest.mark.parametrize("speaker", [None, "custom-voice"], ids=["default", "explicit"])
@@ -385,7 +385,8 @@ def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://api.rime.ai/coda/ws",
+        model="coda",
+        websocket_url="wss://coda.api.rime.ai/ws",
     )
 
     assert tts.model == "coda"
@@ -399,12 +400,13 @@ def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
     assert "sentence_tokenization" not in inspect.signature(TTS).parameters
 
 
-def test_websocket_url_derives_mist_model_and_accepts_options() -> None:
+def test_websocket_url_uses_explicit_mist_model_and_accepts_options() -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://api.rime.ai/mist/ws",
+        websocket_url="wss://mist.api.rime.ai/ws",
+        model="mistv3",
         pause_between_brackets=True,
     )
 
@@ -419,20 +421,31 @@ def test_dedicated_websocket_url_uses_explicit_model() -> None:
 
     tts = TTS(
         api_key="test-key",
-        websocket_url=("wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"),
+        websocket_url="wss://dedicated.rime.ai/ws",
         model="coda",
     )
 
     assert tts.model == "coda"
 
 
-def test_dedicated_websocket_url_requires_model() -> None:
+@pytest.mark.parametrize(
+    "websocket_url",
+    [
+        "wss://coda.api.rime.ai/ws",
+        "wss://mist.api.rime.ai:443/ws",
+        "wss://dedicated.rime.ai/ws",
+        "wss://api.rime.ai/coda/ws",
+        "wss://api.rime.ai/mist/ws",
+        "wss://voice.rime.ai/custom/stream",
+    ],
+)
+def test_websocket_url_requires_model(websocket_url: str) -> None:
     from livekit.plugins.rime import TTS
 
     with pytest.raises(ValueError, match="model is required"):
         TTS(
             api_key="test-key",
-            websocket_url=("wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"),
+            websocket_url=websocket_url,
         )
 
 
@@ -442,11 +455,13 @@ def test_custom_websocket_endpoint_requires_explicit_opt_in() -> None:
     with pytest.raises(ValueError, match="trusted Rime host"):
         TTS(
             api_key="test-key",
+            model="coda",
             websocket_url="wss://voice.customer.example/coda/ws",
         )
 
     tts = TTS(
         api_key="test-key",
+        model="coda",
         websocket_url="wss://voice.customer.example/coda/ws",
         allow_custom_endpoint=True,
     )
@@ -480,7 +495,7 @@ def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
     from livekit.plugins.rime import TTS
 
     with pytest.raises(ValueError, match="absolute ws or wss URL"):
-        TTS(api_key="test-key", websocket_url=websocket_url)
+        TTS(api_key="test-key", model="coda", websocket_url=websocket_url)
 
 
 @pytest.mark.parametrize(
@@ -488,56 +503,49 @@ def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
     [
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "base_url": "https://users.rime.ai/coda",
             },
             "cannot be used with base_url",
         ),
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "use_websocket": True,
             },
             "omit use_websocket",
         ),
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "speed_alpha": 1.1,
             },
             "speed_alpha",
         ),
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "temperature": 0.7,
             },
             "generation controls",
         ),
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
-                "model": "coda",
-            },
-            "model is derived",
-        ),
-        (
-            {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "websocket_protocol": "auto",
             },
             "binary.*json",
         ),
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "audio_format": "audio/aac",
             },
             "unsupported Rime audio_format",
         ),
         (
             {
-                "websocket_url": "wss://api.rime.ai/coda/ws",
+                "websocket_url": "wss://coda.api.rime.ai/ws",
                 "pause_between_brackets": True,
             },
             "Mist options",
@@ -548,13 +556,13 @@ def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) 
     from livekit.plugins.rime import TTS
 
     with pytest.raises(ValueError, match=message):
-        TTS(api_key="test-key", **kwargs)
+        TTS(api_key="test-key", model="coda", **kwargs)
 
 
 def test_v1_rejects_generation_controls_on_update() -> None:
     from livekit.plugins.rime import TTS
 
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
+    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
 
     with pytest.raises(ValueError, match="generation controls"):
         tts.update_options(top_p=0.8)
@@ -570,7 +578,7 @@ def test_audio_format_requires_v1_websocket() -> None:
 def test_v1_updates_audio_format() -> None:
     from livekit.plugins.rime import TTS
 
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
+    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
     tts.update_options(audio_format="audio/mpeg")
 
     assert tts._opts.audio_format == "audio/mpeg"
@@ -581,12 +589,13 @@ def test_v1_updates_audio_format() -> None:
     assert tts._opts.audio_format == "audio/mpeg"
 
 
-def test_v1_derives_model_when_endpoint_is_updated() -> None:
+def test_v1_updates_model_with_endpoint() -> None:
     from livekit.plugins.rime import TTS
 
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
+    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
     tts.update_options(
-        websocket_url="wss://api.rime.ai/mist/ws",
+        websocket_url="wss://mist.api.rime.ai/ws",
+        model="mistv3",
         pause_between_brackets=True,
     )
 
@@ -598,7 +607,7 @@ def test_v1_derives_model_when_endpoint_is_updated() -> None:
 def test_v1_rejects_model_update() -> None:
     from livekit.plugins.rime import TTS
 
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
+    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
 
     with pytest.raises(ValueError, match="only be updated together"):
         tts.update_options(model="mistv3")
@@ -607,8 +616,8 @@ def test_v1_rejects_model_update() -> None:
 def test_v1_dedicated_endpoint_update_keeps_current_model() -> None:
     from livekit.plugins.rime import TTS
 
-    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
-    tts.update_options(websocket_url="wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws")
+    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
+    tts.update_options(websocket_url="wss://dedicated.rime.ai/ws")
 
     assert tts.model == "coda"
 
@@ -616,7 +625,7 @@ def test_v1_dedicated_endpoint_update_keeps_current_model() -> None:
 def test_v1_dedicated_endpoint_rejects_model_change_for_same_url() -> None:
     from livekit.plugins.rime import TTS
 
-    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
+    websocket_url = "wss://dedicated.rime.ai/ws"
     tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
 
     with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
@@ -628,10 +637,10 @@ def test_v1_dedicated_endpoint_rejects_model_change_for_same_url() -> None:
 @pytest.mark.parametrize(
     "updated_websocket_url",
     [
-        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws/",
-        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated",
-        "wss://TIGERSTRIPE.aws-us-east-1.whiteglove.rime.ai/ws",
-        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai:443/ws",
+        "wss://dedicated.rime.ai/ws/",
+        "wss://dedicated.rime.ai/ws?token=rotated",
+        "wss://DEDICATED.rime.ai/ws",
+        "wss://dedicated.rime.ai:443/ws",
     ],
 )
 def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
@@ -639,7 +648,7 @@ def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
 ) -> None:
     from livekit.plugins.rime import TTS
 
-    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
+    websocket_url = "wss://dedicated.rime.ai/ws"
     tts = TTS(
         api_key="test-key",
         websocket_url=websocket_url,
@@ -657,7 +666,7 @@ def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
 def test_v1_dedicated_endpoint_allows_same_model_for_same_url() -> None:
     from livekit.plugins.rime import TTS
 
-    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
+    websocket_url = "wss://dedicated.rime.ai/ws"
     tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
 
     tts.update_options(websocket_url=websocket_url, model="coda")
@@ -670,13 +679,13 @@ def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws",
+        websocket_url="wss://dedicated.rime.ai/ws",
         model="coda",
     )
     adapter = tts._websocket_v1_adapter
     assert adapter is not None
     previous_pool = adapter._pools.current
-    updated_websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated"
+    updated_websocket_url = "wss://dedicated.rime.ai/ws?token=rotated"
 
     tts.update_options(websocket_url=updated_websocket_url, model="coda")
 
@@ -685,25 +694,42 @@ def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
     assert adapter._pools.current is not previous_pool
 
 
-def test_v1_dedicated_endpoint_allows_model_change_with_new_url() -> None:
+@pytest.mark.parametrize(
+    ("coda_url", "mist_url"),
+    [
+        ("wss://coda.api.rime.ai/ws", "wss://mist.api.rime.ai/ws"),
+        (
+            "wss://coda-test.rime.ai/ws",
+            "wss://mist-test.rime.ai/ws",
+        ),
+    ],
+)
+def test_v1_dedicated_endpoint_allows_model_change_with_new_url(
+    coda_url: str, mist_url: str
+) -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://coda.aws-us-east-1.whiteglove.rime.ai/ws",
+        websocket_url=coda_url,
         model="coda",
     )
 
     tts.update_options(
-        websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+        websocket_url=mist_url,
         model="mistv3",
+        pause_between_brackets=True,
     )
 
     assert tts.model == "mistv3"
+    assert tts._opts.mist_options is not None
+    assert tts._opts.mist_options.pause_between_brackets is True
+    assert tts._websocket_v1_adapter is not None
+    assert tts._websocket_v1_adapter._websocket_v1_url == mist_url
 
     with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
         tts.update_options(
-            websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+            websocket_url=mist_url,
             model="coda",
         )
 
@@ -899,7 +925,7 @@ class _RimeV1Server:
         self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await self._site.start()
         port = self._runner.addresses[0][1]
-        self.websocket_url = f"ws://127.0.0.1:{port}/coda/ws"
+        self.websocket_url = f"ws://127.0.0.1:{port}/custom/stream"
         self.session = aiohttp.ClientSession()
         return self
 
@@ -1069,13 +1095,13 @@ class _RimeV1Server:
             )
 
 
-def _v1_tts(server: _RimeV1Server, *, endpoint_model: str = "coda", **kwargs: Any):
+def _v1_tts(server: _RimeV1Server, *, model: str = "coda", **kwargs: Any):
     from livekit.plugins.rime import TTS
 
-    websocket_url = server.websocket_url.replace("/coda/ws", f"/{endpoint_model}/ws")
     return TTS(
         api_key="test-key",
-        websocket_url=websocket_url,
+        websocket_url=server.websocket_url,
+        model=model,
         http_session=server.session,
         **kwargs,
     )
@@ -1138,7 +1164,7 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
             await tts.aclose()
 
     assert remaining[-1].is_final
-    assert server.paths == ["/coda/ws"]
+    assert server.paths == ["/custom/stream"]
     assert server.headers[0]["Authorization"] == "Bearer test-key"
     assert server.headers[0]["Sec-WebSocket-Protocol"] == f"rime.v1.{websocket_protocol}"
     assert server.protocols == [f"rime.v1.{websocket_protocol}"]
@@ -1266,7 +1292,7 @@ async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> 
     async with _RimeV1Server() as server:
         tts = _v1_tts(
             server,
-            endpoint_model="mist",
+            model="mistv3",
             pause_between_brackets=True,
             phonemize_between_brackets=False,
         )
@@ -1286,14 +1312,12 @@ async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> 
 
 
 @pytest.mark.parametrize(
-    ("endpoint_model", "expected_sample_rate"),
-    [("coda", 24000), ("mist", 24000), ("mistv2", 22050), ("future-model", 22050)],
+    ("model", "expected_sample_rate"),
+    [("coda", 24000), ("mistv3", 24000), ("mistv2", 22050), ("future-model", 22050)],
 )
-async def test_v1_sends_resolved_sample_rate(
-    endpoint_model: str, expected_sample_rate: int
-) -> None:
+async def test_v1_sends_resolved_sample_rate(model: str, expected_sample_rate: int) -> None:
     async with _RimeV1Server() as server:
-        tts = _v1_tts(server, endpoint_model=endpoint_model)
+        tts = _v1_tts(server, model=model)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         try:
             stream.push_text("hello")
@@ -1669,8 +1693,8 @@ async def test_v1_stream_metrics_keep_model_after_endpoint_update(
         new_stream = None
         try:
             await asyncio.wait_for(first_server.wait_for_text_messages(1), timeout=2)
-            mist_url = second_server.websocket_url.replace("/coda/ws", "/mist/ws")
-            tts.update_options(websocket_url=mist_url)
+            mist_url = second_server.websocket_url
+            tts.update_options(websocket_url=mist_url, model="mistv3")
             new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
             new_stream.push_text("second")
             streams = [(stream, "coda"), (new_stream, "mistv3")]
@@ -1704,8 +1728,8 @@ async def test_v1_stream_metrics_keep_model_after_endpoint_update(
 async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> None:
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server, time_scale_factor=1.2)
-        mistv2_url = second_server.websocket_url.replace("/coda/ws", "/mistv2/ws")
-        tts.update_options(websocket_url=mistv2_url)
+        mistv2_url = second_server.websocket_url
+        tts.update_options(websocket_url=mistv2_url, model="mistv2")
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
 
         stream.push_text("hello")
@@ -1714,7 +1738,7 @@ async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> N
         await stream.aclose()
         await tts.aclose()
 
-    assert second_server.paths == ["/mistv2/ws"]
+    assert second_server.paths == ["/custom/stream"]
     assert "timeScaleFactor" not in second_server.requests[0]["start"]["audioParameters"]
 
 
@@ -2225,7 +2249,7 @@ def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
 @pytest.mark.parametrize(
     "websocket_url",
     [
-        "wss://api.rime.ai/coda/ws",
+        "wss://coda.api.rime.ai/ws",
         "ws://127.0.0.1:8080/coda/ws",
         "ws://[::1]:8080/coda/ws",
     ],
@@ -2254,55 +2278,35 @@ def test_v1_accepts_custom_secure_host_with_opt_in() -> None:
 def test_v1_accepts_dedicated_rime_subdomain() -> None:
     from livekit.plugins.rime import _websocket_v1
 
-    _websocket_v1.validate_websocket_url(
-        "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"
-    )
+    _websocket_v1.validate_websocket_url("wss://dedicated.rime.ai/ws")
 
 
 def test_v1_rejects_lookalike_rime_host() -> None:
     from livekit.plugins.rime import _websocket_v1
 
     with pytest.raises(ValueError, match="trusted Rime host"):
-        _websocket_v1.validate_websocket_url("wss://whiteglove.rime.ai.attacker.example/coda/ws")
-
-
-@pytest.mark.parametrize(
-    ("websocket_url", "model"),
-    [
-        ("wss://api.rime.ai/coda/ws", "coda"),
-        ("wss://api.rime.ai/mist/ws", "mist"),
-        ("wss://api.rime.ai/future-model/ws/?token=value", "future-model"),
-    ],
-)
-def test_v1_reads_model_from_websocket_url(websocket_url: str, model: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    assert _websocket_v1.model_from_websocket_url(websocket_url) == model
-
-
-def test_v1_dedicated_websocket_url_has_no_embedded_model() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    assert (
-        _websocket_v1.model_from_websocket_url(
-            "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"
-        )
-        is None
-    )
+        _websocket_v1.validate_websocket_url("wss://rime.ai.attacker.example/coda/ws")
 
 
 @pytest.mark.parametrize(
     "websocket_url",
     [
-        "wss://api.rime.ai/coda",
-        "wss://api.rime.ai/coda/stream",
+        "wss://api.rime.ai/coda/ws",
+        "wss://api.rime.ai/mist/ws",
+        "wss://voice.customer.example/custom/stream?token=value",
+        "wss://voice.customer.example/tts/%ZZ/stream",
     ],
 )
-def test_v1_rejects_url_not_ending_in_ws(websocket_url: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError, match="end with /ws"):
-        _websocket_v1.model_from_websocket_url(websocket_url)
+def test_v1_custom_paths_do_not_select_model(websocket_url: str) -> None:
+    tts = TTS(
+        api_key="test-key",
+        websocket_url=websocket_url,
+        model="mistv3",
+        allow_custom_endpoint=True,
+    )
+    assert tts.model == "mistv3"
+    assert tts._websocket_v1_adapter is not None
+    assert tts._websocket_v1_adapter._websocket_v1_url == websocket_url
 
 
 @pytest.mark.parametrize(
@@ -2334,7 +2338,7 @@ async def test_v1_connection_error_does_not_expose_transport_data(
         with pytest.raises(APIConnectionError) as exc_info:
             await _websocket_v1.connect(
                 session,
-                websocket_url="wss://api.rime.ai/coda/ws",
+                websocket_url="wss://coda.api.rime.ai/ws",
                 api_key="test-key",
                 protocol="binary",
                 timeout=1,
@@ -2775,6 +2779,7 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
             if mode == "handshake":
                 tts = TTS(
                     api_key="test-key",
+                    model="coda",
                     websocket_url=url.replace("http:", "ws:"),
                     http_session=session,
                 )

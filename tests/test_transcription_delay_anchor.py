@@ -167,7 +167,7 @@ async def test_skewed_provider_timestamp(mode: str, monkeypatch: pytest.MonkeyPa
     # the provider's audio clock runs ahead of wall clock: end_time maps into the
     # future and the estimate clamps to `now`, zeroing the delay
     now = time.time()
-    # the clamp reads the same clock the expectation is derived from
+    # the clamp reads the clock again, so a slow runner would drift past the tolerance
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6
