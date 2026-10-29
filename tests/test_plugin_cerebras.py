@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 
 import httpx2 as httpx
+import openai
 import pytest
 
 from livekit.agents import Agent, RunContext, llm
 from livekit.plugins.cerebras import LLM
-from livekit.plugins.cerebras.llm import _CerebrasClient
+from livekit.plugins.cerebras.llm import _PayloadTransport
 
 pytestmark = pytest.mark.plugin("cerebras")
 
@@ -81,13 +82,11 @@ def _cerebras_llm_with_transport(
     *, use_gzip: bool, use_msgpack: bool
 ) -> tuple[LLM, HeaderCapturingTransport]:
     transport = HeaderCapturingTransport()
-    http_client = httpx.AsyncClient(transport=transport)
-    client = _CerebrasClient(
-        use_gzip=use_gzip,
-        use_msgpack=use_msgpack,
+    payload = _PayloadTransport(transport, use_msgpack=use_msgpack, use_gzip=use_gzip)
+    client = openai.AsyncClient(
         api_key=os.environ["CEREBRAS_API_KEY"],
         base_url="https://api.cerebras.ai/v1",
-        http_client=http_client,
+        http_client=httpx.AsyncClient(transport=payload),
     )
     return LLM(model=CHAT_MODEL, client=client), transport
 
