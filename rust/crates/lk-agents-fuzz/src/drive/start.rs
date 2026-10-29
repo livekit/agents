@@ -222,7 +222,9 @@ impl Run {
                     .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
                 setup.video_sampler.then_some((1.0, 0.3)),
                 false,
-                legs.is_none().then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
+                legs.is_none().then(|| {
+                    fakes::FakeTextOutput::new(registry.clone(), setup.text_output_raises) as _
+                }),
                 false,
                 setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
                 setup.max_unrecoverable_errors,

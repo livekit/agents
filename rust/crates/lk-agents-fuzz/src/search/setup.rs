@@ -63,6 +63,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         video: rng.bool(),
         room_camera: false,
         sync_transcription: rng.bool(),
+        text_output_raises: false,
         lagging_output: false,
         pausable_output: rng.bool(),
         speech_gap_ms: rng.bool().then(|| ms(rng)),

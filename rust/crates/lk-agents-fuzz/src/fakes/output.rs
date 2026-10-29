@@ -526,12 +526,13 @@ impl AudioOutput for FakeAudioOutput {
 pub struct FakeTextOutput {
     id: u32,
     registry: Arc<Registry>,
+    raises: bool,
 }
 
 impl FakeTextOutput {
-    pub fn new(registry: Arc<Registry>) -> Arc<Self> {
+    pub fn new(registry: Arc<Registry>, raises: bool) -> Arc<Self> {
         let id = registry.new_output(false);
-        Arc::new(FakeTextOutput { id, registry })
+        Arc::new(FakeTextOutput { id, registry, raises })
     }
 }
 
@@ -556,6 +557,9 @@ impl TextOutput for FakeTextOutput {
 
     fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
+            if self.raises {
+                return Err(io::IoError::Rtc("the host text output raised".into()));
+            }
             self.registry.record_sink(Sink::Text { output: self.id, text: text.to_string() });
             Ok(())
         })

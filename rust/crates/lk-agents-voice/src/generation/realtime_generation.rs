@@ -158,11 +158,7 @@ pub(crate) async fn realtime_generation_task(
                     heard.played += part.played;
                     heard.frames += part.frames;
                 }
-                heard.complete = false;
-                generation.drain_started();
-                let cuts = generation.cuts(&heard);
-                let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
-                return Err(failed.error);
+                return Err(heard_until(&mut generation, &mut heard, wake, handle, failed.error));
             }
         };
         if part.frames == 0
@@ -178,7 +174,9 @@ pub(crate) async fn realtime_generation_task(
         heard.played += part.played;
         heard.frames += part.frames;
         heard.complete &= part.complete;
-        text_result?;
+        if let Err(error) = text_result {
+            return Err(heard_until(&mut generation, &mut heard, wake, handle, error));
+        }
         // Its final report has settled before selection can activate the following segment.
         drop(binding);
         if !heard.complete || generation.finished || handle.interrupted() {
@@ -250,6 +248,20 @@ pub(crate) async fn realtime_generation_task(
         return Ok(StepOutcome::Done(finished));
     };
     Ok(deliver_realtime(shared, handle, wake, decision, finished))
+}
+
+/// The step failed: the server keeps only what the person heard of it before the failure.
+fn heard_until(
+    generation: &mut Generation<'_>,
+    heard: &mut crate::transcription::Heard,
+    wake: &Tx,
+    handle: &SpeechHandle,
+    error: DriverError,
+) -> DriverError {
+    heard.complete = false;
+    generation.drain_started();
+    let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts: generation.cuts(heard) });
+    error
 }
 
 fn deliver_realtime(

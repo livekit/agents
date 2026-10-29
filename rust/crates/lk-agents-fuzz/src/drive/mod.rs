@@ -179,6 +179,8 @@ pub struct Setup {
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
     pub sync_transcription: bool,
+    /// The host's transcription output raises on every capture, as a Python `io.TextOutput` can.
+    pub text_output_raises: bool,
     /// An audio output that reports a cut a few scheduler hops late, as a host source does.
     pub lagging_output: bool,
     /// `tts_text_transforms`: `None` is not given (markdown and emoji filtered), `Some` the set
@@ -412,6 +414,7 @@ impl Default for Setup {
             video: false,
             room_camera: false,
             sync_transcription: false,
+            text_output_raises: false,
             lagging_output: false,
             ivr: None,
             amd: None,

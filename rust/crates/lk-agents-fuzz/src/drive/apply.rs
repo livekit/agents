@@ -516,9 +516,9 @@ impl Run {
                 .is_ok()
             }
             Input::SetTranscriptionOutput { attach } => api
-                .set_transcription_output(
-                    attach.then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
-                )
+                .set_transcription_output(attach.then(|| {
+                    fakes::FakeTextOutput::new(registry.clone(), self.setup.text_output_raises) as _
+                }))
                 .is_ok(),
             Input::UpdateModels { models } => {
                 let (stt, llm, tts) = match models {
