@@ -4,8 +4,8 @@ use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::{AudioFrame, TokioSpawner, VirtualClock};
+use lk_agents_runtime::avatar_runner::{AvatarIo, AvatarRunner, Event};
 use lk_agents_test_support::rtc::FakeRtc;
-use lk_agents_voice::avatar_runner::{AvatarIo, AvatarRunner, Event};
 use std::sync::{
     Arc, OnceLock, Weak,
     atomic::{AtomicBool, Ordering},

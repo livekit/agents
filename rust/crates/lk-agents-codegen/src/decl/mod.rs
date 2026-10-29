@@ -87,6 +87,8 @@ pub struct Variant {
     pub name: String,
     pub doc: Vec<String>,
     pub shape: VariantShape,
+    /// A transparent unit variant read and emitted as an existing host marker class.
+    pub host_type: Option<(String, String)>,
     /// A dispatched record's member: how the host routes its value.
     pub route: Option<Route>,
 }

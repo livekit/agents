@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from livekit import rtc
 from livekit.agents._core_view import AvailabilityObserver, Duplex
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
@@ -16,6 +15,7 @@ from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.utils import SerializedImage
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
+from livekit.rtc import AudioFrame
 
 from .._core import ChatItem, FallbackTtsStream
 from .mcp import MCPToolOptions
@@ -33,7 +33,7 @@ class FixedGate:
         deactivation_ratio: float = 1.8,
         min_silence_duration: float = 0.5,
     ) -> None: ...
-    def update(self, frame: rtc.AudioFrame) -> bool:
+    def update(self, frame: AudioFrame) -> bool:
         """True while the frame belongs to an open burst of output."""
     def deactivate(self) -> None:
         """End the open burst, keeping whatever has been learned about the model."""
@@ -50,7 +50,7 @@ class AdaptiveNoiseGate:
         min_silence_duration: float = 0.5,
         window: float = 10.0,
     ) -> None: ...
-    def update(self, frame: rtc.AudioFrame) -> bool:
+    def update(self, frame: AudioFrame) -> bool:
         """True while the frame belongs to an open burst of output."""
     def deactivate(self) -> None:
         """End the open burst, keeping whatever has been learned about the model."""

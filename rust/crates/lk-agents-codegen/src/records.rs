@@ -124,7 +124,7 @@ pub fn check_none_defaults(decls: &Declarations) -> Result<(), String> {
             let none = decls.records.iter().any(|o| {
                 o.rust == held.rust
                     && o.transparent
-                    && matches!(&o.body, RecordBody::Variants(vs) if vs.iter().any(|v| matches!(v.shape, VariantShape::Unit)))
+                    && matches!(&o.body, RecordBody::Variants(vs) if vs.iter().any(|v| matches!(v.shape, VariantShape::Unit) && v.host_type.is_none()))
             });
             if !none {
                 return Err(format!(
@@ -669,10 +669,10 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
     })
 }
 
-/// A transparent record's conversions: each variant's value crosses as itself (a unit variant as
-/// `None`); reading tries the variants in declaration order by the value's class (a record's model
-/// class, a literal record's `str`, else its Python type: `bool` apart from `int`, a `float` taking
-/// an `int` too).
+/// A transparent record's conversions: each value crosses as itself; a unit emits `None` or its
+/// declared host marker. Reading tries the variants in declaration order by the value's class:
+/// a record's model class, a literal record's `str`, else its Python type (`bool` apart from `int`,
+/// a `float` taking an `int` too).
 fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
     let RecordBody::Variants(variants) = &r.body else {
         return Err(format!("{}: a transparent record is an enum", r.rust));
@@ -688,6 +688,21 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
         let f = match &v.shape {
             VariantShape::Tuple(Some(f)) => f,
             VariantShape::Unit => {
+                if let Some((module, name)) = &v.host_type {
+                    if r.extract {
+                        reads.push_str(&format!(
+                            "    if obj.is_instance(&obj.py().import({module:?})?.getattr({name:?})?)? {{\n        return Ok({rust}::{});\n    }}\n",
+                            v.rust_name
+                        ));
+                    }
+                    let class = format!("py.import({module:?})?.getattr({name:?})?");
+                    arms.push_str(&format!(
+                        "        {rust}::{} => {}?,\n",
+                        v.rust_name,
+                        construct(&class, "()", "None", false)
+                    ));
+                    continue;
+                }
                 reads.push_str(&format!(
                     "    if obj.is_none() {{\n        return Ok({rust}::{});\n    }}\n",
                     v.rust_name
@@ -705,6 +720,10 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 ));
             }
         };
+        arms.push_str(&format!("        {rust}::{}(x) => {},\n", v.rust_name, emit(&f.ty, "x")?));
+        if !r.extract {
+            continue;
+        }
         let (kind, test) = match &f.ty {
             Ty::Record(Record { rust: held, host: HostForm::Record { .. }, .. })
                 if literal(held) =>
@@ -718,6 +737,19 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                     format!("{PACKAGE}.{module}")
                 ),
             ),
+            Ty::Record(Record { host: HostForm::Annotation(text), .. }) => {
+                let names = crate::class_stub::annotation_names(text);
+                let [(range, path)] = names.as_slice() else {
+                    return Err(format!("{}::{}: an opaque transparent member names one host class", r.rust, v.rust_name));
+                };
+                if range.start != 0 || range.end != text.len() {
+                    return Err(format!("{}::{}: an opaque transparent member names one host class", r.rust, v.rust_name));
+                }
+                let Some((module, name)) = path.rsplit_once('.') else {
+                    return Err(format!("{}::{}: an opaque transparent member names a qualified host class", r.rust, v.rust_name));
+                };
+                ("", format!("obj.is_instance(&obj.py().import({module:?})?.getattr({name:?})?)?"))
+            }
             Ty::Tuple(_) => ("tuple", "obj.is_instance_of::<::pyo3::types::PyTuple>()".into()),
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
@@ -750,7 +782,6 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             v.rust_name,
             read(&f.ty, "obj", &format!("{}.{}", r.name, v.rust_name))?
         ));
-        arms.push_str(&format!("        {rust}::{}(x) => {},\n", v.rust_name, emit(&f.ty, "x")?));
     }
     let mut s = String::new();
     if r.extract {

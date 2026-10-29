@@ -134,3 +134,55 @@ pub trait DataStreamAudioReceiver: Send + Sync + Sized + 'static {
     #[host(call)]
     fn aclose(&self) -> Result<(), ProviderError>;
 }
+
+/// Why the runner refused a call, or what its loops ended with (`wait_for_complete`).
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RunnerError {
+    #[error("AvatarRunner not started")]
+    NotStarted,
+    #[host(kind = "asyncio.CancelledError")]
+    #[error("the avatar runner was closed")]
+    Closed,
+    /// What the receiver, the generator or the synchronizer raised.
+    #[host(delegate)]
+    #[error(transparent)]
+    Failed(ProviderError),
+    #[error(transparent)]
+    Rtc(#[from] crate::voice::rtc::RtcError),
+}
+
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReceiverEnd {
+    #[host(kind = "StopAsyncIteration")]
+    #[error("the receiver is closed")]
+    Closed,
+    /// A stream without `sample_rate`/`num_channels`: the reference's `ValueError`.
+    #[host(kind = "ValueError")]
+    #[error("{0}")]
+    BadStream(String),
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// The avatar worker's native queue owner. Its decisions remain in RunnerCore.
+#[crate::host(class(name = "AvatarRunner"))]
+pub trait AvatarRunner: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new(
+        room: crate::voice::room_owner::RoomSession,
+        #[host(kw)] receiver: std::sync::Arc<dyn AvatarAudioReceiver>,
+        generator: std::sync::Arc<dyn AvatarVideoGenerator>,
+        media: std::sync::Arc<dyn AvatarMedia>,
+        lazy_publish: bool,
+    ) -> Result<Self, crate::voice::rtc::RtcError>;
+    #[host(await)]
+    async fn start(&self) -> Result<(), RunnerError>;
+    #[host(await)]
+    async fn wait_for_complete(&self) -> Result<(), RunnerError>;
+    #[host(call)]
+    fn clear_buffer(&self, epoch: u64);
+    #[host(await)]
+    async fn aclose(&self) -> Result<(), RunnerError>;
+}

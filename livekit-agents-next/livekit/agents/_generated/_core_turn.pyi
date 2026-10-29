@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from livekit import rtc
 from livekit.agents.types import APIConnectOptions
 from livekit.local_inference import EOT
+from livekit.rtc import AudioFrame
 
 from .turn_events import EotPrediction, ThresholdOverride, TurnDetectorModel
 
@@ -76,7 +76,7 @@ class EotStream:
     def cancel_inference(self, *, timed_out: bool = False) -> None: ...
     def flush(self, reason: str | None = None) -> None:
         """A segment boundary, not a close."""
-    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+    def push_audio(self, frame: AudioFrame) -> None: ...
     def end_input(self) -> None: ...
     async def aclose(self) -> None: ...
 

@@ -11,10 +11,6 @@
 
 use pyo3::prelude::*;
 
-// Linked for their registrations alone: nothing here names their items, and a crate the binary
-// never mentions is not linked (its `inventory` entries with it). The runtime links the others.
-extern crate lk_agents_voice as _;
-
 /// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
 pub mod avatar_output;
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
@@ -56,6 +52,7 @@ impl generated::Implementations for Selected {
     type StreamBuffer = lk_agents_runtime::codecs::StreamBuffer;
     type AudioEmitter = lk_agents_runtime::audio_emitter::AudioEmitter;
     type DataStreamAudioReceiver = lk_agents_runtime::avatar_receiver::DataStreamAudioReceiver;
+    type AvatarRunner = lk_agents_runtime::avatar_runner::AvatarRunner;
     type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;
     type PlayoutLedger = lk_agents_runtime::rtc::playout::PlayoutLedger;
     type RoomRuntime = lk_agents_runtime::room_io::RoomFactory;

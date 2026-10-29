@@ -151,7 +151,7 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let mut sources: Vec<&str> = records.iter().map(|r| r.source.as_str()).collect();
         sources.dedup();
         let mut runtime = Imports::default();
-        let mut typing = Imports::default();
+        let mut typing = Imports::new(decls);
         let mut body = String::new();
         let own: Vec<String> = records
             .iter()
@@ -413,15 +413,19 @@ fn model(
                 .iter()
                 .filter_map(|v| match &v.shape {
                     VariantShape::Tuple(Some(f)) => {
-                        Some(annotation(&f.ty, module, own, out, typing))
+                        Some(annotation(&f.ty, module, own, out, runtime))
                     }
+                    VariantShape::Unit => v.host_type.as_ref().map(|(module, name)| {
+                        runtime.add(module, name);
+                        name.clone()
+                    }),
                     _ => None,
                 })
                 // `None` last: `None | float` is no type expression at runtime.
                 .chain(
                     variants
                         .iter()
-                        .any(|v| matches!(v.shape, VariantShape::Unit))
+                        .any(|v| matches!(v.shape, VariantShape::Unit) && v.host_type.is_none())
                         .then(|| "None".to_owned()),
                 )
                 .collect();

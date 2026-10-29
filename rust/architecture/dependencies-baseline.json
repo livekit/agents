@@ -29,6 +29,5 @@
   "dependency:lk-agents-voice:pyo3-macros",
   "dependency:lk-agents-voice:pyo3-macros-backend",
   "dependency:lk-agents-voice:tokio",
-  "dependency:lk-agents-voice:tokio-macros",
-  "direction:lk-agents-py:lk-agents-voice"
+  "dependency:lk-agents-voice:tokio-macros"
 ]

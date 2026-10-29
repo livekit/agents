@@ -8,11 +8,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from livekit.agents.beta.workflows import _TransferHost
-from livekit.agents.voice.avatar import AudioReceiver
+from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 
 from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, Sound, _core_RoomSession
 from ..types import NotGivenOr
+from .avatar import AudioReceiverFrame
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .workflows import InstructionsArg
 
@@ -49,7 +50,7 @@ class DataStreamAudioReceiver:
     async def start(self) -> None: ...
     async def next_audio(
         self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment | None, dict[str, object] | None]: ...
+    ) -> tuple[int, bool, AvatarPlaybackSegment | None, AudioReceiverFrame | None]: ...
     def notify_playback_started(self, segment: AvatarPlaybackSegment) -> None: ...
     def notify_playback_finished(
         self,
@@ -58,6 +59,22 @@ class DataStreamAudioReceiver:
         interrupted: bool,
     ) -> None: ...
     def aclose(self) -> None: ...
+
+class AvatarRunner:
+    """The avatar worker's native queue owner. Its decisions remain in RunnerCore."""
+    def __init__(
+        self,
+        room: _core_RoomSession,
+        *,
+        receiver: AudioReceiver,
+        generator: VideoGenerator,
+        media: _AvatarMedia,
+        lazy_publish: bool,
+    ) -> None: ...
+    async def start(self) -> None: ...
+    async def wait_for_complete(self) -> None: ...
+    def clear_buffer(self, epoch: int) -> None: ...
+    async def aclose(self) -> None: ...
 
 class PlayState:
     """A sound's monotone stop and completion handle."""

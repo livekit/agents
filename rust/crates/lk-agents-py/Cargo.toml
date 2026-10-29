@@ -28,7 +28,6 @@ lk-agents-abi = { path = "../lk-agents-abi", features = ["python"] }
 # made every workspace test build compile ffmpeg (897 s of a 15 min cold build, 2026-09-06).
 lk-agents-runtime = { path = "../lk-agents-runtime", features = ["python", "media-resample"] }
 
-lk-agents-voice = { path = "../lk-agents-voice", features = ["native-audio", "python"] }
 # The avatar sink implements an async-trait ABI contract.
 async-trait.workspace = true
 serde.workspace = true

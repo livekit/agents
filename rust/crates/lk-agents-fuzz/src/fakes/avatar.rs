@@ -1,5 +1,5 @@
 //! The avatar worker the agent's voice streams to, in its own room, on the production wiring: the
-//! agent's `DataStreamAudioReceiver`, the runner (`lk_agents_voice::avatar_runner`, its ready
+//! agent's `DataStreamAudioReceiver`, the runner (`lk_agents_runtime::avatar_runner`, its ready
 //! events taken in the run's seeded order), and in place of the user's model and the SDK's
 //! `rtc.AVSynchronizer` a generator and a synchronizer that keep real time:
 //!
@@ -28,12 +28,12 @@ use lk_agents_abi::{
     errors::{ApiError, ProviderError},
 };
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
+use lk_agents_runtime::avatar_runner::{AvatarIo, AvatarRunner, Event};
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
     avatar_runner::{
-        AudioReceiverFrame, AvatarAudioReceiver, AvatarFrame, AvatarIo, AvatarMedia, AvatarRunner,
-        AvatarVideoGenerator, Event,
+        AudioReceiverFrame, AvatarAudioReceiver, AvatarFrame, AvatarMedia, AvatarVideoGenerator,
     },
 };
 use tokio::sync::mpsc::Sender;
@@ -657,6 +657,7 @@ impl FakeAvatarWorker {
             spawner.spawn(Box::pin(async move {
                 loop {
                     tokio::select! {
+                        biased;
                         changed = agent_sent.changed() => if changed.is_err() { return },
                         changed = worker_sent.changed() => if changed.is_err() { return },
                     }

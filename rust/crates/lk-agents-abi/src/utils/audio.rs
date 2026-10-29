@@ -3,11 +3,10 @@
 
 use std::sync::Arc;
 
-
 /// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.
 /// The field names are `rtc.AudioFrame(..)`'s keyword arguments.
-#[crate::host(handwritten(extract, emit, host = "rtc.AudioFrame"))]
+#[crate::host(handwritten(extract, emit, host = "livekit.rtc.AudioFrame"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioFrame {
     /// `bytes`, not a list of ints (which `rtc.AudioFrame` would read as garbage).
@@ -25,7 +24,8 @@ impl<'py> pyo3::IntoPyObject<'py> for &AudioFrame {
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
         use pyo3::types::{PyAnyMethods as _, PyDictMethods as _};
-        static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> = pyo3::sync::PyOnceLock::new();
+        static CLASS: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
         let kwargs = pyo3::types::PyDict::new(py);
         kwargs.set_item("data", pyo3::types::PyBytes::new(py, &self.data))?;
         kwargs.set_item("sample_rate", self.sample_rate)?;
@@ -57,9 +57,14 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
         use crate::python::{attr_with, number_from_py};
         const OWNER: &str = "AudioFrameFromPy";
         let obj = &*obj;
-        let sample_rate = attr_with(obj, OWNER, "sample_rate", |v| number_from_py(v, "AudioFrame.sample_rate"))?;
-        let num_channels = attr_with(obj, OWNER, "num_channels", |v| number_from_py(v, "AudioFrame.num_channels"))?;
-        let samples_per_channel = attr_with(obj, OWNER, "samples_per_channel", |v| number_from_py(v, "AudioFrame.samples_per_channel"))?;
+        let sample_rate =
+            attr_with(obj, OWNER, "sample_rate", |v| number_from_py(v, "AudioFrame.sample_rate"))?;
+        let num_channels = attr_with(obj, OWNER, "num_channels", |v| {
+            number_from_py(v, "AudioFrame.num_channels")
+        })?;
+        let samples_per_channel = attr_with(obj, OWNER, "samples_per_channel", |v| {
+            number_from_py(v, "AudioFrame.samples_per_channel")
+        })?;
         Ok(AudioFrame {
             data: attr_with(obj, OWNER, "data", |v| {
                 crate::python::snapshot_buffer(
@@ -110,6 +115,4 @@ mod tests {
         assert!((f.duration() - 0.01).abs() < 1e-12);
         assert_eq!(AudioFrame::new(vec![0u8; 4], 0, 1, 480).duration(), 0.0);
     }
-
-
 }

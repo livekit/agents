@@ -294,3 +294,43 @@ fn a_dispatched_record_routes_its_members_by_model_class() {
     let undispatched = source.replace(", dispatch = \"session_dispatch\"", "");
     assert!(read(&undispatched).unwrap_err().contains("routes a member of a dispatched record"));
 }
+
+#[test]
+fn transparent_records_extract_and_emit_existing_host_classes() {
+    let decls = read(
+        r#"
+        #[crate::host(handwritten(extract, emit, host = "livekit.rtc.AudioFrame"))]
+        pub struct AudioFrame;
+        #[crate::host(record(module = "avatar", extract, emit, transparent))]
+        pub enum AudioReceiverFrame {
+            Audio(AudioFrame),
+            #[host(host_type = "livekit.agents.voice.avatar.AudioSegmentEnd")]
+            SegmentEnd,
+        }
+    "#,
+    )
+    .unwrap();
+    let output = crate::records::conversions(&decls).unwrap();
+    let rust = &output.text;
+    assert!(rust.contains("obj.py().import(\"livekit.rtc\")?.getattr(\"AudioFrame\")?"));
+    assert!(rust.contains(
+        "obj.py().import(\"livekit.agents.voice.avatar\")?.getattr(\"AudioSegmentEnd\")?"
+    ));
+    assert!(!rust.contains("if obj.is_none()"));
+    let models = crate::records::python(&decls).unwrap();
+    let model = &models.iter().find(|o| o.path == "avatar.py").unwrap().text;
+    assert!(model.contains("from livekit.rtc import AudioFrame"));
+    assert!(model.contains("from livekit.agents.voice.avatar import AudioSegmentEnd"));
+    assert!(model.contains("AudioReceiverFrame: TypeAlias = AudioFrame | AudioSegmentEnd"));
+    assert!(!model.contains("class AudioSegmentEnd"));
+    let invalid = read(
+        r#"
+        #[crate::host(handwritten(extract, emit, host = "livekit.rtc.AudioFrame | object"))]
+        pub struct Frame;
+        #[crate::host(record(module = "avatar", extract, transparent))]
+        pub enum Bad { Audio(Frame), End }
+    "#,
+    )
+    .unwrap();
+    assert!(crate::records::conversions(&invalid).err().unwrap().contains("names one host class"));
+}

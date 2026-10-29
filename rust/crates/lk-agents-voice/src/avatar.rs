@@ -55,19 +55,7 @@ pub type Received = lk_agents_abi::utils::video::AudioReceiverFrame;
 
 /// Why reading stopped: closed by us (the end of iteration), or failed (the reference re-raises it
 /// from iteration).
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ReceiverEnd {
-    #[host(kind = "StopAsyncIteration")]
-    #[error("the receiver is closed")]
-    Closed,
-    /// A stream without `sample_rate`/`num_channels`: the reference's `ValueError`.
-    #[host(kind = "ValueError")]
-    #[error("{0}")]
-    BadStream(String),
-    #[error("{0}")]
-    Failed(String),
-}
+pub use lk_agents_abi::voice::avatar::ReceiverEnd;
 
 pub use lk_agents_abi::voice::avatar::ClearBufferListener;
 

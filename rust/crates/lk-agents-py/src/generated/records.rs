@@ -860,6 +860,29 @@ pub mod agent_run {
     }
 }
 
+pub mod avatar {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
+
+    pub fn audio_receiver_frame_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::utils::video::AudioReceiverFrame> {
+        if obj.is_instance(&obj.py().import("livekit.rtc")?.getattr("AudioFrame")?)? {
+            return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(obj.extract::<::lk_agents_abi::AudioFrame>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        if obj.is_instance(&obj.py().import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?)? {
+            return Ok(::lk_agents_abi::utils::video::AudioReceiverFrame::SegmentEnd);
+        }
+        Err(super::not_a(obj, "AudioReceiverFrame"))
+    }
+
+    pub fn audio_receiver_frame_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::utils::video::AudioReceiverFrame) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::utils::video::AudioReceiverFrame::Audio(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::utils::video::AudioReceiverFrame::SegmentEnd => crate::host::construct(py.import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?.as_any(), (), None)?,
+        })
+    }
+}
+
 pub mod duplex {
     use pyo3::prelude::*;
 

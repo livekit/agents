@@ -1027,22 +1027,6 @@ class CoreTextOutput:
     def flush(self) -> None: ...
 
 
-class AvatarRunner:
-    def __init__(
-        self,
-        room: _core_RoomSession,
-        *,
-        receiver: Any,
-        generator: Any,
-        media: Any,
-        lazy_publish: bool,
-    ) -> None: ...
-    async def start(self) -> None: ...
-    async def wait_for_complete(self) -> None: ...
-    def clear_buffer(self, epoch: int) -> None: ...
-    async def aclose(self) -> None: ...
-
-
 class TrackPublishOptions:
     """The host's view: what `_core_rtc.LocalParticipant._core_publish_audio_track` builds its
     `rtc.AudioSource`, `LocalAudioTrack` and `rtc.TrackPublishOptions` from.

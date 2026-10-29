@@ -100,11 +100,10 @@ pub enum AvatarFrame {
 }
 
 /// An avatar audio receiver yields audio or the end of its segment, never video.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, extract, untagged)]
-#[host(host_type = "livekit.agents.voice.avatar._AudioReceiverFrame")]
+#[crate::host(record(module = "avatar", extract, emit, transparent))]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AudioReceiverFrame {
     Audio(AudioFrame),
-    #[binding(class = "livekit.agents.voice.avatar.AudioSegmentEnd")]
+    #[host(host_type = "livekit.agents.voice.avatar.AudioSegmentEnd")]
     SegmentEnd,
 }

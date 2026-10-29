@@ -260,7 +260,7 @@ impl Imports {
 }
 
 /// Identifier paths, excluding quoted literal values and forward-reference strings.
-fn annotation_names(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+pub(crate) fn annotation_names(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
     let chars: Vec<_> = text.char_indices().collect();
     let mut names = Vec::new();
     let mut i = 0;

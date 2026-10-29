@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
-    from livekit import rtc
+    from livekit.rtc import AudioFrame
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -28,7 +28,7 @@ class DuplexCapabilities:
 class DuplexAudio:
     """One frame of the model's output audio; `start_ms` places it on the model's timeline."""
 
-    frame: rtc.AudioFrame
+    frame: AudioFrame
     start_ms: int | None = None
 
 

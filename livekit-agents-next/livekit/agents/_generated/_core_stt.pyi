@@ -8,11 +8,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from livekit import rtc
 from livekit.agents import VAD
 from livekit.agents._core_view import AvailabilityObserver
 from livekit.agents.stt import STT
 from livekit.agents.types import APIConnectOptions
+from livekit.rtc import AudioFrame
 
 from .inference_stt import FallbackModel
 
@@ -42,7 +42,7 @@ class FallbackStt:
         """Every recovery probe in flight closes its stream, awaited (bounded)."""
     async def recognize(
         self,
-        frames: Sequence[rtc.AudioFrame],
+        frames: Sequence[AudioFrame],
         language: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> dict[str, object]:
@@ -56,7 +56,7 @@ class FallbackStt:
         """Audio in, tee'd to the serving stream and every recovery probe; events out."""
 
 class FallbackRecognizeStream:
-    def push(self, item: rtc.AudioFrame) -> None: ...
+    def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     async def recv(self) -> dict[str, object] | None: ...
@@ -125,7 +125,7 @@ class InferenceStt:
         """
 
 class InferenceSttStream:
-    def push(self, item: rtc.AudioFrame) -> None: ...
+    def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     def update_options(
@@ -145,7 +145,7 @@ class SttStreamAdapter:
         """The wrapped STT and VAD; each stream binds its own recognition policy."""
     async def recognize(
         self,
-        frames: Sequence[rtc.AudioFrame],
+        frames: Sequence[AudioFrame],
         language: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> dict[str, object]:
@@ -159,7 +159,7 @@ class SttStreamAdapter:
         """Audio into the VAD, its utterances recognized."""
 
 class SttAdapterStream:
-    def push(self, item: rtc.AudioFrame) -> None: ...
+    def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     async def recv(self) -> dict[str, object] | None: ...

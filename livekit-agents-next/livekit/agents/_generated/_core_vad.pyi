@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from livekit import rtc
 from livekit.local_inference import VAD
+from livekit.rtc import AudioFrame
 
 class InferenceVad:
     """The Silero VAD behind `inference.VAD`."""
@@ -38,7 +38,7 @@ class InferenceVad:
         """One detection; each event carries the audio it refers to."""
 
 class InferenceVadStream:
-    def push(self, item: rtc.AudioFrame) -> None: ...
+    def push(self, item: AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     async def recv(self) -> dict[str, object] | None: ...

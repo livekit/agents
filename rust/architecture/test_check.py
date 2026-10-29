@@ -403,6 +403,12 @@ class ExecutorContracts(unittest.TestCase):
                 ),
                 "rust/crates/lk-agents-runtime/src/voice/api_tests/playback.rs": "fn t() { tokio::spawn(a); }\n",
                 "rust/crates/lk-agents-runtime/src/room_io/input_tests.rs": "fn t() { tokio::spawn(a); }\n",
+                "rust/crates/lk-agents-runtime/src/avatar_runner.rs": (
+                    "fn f() { tokio::spawn(a); tokio::select! { x = a => {} };"
+                    " tokio::select! { biased; x = a => {} } }\n"
+                ),
+                # The native constructor is separate composition, not an actor prefix exemption.
+                "rust/crates/lk-agents-runtime/src/avatar_runner_host.rs": "fn f() { tokio::spawn(a); }\n",
                 # Outside the executors: the process runtime owns the Tokio runtime.
                 "rust/crates/lk-agents-runtime/src/process.rs": "fn f() { tokio::spawn(a); }\n",
             }
@@ -414,6 +420,8 @@ class ExecutorContracts(unittest.TestCase):
             self.assertEqual(
                 executor_violations(root, list(files)),
                 {
+                    "executor:rust/crates/lk-agents-runtime/src/avatar_runner.rs:tokio-spawn": 1,
+                    "executor:rust/crates/lk-agents-runtime/src/avatar_runner.rs:unbiased-select": 1,
                     f"{owner}:tokio-spawn": 1,
                     f"{owner}:unbiased-select": 1,
                     f"{avatar}:tokio-time": 1,

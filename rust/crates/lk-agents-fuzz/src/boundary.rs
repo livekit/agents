@@ -26,7 +26,7 @@ pub const VOICE: Boundary = Boundary {
         "voice decision core (agent_session::Driver), stepped in the real runtime owner by the \
          deterministic harness per delivered event, with effects performed against fake ports",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
-        "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
+        "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::avatar_runner, ::rtc) \
          over FakeRoom, on the run's scheduler (decision 92)",
     ],
     fakes: &[
@@ -39,7 +39,7 @@ pub const VOICE: Boundary = Boundary {
         "fakes::tools",
         "fakes::nodes",
         "fakes::output",
-        "fakes::avatar",
+        "fakes::avatar (generator/media/RTC ports under the real runtime runner and stream executors)",
         "fakes::realtime (a LiveKit Inference realtime session's events at the Realtime \
          boundary, over a server model drawn from the corpus; the fallback adapter over two of \
          them); fakes::realtime::duplex (a duplex model's events at \
@@ -49,7 +49,6 @@ pub const VOICE: Boundary = Boundary {
     transitional: &[
         "voice policy tasks the core spawns (generation, playout, tools, hooks): scheduled as the \
          pool's turns, or one process each under the task bridge (E-1, E-3, E-13)",
-        "the avatar runner over FakeRoom; the console's remote session over a socket",
     ],
     outside: &[
         "the voice runtime arrival-order loop (the harness drives its same actor and effect execution)",

@@ -18,8 +18,8 @@ impl Rule for AvatarPlaybackFinishedOnce {
     const CONTRACT: Contract = Contract {
         id: "avatar_playback_finished_once",
         guarantee: "Each avatar segment that ends or is cut gets exactly one playback-finished report.",
-        examples: &[one_each],
-        counterexamples: &[twice, never],
+        examples: &[one_each, both_cut_segments_reported],
+        counterexamples: &[twice, never, one_cut_segment_unreported, cut_segment_reported_twice],
         probe: None,
     };
 
@@ -46,10 +46,8 @@ impl Rule for AvatarPlaybackFinishedOnce {
                 }
                 AvatarStep::Clear => {
                     // a clear cuts what is playing: everything received and not yet ended
-                    if !open.is_empty() {
-                        open.clear();
-                        due.push(*at);
-                    }
+                    due.extend(open.iter().map(|_| *at));
+                    open.clear();
                 }
                 AvatarStep::ReportedFinished { .. } => {
                     reports += 1;
@@ -99,4 +97,30 @@ fn twice() -> Recording {
 
 fn never() -> Recording {
     steps(0)
+}
+
+fn cut_segments(reports: usize) -> Recording {
+    let mut a = Authored::new()
+        .avatar_at(0, AvatarStep::Started { period_ms: 40, latency_ms: 10, queue_ms: 100 })
+        .avatar_at(10, AvatarStep::Received { segment: 0 })
+        .avatar_at(20, AvatarStep::ReceivedEnd)
+        .avatar_at(30, AvatarStep::Received { segment: 1 })
+        .avatar_at(40, AvatarStep::ReceivedEnd)
+        .avatar_at(50, AvatarStep::Clear);
+    for _ in 0..reports {
+        a = a.avatar_at(50, AvatarStep::ReportedFinished { interrupted: true });
+    }
+    a.avatar_at(2000, AvatarStep::CloseAsked).done()
+}
+
+fn both_cut_segments_reported() -> Recording {
+    cut_segments(2)
+}
+
+fn one_cut_segment_unreported() -> Recording {
+    cut_segments(1)
+}
+
+fn cut_segment_reported_twice() -> Recording {
+    cut_segments(3)
 }

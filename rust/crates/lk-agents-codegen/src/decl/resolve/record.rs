@@ -155,7 +155,11 @@ impl Resolver<'_> {
         let route = route(&at, &mut entries, dispatched)?;
         let shape = match &v.fields {
             syn::Fields::Unit => {
-                voc::only(&at, &entries, &["name"])?;
+                voc::only(
+                    &at,
+                    &entries,
+                    if transparent { &["name", "host_type"] } else { &["name"] },
+                )?;
                 VariantShape::Unit
             }
             syn::Fields::Named(named) => {
@@ -207,6 +211,13 @@ impl Resolver<'_> {
                 }
             }
         };
+        let host_type = voc::text(&at, &entries, "host_type")?
+            .map(|path| {
+                path.rsplit_once('.')
+                    .map(|(module, name)| (module.to_owned(), name.to_owned()))
+                    .ok_or_else(|| format!("{at}: host_type is a dotted class path"))
+            })
+            .transpose()?;
         let rust_name = v.ident.to_string();
         Ok(Variant {
             name: voc::text(&at, &entries, "name")?
@@ -214,6 +225,7 @@ impl Resolver<'_> {
             rust_name,
             doc: doc(&v.attrs),
             shape,
+            host_type,
             route,
         })
     }

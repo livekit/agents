@@ -31,6 +31,8 @@ pub mod cores {
 // links that names them.
 #[cfg(feature = "python")]
 extern crate lk_agents_media as _;
+#[cfg(feature = "python")]
+extern crate lk_agents_voice as _;
 
 /// The provider clients, judges and detectors, wired to this process by [`process::Process`]
 /// (decision 88); the extension names their declared classes through this path.
@@ -69,6 +71,8 @@ pub mod voice;
 
 pub mod avatar;
 pub mod avatar_receiver;
+pub mod avatar_runner;
+mod avatar_runner_host;
 /// Runtime room execution over the ABI-declared SDK capabilities.
 pub mod room_io;
 pub mod rtc;

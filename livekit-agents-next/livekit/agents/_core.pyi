@@ -52,7 +52,6 @@ from ._generated._core_classes import (
     AudioByteStream as AudioByteStream,
     AudioOutputCapabilities as AudioOutputCapabilities,
     AudioStreamOptions as AudioStreamOptions,
-    AvatarRunner as AvatarRunner,
     ByteStreamSender as ByteStreamSender,
     ChatContent as ChatContent,
     ChatItem as ChatItem,
@@ -348,6 +347,7 @@ from ._generated._core_vad import (
     InferenceVadStream as InferenceVadStream,
 )
 from ._generated._core_voice import (
+    AvatarRunner as AvatarRunner,
     BackgroundAudioPlayer as BackgroundAudioPlayer,
     ConsoleIo as ConsoleIo,
     DataStreamAudioOutput as DataStreamAudioOutput,
