@@ -33,6 +33,7 @@ from livekit.agents.a2a.extension import (
     as_dict,
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
+from livekit.agents.llm.tool_context import CUT_OFF_KEY
 from livekit.agents.storage import AgentDBStorage, StorageUnavailable
 from livekit.agents.storage.resolve import Thread
 
@@ -316,9 +317,8 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
         "function_call_output",
         "message",
         "message",
-        "message",
     ]
-    assert items[3].interrupted and items[3].content == [""]
+    assert items[1].extra[CUT_OFF_KEY] == "true"
 
 
 async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers) -> None:

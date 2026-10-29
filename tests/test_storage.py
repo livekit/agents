@@ -27,7 +27,7 @@ from livekit.agents._generated.storage_run import TaskRecord
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
 from livekit.agents.a2a.endpoint import A2AEndpoint
 from livekit.agents.llm import ChatItem, FunctionToolCall
-from livekit.agents.llm.tool_context import WAITING_PREFIX
+from livekit.agents.llm.tool_context import CUT_OFF_KEY, WAITING_PREFIX
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import AgentDBStorage, Ref, RunRejected
 from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
@@ -321,7 +321,7 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
     assert r1.task.data.metadata[INTERRUPTION_REASON_KEY] == "new-message"
     assert r1.task.data.artifacts is None and r1.output is None
     assert r2.task.status == "completed" and r2.output == "both answered"
-    # what ran is in the history, and the first turn's reply is cut off before it began
+    # what ran is in the history, and its result is marked as one the reply never told
     items = await history_items(a, sid, LANE)
     assert [i.type for i in items] == [
         "message",
@@ -329,9 +329,8 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
         "function_call_output",
         "message",
         "message",
-        "message",
     ]
-    assert items[3].interrupted and items[3].content == [""]
+    assert items[1].extra[CUT_OFF_KEY] == "true"
     assert items[-1].text_content == "both answered"
     assert set(await run_outcomes(a, sid)) == {"canceled", "completed"}
 

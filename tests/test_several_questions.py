@@ -61,7 +61,6 @@ def asking_expert(question: str, answer: str, seen: list[str]) -> Callable[..., 
 
 
 @pytest.mark.rule("R36", "R29")
-@pytest.mark.xfail(strict=True, reason="R36: both tasks ask at once, each its own question")
 async def test_one_question_is_in_front_and_the_next_waits(door: Callable[..., Door]) -> None:
     monday_q, tuesday_q = "Which time on Monday?", "Which time on Tuesday?"
     desk = await bookings(
@@ -142,7 +141,6 @@ async def test_two_answers_to_one_question_give_the_second_a_task_of_its_own(
 
 
 @pytest.mark.rule("R47")
-@pytest.mark.xfail(strict=True, reason="R47: only the first expert gets the answer")
 async def test_one_answer_goes_to_each_expert_that_asked_in_one_step(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]
 ) -> None:
@@ -184,7 +182,6 @@ async def test_one_answer_goes_to_each_expert_that_asked_in_one_step(
 
 
 @pytest.mark.rule("R48")
-@pytest.mark.xfail(strict=True, reason="R48: the question is shown before the message's reply")
 async def test_a_question_cut_off_by_a_waiting_message_is_asked_after_its_reply(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]
 ) -> None:

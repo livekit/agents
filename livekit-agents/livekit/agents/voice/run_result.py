@@ -162,8 +162,8 @@ class RunResult(Generic[Run_T]):
         self._input_required: str | None = None
         self._interrupted: bool = False
         self._pending_call: llm.FunctionCall | None = None
-        self._answer_tool: str | None = None  # the tool the answer is handed to, if named
-        self._answer_ref: str | None = None  # what that tool continues with the answer
+        # the tools the answer is handed to, each with what it continues the answer with
+        self._answer_to: list[tuple[str, str]] = []
         self._verbatim: str | None = None
         self._agent_stack: list[Ref] | None = None
 

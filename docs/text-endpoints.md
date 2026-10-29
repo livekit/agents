@@ -159,10 +159,19 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
   question or for the lane, goes `canceled` at once.
 - A message that interrupts stops the reply also while it streams, and only
   a `CANCELLABLE` tool; the task ends `canceled` with what was shown as its
-  answer, or stays `working` while work of it runs in the background.
+  answer, or stays `working` while work of it runs in the background. A cut
+  reply that showed nothing leaves no message; when it answered tool results,
+  the next turn's model reads on them that the person was not told, as on a
+  call.
 - A tool's `InputRequired` ends the turn `input-required` with the question
   as the reply. The next message in the thread answers it; see
-  [human-in-the-loop.md](human-in-the-loop.md).
+  [human-in-the-loop.md](human-in-the-loop.md). One question is in front of
+  the person: another task's question waits unshown, its task `working` with
+  `livekit/queued: true`, and the one queued first is asked when the one in
+  front is answered. Questions of several experts in one step take the one
+  answer each. Under `live` a question that a newer message cut off before it
+  was shown waits the same way: that message is a task of its own, and the
+  question is asked after its reply.
 - A message with the `taskId` of a terminal task fails with
   `UnsupportedOperationError`, unless it is a resend: a follow-up is a new
   task.
@@ -177,6 +186,7 @@ short. A stock client ignores them.
 | `livekit/kind`                                      | `delegation` on a message another agent sent                                                 |
 | `livekit/interrupt`                                 | `false` on a message that waits for the reply under way under `live`; a delegation sends it  |
 | `livekit/background`                                | `true` on a `working` task whose turn ended while a tool of it runs on, under `live`         |
+| `livekit/queued`                                    | `true` on a `working` task whose question waits behind the one in front of the person        |
 | `livekit/interrupted`, `livekit/interruptionReason` | on a `canceled` task the server ended for a newer message                                    |
 | `livekit/mergedInto`                                | on a `completed` task whose message was answered by another task's turn                      |
 | `livekit/reason`                                    | why a task failed: `thread-not-found`, `lease-timeout`, `worker-lost`, `storage-unavailable` |

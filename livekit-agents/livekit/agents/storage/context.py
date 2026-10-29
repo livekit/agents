@@ -203,8 +203,7 @@ class TurnHost(Generic[S]):
             thread_id=self._thread.id,
             agent_stack=ctx.agent_stack,
             rebuild=self._agents.rebuild,
-            answer_tool=ctx.answer_tool,
-            answer_ref=ctx.answer_ref,
+            answer_to=ctx.answer_to,
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
             lane=ctx.lane,
             task_id=ctx.task_id,
@@ -316,8 +315,7 @@ class TurnHost(Generic[S]):
             pending = PendingCall(
                 name=call.name,
                 call_id=call.call_id,
-                answer_tool=asked._answer_tool,
-                answer_ref=asked._answer_ref,
+                answer_to=asked._answer_to,
             )
         return HandlerOutput(
             output=output,

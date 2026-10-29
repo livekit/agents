@@ -25,7 +25,13 @@ from livekit.agents.llm import (
     FunctionCallOutput,
     FunctionToolCall,
 )
-from livekit.agents.llm.tool_context import DuplicateMode, ToolFlag
+from livekit.agents.llm.tool_context import (
+    CUT_OFF_KEY,
+    CUT_OFF_REPLY,
+    DuplicateMode,
+    ToolFlag,
+    note_cut_off_replies,
+)
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.types import NOT_GIVEN
 
@@ -773,18 +779,13 @@ async def test_a_message_stops_the_reply_while_it_streams(door: Callable[..., Do
 
 def cut_off(ctx: ChatContext, call_id: str) -> bool:
     """The request notes that the reply to ``call_id``'s output was cut off."""
-    from livekit.agents.llm.tool_context import CUT_OFF_REPLY
-
     out = next(i for i in ctx.items if isinstance(i, FunctionCallOutput) and i.call_id == call_id)
     return out.output.endswith(CUT_OFF_REPLY)
 
 
 @pytest.mark.rule("R68", "B57")
-@pytest.mark.xfail(strict=True, reason="R68: no note on a cut-off reply's output")
 def test_only_the_newest_message_reads_the_note_on_a_cut_off_reply() -> None:
     """The output of a flagged call gets the note on a copy, until the person speaks again."""
-    from livekit.agents.llm.tool_context import CUT_OFF_KEY, note_cut_off_replies
-
     ctx = ChatContext.empty()
     ctx.add_message(role="user", content="book monday")
     ctx.insert(FunctionCall(call_id="b1", name="book", arguments="{}", extra={CUT_OFF_KEY: "true"}))
@@ -802,7 +803,6 @@ def test_only_the_newest_message_reads_the_note_on_a_cut_off_reply() -> None:
 
 
 @pytest.mark.rule("R6", "R68", "B57")
-@pytest.mark.xfail(strict=True, reason="B57: an empty interrupted reply is recorded")
 async def test_a_reply_cut_off_before_it_showed_leaves_no_message(
     door: Callable[..., Door],
 ) -> None:
@@ -830,8 +830,8 @@ async def test_a_reply_cut_off_before_it_showed_leaves_no_message(
     ]
 
 
-@pytest.mark.rule("R6")
-async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
+@pytest.mark.rule("R6", "R68", "B57")
+async def test_a_reply_to_a_result_cut_off_while_it_streams_is_noted_on_the_result(
     door: Callable[..., Door],
 ) -> None:
     held = asyncio.Event()
@@ -854,16 +854,12 @@ async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
     held.set()
     await asyncio.wait_for(first, 20)
 
-    # the next turn's model reads the result, then the reply cut off before it said anything
-    items = desk.model.requests[-1].items
-    at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "b1_final")
-    reply = items[at + 2]
-    assert isinstance(reply, ChatMessage) and reply.role == "assistant"
-    assert reply.interrupted and reply.content == [""]
+    # the next turn's model reads that the person was not told the result
+    assert cut_off(desk.model.requests[-1], "b1_final")
 
 
-@pytest.mark.rule("R6")
-async def test_an_interrupt_before_the_reply_to_a_result_is_kept_as_interrupted(
+@pytest.mark.rule("R6", "R68", "B57")
+async def test_a_reply_to_a_result_cut_off_before_it_began_is_noted_on_the_result(
     door: Callable[..., Door],
 ) -> None:
     desk = await bookings(
@@ -879,11 +875,7 @@ async def test_an_interrupt_before_the_reply_to_a_result_is_kept_as_interrupted(
     await asyncio.wait_for(asyncio.gather(first, second), 20)
 
     # the result came back as the next message waited: its turn stopped before the reply
-    items = desk.model.requests[-1].items
-    at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "l1")
-    reply = items[at + 2]
-    assert isinstance(reply, ChatMessage) and reply.role == "assistant"
-    assert reply.interrupted and reply.content == [""]
+    assert cut_off(desk.model.requests[-1], "l1")
 
 
 @pytest.mark.rule("R7", "B27")

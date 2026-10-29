@@ -41,6 +41,7 @@ from livekit.agents.llm import (
     Toolset,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.llm.tool_context import CUT_OFF_REPLY
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
@@ -536,10 +537,7 @@ def recorded_requests(session: LiveSession) -> list[ChatContext]:
 
 
 @pytest.mark.rule("R68", "B57")
-@pytest.mark.xfail(strict=True, reason="R68: no note on a cut-off reply's output")
 async def test_a_spoken_reply_to_a_tool_output_cut_off_is_noted_on_the_output() -> None:
-    from livekit.agents.llm.tool_context import CUT_OFF_REPLY
-
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather in Paris?")
     actions.add_llm(
