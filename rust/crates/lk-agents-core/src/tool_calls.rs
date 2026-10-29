@@ -176,6 +176,11 @@ impl ToolCalls {
         ToolCalls { calls: Vec::new(), approval_answers }
     }
 
+    /// The read-backs the step's later calls can consume, as the person's latest message left them.
+    pub(crate) fn answered(&mut self, approval_answers: BTreeSet<String>) {
+        self.approval_answers = approval_answers;
+    }
+
     /// Starts one call as the model makes it, against the tools its request offered: an unknown
     /// tool or arguments that are not a JSON object settle at once as feedback.
     pub fn add<E: From<Effect>>(

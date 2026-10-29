@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 use lk_agents_abi::{ChatMessage, Ts};
 
 use super::{AgentRun, Effect, Next, Output, Phase, StepId};
-use crate::tool_calls::ToolCalls;
 
 /// How an invocation opens, and who owns its record and its requests.
 #[derive(Debug, Clone)]
@@ -47,12 +46,13 @@ pub enum StepVerdict {
 }
 
 impl AgentRun {
-    /// The person's latest answers: what a step that has not called yet grants with.
+    /// The person's latest answers: what a step that has not called yet grants with. The person
+    /// moved on from the answers a step already calling read: they grant nothing more.
     pub(super) fn answered(&mut self, approval_answers: BTreeSet<String>) {
-        if let Some(acting) = self.phase.acting()
-            && acting.calls.is_empty()
-        {
-            acting.calls = ToolCalls::new(approval_answers.clone());
+        if let Some(acting) = self.phase.acting() {
+            let answers =
+                if acting.calls.is_empty() { approval_answers.clone() } else { BTreeSet::new() };
+            acting.calls.answered(answers);
         }
         self.approval_answers = approval_answers;
     }

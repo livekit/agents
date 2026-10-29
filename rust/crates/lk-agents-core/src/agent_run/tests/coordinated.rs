@@ -274,3 +274,46 @@ fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
     d.send(Event::Recorded { item: asked("asked_2", "sales") });
     assert!(!repeat_runs(&mut d, "billing"));
 }
+
+// Catches: an answer the person moved on from still granting a later call of a step that had
+// started calling before they spoke again.
+#[test]
+fn speaking_again_revokes_the_answers_a_calling_step_read() {
+    let mut input = coordinated_input();
+    input.history.push(asked("asked_1", "billing"));
+    input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
+    let mut d =
+        Driver::with_input(text_agent(vec![approval_tool(), string_tool("lookup", "q")]), input);
+    let request = d.plans()[0].request;
+    d.send(Event::LlmChunk {
+        request,
+        chunk: chunk(
+            None,
+            vec![FunctionToolCall {
+                name: "lookup".into(),
+                arguments: json!({"q": "x"}).to_string(),
+                call_id: "c0".into(),
+                extra: None,
+            }],
+            None,
+        ),
+    });
+    d.send(Event::Answered { approval_answers: Default::default() });
+    d.send(Event::LlmChunk {
+        request,
+        chunk: chunk(
+            None,
+            vec![FunctionToolCall {
+                name: "transfer".into(),
+                arguments: json!({"to": "billing"}).to_string(),
+                call_id: "c1".into(),
+                extra: None,
+            }],
+            None,
+        ),
+    });
+    for (call, arguments) in d.prepares() {
+        d.prepared(call, Value::Object(arguments));
+    }
+    assert!(d.executes().iter().all(|(_, _, c)| c.name != "transfer"));
+}
