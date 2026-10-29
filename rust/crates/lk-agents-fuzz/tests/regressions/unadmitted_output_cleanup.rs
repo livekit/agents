@@ -23,7 +23,7 @@ fn interrupting_a_captured_output_does_not_clear_it_before_physical_admission() 
 
 #[test]
 fn disabling_selected_text_keeps_its_admitted_segment_until_it_finishes() {
-    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
     use lk_agents_fuzz::record::Sink;
     use lk_agents_voice::agent_session::IoKind;
@@ -62,5 +62,7 @@ fn disabling_selected_text_keeps_its_admitted_segment_until_it_finishes() {
             })
             .collect();
         assert_eq!(shown, "First segment, still speaking.");
+        let outcome = finish(run, Outcome::default()).await;
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
     });
 }

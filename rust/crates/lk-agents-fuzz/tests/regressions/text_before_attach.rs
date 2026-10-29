@@ -1,5 +1,5 @@
 //! Words reach a transcription output only once its binding attached it.
-use lk_agents_fuzz::drive::{Run, Setup, simulate};
+use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
 use lk_agents_fuzz::record::Sink;
 
@@ -39,5 +39,7 @@ fn a_failed_voice_writes_no_words_to_an_unattached_replaced_output() {
             })
             .collect();
         assert_eq!(text, [(2, "Hello there."), (2, " How are you?")]);
+        let outcome = finish(run, Outcome::default()).await;
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
     });
 }

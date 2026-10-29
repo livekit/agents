@@ -1,6 +1,6 @@
 //! A segment synthesised before its authorization takes the outputs current at its activation: an
 //! audio output detached meanwhile never plays it, and its words show without that audio.
-use lk_agents_fuzz::drive::{Run, Setup, simulate};
+use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
 use lk_agents_fuzz::record::Sink;
 
@@ -38,5 +38,7 @@ fn a_segment_synthesised_before_a_detach_plays_nothing_on_the_detached_output() 
             })
             .collect();
         assert_eq!(shown, "Words synthesised ahead.");
+        let outcome = finish(run, Outcome::default()).await;
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
     });
 }
