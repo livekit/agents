@@ -19,7 +19,7 @@ use lk_agents_voice::generation::realtime::{
 use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
 use lk_agents_voice::io::RealtimeAudioNode;
 use lk_agents_voice::speech_handle::SpeechHandle;
-use lk_agents_voice::tool_executor::{NextStep, StepDecision};
+use lk_agents_voice::tool_executor::{NextStep, StepNext};
 use lk_agents_voice::trace::GenerationStep;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -43,7 +43,6 @@ pub(crate) async fn realtime_generation_task(
     ctx: &ReplyContext,
     events: &mut RealtimePlayer,
     wake: &Tx,
-    retries: &mut lk_agents_core::tool_outcome::ToolRetries,
 ) -> Result<StepOutcome, DriverError> {
     // The authorization, per step: the server's deltas queue meanwhile. It stops a server turn
     // talking over a `say()`, and a tool follow-up over what became current while tools ran.
@@ -223,8 +222,7 @@ pub(crate) async fn realtime_generation_task(
         request_ids,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty, retries).await
-    else {
+    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await else {
         return Ok(StepOutcome::Done(finished));
     };
     Ok(deliver_realtime(shared, handle, wake, decision, finished))
@@ -248,7 +246,7 @@ fn deliver_realtime(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     wake: &Tx,
-    decision: StepDecision,
+    decision: StepNext,
     finished: Finished,
 ) -> StepOutcome {
     let speech = handle.id();

@@ -6,7 +6,6 @@ use crate::agent_activity::false_interruption::{InterruptOutcome, InterruptWaite
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind};
 use crate::agent_session::effects::Out;
 use crate::agent_session::effects::{GateCause, GateOp};
-use crate::agent_session::host_events::HookCall;
 use crate::agent_session::{
     Answer, ClosePhase, Driver, IdleWaiter, Origin, SayText, SpeechCommand,
 };
@@ -15,7 +14,6 @@ use crate::events::SessionEvent;
 use crate::generation::{EndOfSpeech, TurnOutcome as GenTurnOutcome, end_of_speech};
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
-use crate::tool_executor::Handling;
 use crate::tool_executor::Toolset;
 use crate::trace::{
     CoreStep, GenerationStep, HandoffStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep,
@@ -776,24 +774,8 @@ impl Driver {
             // Reported by a task; said by the loop, which is the only place with the bus.
             GenEvent::Emit(ev) => out.machine().emit(*ev),
 
-            GenEvent::ToolsFinished { speech, step, tools, verdict } => {
-                // With a host running hooks, `function_tools_executed` is its to emit, and the step
-                // waits for what the handlers leave.
-                if let (Some(event), Some(verdict)) = (&tools.executed, verdict) {
-                    let id = self.activity.hooks.mint();
-                    let call = HookCall::FunctionToolsExecuted { id, speech, event: event.clone() };
-                    let wait = self.hook_wait();
-                    if self.activity.hook_bound.is_some()
-                        && self.issue_hook(now, call, Some(wait), out)
-                    {
-                        let handling = Handling { speech, step, tools, verdict };
-                        self.activity.tools.handling.insert(id, handling);
-                        return;
-                    }
-                    self.finish_tools(speech, step, tools, Some(verdict), false, out);
-                    return;
-                }
-                self.finish_tools(speech, step, tools, None, false, out);
+            GenEvent::ToolsFinished { speech, step, end, answer } => {
+                self.on_tools_finished(now, (speech, step), *end, answer, out);
             }
 
             // The reply's tools are done and it has a next step: behind whatever was queued.
@@ -1091,6 +1073,7 @@ impl Driver {
         // The release at `Authorized` can miss a pause taken in the same instant, which would
         // leave the sink paused until the close.
         self.release_paused_speech(speech, out);
+        self.activity.tools.retries.remove(&speech);
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
         // Their bodies are cancelled, as the reference's close cancels its tool tasks

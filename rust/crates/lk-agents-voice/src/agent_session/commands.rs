@@ -144,7 +144,8 @@ pub enum Answer {
     OutputActivated(Result<bool, super::output::OutputBindingError>),
     /// A tool call's next move.
     ToolGo(crate::tool_executor::ToolGo),
-    ToolsVerdict(crate::tool_executor::ToolsVerdict),
+    /// A tool step's next step, decided by the driver.
+    ToolStep(crate::tool_executor::StepNext),
     Interrupt(Result<(), InterruptRefusal>),
 
     Commit(Result<String, CommitSuperseded>),
@@ -175,7 +176,7 @@ answer_picks! {
     output_binding: OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
     output_activated: OutputActivated(Result<bool, super::output::OutputBindingError>),
     tool_go: ToolGo(crate::tool_executor::ToolGo),
-    tools_verdict: ToolsVerdict(crate::tool_executor::ToolsVerdict),
+    tool_step: ToolStep(crate::tool_executor::StepNext),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
     commit: Commit(Result<String, CommitSuperseded>),
     idle: Idle(Result<(), IdleRefused>),

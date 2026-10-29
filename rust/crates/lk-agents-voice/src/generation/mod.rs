@@ -837,13 +837,14 @@ pub enum GenEvent {
         metrics: Option<Box<lk_agents_abi::metrics::base::LlmMetrics>>,
     },
 
+    /// A step's tools are over. Awaited (`answer`) with the step's
+    /// [`StepNext`](crate::tool_executor::StepNext) when any of them ran.
     ToolsFinished {
         speech: SpeechId,
         /// `Source::{ToolCall, ToolOutput}` carry it.
         step: u32,
-        tools: crate::tool_executor::StepTools,
-        /// With `tools.executed`: the step waits here for the event's handlers (a host round trip).
-        verdict: Option<crate::agent_session::RequestId>,
+        end: Box<crate::tool_executor::StepEnd>,
+        answer: Option<crate::agent_session::RequestId>,
     },
 
     ToolStep {

@@ -1,14 +1,13 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
 use lk_agents_abi::FunctionCall;
+use lk_agents_core::tool_calls::{Admission, PrepareFailure, admit};
 use lk_agents_voice::agent_session::SessionShared;
-use lk_agents_voice::events::{DiagnosticEvent, SessionEvent};
 use lk_agents_voice::generation::{GenEvent, ReplyContext};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
-    CallId, StepDecision, ToolExecution, ToolGo, ToolOutcome, answer,
+    CallId, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, answer,
 };
-use lk_agents_core::tool_calls::{Admission, PrepareFailure, admit};
 use std::sync::Arc;
 
 /// Calls go to the runner as they arrive (latency hides behind the generation's tail). **Order is
@@ -285,50 +284,37 @@ impl HostedCall<'_> {
     }
 }
 
-/// Arguments that are not JSON as written, as canonical JSON once repaired; `None` for valid or
-/// unrepairable ones (the runner reports the latter to the model).
-/// `None` when nothing ran. The decision is reported before it is acted on.
+/// Awaits the step's executions in the model's order and hands them to the driver, which decides
+/// the step. `None` when nothing ran.
 pub(crate) async fn run_tools(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     tools: ToolStep,
     forwarded_text_empty: bool,
-    retries: &mut lk_agents_core::tool_outcome::ToolRetries,
-) -> Option<StepDecision> {
+) -> Option<StepNext> {
     // A never-adopted preemptive generation's calls never started and are owed nothing.
     if tools.is_empty() || !handle.scheduled() {
         return None;
     }
 
-    // `tool_choice="none"` calls are dropped (this bounds a tool loop), each reported.
-    if ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden) {
-        for d in &tools.calls {
-            let diagnostic =
-                DiagnosticEvent::error(lk_agents_voice::events::diagnostics::TOOL_CHOICE_NONE)
-                    .with("function", d.call.name.clone())
-                    .with("speech_id", handle.id().0.to_string());
-            shared.report(GenEvent::Emit(Box::new(SessionEvent::Diagnostic(diagnostic))));
-        }
-        return None;
-    }
-    if tools.calls.iter().all(|d| d.rx.is_none()) {
-        return None;
-    }
-
-    // Read **before** the executions are awaited (selects `NextStep::Interrupted`); the read
-    // after is a different behaviour. The speech's interruption, not the step's.
+    // Read **before** the executions are awaited; the read after is a different behaviour. The
+    // speech's interruption, not the step's.
     let interrupted_before_tools = handle.interrupted();
 
     // Awaited in the model's order: they ran concurrently, so this is a join, not a sequence.
     let mut executions = Vec::with_capacity(tools.calls.len());
+    let mut dropped = Vec::new();
     for d in tools.calls {
-        let Some(rx) = d.rx else { continue };
+        let Some(rx) = d.rx else {
+            dropped.push(d.call.name);
+            continue;
+        };
         let execution = match rx.await {
             Ok(Some(out)) => out,
             // Never started: the reference returns before executing, so it is owed nothing.
             Ok(None) => continue,
-            // Aborted or panicked: never a hole, since `next_step` pairs by index.
+            // Aborted or panicked: never a hole, since the step pairs by index.
             Err(_) => {
                 let missing = ToolOutcome::ToolError(
                     lk_agents_voice::tool_executor::MISSING_TOOL_OUTPUT.into(),
@@ -348,52 +334,23 @@ pub(crate) async fn run_tools(
         };
         executions.push(execution);
     }
-    if executions.is_empty() {
+    let end = Box::new(StepEnd {
+        executions,
+        dropped,
+        interrupted_before_tools,
+        interrupted: handle.interrupted(),
+        forwarded_text_empty,
+        max_tool_steps: ctx.speech.max_tool_steps(),
+        user_metrics: ctx.user_metrics.clone(),
+    });
+    let (speech, step) = (handle.id(), handle.num_steps());
+    if end.executions.is_empty() {
+        shared.report(GenEvent::ToolsFinished { speech, step, end, answer: None });
         return None;
     }
-
-    let limit = lk_agents_abi::agent::Retries::default().tool;
-    let retried = executions.iter().map(|e| (e.call.name.as_str(), e.retry));
-    let retries_exceeded = retries.step(retried, limit);
-    let mut decision =
-        lk_agents_voice::tool_executor::next_step(lk_agents_voice::tool_executor::StepInputs {
-            tool_output: &executions,
-            interrupted_before_tools,
-            // Re-read after: a interruption during a tool suppresses the reply, not the handoff, commit
-            // or step increment.
-            interrupted: handle.interrupted(),
-            num_steps: handle.num_steps(),
-            max_tool_steps: ctx.speech.max_tool_steps(),
-            forwarded_text_empty,
-            user_metrics: ctx.user_metrics.clone(),
-            retries_exceeded,
-        });
-
-    // A host running hooks runs the event's handlers before the step goes on: they may cancel the
-    // reply or the handoff. A loop gone answers nothing, and nothing
-    // changed.
-    let waits = shared.hook_host && decision.tools_executed.is_some();
-    let waiting =
-        waits.then(|| shared.open_call(lk_agents_voice::agent_session::Answer::tools_verdict));
-    let finished = GenEvent::ToolsFinished {
-        speech: handle.id(),
-        step: handle.num_steps(),
-        tools: lk_agents_voice::tool_executor::StepTools {
-            commit: decision.commit.clone(),
-            executed: decision.tools_executed.clone().map(Box::new),
-            warnings: decision.warnings.clone(),
-            deliveries: decision.deliveries.clone(),
-            retries_exceeded: decision.retries_exceeded.clone(),
-        },
-        verdict: waiting.as_ref().map(|(call, _)| call.id),
-    };
-    if let Some((call, verdict)) = waiting {
-        shared.report_awaited(finished, call);
-        if let Ok(verdict) = verdict.await {
-            decision = decision.settle(verdict.executed);
-        }
-    } else {
-        shared.report(finished);
-    }
-    Some(decision)
+    let (call, next) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_step);
+    let finished = GenEvent::ToolsFinished { speech, step, end, answer: Some(call.id) };
+    shared.report_awaited(finished, call);
+    // A loop gone answers nothing: the reply ends.
+    next.await.ok()
 }
