@@ -14,13 +14,9 @@ use crate::generation::ReplySource;
 use crate::generation::fatal;
 use crate::trace::{InterruptCause, InterruptStep, RealtimeStep};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::llm::realtime::{
-    Event, PushAudio, RealtimeCapabilities, RealtimeCommand, RealtimeError, RealtimeSession,
-};
+use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities, RealtimeCommand, RealtimeError};
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::{
-    AudioFrame, ChatMessage, Role, StreamSink, ToolChoice, Ts, llm::realtime as rt,
-};
+use lk_agents_abi::{ChatMessage, Role, ToolChoice, Ts, llm::realtime as rt};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,33 +48,6 @@ pub const AUTO_TOOL_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 pub const AUTO_TOOL_REPLY_TIMED_OUT: &str = "timed out waiting for realtime auto tool reply";
 
 const REALTIME_SESSION_ENDED: &str = "the realtime session ended";
-
-/// `flush` is a no-op, not `CommitAudio`: an input boundary means the gate substituted silence, not
-/// that the user ended a turn.
-pub(crate) struct RealtimeAudioSink {
-    session: Arc<dyn RealtimeSession>,
-}
-
-impl RealtimeAudioSink {
-    pub(crate) fn new(session: Arc<dyn RealtimeSession>) -> Self {
-        RealtimeAudioSink { session }
-    }
-}
-
-impl StreamSink<AudioFrame> for RealtimeAudioSink {
-    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        self.session.send(RealtimeCommand::PushAudio(PushAudio { frame }));
-        Ok(())
-    }
-
-    fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-
-    fn end_input(&self) {
-        // Not `aclose`: a handoff replaces the leg, not the socket (the server's mirror survives).
-    }
-}
 
 /// One wake on the realtime leg's queue. `Ended` exists because `select!` cannot observe a closed
 /// channel. `ToolsDone` is the player's one report, on the socket's queue so the two are ordered.

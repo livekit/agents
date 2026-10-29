@@ -34,6 +34,21 @@ impl SessionExecutor for NoLegs {
         Box::pin(async { Ok(OpeningLegs::default()) })
     }
 
+    fn open_realtime<'a>(
+        &'a mut self,
+        _: &'a lk_agents_abi::resources::Resources,
+        _: Arc<dyn lk_agents_abi::Realtime>,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            (Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::resources::ResourceId),
+            DriverError,
+        >,
+    > {
+        unreachable!("these sessions open no realtime session")
+    }
+
     fn own(self: Box<Self>, _: SessionCores) -> Box<dyn QueueOwner> {
         unreachable!("the tests step the cores themselves")
     }

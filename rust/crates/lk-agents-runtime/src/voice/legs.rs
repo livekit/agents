@@ -2,9 +2,13 @@
 //! predictions and the tasks that forward the room's and the interruption detector's events.
 
 use super::Runtime;
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::llm::realtime::{PushAudio, RealtimeCommand};
 use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::turn::detector::LegEvent;
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt, Stt, Vad};
+use lk_agents_abi::{
+    AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamSink, Stt, Vad,
+};
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{
     DriverError, Event, Input, OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
@@ -140,8 +144,43 @@ impl SessionExecutor for Executor {
         })
     }
 
+    fn open_realtime<'a>(
+        &'a mut self,
+        resources: &'a Resources,
+        model: Arc<dyn Realtime>,
+        disabled: bool,
+    ) -> BoxFuture<'a, Result<(Arc<dyn RealtimeSession>, ResourceId), DriverError>> {
+        Box::pin(async move {
+            let session = model.session(disabled).await?;
+            let sink = resources
+                .register_audio_sink(Arc::new(RealtimeAudioSink { session: session.clone() }));
+            Ok((session, sink))
+        })
+    }
+
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
         Box::new((*self).into_runtime(cores))
+    }
+}
+
+/// `flush` is a no-op, not `CommitAudio`: an input boundary means the gate substituted silence, not
+/// that the user ended a turn.
+struct RealtimeAudioSink {
+    session: Arc<dyn RealtimeSession>,
+}
+
+impl StreamSink<AudioFrame> for RealtimeAudioSink {
+    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.session.send(RealtimeCommand::PushAudio(PushAudio { frame }));
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
+    fn end_input(&self) {
+        // Not `aclose`: a handoff replaces the leg, not the socket (the server's mirror survives).
     }
 }
 

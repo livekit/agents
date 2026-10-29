@@ -41,6 +41,21 @@ impl SessionExecutor for Handover {
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         self.factory.open_legs(resources, stt, vad)
     }
+    fn open_realtime<'a>(
+        &'a mut self,
+        resources: &'a lk_agents_abi::resources::Resources,
+        model: Arc<dyn lk_agents_abi::Realtime>,
+        disabled: bool,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            (Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::resources::ResourceId),
+            DriverError,
+        >,
+    > {
+        self.factory.open_realtime(resources, model, disabled)
+    }
+
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
         let Self { factory, run } = *self;
         Box::new(Running { runtime: Some(factory.into_runtime(cores)), run })

@@ -86,6 +86,17 @@ pub trait SessionExecutor: Send {
         vad: Option<Arc<dyn Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>>;
 
+    /// Opens the model with the core's turn-detection choice and registers its audio sink.
+    fn open_realtime<'a>(
+        &'a mut self,
+        resources: &'a Resources,
+        model: Arc<dyn lk_agents_abi::Realtime>,
+        disabled: bool,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId), DriverError>,
+    >;
+
     /// Takes the started cores over.
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner>;
 }
@@ -225,7 +236,7 @@ impl DriverBuilder {
         let opened =
             executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone()).await?;
         self.install_legs(&mut sinks, opened);
-        let realtime = self.open_realtime(&mut sinks).await?;
+        let realtime = self.open_realtime(executor, &mut sinks).await?;
         let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));
         let Sinks { by_channel: sinks, forwarder } = sinks;
 
@@ -404,6 +415,7 @@ impl DriverBuilder {
     /// The realtime session, opened once for the driver's life (a handoff updates it).
     async fn open_realtime(
         &mut self,
+        executor: &mut dyn SessionExecutor,
         sinks: &mut Sinks,
     ) -> Result<Option<RealtimeStart>, DriverError> {
         let Some(model) = &self.realtime else {
@@ -427,9 +439,9 @@ impl DriverBuilder {
         let owner =
             crate::agent_activity::realtime::realtime_turn_detection_mode(&caps, side, disabled);
         self.config.effective.turn.owner = Some(owner);
-        let session = model.session(disabled).await?;
-        let sink = crate::agent_activity::realtime::RealtimeAudioSink::new(Arc::clone(&session));
-        sinks.install(&self.resources, AudioChannel::Realtime, Arc::new(sink));
+        let (session, sink) =
+            executor.open_realtime(&self.resources, Arc::clone(model), disabled).await?;
+        sinks.insert(AudioChannel::Realtime, sink);
         Ok(Some(RealtimeStart { session, caps, disabled, resolved: side.turn_detection_mode }))
     }
 }

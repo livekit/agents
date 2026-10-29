@@ -179,6 +179,21 @@ impl SessionExecutor for Observing {
         self.0.open_legs(resources, stt, vad)
     }
 
+    fn open_realtime<'a>(
+        &'a mut self,
+        resources: &'a lk_agents_abi::resources::Resources,
+        model: Arc<dyn lk_agents_abi::Realtime>,
+        disabled: bool,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            (Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::resources::ResourceId),
+            DriverError,
+        >,
+    > {
+        self.0.open_realtime(resources, model, disabled)
+    }
+
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
         *self.1.lock().unwrap() = Some(cores.peer.journal.clone());
         Box::new(self.0).own(cores)
