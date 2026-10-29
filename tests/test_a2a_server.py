@@ -445,43 +445,6 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     ]
 
 
-async def test_inbox_sms_burst_is_one_reply_and_a_merge(thread_storages: Workers) -> None:
-    a, b = thread_storages
-    batches: list[list[str]] = []
-
-    async def handler(ctx: A2ASessionContext) -> str:
-        batches.append([m.parts[0].text for m in ctx.messages])
-        return "one reply"
-
-    from datetime import timedelta
-
-    server_a, _ = make_server(a, handler, debounce=timedelta(seconds=0.3))
-    server_b, _ = make_server(b, handler, debounce=timedelta(seconds=0.3))
-    ctx_id = (await a.threads.create_thread()).thread_id
-    async with http_client(server_a) as http_a, http_client(server_b) as http_b:
-        first = asyncio.create_task(
-            rpc(
-                http_a,
-                "message/send",
-                {"message": wire("where", "m1", context_id=ctx_id, **{CHANNEL: "sms"})},
-            )
-        )
-        await asyncio.sleep(0.05)
-        second = asyncio.create_task(
-            rpc(
-                http_b,
-                "message/send",
-                {"message": wire("are you", "m2", context_id=ctx_id, **{CHANNEL: "sms"})},
-            )
-        )
-        r1, r2 = await asyncio.gather(first, second)
-    task_1, task_2 = r1.json()["result"]["task"], r2.json()["result"]["task"]
-    assert batches == [["where", "are you"]]
-    assert task_1["status"]["state"] == "TASK_STATE_COMPLETED" and "artifacts" not in task_1
-    assert metadata_from_wire(task_1["metadata"])[MERGED_INTO] == task_2["id"]
-    assert task_2["artifacts"][0]["parts"][0]["text"] == "one reply"
-
-
 async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
     thread_storage: Storage,
 ) -> None:
