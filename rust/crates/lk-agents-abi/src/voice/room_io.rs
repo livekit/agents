@@ -155,58 +155,6 @@ impl Default for TextOutputConfig {
     }
 }
 
-// What a `NoiseCancellationSelector` is called with, host-side.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, name = "NoiseCancellationParams")]
-pub struct NoiseCancellationParams {
-    #[python(ty = "rtc.Participant", import = "livekit:rtc")]
-    pub participant: crate::HostRef,
-    #[python(ty = "rtc.Track", import = "livekit:rtc")]
-    pub track: crate::HostRef,
-}
-
-// `_default_text_input_cb` is host behaviour (`voice/room_io.py`).
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, name = "TextInputOptions")]
-pub struct TextInputOptions {
-    #[python(
-        ty = "TextInputCallback",
-        import = "..voice.room_io:_default_text_input_cb",
-        type_import = "..voice.room_io:TextInputCallback",
-        default = "_default_text_input_cb"
-    )]
-    pub text_input_cb: Option<crate::HostRef>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(dataclass, name = "VideoInputOptions")]
-pub struct VideoInputOptions {}
-
-// `AudioOutputOptions` as written, before the host flattens it. Only `source` of
-// `rtc.TrackPublishOptions` crosses.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, name = "AudioOutputOptions")]
-pub struct AudioOutputOptions {
-    #[python(default = "24000")]
-    pub sample_rate: u32,
-    #[python(default = "1")]
-    pub num_channels: u16,
-    #[python(
-        ty = "rtc.TrackPublishOptions",
-        import = "livekit:rtc",
-        default_factory = "lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)"
-    )]
-    pub track_publish_options: Option<crate::HostRef>,
-    /// The name of the audio track to publish. If not provided, default to "roomio_audio".
-    #[python(
-        ty = "NotGivenOr[str]",
-        import = "..types:NOT_GIVEN",
-        type_import = "..types:NotGivenOr",
-        default = "NOT_GIVEN"
-    )]
-    pub track_name: Option<String>,
-}
-
 /// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off.
 #[crate::host(handwritten(extract, host = "dict[str, object]"))]
 #[derive(Debug, Clone, PartialEq)]

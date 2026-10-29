@@ -9,18 +9,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from livekit import rtc
 
 from ..types import NOT_GIVEN
-from ..voice.room_io import _default_text_input_cb
 
 if TYPE_CHECKING:
     from ..types import NotGivenOr
     from ..voice.io import TextOutput
-    from ..voice.room_io import NoiseCancellationSelector, TextInputCallback
+    from ..voice.room_io import NoiseCancellationSelector
 
 
 @dataclass
@@ -57,31 +56,6 @@ class TextOutputOptions:
 
 
 @dataclass
-class NoiseCancellationParams:
-    participant: rtc.Participant
-    track: rtc.Track
-
-
-@dataclass
-class TextInputOptions:
-    text_input_cb: TextInputCallback = _default_text_input_cb
-
-
-@dataclass
-class VideoInputOptions:
-    pass
-
-
-@dataclass
-class AudioOutputOptions:
-    sample_rate: int = 24000
-    num_channels: int = 1
-    track_publish_options: rtc.TrackPublishOptions = field(default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
-    track_name: NotGivenOr[str] = NOT_GIVEN
-    """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
-
-
-@dataclass
 class _StreamInfo:
     """Header of an incoming byte or text stream: read from `rtc.ByteStreamInfo` /
     `rtc.TextStreamInfo`, handed back as a dict of these fields (`TextInputWire.info`).
@@ -106,7 +80,3 @@ class _StreamInfo:
 # reporting `_generated.*` for a name whose import path never moved.
 AudioInputOptions.__module__ = "livekit.agents.voice.room_io"
 TextOutputOptions.__module__ = "livekit.agents.voice.room_io"
-NoiseCancellationParams.__module__ = "livekit.agents.voice.room_io"
-TextInputOptions.__module__ = "livekit.agents.voice.room_io"
-VideoInputOptions.__module__ = "livekit.agents.voice.room_io"
-AudioOutputOptions.__module__ = "livekit.agents.voice.room_io"
