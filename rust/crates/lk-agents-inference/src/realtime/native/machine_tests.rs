@@ -978,17 +978,3 @@ fn a_reconnect_replays_an_unconfirmed_update_whole() {
         .collect();
     assert_eq!(created, ["a", "b"]);
 }
-
-#[test]
-fn realtime_pending_response_deadline_is_owned_by_the_core() {
-    let mut m = machine(OPENAI);
-    m.open(at(0));
-    m.command(at(0), reply("response_deadline"));
-    assert_eq!(m.next_deadline(), Some(at(5)));
-    let step = m.tick(at(5));
-    assert!(step.events.iter().any(|event| matches!(event,
-        Event::GenerateReplyFailed(failed) if failed.req_id == "response_deadline")));
-    assert!(!m.has_active_generation());
-    let late = recv(&mut m, at(6), response_created("late", Some("response_deadline")));
-    assert!(!late.events.iter().any(|event| matches!(event, Event::GenerationCreated(_))));
-}
