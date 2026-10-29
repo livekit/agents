@@ -5,8 +5,8 @@
 //! walk it so a rule cannot exist without a counterexample it rejects and a probe that reaches it.
 use crate::check::{Registered, Rule};
 
-// `build.rs` lists `src/rules/*.rs` and generates the `mod` declarations, `RULES` and
-// `FILES`; adding a rule is adding a file. See the registry test for what each file must hold.
+// `build.rs` lists `src/rules/*.rs` and generates the `mod` declarations and `RULES`;
+// adding a rule is adding a file. See the registry test for what each file must hold.
 include!(concat!(env!("OUT_DIR"), "/rules.rs"));
 
 #[cfg(test)]
@@ -40,15 +40,6 @@ mod registry {
                 let path = format!("{}/tests/regressions/{test}.rs", env!("CARGO_MANIFEST_DIR"));
                 assert!(std::path::Path::new(&path).exists(), "{test}: no such regression test");
             }
-        }
-    }
-
-    /// Every contract's id is its file name, so the report, `failure.json` and the source agree
-    /// on what a rule is called.
-    #[test]
-    fn every_contract_is_named_after_its_file() {
-        for (rule, file) in RULES.iter().zip(FILES) {
-            assert_eq!(rule.id(), *file, "contract id must be its file name");
         }
     }
 

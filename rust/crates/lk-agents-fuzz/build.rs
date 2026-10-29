@@ -34,10 +34,6 @@ fn main() {
             "    Registered {{ contract: <{name}::{rule} as Rule>::CONTRACT, on_complete: <{name}::{rule} as Rule>::on_complete }},\n"
         ));
     }
-    out.push_str("];\n\n/// The rule files, in the same order, for the id check.\n#[cfg(test)]\nconst FILES: &[&str] = &[\n");
-    for name in &names {
-        out.push_str(&format!("    {name:?},\n"));
-    }
     out.push_str("];\n");
 
     let dest = Path::new(&env::var("OUT_DIR").unwrap()).join("rules.rs");

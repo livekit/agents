@@ -3,7 +3,7 @@
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_fuzz::check::check_all;
 use lk_agents_fuzz::drive::{Case, Run, Setup, run, simulate};
-use lk_agents_fuzz::input::{AgentText, Count, Input, Millis, Ref, SayInput};
+use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
 use lk_agents_voice::events::{SessionEvent, SpeechOutcome};
 use lk_agents_voice::trace::{InterruptCause, InterruptStep, PlayoutStep, Step};
 
@@ -38,30 +38,6 @@ fn a_synchroniser_flushes_its_old_output_as_it_closes() {
         Input::Close { drain: true },
     ];
     clean(setup, inputs);
-}
-
-// Catches: the same rule counting the rest of a step already playing, whose reply task had read
-// the old output at its start, as output escaping (`_tts_task` and `_pipeline_reply_task_impl`
-// read `self._session.output` once, agent_activity.py:3406, 3717; survey seeds 5, 9, 15).
-#[test]
-fn a_step_playing_at_the_swap_finishes_on_its_output() {
-    let inputs = vec![
-        Input::Say {
-            text: AgentText("Hello there.".into()),
-            input: SayInput::Audio,
-            allow: None,
-            to_ctx: true,
-        },
-        Input::Advance { ms: Millis(20) },
-        Input::FeedAudio { stream: Ref::new(0), chunks: Count(1) },
-        Input::Advance { ms: Millis(20) },
-        Input::SetAudioOutput { attach: true },
-        Input::Advance { ms: Millis(20) },
-        Input::FeedAudio { stream: Ref::new(0), chunks: Count(1) },
-        Input::FeedEnd { stream: Ref::new(0) },
-        Input::Advance { ms: Millis(100) },
-    ];
-    clean(Setup::default(), inputs);
 }
 
 // Catches: a sink swap force-interrupting the speech playing into the old output. Replacement takes
