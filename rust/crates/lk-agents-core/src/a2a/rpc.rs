@@ -23,6 +23,8 @@ const VERSIONS: [&str; 1] = ["1.0"];
 
 /// The largest `ListTasks` page A2A allows.
 pub const MAX_PAGE_SIZE: i64 = 100;
+/// A `ListTasks` page without `pageSize`.
+pub const DEFAULT_PAGE_SIZE: i64 = 50;
 
 /// One well-formed request.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,7 +67,7 @@ pub enum Call {
 pub struct TaskList {
     pub context_id: String,
     pub status: Option<TaskState>,
-    pub page_size: Option<i64>,
+    pub page_size: i64,
     pub page_token: Option<String>,
     pub history_length: Option<usize>,
     /// Unix milliseconds: only tasks updated after it; zero for every task.
@@ -230,8 +232,8 @@ fn list(params: Map<String, Value>) -> Result<Call, JsonRpcError> {
         Some(s) => Some(task_state(&s).ok_or_else(|| invalid_params("no task is in that state"))?),
     };
     let page_size = match r.page_size {
-        None => None,
-        Some(n) if (1..=MAX_PAGE_SIZE).contains(&i64::from(n)) => Some(i64::from(n)),
+        None => DEFAULT_PAGE_SIZE,
+        Some(n) if (1..=MAX_PAGE_SIZE).contains(&i64::from(n)) => i64::from(n),
         Some(_) => return Err(invalid_params(format!("pageSize is 1 to {MAX_PAGE_SIZE}"))),
     };
     Ok(Call::List(TaskList {
@@ -649,7 +651,7 @@ mod tests {
             Call::List(TaskList {
                 context_id: "AT_1".into(),
                 status: Some(TaskState::Working),
-                page_size: Some(10),
+                page_size: 10,
                 page_token: Some("p".into()),
                 history_length: None,
                 updated_after: 1000,
