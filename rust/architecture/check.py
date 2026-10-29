@@ -38,8 +38,11 @@ GRAPH = {
     "lk-agents-net": {"lk-agents-abi"} | {"lk-agents-core"},
     "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
-    # The realtime and duplex fakes still run inference's realtime machine (decision 70).
-    "lk-agents-fuzz": PURE | {TEST_SUPPORT} | {"lk-agents-inference", "lk-agents-net"},
+    # The realtime and duplex fakes still run inference's realtime machine (decision 70); the DST
+    # runs the runtime's real executors over faked ports (decision 92).
+    "lk-agents-fuzz": PURE
+    | {TEST_SUPPORT}
+    | {"lk-agents-inference", "lk-agents-net", "lk-agents-runtime"},
     TEST_SUPPORT: PURE,
     "lk-agents-bench-steps": PURE,
     "lk-agents-runtime": PURE | ASYNC,
@@ -159,6 +162,38 @@ def host_call_violations(root: Path, paths: list[str]) -> set[str]:
         text = (root / path).read_text()
         if PYO3.search(text) and HOST_CALL.search(text):
             violations.add(f"host-call:{path}")
+    return violations
+
+
+# The runtime executors the DST runs (decision 92): they spawn and sleep only through the injected
+# Spawner and Clock, and every `select!` is `biased;`, so the DST's scheduler decides their order.
+EXECUTORS = tuple(
+    f"rust/crates/lk-agents-runtime/src/{module}/" for module in ("voice", "room_io", "avatar", "rtc")
+)
+TOKIO_RUNTIME = {
+    "tokio-spawn": re.compile(r"\btokio::(?:task::)?spawn"),
+    "tokio-time": re.compile(r"\btokio::time\b"),
+    "tokio-net": re.compile(r"\btokio::net\b"),
+    "tokio-runtime": re.compile(r"\btokio::runtime\b|\bHandle::(?:current|try_current)\b"),
+    "unbiased-select": re.compile(r"\bselect!\s*\{(?!\s*biased\s*;)"),
+}
+TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*mod\b")
+
+
+def executor_violations(root: Path, paths: list[str]) -> dict[str, int]:
+    """Per executor file and kind, the count of tokio runtime uses and unbiased selects outside
+    its tests (a test file, or what follows the file's first `#[cfg(test)] mod`)."""
+    violations = {}
+    for path in paths:
+        if not path.startswith(EXECUTORS) or any(
+            part.removesuffix(".rs").endswith("tests") for part in Path(path).parts
+        ):
+            continue
+        text = (root / path).read_text()
+        text = text[: m.start()] if (m := TEST_MODULE.search(text)) else text
+        for kind, pattern in TOKIO_RUNTIME.items():
+            if count := len(pattern.findall(text)):
+                violations[f"executor:{path}:{kind}"] = count
     return violations
 
 
@@ -324,6 +359,7 @@ def check_boundaries() -> int:
         ("paths", path_violations(root, paths)),
         ("pyo3", pyo3_violations(metadata, root, paths)),
         ("host-calls", host_call_violations(root, paths)),
+        ("executors", executor_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

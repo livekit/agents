@@ -53,8 +53,8 @@ tools and host RTC objects.
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
 | `lk-agents-codegen` | Python models, stubs, provider bases, forwarders and architecture checks |
-| `lk-agents-fuzz` | Deterministic simulation of the sans-I/O crates and behavioral contracts |
-| `lk-agents-test-support` | Simulated RTC peers and performers on a supplied clock, shared by the DST and the crates' own tests |
+| `lk-agents-fuzz` | Deterministic simulation of the sans-I/O crates and behavioral contracts, running the runtime's real executors over faked SDK and provider ports |
+| `lk-agents-test-support` | Simulated RTC peers (the SDK-port fakes) on a supplied clock, shared by the DST and the crates' own tests |
 | `lk-agents-bench-steps` | Direct step measurements of the voice data plane; compiled in the launch gate, measured explicitly on qualified hardware |
 
 ```text
@@ -68,7 +68,8 @@ lk-agents-net -> lk-agents-core         (pending owner approval)
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 fuzz, test-support, bench-steps -> sans-I/O crates + lk-agents-abi
-lk-agents-fuzz -> lk-agents-test-support; every crate's tests -> lk-agents-test-support
+lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-test-support
+every crate's tests -> lk-agents-test-support
 ```
 
 The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
@@ -964,8 +965,8 @@ tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
 `net -> core` (each pending owner approval), `py -> abi`, async I/O crates `-> net`,
-`fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, and `-> test-support`
-from fuzz and every crate's tests described above;
+`fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, `fuzz -> runtime`, and
+`-> test-support` from fuzz and every crate's tests described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
 support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
@@ -1746,6 +1747,15 @@ behavior. The POS scheduler chooses among enabled core event deliveries and
 fake completions; it does not schedule runtime adapter tasks. Each core
 transition remains synchronous and atomic. Advance virtual time to the next
 arrival or deadline only when no core step is enabled.
+
+The DST runs the runtime's real executors (voice, room, avatar) over faked SDK and
+provider ports, never copies of them: fakes sit only at those ports. Executor code
+therefore uses no Tokio runtime (no `tokio::spawn`, `tokio::time`, `tokio::net` or
+`Handle`): it spawns and sleeps only through the injected `Spawner` and `Clock`, so
+the DST's scheduler runs it. Tokio's executor-agnostic sync primitives are allowed,
+and every `select!` is `biased;`. The architecture check counts violations in the
+runtime's `voice/`, `room_io/`, `avatar/` and `rtc/` modules against a shrink-only
+baseline.
 
 Bound total steps, steps without virtual-time progress and real execution time.
 A real-time watchdog operates independently of the simulation so a

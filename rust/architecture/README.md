@@ -25,6 +25,10 @@ the workspace Rust flags.
   (`call*`, `call_soon_threadsafe`, `into_future`, `future_into_py`) outside the Python entry
   `lk-agents-py/src/host/` is an identity of the shrink-only `host-calls-baseline.json`; generated
   code calls through the entry. Generators and integration tests are exempt.
+- The runtime executors the DST runs (decision 92: `lk-agents-runtime/src/{voice,room_io,avatar,rtc}`,
+  outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
+  no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only
+  `executors-baseline.json`.
 - Git-tracked handwritten Rust files have a 1,250-line limit. A generated file's
   first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
   shrinking ceilings.

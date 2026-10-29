@@ -189,7 +189,7 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
 ├── lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen   # Declarations IR, markers, generation
 ├── lk-agents-fuzz      # Deterministic simulation of the sans-I/O crates with realistic fakes
-├── lk-agents-test-support # Simulated RTC peers on a supplied clock for the DST and crate tests
+├── lk-agents-test-support # Simulated RTC peers (SDK-port fakes) on a supplied clock for the DST and tests
 └── lk-agents-bench-steps  # Voice data-plane step measurements (compiled in the launch gate)
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
@@ -233,7 +233,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 ## Rust architecture rules
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `py -> abi`, async
-  I/O crates `-> net`, `fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, and
+  I/O crates `-> net`, `fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`,
+  `fuzz -> runtime` (the DST runs the runtime's real executors over faked ports) and
   `-> test-support` from fuzz and every crate's tests are allowed composition edges.
   `inference -> core` and `net -> core` are pending owner approval, each a separable edge.
   `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the

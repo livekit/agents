@@ -13,7 +13,7 @@ rmcp.workspace = true
 sse-stream = "0.2"
 tokio-util = { version = "0.7", features = ["rt"] }
 lk-agents-abi = { path = "../lk-agents-abi" }
-lk-agents-inference = { path = "../lk-agents-inference" }
+lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
 lk-agents-net = { path = "../lk-agents-net" }
 # The shared agent execution core whose `AgentRun` effects `agent_run` executes.
 lk-agents-core = { path = "../lk-agents-core" }

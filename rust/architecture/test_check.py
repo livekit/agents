@@ -11,6 +11,7 @@ from unittest.mock import patch
 from check import (
     check_history,
     dependency_violations,
+    executor_violations,
     host_call_violations,
     length_violations,
     path_violations,
@@ -115,6 +116,10 @@ class DependencyContracts(unittest.TestCase):
         self.assertNotIn(
             "direction:lk-agents-fuzz:lk-agents-test-support", dependency_violations(graph)
         )
+
+    def test_the_dst_may_run_the_runtime_executors(self):
+        graph = metadata({"lk-agents-fuzz": ["lk-agents-runtime"], "lk-agents-abi": []})
+        self.assertNotIn("direction:lk-agents-fuzz:lk-agents-runtime", dependency_violations(graph))
 
     def test_direction_allows_only_the_documented_graph(self):
         for crate, target in (
@@ -372,6 +377,42 @@ class HostCallContracts(unittest.TestCase):
                     "host-call:rust/crates/lk-agents-py/src/generated/llm.rs",
                     "host-call:rust/crates/lk-agents-py/src/turn.rs",
                     "host-call:rust/crates/lk-agents-runtime/src/bridge.rs",
+                },
+            )
+
+
+class ExecutorContracts(unittest.TestCase):
+    """Decision 92: the DST's scheduler runs the runtime executors."""
+
+    def test_tokio_runtime_use_and_unbiased_selects_are_counted_outside_tests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "rust/crates/lk-agents-runtime/src/room_io/owner.rs": (
+                    "fn f() { tokio::spawn(a); tokio::select! { x = a => {} };"
+                    " tokio::select! { biased; x = a => {} } }\n"
+                    "#[cfg(test)]\nmod tests { fn t() { tokio::time::sleep(d); } }\n"
+                ),
+                "rust/crates/lk-agents-runtime/src/avatar/output.rs": (
+                    "use tokio::time::sleep;\nfn f() { Handle::current(); }\n"
+                ),
+                "rust/crates/lk-agents-runtime/src/voice/api_tests/playback.rs": "fn t() { tokio::spawn(a); }\n",
+                "rust/crates/lk-agents-runtime/src/room_io/input_tests.rs": "fn t() { tokio::spawn(a); }\n",
+                # Outside the executors: the process runtime owns the Tokio runtime.
+                "rust/crates/lk-agents-runtime/src/process.rs": "fn f() { tokio::spawn(a); }\n",
+            }
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            owner = "executor:rust/crates/lk-agents-runtime/src/room_io/owner.rs"
+            avatar = "executor:rust/crates/lk-agents-runtime/src/avatar/output.rs"
+            self.assertEqual(
+                executor_violations(root, list(files)),
+                {
+                    f"{owner}:tokio-spawn": 1,
+                    f"{owner}:unbiased-select": 1,
+                    f"{avatar}:tokio-time": 1,
+                    f"{avatar}:tokio-runtime": 1,
                 },
             )
 

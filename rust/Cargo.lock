@@ -1448,6 +1448,7 @@ dependencies = [
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-net",
+ "lk-agents-runtime",
  "lk-agents-test-support",
  "lk-agents-voice",
  "prost",
