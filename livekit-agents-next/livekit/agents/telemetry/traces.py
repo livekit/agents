@@ -103,9 +103,7 @@ def _describe_option_object(obj: object, *, depth: int) -> str:
 
 
 def _serialize_option_value(value: object, *, depth: int = 0) -> tuple[JsonValue, int]:
-    from ._export import attribute_bytes, policy
-
-    native = policy()
+    from ._export import attribute_bytes
 
     def checked(charge: int) -> int:
         if charge > _core.SDK_RECORD_BYTES:
@@ -115,7 +113,7 @@ def _serialize_option_value(value: object, *, depth: int = 0) -> tuple[JsonValue
     if value is None or isinstance(value, _OPTION_PRIMITIVES):
         return value, checked(attribute_bytes(value, depth=depth))
     if isinstance(value, Mapping):
-        charge = checked(native.value_bytes("mapping", len(value), depth, []))
+        charge = checked(_core._core_value_bytes("mapping", len(value), depth, []))
         children = 0
         result: dict[str, JsonValue] = {}
         for key, item in value.items():
@@ -126,17 +124,17 @@ def _serialize_option_value(value: object, *, depth: int = 0) -> tuple[JsonValue
                 key_charge = checked(attribute_bytes(name, depth=depth + 1))
                 serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
                 children += key_charge + item_charge
-                charge = checked(native.value_bytes("mapping", len(value), depth, [children]))
+                charge = checked(_core._core_value_bytes("mapping", len(value), depth, [children]))
                 result[name] = serialized
         return result, charge
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
-        charge = checked(native.value_bytes("sequence", len(value), depth, []))
+        charge = checked(_core._core_value_bytes("sequence", len(value), depth, []))
         children = 0
         items: list[JsonValue] = []
         for item in value:
             serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
             children += item_charge
-            charge = checked(native.value_bytes("sequence", len(value), depth, [children]))
+            charge = checked(_core._core_value_bytes("sequence", len(value), depth, [children]))
             items.append(serialized)
         return (sorted(items, key=str) if isinstance(value, Set) else items), charge
     serialized = _describe_option_object(value, depth=depth)
@@ -158,13 +156,15 @@ def _append_transcript_item(
 ) -> _core.ChatItem:
     from .._core_view import to_core_item
     from ..llm.chat_context import AudioContent, ImageContent
-    from ._export import attribute_bytes, policy
+    from ._export import attribute_bytes
 
     include_image, include_audio = builder.content_policy()
     fields = item.__dict__
     content = None
     if item.type == "message":
-        builder.check_input(item_count, policy().value_bytes("sequence", len(item.content), 0, []))
+        builder.check_input(
+            item_count, _core._core_value_bytes("sequence", len(item.content), 0, [])
+        )
         content = [
             part
             for part in item.content

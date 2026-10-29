@@ -2,7 +2,7 @@
 
 use lk_agents_abi::telemetry::policy::{
     MAX_COLLECTION, MAX_DEPTH, MAX_EVENTS, REDACTED_EXCEPTION, REDACTED_LOG_BODY,
-    SDK_PENDING_RECORDS as MAX_PENDING, SDK_RECORD_BYTES as MAX_RECORD_BYTES,
+    SDK_PENDING_RECORDS as MAX_PENDING, SDK_RECORD_BYTES as MAX_RECORD_BYTES, TelemetryAdmission,
     TelemetryExportAction, TelemetryPolicy, TelemetryRecordKind, TelemetryValueKind,
 };
 
@@ -67,27 +67,6 @@ impl TelemetryPolicy for DestinationPolicy {
         self.redacted
     }
 
-    fn export_action(
-        &self,
-        registered: bool,
-        signal_enabled: bool,
-        job_open: bool,
-        held_count: usize,
-        recording_disabled: bool,
-    ) -> TelemetryExportAction {
-        if recording_disabled {
-            TelemetryExportAction::Disabled
-        } else if registered {
-            if signal_enabled { TelemetryExportAction::Export } else { TelemetryExportAction::Drop }
-        } else if !job_open {
-            TelemetryExportAction::Drop
-        } else if held_count < MAX_PENDING {
-            TelemetryExportAction::Hold
-        } else {
-            TelemetryExportAction::Capacity
-        }
-    }
-
     fn attribute_action(
         &self,
         parent: Option<String>,
@@ -137,9 +116,32 @@ impl TelemetryPolicy for DestinationPolicy {
             description
         }
     }
+}
 
-    fn value_bytes(
-        &self,
+pub struct Admission;
+
+impl TelemetryAdmission for Admission {
+    fn _core_export_action(
+        registered: bool,
+        signal_enabled: bool,
+        job_open: bool,
+        held_count: usize,
+        recording_disabled: bool,
+    ) -> TelemetryExportAction {
+        if recording_disabled {
+            TelemetryExportAction::Disabled
+        } else if registered {
+            if signal_enabled { TelemetryExportAction::Export } else { TelemetryExportAction::Drop }
+        } else if !job_open {
+            TelemetryExportAction::Drop
+        } else if held_count < MAX_PENDING {
+            TelemetryExportAction::Hold
+        } else {
+            TelemetryExportAction::Capacity
+        }
+    }
+
+    fn _core_value_bytes(
         kind: TelemetryValueKind,
         length: usize,
         depth: usize,
@@ -164,8 +166,7 @@ impl TelemetryPolicy for DestinationPolicy {
         total(base, children)
     }
 
-    fn record_bytes(
-        &self,
+    fn _core_record_bytes(
         kind: TelemetryRecordKind,
         fields: Vec<usize>,
         event_count: usize,
@@ -281,9 +282,7 @@ mod tests {
 
     #[test]
     fn admission_refuses_large_deep_wide_or_unsupported_sdk_records() {
-        let policy = DestinationPolicy::new(false, false, false);
-        let charge =
-            |kind, length, depth, children| policy.value_bytes(kind, length, depth, children);
+        let charge = Admission::_core_value_bytes;
         assert_eq!(charge(TelemetryValueKind::String, 3, 0, vec![]), 76);
         assert_eq!(charge(TelemetryValueKind::Mapping, 1, 0, vec![76, 32]), 236);
         assert_eq!(charge(TelemetryValueKind::String, usize::MAX, 0, vec![]), REFUSED_BYTES);
@@ -298,36 +297,44 @@ mod tests {
             REFUSED_BYTES
         );
         assert_eq!(charge(TelemetryValueKind::Unsupported, 0, 0, vec![]), REFUSED_BYTES);
-        assert_eq!(policy.record_bytes(TelemetryRecordKind::Span, vec![32, 76], 0, 0), 620);
         assert_eq!(
-            policy.record_bytes(TelemetryRecordKind::Span, vec![], MAX_EVENTS + 1, 0),
+            Admission::_core_record_bytes(TelemetryRecordKind::Span, vec![32, 76], 0, 0),
+            620
+        );
+        assert_eq!(
+            Admission::_core_record_bytes(TelemetryRecordKind::Span, vec![], MAX_EVENTS + 1, 0),
             REFUSED_BYTES
         );
         assert_eq!(
-            policy.record_bytes(TelemetryRecordKind::Log, vec![MAX_RECORD_BYTES], 0, 0),
+            Admission::_core_record_bytes(TelemetryRecordKind::Log, vec![MAX_RECORD_BYTES], 0, 0),
             REFUSED_BYTES
         );
     }
 
     #[test]
     fn cloud_admission_never_exports_an_undecided_or_disabled_job() {
-        let policy = DestinationPolicy::new(false, false, false);
         assert_eq!(
-            policy.export_action(true, true, false, 0, false),
+            Admission::_core_export_action(true, true, false, 0, false),
             TelemetryExportAction::Export
         );
-        assert_eq!(policy.export_action(true, false, true, 0, false), TelemetryExportAction::Drop);
-        assert_eq!(policy.export_action(false, true, false, 0, false), TelemetryExportAction::Drop);
         assert_eq!(
-            policy.export_action(false, true, true, MAX_PENDING - 1, false),
+            Admission::_core_export_action(true, false, true, 0, false),
+            TelemetryExportAction::Drop
+        );
+        assert_eq!(
+            Admission::_core_export_action(false, true, false, 0, false),
+            TelemetryExportAction::Drop
+        );
+        assert_eq!(
+            Admission::_core_export_action(false, true, true, MAX_PENDING - 1, false),
             TelemetryExportAction::Hold
         );
         assert_eq!(
-            policy.export_action(false, true, true, MAX_PENDING, false),
+            Admission::_core_export_action(false, true, true, MAX_PENDING, false),
             TelemetryExportAction::Capacity
         );
         assert_eq!(
-            policy.export_action(true, true, true, 0, true),
+            Admission::_core_export_action(true, true, true, 0, true),
             TelemetryExportAction::Disabled
         );
     }

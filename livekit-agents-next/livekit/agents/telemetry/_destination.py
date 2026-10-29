@@ -164,13 +164,12 @@ class _GatedSpanExporter(SpanExporter):
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         selected: list[tuple[ReadableSpan, bool]] = []
-        policy = _core._core_TelemetryPolicy(True, True, False)
         with self._lock:
             for span in spans:
                 state = _job_export_state(self._export_jobs, span.attributes)
                 job_id = (span.attributes or {}).get("job_id")
                 held = self._pending.get(job_id, []) if isinstance(job_id, str) else []
-                action = policy.export_action(
+                action = _core._core_export_action(
                     state is not None,
                     state.traces_enabled if state else False,
                     isinstance(job_id, str) and job_id in self._open_jobs,
@@ -223,7 +222,7 @@ class _GatedLogExporter(LogRecordExporter):
         for record in batch:
             attrs = record.log_record.attributes
             state = _job_export_state(self._export_jobs, attrs)
-            action = _core._core_TelemetryPolicy(True, True, False).export_action(
+            action = _core._core_export_action(
                 state is not None,
                 state.logs_enabled if state else False,
                 False,

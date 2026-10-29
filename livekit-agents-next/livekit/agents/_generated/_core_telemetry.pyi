@@ -25,19 +25,10 @@ from .telemetry import (
 from .tts import SynthesizedAudio
 
 class _core_TelemetryPolicy:
-    """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""
+    """One destination's content policy: what its snapshot keeps, drops or replaces."""
     def __init__(self, allow_pii: bool, capture_content: bool, project_redaction: bool) -> None: ...
     @property
     def redacted(self) -> bool: ...
-    def export_action(
-        self,
-        registered: bool,
-        signal_enabled: bool,
-        job_open: bool,
-        held_count: int,
-        recording_disabled: bool,
-    ) -> TelemetryExportAction:
-        """The destination may export, hold, drop, refuse capacity or stop after recording is disabled."""
     def attribute_action(
         self,
         parent: str | None,
@@ -49,24 +40,33 @@ class _core_TelemetryPolicy:
     def log_body(self, safe_body: bool, body: str | None) -> str | None:
         """A replacement body, or None to snapshot the original SDK value."""
     def status_description(self, is_error: bool, description: str | None) -> str | None: ...
-    def value_bytes(
-        self,
-        kind: TelemetryValueKind,
-        length: int,
-        depth: int,
-        children: Sequence[int],
-    ) -> int:
-        """Conservative retained bytes for an SDK scalar or collection. Child charges are already
-        bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
-        """
-    def record_bytes(
-        self,
-        kind: TelemetryRecordKind,
-        fields: Sequence[int],
-        event_count: int,
-        link_count: int,
-    ) -> int:
-        """SDK record overhead plus field charges. Counts are supplied before traversing events/links."""
+
+def _core_export_action(
+    registered: bool,
+    signal_enabled: bool,
+    job_open: bool,
+    held_count: int,
+    recording_disabled: bool,
+) -> TelemetryExportAction:
+    """The destination may export, hold, drop, refuse capacity or stop after recording is disabled."""
+
+def _core_value_bytes(
+    kind: TelemetryValueKind,
+    length: int,
+    depth: int,
+    children: Sequence[int],
+) -> int:
+    """Conservative retained bytes for an SDK scalar or collection. Child charges are already
+    bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
+    """
+
+def _core_record_bytes(
+    kind: TelemetryRecordKind,
+    fields: Sequence[int],
+    event_count: int,
+    link_count: int,
+) -> int:
+    """SDK record overhead plus field charges. Counts are supplied before traversing events/links."""
 
 class _core_MetricSeries:
     """The framework's metric series. Subject folds decide measurements; this refuses unbounded labels

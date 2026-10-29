@@ -52,6 +52,7 @@ impl generated::Implementations for Selected {
     type SynthesisChecks = lk_agents_runtime::inference::tts::checks::SynthesisChecks;
     type ImageFunctions = lk_agents_runtime::images::ImageFunctions;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
+    type TelemetryAdmission = lk_agents_runtime::cores::Admission;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
     type Tagger = lk_agents_runtime::net::session_report::records::Tagger;
     type UploadGate = lk_agents_runtime::net::session_report::records::UploadGate;

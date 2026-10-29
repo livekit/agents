@@ -86,6 +86,7 @@ pub trait Implementations: 'static {
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
+    type TelemetryAdmission: ::lk_agents_abi::telemetry::policy::TelemetryAdmission;
     type MetricSeries: ::lk_agents_abi::telemetry::policy::MetricSeries;
     type ProviderMetrics: ::lk_agents_abi::telemetry::provider::ProviderMetrics;
     type LlmMetricState: ::lk_agents_abi::telemetry::provider::LlmMetricState;
@@ -268,6 +269,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stt::SttStreamAdapter>()?;
     m.add_class::<stt::SttAdapterStream>()?;
     m.add_class::<telemetry::_core_TelemetryPolicy>()?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_export_action, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_value_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_record_bytes, m)?)?;
     m.add_class::<telemetry::_core_MetricSeries>()?;
     m.add_function(wrap_pyfunction!(telemetry::stt_batch_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::stt_stream_metrics, m)?)?;

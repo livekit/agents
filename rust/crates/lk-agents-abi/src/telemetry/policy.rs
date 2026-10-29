@@ -86,7 +86,7 @@ pub enum TelemetryExportAction {
     Disabled,
 }
 
-/// The host supplies SDK fields and lengths; shared policy decides what may be retained/exported.
+/// One destination's content policy: what its snapshot keeps, drops or replaces.
 #[crate::host(class(name = "_core_TelemetryPolicy"))]
 pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
     #[host(new)]
@@ -94,17 +94,6 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
 
     #[host(getter)]
     fn redacted(&self) -> bool;
-
-    /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
-    #[host(call)]
-    fn export_action(
-        &self,
-        registered: bool,
-        signal_enabled: bool,
-        job_open: bool,
-        held_count: usize,
-        recording_disabled: bool,
-    ) -> TelemetryExportAction;
 
     /// Whether to keep the field and, if present, the replacement for its value.
     #[host(call)]
@@ -124,12 +113,25 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
 
     #[host(call)]
     fn status_description(&self, is_error: bool, description: Option<String>) -> Option<String>;
+}
+
+/// SDK retention charges and Cloud export admission, which no destination's consent changes.
+#[crate::host(functions)]
+pub trait TelemetryAdmission {
+    /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
+    #[host(function)]
+    fn _core_export_action(
+        registered: bool,
+        signal_enabled: bool,
+        job_open: bool,
+        held_count: usize,
+        recording_disabled: bool,
+    ) -> TelemetryExportAction;
 
     /// Conservative retained bytes for an SDK scalar or collection. Child charges are already
     /// bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
-    #[host(call)]
-    fn value_bytes(
-        &self,
+    #[host(function)]
+    fn _core_value_bytes(
         kind: TelemetryValueKind,
         length: usize,
         depth: usize,
@@ -137,9 +139,8 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
     ) -> usize;
 
     /// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
-    #[host(call)]
-    fn record_bytes(
-        &self,
+    #[host(function)]
+    fn _core_record_bytes(
         kind: TelemetryRecordKind,
         fields: Vec<usize>,
         event_count: usize,

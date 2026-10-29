@@ -10,7 +10,6 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import fields, is_dataclass, replace
-from functools import cache
 from typing import Literal, cast
 
 from opentelemetry.sdk._logs import LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
@@ -48,11 +47,6 @@ def export_context() -> Iterator[None]:
         _exporting.reset(token)
 
 
-@cache
-def policy() -> _core._core_TelemetryPolicy:
-    return _core._core_TelemetryPolicy(False, False, False)
-
-
 Outcome = Literal["dropped", "failed", "conflicts", "incomplete_cleanup"]
 
 _outcomes: Counter[str] = Counter()
@@ -76,17 +70,16 @@ def diagnostics() -> dict[str, int]:
 
 def attribute_bytes(value: object, *, depth: int = 0) -> int:
     """Read bounded SDK object shape; native policy owns every retention charge."""
-    native = policy()
     if depth > _core.TELEMETRY_MAX_DEPTH:
-        return native.value_bytes("unsupported", 0, depth, [])
+        return _core._core_value_bytes("unsupported", 0, depth, [])
     if value is None or isinstance(value, (bool, float)):
-        return native.value_bytes("scalar", 0, depth, [])
+        return _core._core_value_bytes("scalar", 0, depth, [])
     if isinstance(value, int):
-        return native.value_bytes("integer", value.bit_length(), depth, [])
+        return _core._core_value_bytes("integer", value.bit_length(), depth, [])
     if isinstance(value, str):
-        return native.value_bytes("string", len(value), depth, [])
+        return _core._core_value_bytes("string", len(value), depth, [])
     if isinstance(value, bytes):
-        return native.value_bytes("bytes", len(value), depth, [])
+        return _core._core_value_bytes("bytes", len(value), depth, [])
     children: list[int] = []
     mappings: tuple[tuple[int, Iterable[tuple[object, object]]], ...] | None = None
     if isinstance(value, BaseModel):
@@ -99,12 +92,14 @@ def attribute_bytes(value: object, *, depth: int = 0) -> int:
         record_fields = fields(value)
         storage = getattr(value, "__dict__", {})
         if not isinstance(storage, Mapping):
-            return native.value_bytes("unsupported", 0, depth, [])
+            return _core._core_value_bytes("unsupported", 0, depth, [])
         if (
             len(record_fields) > _core.TELEMETRY_MAX_COLLECTION
             or len(storage) > _core.TELEMETRY_MAX_COLLECTION
         ):
-            return native.value_bytes("mapping", max(len(record_fields), len(storage)), depth, [])
+            return _core._core_value_bytes(
+                "mapping", max(len(record_fields), len(storage)), depth, []
+            )
         slots = tuple(field for field in record_fields if field.name not in storage)
         mappings = (
             (len(storage), storage.items()),
@@ -124,28 +119,28 @@ def attribute_bytes(value: object, *, depth: int = 0) -> int:
                         )
                     )
                     if (
-                        native.value_bytes("mapping", length, depth, children)
+                        _core._core_value_bytes("mapping", length, depth, children)
                         > _core.SDK_RECORD_BYTES
                     ):
-                        return native.value_bytes("mapping", length, depth, children)
-        return native.value_bytes("mapping", length, depth, children)
+                        return _core._core_value_bytes("mapping", length, depth, children)
+        return _core._core_value_bytes("mapping", length, depth, children)
     if isinstance(value, Sequence):
         if len(value) <= _core.TELEMETRY_MAX_COLLECTION:
             for item in value:
                 children.append(attribute_bytes(item, depth=depth + 1))
                 if (
-                    native.value_bytes("sequence", len(value), depth, children)
+                    _core._core_value_bytes("sequence", len(value), depth, children)
                     > _core.SDK_RECORD_BYTES
                 ):
                     break
-        return native.value_bytes("sequence", len(value), depth, children)
-    return native.value_bytes("unsupported", 0, depth, [])
+        return _core._core_value_bytes("sequence", len(value), depth, children)
+    return _core._core_value_bytes("unsupported", 0, depth, [])
 
 
 def scope_bytes(scope: InstrumentationScope | None) -> int:
     if scope is None:
         return 0
-    return policy().record_bytes(
+    return _core._core_record_bytes(
         "scope",
         [
             attribute_bytes(scope.name),
@@ -159,12 +154,11 @@ def scope_bytes(scope: InstrumentationScope | None) -> int:
 
 
 def span_bytes(span: ReadableSpan) -> int:
-    native = policy()
     if (
         len(span.events) > _core.TELEMETRY_MAX_EVENTS
         or len(span.links) > _core.TELEMETRY_MAX_EVENTS
     ):
-        return native.record_bytes("span", [], len(span.events), len(span.links))
+        return _core._core_record_bytes("span", [], len(span.events), len(span.links))
     fields = [
         attribute_bytes(span.name),
         attribute_bytes(span.attributes),
@@ -177,26 +171,26 @@ def span_bytes(span: ReadableSpan) -> int:
     ]
     for event in span.events:
         fields.append(
-            native.record_bytes(
+            _core._core_record_bytes(
                 "event", [attribute_bytes(event.name), attribute_bytes(event.attributes)], 0, 0
             )
         )
     for link in span.links:
         fields.append(
-            native.record_bytes(
+            _core._core_record_bytes(
                 "link",
                 [attribute_bytes(link.attributes), attribute_bytes(dict(link.context.trace_state))],
                 0,
                 0,
             )
         )
-    return native.record_bytes("span", fields, len(span.events), len(span.links))
+    return _core._core_record_bytes("span", fields, len(span.events), len(span.links))
 
 
 def log_bytes(record: ReadableLogRecord | ReadWriteLogRecord) -> int:
     """Account the SDK log envelope once for queue and destination admission."""
     data = record.log_record
-    return policy().record_bytes(
+    return _core._core_record_bytes(
         "log",
         [
             attribute_bytes(data.body),

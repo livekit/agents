@@ -13,35 +13,7 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
 type _core_TelemetryPolicyImpl = <crate::Selected as super::Implementations>::TelemetryPolicy;
 
-fn _extract_telemetry_policy_export_action_held_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "held_count")
-}
-
-fn _extract_telemetry_policy_value_bytes_length(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "length")
-}
-
-fn _extract_telemetry_policy_value_bytes_depth(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "depth")
-}
-
-fn _extract_telemetry_policy_value_bytes_children(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<usize>> {
-    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<usize>(&item, "children") }).collect::<PyResult<Vec<_>>>())
-}
-
-fn _extract_telemetry_policy_record_bytes_fields(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<usize>> {
-    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<usize>(&item, "fields") }).collect::<PyResult<Vec<_>>>())
-}
-
-fn _extract_telemetry_policy_record_bytes_event_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "event_count")
-}
-
-fn _extract_telemetry_policy_record_bytes_link_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "link_count")
-}
-
-/// The host supplies SDK fields and lengths; shared policy decides what may be retained/exported.
+/// One destination's content policy: what its snapshot keeps, drops or replaces.
 #[pyclass(frozen, name = "_core_TelemetryPolicy", module = "livekit.agents._core")]
 pub struct _core_TelemetryPolicy(::std::sync::Arc<_core_TelemetryPolicyImpl>);
 
@@ -60,14 +32,6 @@ impl _core_TelemetryPolicy {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::redacted(&self.0);
         Ok(out)
-    }
-
-    /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
-    #[pyo3(signature = (registered, signal_enabled, job_open, held_count, recording_disabled))]
-    fn export_action<'py>(&self, py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, #[pyo3(from_py_with = _extract_telemetry_policy_export_action_held_count)] held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
-        ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::export_action(&self.0, registered, signal_enabled, job_open, held_count, recording_disabled);
-        Ok(crate::generated::records::telemetry::telemetry_export_action_to_py(py, out)?)
     }
 
     /// Whether to keep the field and, if present, the replacement for its value.
@@ -99,25 +63,67 @@ impl _core_TelemetryPolicy {
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::status_description(&self.0, is_error, description);
         Ok(out)
     }
+}
 
-    /// Conservative retained bytes for an SDK scalar or collection. Child charges are already
-    /// bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
-    #[pyo3(signature = (kind, length, depth, children))]
-    fn value_bytes(&self, kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_policy_value_bytes_length)] length: usize, #[pyo3(from_py_with = _extract_telemetry_policy_value_bytes_depth)] depth: usize, #[pyo3(from_py_with = _extract_telemetry_policy_value_bytes_children)] children: ::std::vec::Vec<usize>) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let kind = crate::generated::records::telemetry::telemetry_value_kind_from_py(&kind)?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::value_bytes(&self.0, kind, length, depth, children);
-        Ok(out)
-    }
+// Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
+type TelemetryAdmissionImpl = <crate::Selected as super::Implementations>::TelemetryAdmission;
 
-    /// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
-    #[pyo3(signature = (kind, fields, event_count, link_count))]
-    fn record_bytes(&self, kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_policy_record_bytes_fields)] fields: ::std::vec::Vec<usize>, #[pyo3(from_py_with = _extract_telemetry_policy_record_bytes_event_count)] event_count: usize, #[pyo3(from_py_with = _extract_telemetry_policy_record_bytes_link_count)] link_count: usize) -> PyResult<usize> {
-        ::lk_agents_abi::python::check_pid()?;
-        let kind = crate::generated::records::telemetry::telemetry_record_kind_from_py(&kind)?;
-        let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::record_bytes(&self.0, kind, fields, event_count, link_count);
-        Ok(out)
-    }
+fn _extract_telemetry_admission__core_export_action_held_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "held_count")
+}
+
+fn _extract_telemetry_admission__core_value_bytes_length(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "length")
+}
+
+fn _extract_telemetry_admission__core_value_bytes_depth(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "depth")
+}
+
+fn _extract_telemetry_admission__core_value_bytes_children(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<usize>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<usize>(&item, "children") }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_telemetry_admission__core_record_bytes_fields(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<usize>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<usize>(&item, "fields") }).collect::<PyResult<Vec<_>>>())
+}
+
+fn _extract_telemetry_admission__core_record_bytes_event_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "event_count")
+}
+
+fn _extract_telemetry_admission__core_record_bytes_link_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "link_count")
+}
+
+/// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
+#[pyfunction]
+#[pyo3(signature = (registered, signal_enabled, job_open, held_count, recording_disabled))]
+pub fn _core_export_action<'py>(py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, #[pyo3(from_py_with = _extract_telemetry_admission__core_export_action_held_count)] held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_export_action(registered, signal_enabled, job_open, held_count, recording_disabled);
+    Ok(crate::generated::records::telemetry::telemetry_export_action_to_py(py, out)?)
+}
+
+/// Conservative retained bytes for an SDK scalar or collection. Child charges are already
+/// bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
+#[pyfunction]
+#[pyo3(signature = (kind, length, depth, children))]
+pub fn _core_value_bytes(kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_admission__core_value_bytes_length)] length: usize, #[pyo3(from_py_with = _extract_telemetry_admission__core_value_bytes_depth)] depth: usize, #[pyo3(from_py_with = _extract_telemetry_admission__core_value_bytes_children)] children: ::std::vec::Vec<usize>) -> PyResult<usize> {
+    ::lk_agents_abi::python::check_pid()?;
+    let kind = crate::generated::records::telemetry::telemetry_value_kind_from_py(&kind)?;
+    let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_value_bytes(kind, length, depth, children);
+    Ok(out)
+}
+
+/// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
+#[pyfunction]
+#[pyo3(signature = (kind, fields, event_count, link_count))]
+pub fn _core_record_bytes(kind: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_telemetry_admission__core_record_bytes_fields)] fields: ::std::vec::Vec<usize>, #[pyo3(from_py_with = _extract_telemetry_admission__core_record_bytes_event_count)] event_count: usize, #[pyo3(from_py_with = _extract_telemetry_admission__core_record_bytes_link_count)] link_count: usize) -> PyResult<usize> {
+    ::lk_agents_abi::python::check_pid()?;
+    let kind = crate::generated::records::telemetry::telemetry_record_kind_from_py(&kind)?;
+    let out = <TelemetryAdmissionImpl as ::lk_agents_abi::telemetry::policy::TelemetryAdmission>::_core_record_bytes(kind, fields, event_count, link_count);
+    Ok(out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
