@@ -12,6 +12,7 @@ use crate::agent_session::commands::{
 };
 use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx};
 use crate::agent_session::host_events::HostEvent;
+use crate::agent_session::lifecycle::{CloseAction, OpenAction, RecorderTarget, SessionLifecycle};
 use crate::agent_session::nodes::{Nodes, OutputNodes};
 use crate::agent_session::time::Timebase;
 use crate::events::SessionEvent;
@@ -76,7 +77,9 @@ pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
 impl SessionApi {
     /// Every step the driver journals, from the first, to `observer`. Before `start()`.
     pub fn observe(&self, observer: impl FnMut(&Step) + Send + 'static) {
-        if let Stage::Ready(ready) = &mut *self.lock() {
+        let mut stage = self.lock();
+        if stage.lifecycle().configure_ready() {
+            let Stage::Ready(ready) = &mut *stage else { unreachable!("ready resources") };
             ready.builder.journal = crate::trace::Journal::observed(observer);
         }
     }
@@ -85,7 +88,9 @@ impl SessionApi {
 #[cfg(feature = "dst")]
 impl SessionApi {
     pub fn probe(&self, Probe { step, host_event }: Probe) {
-        if let Stage::Ready(ready) = &mut *self.lock() {
+        let mut stage = self.lock();
+        if stage.lifecycle().configure_ready() {
+            let Stage::Ready(ready) = &mut *stage else { unreachable!("ready resources") };
             ready.builder.journal = crate::trace::Journal::observed(step);
             ready.builder.probe = Some(host_event);
         }
@@ -128,16 +133,19 @@ impl SessionApi {
         impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static,
         OpenRefused,
     > {
-        let ready = match &mut *self.lock() {
-            stage @ Stage::Ready(_) => {
-                let Stage::Ready(ready) = std::mem::replace(stage, Stage::Opening(remote.clone()))
-                else {
-                    unreachable!()
-                };
-                *ready
+        let ready = {
+            let mut stage = self.lock();
+            match stage.lifecycle().open()? {
+                OpenAction::Begin => {
+                    let Stage::Ready(ready) =
+                        std::mem::replace(&mut *stage, Stage::Opening(remote.clone()))
+                    else {
+                        unreachable!("opening consumes ready resources")
+                    };
+                    *ready
+                }
+                OpenAction::InstallRunning => unreachable!("an open request begins startup"),
             }
-            Stage::Opening(_) | Stage::Running(_) => return Err(OpenRefused::AlreadyStarted),
-            Stage::Closed(_) => return Err(OpenRefused::Closed),
         };
 
         let room_io = Arc::clone(&self.room_io);
@@ -169,8 +177,15 @@ impl SessionApi {
             let tts_adapter = executor.tts_adapter();
             let stt_adapter = executor.stt_adapter();
             let (cores, handle) = builder.start(&mut *executor).await?;
-            let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection: _, speech_ids } =
-                handle;
+            let SessionHandle {
+                api,
+                events,
+                keyterms,
+                chat_ctx,
+                peer,
+                ivr_detection: _,
+                speech_ids,
+            } = handle;
             #[cfg(feature = "dst")]
             let host_event = probe;
             let mut owner = executor.own(cores);
@@ -197,20 +212,30 @@ impl SessionApi {
             };
             tasks.push(spawner.spawn(drain(runner)));
 
-            *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Running(Running {
-                api,
-                keyterms,
-                chat_ctx,
-                peer,
-                amd: None,
-                remote,
-                amd_factory,
-                tasks,
-                drained: Some(drained),
-                speech_ids,
-                tts_adapter,
-                stt_adapter,
-            });
+            {
+                let mut stage = stage.lock().unwrap_or_else(|p| p.into_inner());
+                match stage.lifecycle().opened() {
+                    OpenAction::InstallRunning => {
+                        *stage = Stage::Running(Running {
+                            api,
+                            keyterms,
+                            chat_ctx,
+                            peer,
+                            amd: None,
+                            remote,
+                            amd_factory,
+                            tasks,
+                            drained: Some(drained),
+                            speech_ids,
+                            tts_adapter,
+                            stt_adapter,
+                        });
+                    }
+                    OpenAction::Begin => {
+                        unreachable!("startup completion installs running resources")
+                    }
+                }
+            }
             // A drain that returned without reading drops the sender: nothing to wait for.
             let _ = opening_rx.await;
             Ok(())
@@ -222,25 +247,29 @@ impl SessionApi {
         &self,
         recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     ) {
-        match &mut *self.lock() {
-            Stage::Ready(ready) => ready.builder.recorder = recorder,
-            Stage::Running(r) => {
+        let mut stage = self.lock();
+        match stage.lifecycle().recorder_target() {
+            RecorderTarget::Builder => {
+                let Stage::Ready(ready) = &mut *stage else { unreachable!("ready resources") };
+                ready.builder.recorder = recorder;
+            }
+            RecorderTarget::Running => {
+                let Stage::Running(running) = &mut *stage else {
+                    unreachable!("running resources")
+                };
                 let cmd = match recorder {
                     Some(tap) => RecorderCommand::Attach(HostRecorder(tap)),
                     None => RecorderCommand::Detach,
                 };
-                let _ = r.api.send(Command::Recorder(cmd));
+                let _ = running.api.send(Command::Recorder(cmd));
             }
-            Stage::Opening(_) | Stage::Closed(_) => {}
+            RecorderTarget::Ignore => {}
         }
     }
 
     /// `false`: the loop did not take it (not started or closed), and the image is dropped.
     pub fn push_video(&self, image: lk_agents_abi::ImageContent) -> bool {
-        match &*self.lock() {
-            Stage::Running(r) => r.api.send(Command::Video(image)).is_ok(),
-            _ => false,
-        }
+        self.running(|running| Ok(running.api.send(Command::Video(image)).is_ok())).unwrap_or(false)
     }
 
     /// Refused before `start()` and after the close.
@@ -248,11 +277,10 @@ impl SessionApi {
         &self,
         f: impl FnOnce(&mut Running) -> Result<R, SessionRefused>,
     ) -> Result<R, SessionRefused> {
-        match &mut *self.lock() {
-            Stage::Running(r) => f(r),
-            Stage::Ready(_) | Stage::Opening(_) => Err(SessionRefused::NotStarted),
-            Stage::Closed(_) => Err(SessionRefused::Closed),
-        }
+        let mut stage = self.lock();
+        stage.lifecycle().running()?;
+        let Stage::Running(running) = &mut *stage else { unreachable!("running resources") };
+        f(running)
     }
 
     fn remote_host(
@@ -367,16 +395,28 @@ impl SessionApi {
         drain: bool,
         error: Option<crate::events::ErrorEvent>,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let running = match &mut *self.lock() {
-            Stage::Running(r) => {
-                Some((r.api.clone(), r.drained.take(), r.tasks.clone(), r.remote.clone()))
+        let running = {
+            let mut stage = self.lock();
+            match stage.lifecycle().close() {
+                CloseAction::Running => {
+                    let Stage::Running(running) = &mut *stage else {
+                        unreachable!("running resources")
+                    };
+                    Some((
+                        running.api.clone(),
+                        running.drained.take(),
+                        running.tasks.clone(),
+                        running.remote.clone(),
+                    ))
+                }
+                CloseAction::Opening => {
+                    let Stage::Opening(remote) = &*stage else { unreachable!("opening resources") };
+                    *stage = Stage::Closed(remote.clone());
+                    None
+                }
+                CloseAction::None => None,
+                CloseAction::Closed => unreachable!("the close has not completed"),
             }
-            stage @ Stage::Opening(_) => {
-                let Stage::Opening(remote) = stage else { unreachable!() };
-                *stage = Stage::Closed(remote.clone());
-                None
-            }
-            Stage::Ready(_) | Stage::Closed(_) => None,
         };
         let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
@@ -392,7 +432,13 @@ impl SessionApi {
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on the
             // host stream, and the drain only ends when every sender is gone.
-            *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Closed(remote);
+            {
+                let mut stage = stage.lock().unwrap_or_else(|p| p.into_inner());
+                match stage.lifecycle().closed() {
+                    CloseAction::Closed => *stage = Stage::Closed(remote),
+                    _ => unreachable!("close completion installs closed resources"),
+                }
+            }
             // Then the drain: the host's `close` is queued before this future completes.
             if let Some(drained) = drained {
                 let _ = time.timeout(CLOSE_TIMEOUT, drained).await;
@@ -686,6 +732,17 @@ enum Stage {
     Opening(Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>),
     Running(Running),
     Closed(Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>),
+}
+
+impl Stage {
+    fn lifecycle(&self) -> SessionLifecycle {
+        match self {
+            Self::Ready(_) => SessionLifecycle::Ready,
+            Self::Opening(_) => SessionLifecycle::Opening,
+            Self::Running(_) => SessionLifecycle::Running,
+            Self::Closed(_) => SessionLifecycle::Closed,
+        }
+    }
 }
 
 struct Ready {

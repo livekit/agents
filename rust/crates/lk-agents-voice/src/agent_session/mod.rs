@@ -22,6 +22,7 @@ pub mod commands;
 pub mod driver;
 pub mod effects;
 pub mod host_events;
+pub mod lifecycle;
 pub mod nodes;
 pub mod output;
 pub(crate) mod storage;
