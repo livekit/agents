@@ -132,8 +132,8 @@ class ProjectedReportEvent:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class LogRecordWire:
-    """A [`LogRecord`] as the dict `_upload_session_report` hands `logger.emit`: one integer of epoch
-    nanos, where the log handler's records carry an `HrTime` pair.
+    """A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
+    of epoch nanos, where the log handler's records carry an `HrTime` pair.
     """
 
     logger: str

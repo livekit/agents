@@ -1,6 +1,6 @@
 //! `telemetry/traces.py`'s `_upload_session_report` records, its `_UploadGate`, and
-//! `observability.py`'s `Tagger`. The records are ABI's telemetry `LogRecord`s, built here and
-//! emitted by the host's SDK.
+//! `observability.py`'s `Tagger`. The records are built here as [`LogRecord`]s and emitted by the
+//! host's SDK as ABI's `LogRecordWire`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -14,9 +14,69 @@ use lk_agents_abi::telemetry::report::{
     ChatItemProjection, EvaluationRecord, LogRecordWire, Outcome, RecordingOptions,
     SessionReportInput, TAG_FAIL, TAG_SUCCESS, Tagger as _,
 };
-use lk_agents_abi::telemetry::{HrTime, LogRecord, Severity, hr_time, hr_wall};
 use lk_agents_abi::{ChatItem, Clock};
 use serde_json::{Map, Value, json};
+
+// -----------------------------------------------------------------------------------------
+// log records and their timestamps
+// -----------------------------------------------------------------------------------------
+
+/// OTel JS's `HrTime`: epoch nanos do not fit a JS `number`.
+pub type HrTime = (i64, u32);
+
+pub fn hr_time(epoch_nanos: u128) -> HrTime {
+    ((epoch_nanos / 1_000_000_000) as i64, (epoch_nanos % 1_000_000_000) as u32)
+}
+
+pub fn epoch_nanos(t: HrTime) -> u128 {
+    t.0.max(0) as u128 * 1_000_000_000 + t.1 as u128
+}
+
+/// A wall-clock stamp; pre-epoch reads as the epoch.
+pub fn hr_wall(t: SystemTime) -> HrTime {
+    hr_time(t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0))
+}
+
+/// OTel's `SeverityNumber.ERROR`, identical in both SDKs.
+const SEVERITY_ERROR: u8 = 17;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogRecord {
+    pub logger: String,
+    pub body: String,
+    pub timestamp: HrTime,
+    pub severity_number: u8,
+    pub severity_text: String,
+    /// Recursive, unlike a span's.
+    pub attributes: Value,
+}
+
+impl From<LogRecord> for LogRecordWire {
+    fn from(r: LogRecord) -> Self {
+        LogRecordWire {
+            logger: r.logger,
+            body: r.body,
+            timestamp_nanos: epoch_nanos(r.timestamp).min(i64::MAX as u128) as i64,
+            severity_number: r.severity_number,
+            severity_text: r.severity_text,
+            attributes: match r.attributes {
+                Value::Object(attributes) => attributes,
+                _ => unreachable!("session report attributes are always objects"),
+            },
+        }
+    }
+}
+
+/// An evaluation's fields, in the reference's insertion order.
+fn evaluation_attributes(e: &EvaluationRecord) -> [(&'static str, &str); 5] {
+    [
+        ("name", &e.name),
+        ("tag", &e.tag),
+        ("verdict", &e.verdict),
+        ("reasoning", &e.reasoning),
+        ("instructions", &e.instructions),
+    ]
+}
 
 // -----------------------------------------------------------------------------------------
 // the session report's log records
@@ -43,7 +103,7 @@ pub(super) fn record(
     error: bool,
 ) -> LogRecord {
     let (severity_number, severity_text) =
-        if error { (Severity::Error as u8, "error") } else { (0, "unspecified") };
+        if error { (SEVERITY_ERROR, "error") } else { (0, "unspecified") };
     LogRecord {
         logger: match logger {
             LoggerName::ChatHistory => "chat_history",
@@ -278,8 +338,7 @@ pub fn session_records(
         .iter()
         .take(policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1))
     {
-        let fields: Vec<_> = e
-            .attributes()
+        let fields: Vec<_> = evaluation_attributes(e)
             .into_iter()
             .filter(|(k, _)| capture_content || !matches!(*k, "reasoning" | "instructions"))
             .collect();

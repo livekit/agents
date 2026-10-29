@@ -56,19 +56,6 @@ pub struct EvaluationRecord {
     pub instructions: String,
 }
 
-impl EvaluationRecord {
-    /// In the reference's insertion order.
-    pub fn attributes(&self) -> Vec<(&'static str, &str)> {
-        vec![
-            ("name", &self.name),
-            ("tag", &self.tag),
-            ("verdict", &self.verdict),
-            ("reasoning", &self.reasoning),
-            ("instructions", &self.instructions),
-        ]
-    }
-}
-
 /// The session outcome. `"fail"` bumps the outcome record's severity.
 #[crate::host(record(module = "telemetry", emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
