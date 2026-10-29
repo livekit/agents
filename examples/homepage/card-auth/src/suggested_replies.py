@@ -126,7 +126,7 @@ class SuggestedReplies:
         )
 
     async def _publish(self, items: list[dict[str, str]]) -> None:
-        logger.debug("suggested replies", extra={"suggestions": items})
+        logger.debug("suggested replies", extra={"count": len(items)})
         await self._room.local_participant.set_attributes(
             {SUGGESTIONS_ATTRIBUTE: json.dumps(items)}
         )

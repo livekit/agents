@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
 from livekit.agents import Agent, RunContext, function_tool, inference
@@ -40,6 +40,7 @@ class Caller:
 class CallState:
     caller: Caller | None = None
     birthday: date | None = None
+    charts: list[str] = field(default_factory=list)
     clinic: Clinic | None = None
 
 
@@ -150,7 +151,7 @@ Saying goodbye and delegating ending the call always go together, in the same tu
 You do the record-keeping for {CLINIC_NAME}, {DOCTOR}'s practice, on behalf of the receptionist on the phone.
 {calendar_context(clinic)}
 
-Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth, then match the name they gave against the charts it lists. Match by how the name sounds, not its exact letters: Leigh is Lee, Shawn is Sean. A different first or last name is not a match.
+Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth and the name they gave. It lists only the charts with that date of birth and last name; match the first name they gave against those by how it sounds, not its exact letters: Leigh is Lee, Shawn is Sean. A different first name is not a match.
 - If one matches, report that chart's letters for the receptionist to spell back, and nothing about any other chart. Once the caller says the spelling is right, call open_chart with that chart's name and report their upcoming appointment.
 - If none matches, report only that they're new to the records.
 No other record can be read or changed until their chart is open or they're registered.
@@ -165,20 +166,26 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
 
     @function_tool
     async def look_up_birthday(
-        self, context: RunContext[CallState], date_of_birth: str
+        self, context: RunContext[CallState], date_of_birth: str, name: str
     ) -> str:
-        """List the charts with the caller's date of birth, to match the name they gave against. The first step for every caller.
+        """List the charts with the caller's date of birth and last name, to match their first name against. The first step for every caller.
 
         Args:
             date_of_birth: The caller's date of birth, YYYY-MM-DD.
+            name: The caller's full name as they said it.
         """
         born = _date(date_of_birth)
         context.userdata.birthday = born
+        context.userdata.charts = [
+            chart
+            for chart in self._clinic.born_on(born)
+            if _last_name(chart) == _last_name(name)
+        ]
         return json.dumps(
             {
                 "charts": [
-                    {"name": name, "letters": _read_back(name)}
-                    for name in self._clinic.born_on(born)
+                    {"name": chart, "letters": _read_back(chart)}
+                    for chart in context.userdata.charts
                 ]
             }
         )
@@ -193,9 +200,11 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
         born = context.userdata.birthday
         if born is None:
             raise ToolError("Look up the caller's date of birth first.")
-        if not await self._clinic.verify(name, born):
+        if name not in context.userdata.charts or not await self._clinic.verify(
+            name, born
+        ):
             raise ToolError(
-                f"No chart named {name!r} has that date of birth. Use a name "
+                f"No chart named {name!r} matched that date of birth. Use a name "
                 "look_up_birthday listed."
             )
         context.userdata.caller = Caller(name, born)
@@ -278,7 +287,7 @@ Saying goodbye and delegating ending the call always go together, in the same tu
 You do the record-keeping for {CLINIC_NAME}, {DOCTOR}'s practice, on behalf of the receptionist, who called the patient {name} to confirm their appointment {appointment.id}.
 {calendar_context(clinic)}
 
-Verify the patient with verify_patient, using the name {name} and the date of birth they gave, before anything else. Report only whether it matched, and their appointment once it does. Never reveal a date of birth on file.
+Verify the patient with verify_patient and the date of birth they gave, before anything else. Report only whether it matched, and their appointment once it does. Never reveal a date of birth on file.
 Call confirm_appointment once the patient says they can make it, or right after moving it.
 To move it, call check_availability for what they asked and report the one or two openings closest to it; once they pick, call reschedule_appointment, then confirm_appointment.
 Call add_note_for_doctor with anything the patient wants the doctor to know before the visit, in their words.
@@ -289,22 +298,22 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
 
     @function_tool
     async def verify_patient(
-        self, context: RunContext[CallState], full_name: str, date_of_birth: str
+        self, context: RunContext[CallState], date_of_birth: str
     ) -> str:
-        """Verify the patient against the chart on file. Required before any other record is read or changed.
+        """Verify the patient against their chart. Required before any other record is read or changed.
 
         Args:
-            full_name: The patient's full name.
-            date_of_birth: The patient's date of birth, YYYY-MM-DD.
+            date_of_birth: The date of birth the patient gave, YYYY-MM-DD.
         """
+        name = self._appointment.patient
         dob = _date(date_of_birth)
-        if not await self._clinic.verify(full_name, dob):
+        if not await self._clinic.verify(name, dob):
             return json.dumps({"verified": False})
-        context.userdata.caller = Caller(full_name, dob)
+        context.userdata.caller = Caller(name, dob)
         return json.dumps(
             {
                 "verified": True,
-                "upcoming": [_describe(a) for a in self._clinic.upcoming(full_name)],
+                "upcoming": [_describe(a) for a in self._clinic.upcoming(name)],
             }
         )
 
@@ -456,6 +465,11 @@ def _from_letters(spelled: str) -> str:
         out.append(ch.upper() if capitalize else ch.lower())
         capitalize = ch in "-'"
     return "".join(out)
+
+
+def _last_name(name: str) -> str:
+    last = (name.split() or [""])[-1]
+    return "".join(c for c in last if c.isalpha()).casefold()
 
 
 def _read_back(name: str) -> str:

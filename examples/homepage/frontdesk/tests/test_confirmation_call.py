@@ -53,7 +53,7 @@ def context() -> FakeContext:
 
 async def verify(agent, context, clinic, appointment) -> dict:
     dob = clinic.patients[appointment.patient].isoformat()
-    return json.loads(await agent.verify_patient(context, appointment.patient, dob))
+    return json.loads(await agent.verify_patient(context, dob))
 
 
 async def test_nothing_changes_before_the_patient_is_verified(

@@ -36,13 +36,13 @@ async def ring(
     except api.TwirpError as e:
         logger.warning("outbound call failed: %s", e)
         await ctx.room.local_participant.set_attributes(
-            {CALL_ERROR_ATTRIBUTE: dial_error(e, number)}
+            {CALL_ERROR_ATTRIBUTE: dial_error(e)}
         )
         return None
     return await ctx.wait_for_participant(identity=PHONE)
 
 
-def dial_error(e: api.TwirpError, number: str) -> str:
+def dial_error(e: api.TwirpError) -> str:
     """Why a call to a phone couldn't be placed, the way the page says it."""
     sip = e.metadata or {}
     status = sip.get("sip_status_code", "")
@@ -53,4 +53,4 @@ def dial_error(e: api.TwirpError, number: str) -> str:
     if status == "603":
         return "The call was declined."
     detail = f"SIP {status}: {sip.get('sip_status', '')}" if status else e.message
-    return f"The call couldn't be placed to {number} ({detail})."
+    return f"The call couldn't be placed ({detail})."
