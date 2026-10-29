@@ -329,7 +329,7 @@ def hook_slow_callbacks(slow_duration: float) -> None:
         val: None = _run(self)
         dt = time.monotonic() - start
         if dt >= slow_duration:
-            logger.warning("Running %s took too long: %.2f seconds", _format_handle(self), dt)
+            logger.warning("Running %s took too long: %.2f seconds", str(_format_handle(self)), dt)
         return val
 
     asyncio.events.Handle._run = instrumented  # type: ignore
@@ -602,11 +602,11 @@ class _CancellableFuture(Protocol):
 
 async def cancel_and_wait(*futures: _CancellableFuture) -> None:
     loop = asyncio.get_running_loop()
-    waiters = []
+    waiters: list[tuple[asyncio.Future[None], Callable[[_CancellableFuture], None]]] = []
 
     for fut in futures:
         waiter = loop.create_future()
-        cb = functools.partial(_release_waiter, waiter)
+        cb: Callable[[_CancellableFuture], None] = functools.partial(_release_waiter, waiter)
         waiters.append((waiter, cb))
         fut.add_done_callback(cb)
         fut.cancel()
