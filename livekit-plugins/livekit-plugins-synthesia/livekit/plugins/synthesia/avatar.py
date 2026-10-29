@@ -23,7 +23,8 @@ from typing import TypeGuard
 
 from pydantic import JsonValue, TypeAdapter
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, VoiceSession, get_job_context
 from livekit.agents.job import _server_credentials
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF

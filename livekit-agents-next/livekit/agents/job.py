@@ -32,7 +32,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import aiohttp
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 from livekit.api.access_token import Claims
 from livekit.protocol import agent
 from livekit.protocol.sip import TransferSIPParticipantResponse

@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import aiohttp
 from pydantic import JsonValue
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 from livekit.agents import (
     NOT_GIVEN,
     NotGivenOr,

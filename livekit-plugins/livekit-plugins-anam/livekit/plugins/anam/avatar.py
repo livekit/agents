@@ -4,7 +4,8 @@ import os
 
 import aiohttp
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

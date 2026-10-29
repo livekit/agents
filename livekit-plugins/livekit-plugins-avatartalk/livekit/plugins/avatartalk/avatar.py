@@ -1,6 +1,7 @@
 import os
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 from livekit.agents import NOT_GIVEN, NotGivenOr, VoiceSession, get_job_context
 from livekit.agents.job import _server_credentials
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF

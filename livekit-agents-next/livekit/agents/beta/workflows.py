@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import AfterValidator
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 
 from .. import _core, llm, stt, tts, utils
 from .._generated.vad import VAD
