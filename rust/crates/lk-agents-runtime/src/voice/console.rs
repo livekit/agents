@@ -107,7 +107,8 @@ impl ConsoleIo {
     }
 
     fn finish(&self) {
-        if let Some((segment, finished)) = self.playback.lock().unwrap().clear() {
+        let cleared = self.playback.lock().unwrap().clear();
+        if let Some((segment, finished)) = cleared {
             self.tracker.playback_finished(segment, finished);
         }
     }

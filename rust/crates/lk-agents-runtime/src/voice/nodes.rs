@@ -359,6 +359,11 @@ struct AudioOutputNode {
 impl RealtimeAudioNode for AudioOutputNode {
     fn push<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, ()> {
         Box::pin(async move {
+            let failed = |outcome: Result<(), IoError>| {
+                if let Err(error) = outcome {
+                    log::error!(target: "livekit.agents", "error in audio node: {error}");
+                }
+            };
             let mut generation = self.generation.lock().unwrap_or_else(|p| p.into_inner());
             if generation.is_none() {
                 let (below, cut) = (Arc::clone(&self.below), Arc::clone(&self.cut));
@@ -378,11 +383,7 @@ impl RealtimeAudioNode for AudioOutputNode {
                             }
                         }
                     },
-                    |outcome| {
-                        if let Err(error) = outcome {
-                            log::error!(target: "livekit.agents", "error in audio node: {error}");
-                        }
-                    },
+                    failed,
                     None,
                     None,
                 ));

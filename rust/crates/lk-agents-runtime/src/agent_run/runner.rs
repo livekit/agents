@@ -1,7 +1,8 @@
 //! [`AgentRunner`], the host's class: each `run` starts one invocation ([`start`]) on the process
 //! runtime and hands its updates out as a stream whose drop cancels it.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, RunUpdate};
 use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
@@ -102,7 +103,7 @@ impl AgentRunner for Runner {
         let (handle, updates) =
             start(&runtime, self.definition.clone(), input, setup, UPDATE_QUEUE)
                 .map_err(|e| InvalidRun(e.to_string()))?;
-        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let mut running = self.running.lock();
         running.retain(|(_, progress)| !progress.ended());
         running.push((invocation_id, handle.progress()));
         Ok(Updates { run: handle, updates, clock: self.clock.clone() })
@@ -114,9 +115,12 @@ impl AgentRunner for Runner {
         operation: u64,
         message: String,
     ) -> Result<(), InvalidRun> {
-        let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        let progress = running.iter().find(|(id, _)| id == invocation_id).map(|(_, p)| p);
-        match progress.map(|p| p.report(operation, message)) {
+        let reported = {
+            let running = self.running.lock();
+            let progress = running.iter().find(|(id, _)| id == invocation_id).map(|(_, p)| p);
+            progress.map(|p| p.report(operation, message))
+        };
+        match reported {
             Some(Ok(())) => Ok(()),
             Some(Err(ProgressRefused::Full)) => {
                 log::warn!(target: "livekit.agents", "invocation {invocation_id}: a progress update was dropped, {PROGRESS_QUEUE} are waiting");

@@ -446,11 +446,14 @@ impl Inner {
     }
 
     fn observe(&self, observation: CleanupObservation) {
-        if let Ok(mut observations) = self.observations.lock()
-            && !observations.contains(&observation)
-        {
+        let Ok(mut observations) = self.observations.lock() else { return };
+        let first = !observations.contains(&observation);
+        if first {
+            observations.push(observation.clone());
+        }
+        drop(observations);
+        if first {
             log::error!(target: "livekit.agents", "A2A cleanup incomplete: {observation:?}");
-            observations.push(observation);
         }
     }
 

@@ -16,7 +16,8 @@ use lk_agents_voice::avatar::{
 };
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock, Weak};
 
 struct RxInner {
     room: Arc<dyn RtcRoom>,
@@ -36,15 +37,15 @@ struct RxInner {
 
 impl RxInner {
     fn end(&self, end: ReceiverEnd) {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).end(end);
+        self.state.lock().end(end);
         self.out_ready.notify_waiters();
         self.streams_ready.notify_waiters();
     }
     fn ended(&self) -> bool {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).ended()
+        self.state.lock().ended()
     }
     fn on_clear_buffer(&self) -> String {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.state.lock().clear();
         self.superseded_wake.notify_waiters();
         if let Some(cb) = &self.on_clear {
             cb();
@@ -56,7 +57,7 @@ impl RxInner {
             let wake = self.streams_ready.notified();
             tokio::pin!(wake);
             wake.as_mut().enable();
-            let next = self.streams.lock().unwrap_or_else(|p| p.into_inner()).pop_front();
+            let next = self.streams.lock().pop_front();
             let Some(mut stream) = next else {
                 if self.ended() {
                     return Ok(());
@@ -67,7 +68,6 @@ impl RxInner {
             let mut reader = self
                 .state
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
                 .begin(&stream.info, self.frame_size);
             let outcome = match &mut reader {
                 Err(error) => Err(error.clone()),
@@ -76,7 +76,7 @@ impl RxInner {
                         let superseded = self.superseded_wake.notified();
                         tokio::pin!(superseded);
                         superseded.as_mut().enable();
-                        let gave_up = self.state.lock().unwrap_or_else(|p| p.into_inner()).superseded();
+                        let gave_up = self.state.lock().superseded();
                         let idle_until = self.clock.now().saturating_add(STREAM_IDLE_TIMEOUT);
                         let chunk = tokio::select! {
                             biased;
@@ -87,18 +87,21 @@ impl RxInner {
                         };
                         match chunk {
                             Some(Ok(Some(data))) => {
-                                let keep = self.state.lock().unwrap_or_else(|p| p.into_inner()).chunk(reader, &data);
+                                let keep = self.state.lock().chunk(reader, &data);
                                 self.out_ready.notify_waiters();
                                 if !keep { break; }
                             }
                             Some(Ok(None)) => break,
                             Some(Err(error)) => return Err(ReceiverEnd::BadStream(error.to_string())),
                             None => {
-                                let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-                                if state.cleared() {
+                                let (cleared, superseded) = {
+                                    let state = self.state.lock();
+                                    (state.cleared(), state.superseded())
+                                };
+                                if cleared {
                                     log::debug!(target: LOG, stream_id = stream.info.id.as_str(); "audio stream ended early after clear_buffer");
                                 } else {
-                                    let reason = if state.superseded() { "superseded by a newer stream".to_owned() }
+                                    let reason = if superseded { "superseded by a newer stream".to_owned() }
                                         else { format!("idle for {}s", STREAM_IDLE_TIMEOUT.as_secs()) };
                                     log::warn!(target: LOG, stream_id = stream.info.id.as_str(); "audio stream ended before its trailer arrived ({reason})");
                                 }
@@ -106,7 +109,7 @@ impl RxInner {
                             }
                         }
                     }
-                    self.state.lock().unwrap_or_else(|p| p.into_inner()).flush(reader);
+                    self.state.lock().flush(reader);
                     self.out_ready.notify_waiters();
                     Ok(())
                 }.await,
@@ -120,7 +123,7 @@ impl RxInner {
                     outcome.err().map(|e| format!("{e}; ")).unwrap_or_default()
                 ))),
             };
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.state.lock();
             state.finish(if outcome.is_ok() { reader.as_mut().ok() } else { None });
             drop(state);
             outcome?;
@@ -130,13 +133,12 @@ impl RxInner {
 
     /// `_send_task`: the playback reports, in order, each retried by its attempt policy.
     async fn send(self: Arc<Self>) -> std::result::Result<(), ReceiverEnd> {
-        let Some(mut rx) = self.rpc_rx.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+        let Some(mut rx) = self.rpc_rx.lock().take() else {
             return Ok(());
         };
         let remote = self
             .state
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
             .sender()
             .unwrap_or_default()
             .to_owned();
@@ -225,7 +227,7 @@ impl DataStreamAudioReceiver {
                 .room
                 .remote_participants()
                 .map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
-            let chosen = inner.state.lock().unwrap_or_else(|p| p.into_inner()).choose_sender(
+            let chosen = inner.state.lock().choose_sender(
                 inner.sender_identity.as_deref(),
                 participants.iter().map(|p| (p.identity().0.as_str(), p.kind())),
             );
@@ -246,14 +248,12 @@ impl DataStreamAudioReceiver {
         let room = inner.room.name().map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
         RX_ROUTES
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
             .entry(room.clone())
             .or_default()
             .insert(remote.clone(), Arc::downgrade(inner));
         let handler = RpcHandler::new(move |caller, _payload| {
             let found = RX_ROUTES
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
                 .get(&room)
                 .and_then(|m| m.get(caller))
                 .and_then(Weak::upgrade);
@@ -289,7 +289,6 @@ impl DataStreamAudioReceiver {
                     let admitted = inner
                         .state
                         .lock()
-                        .unwrap_or_else(|p| p.into_inner())
                         .admits(&stream.sender.0);
                     if !admitted {
                         let deadline =
@@ -300,8 +299,8 @@ impl DataStreamAudioReceiver {
                         }
                         continue;
                     }
-                    inner.streams.lock().unwrap_or_else(|p| p.into_inner()).push_back(stream);
-                    if inner.state.lock().unwrap_or_else(|p| p.into_inner()).stream_admitted() {
+                    inner.streams.lock().push_back(stream);
+                    if inner.state.lock().stream_admitted() {
                         inner.superseded_wake.notify_waiters();
                     }
                     inner.streams_ready.notify_waiters();
@@ -320,7 +319,7 @@ impl DataStreamAudioReceiver {
                 });
             }
         };
-        let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
+        let mut tasks = self.tasks.lock();
         tasks.push(self.spawner.spawn(pump));
         tasks.push(self.spawner.spawn(main));
         Ok(())
@@ -355,7 +354,7 @@ impl DataStreamAudioReceiver {
             let wake = self.inner.out_ready.notified();
             tokio::pin!(wake);
             wake.as_mut().enable();
-            if let Some(item) = self.inner.state.lock().unwrap_or_else(|p| p.into_inner()).take()? {
+            if let Some(item) = self.inner.state.lock().take()? {
                 return Ok(item);
             }
             wake.await;
@@ -365,7 +364,7 @@ impl DataStreamAudioReceiver {
     pub fn aclose(&self) {
         self.inner.end(ReceiverEnd::Closed);
         // Cancelled, not awaited.
-        drop(std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())));
+        drop(std::mem::take(&mut *self.tasks.lock()));
     }
 }
 

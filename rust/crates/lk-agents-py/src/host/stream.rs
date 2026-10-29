@@ -275,8 +275,10 @@ fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
                 Entry::EndInput => target.call_method0("_core_end_input"),
             };
             if let Err(e) = delivered {
+                // Capturing reads the exception's attributes: Python code, run before the lock.
+                let failed = lk_agents_abi::python::capture(py, &e);
                 let mut queue = shared.queue.lock().unwrap_or_else(|p| p.into_inner());
-                queue.failed = Some(lk_agents_abi::python::capture(py, &e));
+                queue.failed = Some(failed);
                 queue.entries.clear();
                 queue.scheduled = false;
                 return;
