@@ -68,6 +68,7 @@ class MotionAgent(Agent):
 
 class EmotionAgent(Agent):
     """Agent that controls a Tavus avatar's facial emotion."""
+
     def __init__(self, persona: Persona, avatar: tavus.AvatarSession) -> None:
         super().__init__(
             instructions=compose_instructions(persona),
@@ -77,10 +78,13 @@ class EmotionAgent(Agent):
         self._avatar = avatar
 
     @function_tool
-    async def set_emotion(self, context: RunContext, emotion: tavus.Emotion) -> None:
+    async def set_emotion(self, context: RunContext, emotion: tavus.Emotion) -> str:
         """Set the facial emotion of your avatar. It stays until you set another one."""
         logger.info("setting avatar emotion to %s", emotion)
         await self._avatar.set_emotion(emotion)
+        # returning a value makes the LLM reply after the call; with None the turn
+        # ends silently whenever the model emits only this tool call
+        return f"Your face now shows {emotion}."
 
 
 @server.rtc_session()
@@ -127,19 +131,21 @@ async def entrypoint(ctx: JobContext) -> None:
     state = State(persona=initial, avatar=avatar, session_id=session_id)
     await state.avatar.wait_for_join()
 
+    waves = False
     if supports_actions(initial.id) and state.session_id:
         actions.set_session(state.session_id, initial.id)
+        waves = True
 
     await session.start(agent=make_agent(initial, state.avatar), room=ctx.room)
 
-    if supports_actions(initial.id):
+    if waves:
         await actions.opening_wave()
 
     session.generate_reply(
         instructions=(
             f"It's your turn to speak first. Open with a single short greeting in "
             f"character as {initial.name} and then stop."
-            + (" Do not call wave — you already waved." if supports_actions(initial.id) else "")
+            + (" Do not call wave — you already waved." if waves else "")
         )
     )
 
@@ -186,20 +192,18 @@ async def entrypoint(ctx: JobContext) -> None:
                     # before it actually consumes audio + emits frames.
                     await asyncio.sleep(1.2)
 
+            waves = False
             if supports_actions(new_persona.id) and state.session_id:
                 actions.set_session(state.session_id, new_persona.id)
                 await actions.opening_wave()
+                waves = True
 
             session.generate_reply(
                 instructions=(
                     f"It's your turn to speak first. Open with a single short line in "
                     f"character as {state.persona.name} (acknowledge that you're who they "
                     "just picked) and then stop."
-                    + (
-                        " Do not call wave — you already waved."
-                        if supports_actions(new_persona.id)
-                        else ""
-                    )
+                    + (" Do not call wave — you already waved." if waves else "")
                 )
             )
 
