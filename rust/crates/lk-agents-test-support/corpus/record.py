@@ -7,7 +7,7 @@ the providers say is kept, only the shape of it: event types, when each arrived,
 word counts, statuses and error codes. Ids are replaced by ordinals so linkage survives.
 
     set -a; . creds.env; set +a      # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-    python -I rust/crates/lk-agents-fuzz/corpus/record.py [realtime stt tts llm] --out <dir>
+    python -I rust/crates/lk-agents-test-support/corpus/record.py [realtime stt tts llm] --out <dir>
 
 The user's side of every call is speech this script synthesises once with the inference TTS, fed
 at real-time pace with silence between turns.

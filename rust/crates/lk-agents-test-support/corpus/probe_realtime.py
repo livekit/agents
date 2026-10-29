@@ -9,7 +9,7 @@ server events with their timing. Nothing anybody said is kept: content becomes i
 become ordinals (`item0`, `resp1`, `call0`), so which event names which item survives.
 
     LIVEKIT_API_KEY=.. LIVEKIT_API_SECRET=.. \
-        python -I rust/crates/lk-agents-fuzz/corpus/probe_realtime.py --out <dir> [probe ...]
+        python -I rust/crates/lk-agents-test-support/corpus/probe_realtime.py --out <dir> [probe ...]
 
 Through LiveKit Inference (`openai/gpt-realtime`) by default, as `record.py` does; `--openai`
 goes to api.openai.com with `OPENAI_API_KEY`.

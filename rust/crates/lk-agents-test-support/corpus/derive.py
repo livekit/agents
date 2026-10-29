@@ -1,11 +1,11 @@
 """Derive the fakes' calibration from the recordings beside this file (`record.py` wrote them).
 
 Every number the fakes and the person draw from is an empirical sample here, in milliseconds,
-taken from what the providers did: `src/corpus.rs` reads `calibration.json` and draws uniformly
+taken from what the providers did: `lk-agents-test-support/src/corpus.rs` reads `calibration.json` and draws uniformly
 from each list, so a fake's delays are distributed as the real provider's were.
 
-    python3 rust/crates/lk-agents-fuzz/corpus/derive.py           # rewrites calibration.json
-    python3 rust/crates/lk-agents-fuzz/corpus/derive.py --check   # fails if it is stale; writes nothing
+    python3 rust/crates/lk-agents-test-support/corpus/derive.py           # rewrites calibration.json
+    python3 rust/crates/lk-agents-test-support/corpus/derive.py --check   # fails if it is stale; writes nothing
 
 Every family, model and quantity must have data: an empty recordings directory, a family nothing
 recorded, or a quantity with no samples fails before calibration.json is touched, except a

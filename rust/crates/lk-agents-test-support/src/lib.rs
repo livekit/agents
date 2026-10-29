@@ -1,5 +1,6 @@
 //! Supplied-clock RTC peers and performers for native conformance and deterministic tests.
 
+pub mod corpus;
 pub mod playback;
 pub mod recorder;
 pub mod room_io;

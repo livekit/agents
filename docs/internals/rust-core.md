@@ -1834,7 +1834,7 @@ do not establish scheduler correctness.
 
 Fakes reproduce real boundary behavior: calibrated LLM chunk timings, TTS audio
 proportional to text, realtime probe fixtures and SDK room lifecycle behavior.
-Calibration is in `rust/crates/lk-agents-fuzz/corpus/calibration.json`. Fix the
+Calibration is in `rust/crates/lk-agents-test-support/corpus/calibration.json`. Fix the
 fake's missing behavior whenever a real-room failure reveals a gap.
 
 A seed reproduces a run for the same build, configuration and scheduling policy.

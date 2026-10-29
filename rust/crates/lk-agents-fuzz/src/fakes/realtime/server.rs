@@ -6,7 +6,7 @@
 //! ([`Outgoing`]) go in with the instant they arrived ([`Server::client`]), what the server does
 //! on its own accord goes in as an [`Exo`], and every server event comes out of [`Server::pop`]
 //! once it is due, as the [`Incoming`] the client decodes from it. Each event's delay after its
-//! cause is drawn from the corpus (`corpus/calibration.json`, [`crate::corpus`]), so a reply is
+//! cause is drawn from the corpus (`lk_agents_test_support::corpus`), so a reply is
 //! created about 100 ms after its `response.create`, its first item 300 ms later, its audio in
 //! 400 ms deltas faster than real time, and `response.done` while the client is still playing
 //! most of it -- which is what made a server onset over a finished generation the common
@@ -50,9 +50,10 @@ mod client;
 
 pub use client::{event_id_of, wire_name};
 
+use lk_agents_test_support::corpus::{draw_ms, share};
+
 use super::super::SAMPLE_RATE;
 use crate::{
-    corpus::{draw_ms, share},
     input::{AGENT_TURNS, USER_TURNS},
     record::{Breach, Tag},
 };
@@ -722,7 +723,8 @@ impl Server {
         self.put(t, Some(r), Incoming::ContentPartAdded { item_id: item.clone(), part_type });
 
         // The words, as transcript (or text) deltas, and the audio they become.
-        let per_char = crate::corpus::draw(&mut self.rng, &["realtime", "audio_ms_per_char"]);
+        let per_char =
+            lk_agents_test_support::corpus::draw(&mut self.rng, &["realtime", "audio_ms_per_char"]);
         let audio_ms = ((text.chars().count() as f64 * per_char) as u64).max(DELTA_MS);
         let deltas = audio_ms.div_ceil(DELTA_MS) as usize;
         let words: Vec<&str> = text.split_inclusive(' ').collect();

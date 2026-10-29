@@ -21,7 +21,7 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Ts;
 use lk_agents_abi::utils::vocabulary::Coverage;
-use lk_agents_fuzz::corpus;
+use lk_agents_test_support::corpus;
 use lk_agents_fuzz::fakes::realtime::server::{Exo, NoHooks, Server, event_id_of};
 use lk_agents_fuzz::fakes::vocabulary;
 use lk_agents_fuzz::search::stt_kinds;
@@ -32,7 +32,7 @@ mod typed;
 use typed::{outgoing, wire};
 
 fn recordings(prefix: &str) -> Vec<(String, Value)> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/recordings");
+    let dir = corpus::dir().join("recordings");
     let mut out: Vec<(String, Value)> = std::fs::read_dir(&dir)
         .expect("corpus/recordings")
         .flatten()
@@ -514,7 +514,7 @@ fn the_realtime_failures_send_documented_events() {
 // same distance past its end, or the same share of it.
 
 fn probes() -> Vec<(String, Value)> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/probes");
+    let dir = corpus::dir().join("probes");
     let mut out: Vec<(String, Value)> = std::fs::read_dir(&dir)
         .expect("corpus/probes")
         .flatten()

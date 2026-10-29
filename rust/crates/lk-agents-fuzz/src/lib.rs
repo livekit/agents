@@ -31,7 +31,6 @@ pub mod a2a;
 pub mod authored;
 pub mod boundary;
 pub mod check;
-pub mod corpus;
 pub mod drive;
 pub mod fakes;
 pub mod input;

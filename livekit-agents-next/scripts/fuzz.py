@@ -49,7 +49,7 @@ from unittest import mock
 from livekit.agents import RunContext
 
 REPO = Path(__file__).resolve().parents[2]
-CALIBRATION = REPO / "rust/crates/lk-agents-fuzz/corpus/calibration.json"
+CALIBRATION = REPO / "rust/crates/lk-agents-test-support/corpus/calibration.json"
 SAMPLE_RATE = 24000
 # What a reply may take beyond its providers' drawn delays before its first audio.
 BUDGET_S = 0.4

@@ -1,19 +1,29 @@
-//! What real providers did, as the fakes and the person draw from it.
+//! What real providers did, as the fakes and the test peers draw from it.
 //!
 //! `corpus/record.py` records real traffic through LiveKit Inference (the realtime model's raw
 //! socket, streaming STT, TTS and LLM) as event kinds and relative timing, nothing anybody said;
 //! `corpus/derive.py` turns the recordings into `corpus/calibration.json`, one list of observed
 //! values per quantity. A draw here is uniform over a list, so a delay is distributed as the real
-//! provider's was. `tests/conformance.rs` checks the fakes against the recordings themselves.
+//! provider's was. The DST's fakes (lk-agents-fuzz) and inference's simulated realtime server
+//! both draw from it, and both are checked against the recordings themselves.
 //!
 //! The lists are read once per process.
-use std::{collections::HashMap, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use fastrand::Rng;
 use serde_json::Value;
 
 /// The calibration, as `derive.py` wrote it.
 pub const CALIBRATION: &str = include_str!("../corpus/calibration.json");
+
+/// The corpus directory: its `recordings/` and `probes/` are what conformance tests replay.
+pub fn dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
+}
 
 fn calibration() -> &'static Value {
     static PARSED: OnceLock<Value> = OnceLock::new();

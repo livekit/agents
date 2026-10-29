@@ -142,7 +142,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         realtime_audio: false,
     });
     // The recorded recogniser the transcripts follow, drawn last too.
-    setup.stt_model = rng.usize(0..crate::corpus::STT_MODELS.len());
+    setup.stt_model = rng.usize(0..lk_agents_test_support::corpus::STT_MODELS.len());
     // Most voices take their recorded time to start; some answer at once.
     setup.tts_latency = (rng.u8(0..100) < 80).then(|| rng.u64(..));
     // The realtime server's detector and its own dice, drawn last too.

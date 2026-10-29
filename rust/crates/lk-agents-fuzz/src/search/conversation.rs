@@ -37,8 +37,9 @@ use lk_agents_voice::{
 };
 
 use super::uniform;
+use lk_agents_test_support::corpus;
+
 use crate::{
-    corpus,
     drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
     input::{
         AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,

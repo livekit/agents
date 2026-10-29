@@ -1625,6 +1625,7 @@ name = "lk-agents-test-support"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "fastrand",
  "lk-agents-abi",
  "lk-agents-media",
  "lk-agents-voice",
