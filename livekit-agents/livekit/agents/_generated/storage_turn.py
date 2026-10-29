@@ -99,12 +99,11 @@ class TurnContext(BaseModel):
     """A delegating caller's conversation when the message carried a `chat_ctx` data part (plan
     7.5), as the part's `data`.
     """
-    answer_tool: str | None
-    """The tool the message is handed to before the model runs: the last turn's question came
-    from it with a reference, and this message is its answer.
+    answer_to: list[tuple[str, str]]
+    """The tools the message is handed to before the model runs, each with what it continues
+    the answer with, such as an expert's task: the last turn's question came from their calls,
+    and this message is its answer.
     """
-    answer_ref: str | None
-    """What `answer_tool` continues with the answer, such as the expert's task."""
     live: bool = False
     """The turn runs under `live`: a tool may go on in the background after its first update."""
 
@@ -115,10 +114,10 @@ class PendingCall(BaseModel):
     model_config = ConfigDict(frozen=True)
     name: str
     call_id: str
-    answer_tool: str | None = None
-    """The tool that takes the answer, when the question carries a reference."""
-    answer_ref: str | None = None
-    """What the tool that takes the answer continues with it, such as the expert's task."""
+    answer_to: list[tuple[str, str]] = Field(default_factory=list)
+    """The tools that take the answer, each with what it continues it with: the calls of the
+    step whose questions carry a reference.
+    """
 
 
 class HostEvent(BaseModel):

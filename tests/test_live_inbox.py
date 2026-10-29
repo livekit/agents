@@ -561,7 +561,6 @@ async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_tas
 
 
 @pytest.mark.rule("R29")
-@pytest.mark.xfail(strict=True, reason="B61: the background frame repeats the question")
 async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     door: Callable[..., Door],
 ) -> None:

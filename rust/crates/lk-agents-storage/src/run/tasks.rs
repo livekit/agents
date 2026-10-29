@@ -57,10 +57,12 @@ pub struct WaitOptions {
     pub tool: Option<String>,
     /// For a conversation tool's `InputRequired`, the pending call.
     pub call_id: Option<String>,
-    /// The tool the answer is handed to, when the question carries a reference.
-    pub answer_tool: Option<String>,
-    /// What the tool that takes the answer continues with it, such as the expert's task.
-    pub answer_ref: Option<String>,
+    /// The tools the answer is handed to, each with what it continues it with, such as an
+    /// expert's task.
+    pub answer_to: Vec<(String, String)>,
+    /// When the question was put behind the one in front of the person, in seconds: it waits
+    /// unshown and the row stays `working`.
+    pub queued_at: Option<f64>,
     pub deadline: Option<i64>,
     /// The tool's parameter schema, added to the status message as a data part.
     pub schema: Option<Value>,
@@ -190,6 +192,27 @@ impl Tasks {
             .find(|r| r.ask().is_some_and(truthy)))
     }
 
+    /// The rows in `state` as this run leaves them: its writes over the lane's rows.
+    pub async fn in_state(&self, state: TaskState) -> Result<Vec<TaskRecord>, StorageError> {
+        let status = state.as_str();
+        let rows: Vec<TaskRecord> = match self.snapshot() {
+            Some(rows) => rows.iter().filter(|r| r.status == status).cloned().collect(),
+            None => {
+                let rows = self.db.tasks(&self.lane, Some(status), LOOKUP_LIMIT).await?;
+                rows.into_iter().map(TaskRecord::from_row).collect()
+            }
+        };
+        let written = |id: &str| self.writes.iter().any(|w| w.task_id == id);
+        let mut rows: Vec<TaskRecord> = rows.into_iter().filter(|r| !written(&r.id)).collect();
+        rows.extend(
+            self.writes
+                .iter()
+                .filter(|w| w.status == status)
+                .map(|w| record_from_write(w, &self.lane)),
+        );
+        Ok(rows)
+    }
+
     /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.
     pub async fn write(
         &mut self,
@@ -248,22 +271,24 @@ impl Tasks {
         if let Some(call_id) = opts.call_id {
             ask.insert("call_id".into(), Value::String(call_id));
         }
-        if let Some(answer_tool) = opts.answer_tool {
-            ask.insert("answer_tool".into(), Value::String(answer_tool));
+        if !opts.answer_to.is_empty() {
+            ask.insert("answer_to".into(), serde_json::json!(opts.answer_to));
         }
-        if let Some(answer_ref) = opts.answer_ref {
-            ask.insert("answer_ref".into(), Value::String(answer_ref));
+        if let Some(queued_at) = opts.queued_at {
+            ask.insert("queued_at".into(), Value::from(queued_at));
         }
         let mut parts = vec![text_part(question)];
         if let Some(schema) = opts.schema {
             parts.push(serde_json::json!({"kind": "data", "data": schema}));
         }
+        let queued = opts.queued_at.is_some();
+        let state = if queued { TaskState::Working } else { TaskState::InputRequired };
         self.write(
             task_id,
-            TaskState::InputRequired,
+            state,
             TaskPatch {
                 ask: Some(Value::Object(ask)),
-                status_message: Some(agent_message(parts, task_id)),
+                status_message: (!queued).then(|| agent_message(parts, task_id)),
                 deadline: opts.deadline,
                 ..TaskPatch::default()
             },
@@ -381,9 +406,10 @@ fn merge_write(
         status: status.as_str().to_owned(),
         message_id: patch.message_id.or_else(|| base.and_then(|b| b.message_id.clone())),
         name: patch.name.or_else(|| base.and_then(|b| b.name.clone())),
-        status_message: patch
-            .status_message
-            .or_else(|| base.and_then(|b| b.status_message.clone())),
+        // a status message says something of one state: a move to another state drops it
+        status_message: patch.status_message.or_else(|| {
+            base.filter(|b| b.status == status.as_str()).and_then(|b| b.status_message.clone())
+        }),
         data,
         internal: (!internal.is_empty()).then_some(internal),
     })
@@ -556,6 +582,24 @@ mod tests {
         assert_eq!(ask(&working), None);
         let again = merge_write("AST_1", Some(&done), TaskState::Working, TaskPatch::default());
         assert!(matches!(again, Err(StorageError::Invalid(m)) if m.contains("is completed")));
+    }
+
+    #[test]
+    fn a_status_message_is_kept_only_while_the_state_stays() {
+        let question = agent_message(vec![text_part("Please confirm?")], "AST_1");
+        let base = merge_write(
+            "AST_1",
+            None,
+            TaskState::InputRequired,
+            TaskPatch { status_message: Some(question.clone()), ..TaskPatch::default() },
+        )
+        .unwrap();
+        let same =
+            merge_write("AST_1", Some(&base), TaskState::InputRequired, TaskPatch::default());
+        assert_eq!(same.unwrap().status_message, Some(question));
+        let working =
+            merge_write("AST_1", Some(&base), TaskState::Working, TaskPatch::default()).unwrap();
+        assert_eq!(working.status_message, None);
     }
 
     #[test]

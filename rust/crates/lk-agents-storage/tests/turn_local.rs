@@ -287,8 +287,7 @@ impl TurnHost for Fake {
                     pending_call: Some(PendingCall {
                         name: "request_photo".into(),
                         call_id: "p1".into(),
-                        answer_tool: None,
-                        answer_ref: None,
+                        answer_to: Vec::new(),
                     }),
                     ..HandlerOutput::default()
                 })

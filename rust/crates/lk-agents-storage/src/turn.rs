@@ -642,6 +642,11 @@ impl Turn {
                         self.host.on_end(&row, output.and_then(|o| o.output.as_ref())).await;
                     }
                 }
+                for task_id in outcome.iter().flat_map(|o| &o.asked) {
+                    if let Some(row) = ctx.lane.task(task_id).await? {
+                        self.host.on_end(&row, None).await;
+                    }
+                }
             }
             taken = false;
             ctx.last_run_id = Some(run.run_id.clone());
@@ -752,6 +757,11 @@ impl Turn {
                 self.host.on_end(&row, outcome.output.as_ref()).await;
             }
         }
+        if let Some(task_id) = &outcome.asked
+            && let Some(row) = ctx.lane.task(task_id).await?
+        {
+            self.host.on_end(&row, None).await;
+        }
         Ok(run.lease_token().map(str::to_owned))
     }
 
@@ -852,7 +862,8 @@ impl Turn {
     async fn fail_orphans(&self, run: &Run, skip: &[String]) -> Result<(), StorageError> {
         let db = self.thread.db();
         for row in run.tasks.working().await? {
-            if skip.contains(&row.id) {
+            // a held question waits on the person, not on a worker
+            if skip.contains(&row.id) || row.ask().is_some() {
                 continue;
             }
 
