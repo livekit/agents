@@ -42,6 +42,7 @@ mod late_verdict_pause_resumes;
 mod left_at_close;
 mod live_options;
 mod llm_tokens_per_second;
+mod lost_voice_ends_its_audio_once;
 mod lost_voice_words_shown_whole;
 mod manual_turn_closed_empty;
 mod mic_gate_reopens;

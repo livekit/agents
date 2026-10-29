@@ -22,13 +22,14 @@ use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// One failed duplex stream: the error, whether audio came first, the words fed, and the
-/// synchroniser's words up to where its audio played.
+/// One failed duplex stream: the error, whether audio came first, the words fed, the
+/// synchroniser's words up to where its audio played, and the sink's account of that audio.
 struct Failed {
     error: DriverError,
     produced: bool,
     words: Visible,
     synchronized: Option<String>,
+    heard: Option<Heard>,
 }
 
 /// `perform_tts_inference`, retried: opens are retried until a frame arrives; a later failure, or a
@@ -103,7 +104,7 @@ pub(super) async fn perform_tts_inference(
                 match synthesize(shared, handle, streaming, playback).await {
                     (Ok(heard), _) => return Ok(heard),
                     (Err(failed), done) => {
-                        state.stream_failed(failed.words, done, failed.synchronized);
+                        state.stream_failed(failed.words, done, failed.synchronized, failed.heard);
                         (failed.error, failed.produced)
                     }
                 }
@@ -179,8 +180,8 @@ async fn synthesize(
             }
             (Ok(heard), true)
         }
-        Err(SourceFailed { error, synchronized, .. }) => {
-            (Err(Failed { error, produced, words, synchronized }), input_done)
+        Err(SourceFailed { error, synchronized, heard }) => {
+            (Err(Failed { error, produced, words, synchronized, heard }), input_done)
         }
     }
 }

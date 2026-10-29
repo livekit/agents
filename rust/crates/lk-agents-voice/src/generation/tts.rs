@@ -1,6 +1,6 @@
 //! Streaming synthesis decisions: feed ordering, completion and aligned captions.
 
-use crate::transcription::Visible;
+use crate::transcription::{Heard, Visible};
 use lk_agents_abi::TimedString;
 use lk_agents_abi::errors::ProviderError;
 
@@ -220,6 +220,8 @@ pub struct Lost {
     pub opening: Visible,
     pub synchronized: Option<String>,
     pub played: bool,
+    /// What the sink confirmed of the failed attempt's audio: its frames and playhead.
+    pub heard: Heard,
 }
 
 /// The accumulated input of a synthesis attempt, preserved for a retry.
@@ -228,6 +230,7 @@ pub struct SynthesisAttempt {
     pub opening: Visible,
     pub input_done: bool,
     synchronized: Option<String>,
+    heard: Heard,
     produced: bool,
 }
 
@@ -249,6 +252,7 @@ impl SynthesisAttempt {
             opening,
             input_done: false,
             synchronized: None,
+            heard: Heard::default(),
             produced: false,
         }
     }
@@ -262,10 +266,12 @@ impl SynthesisAttempt {
         opening: Visible,
         input_done: bool,
         synchronized: Option<String>,
+        heard: Option<Heard>,
     ) {
         self.opening = opening;
         self.input_done = input_done;
         self.synchronized = synchronized;
+        self.heard = heard.unwrap_or_default();
     }
 
     pub fn failed(
@@ -287,6 +293,7 @@ impl SynthesisAttempt {
                 opening: self.opening.clone(),
                 synchronized: self.synchronized.clone(),
                 played: produced,
+                heard: self.heard.clone(),
             }),
         }
     }
@@ -301,6 +308,7 @@ impl SynthesisAttempt {
                 opening: self.opening.clone(),
                 synchronized: self.synchronized.clone(),
                 played: self.produced,
+                heard: self.heard.clone(),
             }),
         }
     }
@@ -312,6 +320,7 @@ impl SynthesisAttempt {
             opening: self.opening.clone(),
             synchronized: None,
             played: false,
+            heard: Heard::default(),
         }
     }
 }
@@ -320,6 +329,8 @@ impl SynthesisAttempt {
 #[derive(Default)]
 pub struct SynthesisLoss {
     pending: Option<LossText>,
+    /// The sink's account of the audio that did play: the segment is voiced if any reached it.
+    sink: Heard,
 }
 
 enum LossText {
@@ -339,7 +350,7 @@ pub enum LossEffect {
     CutShort,
     Capture(String),
     Drain { opening: Visible, forward_text: bool },
-    Heard(crate::transcription::Heard),
+    Heard(Heard),
 }
 
 impl SynthesisLoss {
@@ -353,6 +364,7 @@ impl SynthesisLoss {
                     self.pending = Some(LossText::Unheard);
                     return vec![LossEffect::Drain { opening: lost.opening, forward_text: false }];
                 }
+                self.sink = lost.heard;
                 let mut effects = vec![LossEffect::ReleaseVoice, LossEffect::CutShort];
                 match aligned {
                     Some(aligned) if aligned.stamped => {
@@ -380,20 +392,15 @@ impl SynthesisLoss {
                     return Vec::new();
                 };
                 let text = match pending {
-                    LossText::Unheard => {
-                        return vec![LossEffect::Heard(crate::transcription::Heard::default())];
-                    }
+                    LossText::Unheard => return vec![LossEffect::Heard(Heard::default())],
                     LossText::Stamped(text) => text,
                     LossText::Generated { played: true, synchronized } => {
                         synchronized.unwrap_or(words.text)
                     }
                     LossText::Generated { played: false, .. } => String::new(),
                 };
-                vec![LossEffect::Heard(crate::transcription::Heard {
-                    text,
-                    complete: true,
-                    ..Default::default()
-                })]
+                let sink = std::mem::take(&mut self.sink);
+                vec![LossEffect::Heard(Heard { text, complete: true, ..sink })]
             }
         }
     }
