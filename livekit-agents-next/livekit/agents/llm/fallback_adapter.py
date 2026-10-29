@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal
 
 from .. import _bindings, _core
 from .._generated.llm import LLM, ChatChunk, LLMStream
@@ -47,12 +48,10 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             raise ValueError("at least one LLM instance must be provided.")
         super().__init__()
         self._llm_instances = llm
-        self._opts = {
-            "attempt_timeout": attempt_timeout,
-            "max_retry_per_llm": max_retry_per_llm,
-            "retry_interval": retry_interval,
-            "sticky": sticky,
-        }
+        self._attempt_timeout = attempt_timeout
+        self._max_retry_per_llm = max_retry_per_llm
+        self._retry_interval = retry_interval
+        self._sticky = sticky
 
     @property
     def _native(self) -> _core.FallbackLlm:
@@ -62,11 +61,14 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             lambda: _core.FallbackLlm(
                 [_bindings.core_leg(t) for t in self._llm_instances],
                 on_availability=self,
-                **self._opts,
+                attempt_timeout=self._attempt_timeout,
+                max_retry_per_llm=self._max_retry_per_llm,
+                retry_interval=self._retry_interval,
+                sticky=self._sticky,
             ),
         )
 
-    def _core_leg(self) -> Any:
+    def _core_leg(self) -> FallbackAdapter | _core.FallbackLlm:
         return self if _bindings.overrides(self, FallbackAdapter, "chat") else self._native
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
@@ -103,7 +105,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> LLMStream:
         return FallbackLLMStream(
             self,
@@ -111,17 +113,13 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             tools=tools or [],
             # the core's chain retries and falls back: the stream does not retry on top of it
             conn_options=replace(conn_options, max_retry=0),
-            request={
-                "parallel_tool_calls": parallel_tool_calls
-                if is_given(parallel_tool_calls)
-                else None,
-                "tool_choice": tool_choice if is_given(tool_choice) else None,
-                "extra_kwargs": extra_kwargs if is_given(extra_kwargs) else None,
-            },
+            parallel_tool_calls=parallel_tool_calls if is_given(parallel_tool_calls) else None,
+            tool_choice=tool_choice if is_given(tool_choice) else None,
+            extra_kwargs=extra_kwargs if is_given(extra_kwargs) else None,
         )
 
-    def prewarm(self, **kwargs: Any) -> None:
-        self._llm_instances[0].prewarm(**kwargs)
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._llm_instances[0].prewarm(loop=loop)
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -132,9 +130,21 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
 class FallbackLLMStream(LLMStream):
     _llm: FallbackAdapter
 
-    def __init__(self, llm: FallbackAdapter, *, request: dict[str, Any], **kwargs: Any) -> None:
-        super().__init__(llm, **kwargs)
-        self._request = request
+    def __init__(
+        self,
+        llm: FallbackAdapter,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool],
+        conn_options: APIConnectOptions,
+        parallel_tool_calls: bool | None,
+        tool_choice: ToolChoice | None,
+        extra_kwargs: dict[str, object] | None,
+    ) -> None:
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
         from .._core_view import tool_specs
@@ -144,7 +154,9 @@ class FallbackLLMStream(LLMStream):
             tools=tool_specs(self._tools),
             tools_host=self._tools,
             conn_options=self._conn_options,
-            **self._request,
+            parallel_tool_calls=self._parallel_tool_calls,
+            tool_choice=self._tool_choice,
+            extra_kwargs=self._extra_kwargs,
         )
         try:
             while (chunk := await native.recv()) is not None:
