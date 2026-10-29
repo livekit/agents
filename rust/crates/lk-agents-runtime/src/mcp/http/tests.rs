@@ -90,7 +90,7 @@ fn client() -> CleanupClient {
             read_timeout: Some(READ_INACTIVITY.as_secs_f64()),
             ..Default::default()
         },
-        clock: Arc::new(lk_agents_abi::RealClock::new()),
+        clock: Arc::new(lk_agents_net::clock::RealClock::new()),
         receipt: Arc::new(TransportReceipt::default()),
     }
 }

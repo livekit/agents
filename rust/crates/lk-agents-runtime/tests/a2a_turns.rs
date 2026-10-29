@@ -10,11 +10,12 @@ use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallOutput};
 use lk_agents_abi::a2a::turn::TurnContext;
 use lk_agents_abi::errors::{HostError, ProviderError};
-use lk_agents_abi::{Clock, Closed, RealClock, StreamSink, StreamSource, Ts};
+use lk_agents_abi::{Clock, Closed, StreamSink, StreamSource, Ts};
 use lk_agents_core::a2a::{
     DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnEvent, TurnHost, TurnOptions,
     TurnResult, Verdict,
 };
+use lk_agents_net::clock::RealClock;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::db::Receive;

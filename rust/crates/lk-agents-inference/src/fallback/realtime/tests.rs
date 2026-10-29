@@ -115,7 +115,7 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
         10.0,
         true,
         Arc::new(Record(Arc::clone(&changes))),
-        Arc::new(lk_agents_abi::RealClock::default()),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
     let session = model.session(false).await.unwrap();
@@ -213,7 +213,7 @@ async fn cancellation_case(failed_open: bool) {
         10.0,
         false,
         changes.clone(),
-        Arc::new(lk_agents_abi::RealClock::default()),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
     let session = model.session(false).await.unwrap();
@@ -288,7 +288,7 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
         10.0,
         false,
         changes.clone(),
-        Arc::new(lk_agents_abi::RealClock::default()),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
     let session = model.session(false).await.unwrap();
@@ -319,7 +319,7 @@ async fn repeating_the_same_backend_does_not_create_a_second_fallback_identity()
         10.0,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
-        Arc::new(lk_agents_abi::RealClock::default()),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
     let session = model.session(false).await.unwrap();
@@ -363,7 +363,7 @@ async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_child
         0.0,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
-        Arc::new(lk_agents_abi::RealClock::default()),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
     let session = model.session(false).await.unwrap();
@@ -385,7 +385,7 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
         10.0,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
-        Arc::new(lk_agents_abi::RealClock::default()),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
     let session = model.session(false).await.unwrap();

@@ -42,7 +42,7 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
         },
         Arc::new(TungsteniteTransport),
         Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current())),
-        Arc::new(lk_agents_abi::RealClock::new()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
         lk_agents_runtime::process::env().speech_text,
     );
 

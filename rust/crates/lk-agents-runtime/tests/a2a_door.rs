@@ -151,7 +151,7 @@ fn principal(write: bool) -> AuthPrincipal {
 }
 
 fn door(storage: Arc<dyn lk_agents_storage::Storage>, host: Arc<dyn TurnHost>) -> Door {
-    let clock = Arc::new(lk_agents_abi::RealClock::new());
+    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
     Door::new(storage, config(), host, Arc::default(), clock).unwrap()
 }
 

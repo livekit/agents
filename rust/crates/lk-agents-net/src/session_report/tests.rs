@@ -234,7 +234,7 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
         "key".into(),
         "secret".into(),
         admission.clone(),
-        Arc::new(lk_agents_abi::RealClock::new()),
+        Arc::new(crate::clock::RealClock::new()),
     )
     .unwrap();
     let mut upload =

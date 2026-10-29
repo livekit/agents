@@ -62,7 +62,7 @@ async fn play_refuses_what_cannot_play() {
         1,
         4_800,
         200,
-        Arc::new(lk_agents_abi::SimClock::new()),
+        Arc::new(lk_agents_net::clock::SimClock::new()),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         crate::process::env().media_pool,
     );

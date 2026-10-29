@@ -9,9 +9,8 @@ use lk_agents_abi::llm::fallback::FallbackLlm as DeclaredFallback;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{
-    ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, RealClock, StreamSource, Ts,
-};
+use lk_agents_abi::{ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, StreamSource, Ts};
+use lk_agents_net::clock::RealClock;
 
 use super::FallbackLlm;
 use lk_agents_net::env::ProcessEnv;

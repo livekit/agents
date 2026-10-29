@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 fn streams(base: &str) -> Streams {
     let http = Arc::new(GatewayHttp::new().unwrap());
     let minter = TokenMinter::new("key", "secret").unwrap();
-    Streams::new(http, Arc::new(lk_agents_abi::RealClock::new()), base, minter)
+    Streams::new(http, Arc::new(lk_agents_net::clock::RealClock::new()), base, minter)
 }
 
 /// The documented HTTP stream boundary, with deliberately opaque upstream tokens.

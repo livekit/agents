@@ -56,14 +56,17 @@ async fn publication_failure_settles_every_room_readiness_waiter() {
     pending(first.as_mut()).await;
     pending(second.as_mut()).await;
     io.clone().start();
-    let completed =
-        lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(1), async {
+    let completed = lk_agents_abi::timeout(
+        &lk_agents_net::clock::RealClock::new(),
+        Duration::from_secs(1),
+        async {
             let first = first.await.expect_err("publication failure must fail readiness");
             let second = second.await.expect_err("every waiter must see the same failure");
             assert_eq!(first, second);
             assert!(first.to_string().contains("publication refused"));
-        })
-        .await;
+        },
+    )
+    .await;
     io.clone().aclose().await;
     assert!(completed.is_ok(), "publication failure must release every readiness waiter");
 }
@@ -76,7 +79,7 @@ async fn closing_before_linking_settles_room_readiness() {
     io.clone().start();
     io.clone().aclose().await;
     let ready = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         io.wait_for_ready(),
     )
@@ -236,7 +239,7 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     pending(first.as_mut()).await;
     source.wait_for_close_started().await;
     let playback = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         output.tracker().wait_for_playout(),
     )
@@ -245,17 +248,24 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     let mut second = Box::pin(io.clone().aclose());
     pending(second.as_mut()).await;
     clock.advance(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-    let outcome =
-        lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(1), second)
-            .await;
+    let outcome = lk_agents_abi::timeout(
+        &lk_agents_net::clock::RealClock::new(),
+        Duration::from_secs(1),
+        second,
+    )
+    .await;
     let unpublished_while_source_blocked =
         native_room.local_participant().publications().is_empty();
     source.flow_closes(true);
-    lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(1), async {
-        while !source.is_closed() {
-            tokio::task::yield_now().await;
-        }
-    })
+    lk_agents_abi::timeout(
+        &lk_agents_net::clock::RealClock::new(),
+        Duration::from_secs(1),
+        async {
+            while !source.is_closed() {
+                tokio::task::yield_now().await;
+            }
+        },
+    )
     .await
     .expect("the SDK cleanup owner survives its waiters");
     io.clone().aclose().await;
@@ -286,7 +296,7 @@ async fn room_disconnection_settles_readiness_before_a_participant_links() {
     io.clone().start();
     room.close(DisconnectReason::ClientInitiated);
     let ready = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         io.wait_for_ready(),
     )
@@ -368,13 +378,17 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     room.event_bus().track_unpublished(old.clone(), old_publication);
     room.event_bus().participant_disconnected(old, DisconnectReason::ClientInitiated);
     room.press_dtmf("1");
-    lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(1), async {
-        loop {
-            if matches!(events.recv().await, Some(RoomIoEvent::KeyPressed)) {
-                break;
+    lk_agents_abi::timeout(
+        &lk_agents_net::clock::RealClock::new(),
+        Duration::from_secs(1),
+        async {
+            loop {
+                if matches!(events.recv().await, Some(RoomIoEvent::KeyPressed)) {
+                    break;
+                }
             }
-        }
-    })
+        },
+    )
     .await
     .expect("the current participant must remain linked after the delayed old departure");
     assert_eq!(io.audio_input_leg().unwrap().reading(), Some("microphone".into()));
@@ -417,7 +431,7 @@ async fn a_rejoined_identity_gets_a_new_attachment_without_an_explicit_selection
     let current = room.add_participant("person", ParticipantKind::Standard);
     current.publish_microphone("new-track");
     let event = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         events.recv(),
     )

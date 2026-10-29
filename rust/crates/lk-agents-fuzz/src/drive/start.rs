@@ -14,7 +14,7 @@ impl Run {
     /// from the same counter as everything else the case observes. That one counter is what makes
     /// the recording a happens-before order rather than a pile of clocks.
     pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
-        let time = Timebase::of_clock(Arc::new(lk_agents_abi::SimClock::new()));
+        let time = Timebase::of_clock(Arc::new(lk_agents_runtime::net::clock::SimClock::new()));
         let stamps = Stamps::new(time.clone());
         let gate = (policy == Policy::TaskBridge).then(|| Arc::new(super::queue::Gate::new()));
         let tasks = Arc::new(Tasks {

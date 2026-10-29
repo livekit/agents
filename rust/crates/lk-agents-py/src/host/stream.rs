@@ -305,7 +305,7 @@ pub(crate) mod tests {
     //! Against a live interpreter and a running loop.
     use std::time::Duration;
 
-    use lk_agents_abi::RealClock;
+    use lk_agents_runtime::net::clock::RealClock;
     use pyo3::types::PyDict;
 
     use super::*;

@@ -336,14 +336,14 @@ async fn handle_request(
 mod tests {
     use tokio::sync::Notify;
 
-    use super::super::client::{RemoteSession, ReadyError, RequestError};
+    use super::super::client::{ReadyError, RemoteSession, RequestError};
     use super::super::{
         AgentInfo, ClientSink, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict,
         VerdictOutcome,
     };
     use super::*;
-    use lk_agents_abi::secs;
     use lk_agents_abi::metrics::usage::ModelUsage;
+    use lk_agents_abi::secs;
     use lk_agents_abi::{ChatItem, Clock};
     use std::sync::atomic::AtomicBool;
     use tokio::sync::Mutex as AsyncMutex;
@@ -468,7 +468,7 @@ mod tests {
 
     fn rt() -> (Arc<dyn Clock>, Arc<dyn Spawner>) {
         (
-            Arc::new(lk_agents_abi::RealClock::default()),
+            Arc::new(lk_agents_net::clock::RealClock::default()),
             Arc::new(lk_agents_net::task::TokioSpawner::current()),
         )
     }
@@ -486,7 +486,7 @@ mod tests {
     }
 
     async fn nap(d: Duration) {
-        let clock = lk_agents_abi::RealClock::default();
+        let clock = lk_agents_net::clock::RealClock::default();
         clock.wait_until(clock.now().saturating_add(d)).await;
     }
 
@@ -519,8 +519,10 @@ mod tests {
             assert!((before..=after).contains(&stamped), "{stamped} outside {before}..={after}");
         }
         let (transport, _peer) = pair();
-        let runtime =
-            SessionServer::new(time.clone(), Arc::new(lk_agents_net::task::TokioSpawner::current()));
+        let runtime = SessionServer::new(
+            time.clone(),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
+        );
         let before = time.wall_secs();
         runtime
             .send_wire(

@@ -2,10 +2,8 @@ use std::future::Future;
 use std::pin::pin;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
-use std::task::Poll;
+use std::task::{Poll, Waker};
 use std::time::{Duration, SystemTime};
-
-use tokio::sync::Notify;
 
 /// `t` as `time.time()` reads it: seconds since the Unix epoch, negative before it.
 pub fn unix_secs(t: SystemTime) -> f64 {
@@ -94,109 +92,20 @@ pub fn simulated_epoch() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200)
 }
 
-/// Tokio's clock for scheduling, a synthetic one for wall stamps, so a recorded case replays
-/// byte-exactly.
-pub struct SimClock {
-    real: RealClock,
-    origin: SystemTime,
-}
-
-impl SimClock {
-    pub fn new() -> Self {
-        SimClock { real: RealClock::new(), origin: simulated_epoch() }
-    }
-}
-
-impl Default for SimClock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clock for SimClock {
-    fn now(&self) -> Ts {
-        self.real.now()
-    }
-
-    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
-        Box::pin(async move { self.real.wait_until(at).await })
-    }
-
-    fn wall(&self) -> SystemTime {
-        self.real.nudged(self.origin + Duration::from_nanos(self.now().as_nanos()))
-    }
-}
-
-/// Anchors `Ts::ZERO` at construction. Scheduling follows Tokio time; wall stamps use the OS clock.
-pub struct RealClock {
-    origin: tokio::time::Instant,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    last_wall: Mutex<SystemTime>,
-}
-
-impl RealClock {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn new() -> Self {
-        RealClock {
-            origin: tokio::time::Instant::now(),
-            last_wall: Mutex::new(SystemTime::UNIX_EPOCH),
-        }
-    }
-}
-
-impl Default for RealClock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RealClock {
-    /// The candidate reading is passed in so tests can present a repeat or a backwards step.
-    fn nudged(&self, candidate: SystemTime) -> SystemTime {
-        let mut last = self.last_wall.lock().unwrap();
-        *last = if candidate > *last { candidate } else { *last + TICK_EPSILON };
-        *last
-    }
-}
-
-impl Clock for RealClock {
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
-    fn now(&self) -> Ts {
-        Ts(self.origin.elapsed().as_nanos().min(u64::MAX as u128) as u64)
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    fn wall(&self) -> SystemTime {
-        // Real time can repeat (coarse clocks) or go backwards (NTP): nudge it too.
-        self.nudged(SystemTime::now())
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            let now = self.now();
-            if at > now {
-                tokio::time::sleep(at.saturating_duration_since(now)).await;
-            }
-        })
-    }
-}
-
 /// `_TICK_EPSILON` in `tests/virtual_time.py`: wall stamps stay strictly increasing.
 pub const TICK_EPSILON: Duration = Duration::from_micros(1);
 
 pub struct VirtualClock {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<Virtual>,
-    /// Woken by every `advance`.
-    wake: Notify,
 }
 
 struct Virtual {
     now: Ts,
     wall_origin: SystemTime,
     last_wall: SystemTime,
+    /// The waits parked on a later instant, woken by every `advance`.
+    parked: Vec<Waker>,
 }
 
 impl VirtualClock {
@@ -204,28 +113,35 @@ impl VirtualClock {
     pub fn new() -> Self {
         let origin = simulated_epoch();
         VirtualClock {
-            state: Mutex::new(Virtual { now: Ts::ZERO, wall_origin: origin, last_wall: origin }),
-            wake: Notify::new(),
+            state: Mutex::new(Virtual {
+                now: Ts::ZERO,
+                wall_origin: origin,
+                last_wall: origin,
+                parked: Vec::new(),
+            }),
         }
     }
 
     /// Going backwards is a test bug, not a runtime condition, so it panics.
     pub fn advance(&self, d: Duration) {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.now = s.now.saturating_add(d);
-        }
-        self.wake.notify_waiters();
+        let s = self.state.lock().unwrap();
+        let at = s.now.saturating_add(d);
+        Self::move_to(s, at);
     }
 
     /// Panics on a backwards jump.
     pub fn advance_to(&self, at: Ts) {
-        {
-            let mut s = self.state.lock().unwrap();
-            assert!(at >= s.now, "VirtualClock cannot go backwards: {:?} -> {:?}", s.now, at);
-            s.now = at;
-        }
-        self.wake.notify_waiters();
+        let s = self.state.lock().unwrap();
+        assert!(at >= s.now, "VirtualClock cannot go backwards: {:?} -> {:?}", s.now, at);
+        Self::move_to(s, at);
+    }
+
+    /// Wakes every parked wait outside the lock; each re-reads the time it waits for.
+    fn move_to(mut s: std::sync::MutexGuard<'_, Virtual>, at: Ts) {
+        s.now = at;
+        let parked = std::mem::take(&mut s.parked);
+        drop(s);
+        parked.into_iter().for_each(Waker::wake);
     }
 }
 
@@ -241,18 +157,17 @@ impl Clock for VirtualClock {
     }
 
     fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            loop {
-                // Armed before the read, so an `advance` in between is not missed.
-                let parked = self.wake.notified();
-                let mut parked = pin!(parked);
-                parked.as_mut().enable();
-                if self.now() >= at {
-                    return;
-                }
-                parked.await;
+        Box::pin(std::future::poll_fn(move |cx| {
+            let mut s = self.state.lock().unwrap();
+            if s.now >= at {
+                return Poll::Ready(());
             }
-        })
+            // Once per task: a select loop polling the same wait again does not grow the list.
+            if !s.parked.iter().any(|w| w.will_wake(cx.waker())) {
+                s.parked.push(cx.waker().clone());
+            }
+            Poll::Pending
+        }))
     }
 
     fn wall(&self) -> SystemTime {
@@ -384,41 +299,25 @@ mod tests {
     use super::*;
 
     // Catches: a virtual-clock wait that never returns, or returns before time moved.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[tokio::test]
-    async fn a_virtual_timeout_fires_only_when_time_moves() {
-        let c = std::sync::Arc::new(VirtualClock::new());
-        let waiter = {
-            let c = c.clone();
-            tokio::spawn(async move {
-                timeout(&*c, Duration::from_secs(1), std::future::pending::<()>()).await
-            })
-        };
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished(), "nothing moved time, the wait must be parked");
+    #[test]
+    fn a_virtual_timeout_fires_only_when_time_moves() {
+        let c = VirtualClock::new();
+        let mut waiter = pin!(timeout(&c, Duration::from_secs(1), std::future::pending::<()>()));
+        struct Woken(std::sync::OnceLock<()>);
+        impl std::task::Wake for Woken {
+            fn wake(self: std::sync::Arc<Self>) {
+                let _ = self.0.set(());
+            }
+        }
+        let woken = std::sync::Arc::new(Woken(std::sync::OnceLock::new()));
+        let waker = Waker::from(woken.clone());
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(waiter.as_mut().poll(&mut cx).is_pending(), "nothing moved time");
         c.advance(Duration::from_millis(999));
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished(), "999 ms is not 1 s");
+        assert!(waiter.as_mut().poll(&mut cx).is_pending(), "999 ms is not 1 s");
         c.advance(Duration::from_millis(1));
-        assert_eq!(waiter.await.unwrap(), Err(Elapsed));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn runtime_clock_deadlines_follow_paused_tokio_time() {
-        let clock = RealClock::new();
-        let deadline = Ts::ZERO.saturating_add(Duration::from_secs(5));
-        tokio::time::advance(Duration::from_secs(4)).await;
-        assert_eq!(clock.now(), Ts::ZERO.saturating_add(Duration::from_secs(4)));
-        let wait = clock.wait_until(deadline);
-        tokio::pin!(wait);
-        assert!(std::future::poll_fn(|cx| Poll::Ready(wait.as_mut().poll(cx))).await.is_pending());
-        wait.await;
-        assert_eq!(clock.now(), deadline);
-        assert_eq!(
-            timeout(&clock, Duration::from_secs(2), std::future::pending::<()>()).await,
-            Err(Elapsed)
-        );
-        assert_eq!(clock.now(), Ts::ZERO.saturating_add(Duration::from_secs(7)));
+        assert!(woken.0.get().is_some(), "moving time wakes the parked wait");
+        assert_eq!(waiter.as_mut().poll(&mut cx), Poll::Ready(Err(Elapsed)));
     }
 
     // Catches: two chat items created in the same tick get equal `created_at`.
@@ -458,41 +357,6 @@ mod tests {
             Ts::from_nanos(u64::MAX).saturating_add(Duration::from_secs(1)).as_nanos(),
             u64::MAX
         );
-    }
-
-    // Catches: `RealClock::wall` reporting the nudge origin instead of the real time.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[test]
-    fn the_real_clock_wall_reports_real_time_and_never_repeats() {
-        let c = RealClock::new();
-        let reads: Vec<_> = (0..8).map(|_| c.wall()).collect();
-        assert!(reads.windows(2).all(|w| w[1] > w[0]), "{reads:?}");
-        // 2024-01-01, i.e. safely in the past but far past the UNIX epoch the nudge starts from.
-        let sane = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200);
-        assert!(reads[0] > sane, "wall must be the OS clock, not the nudge origin");
-        // Not after a later read: equal on a coarse clock (macOS counts microseconds).
-        assert!(reads[0] <= SystemTime::now(), "and it must not be in the future");
-    }
-
-    // Catches: the repeat/backwards branch of the nudge, which a live `wall()` read never hits.
-    #[test]
-    fn the_real_clock_nudges_past_a_repeated_or_backwards_os_reading() {
-        let c = RealClock::new();
-        let first = c.wall();
-
-        // A coarse clock handing back the same reading twice.
-        assert_eq!(c.nudged(first), first + TICK_EPSILON, "an equal reading must still advance");
-
-        // An NTP step backwards: previous value plus one tick.
-        assert_eq!(
-            c.nudged(first - Duration::from_secs(1)),
-            first + 2 * TICK_EPSILON,
-            "a backwards step must not drag `created_at` backwards"
-        );
-
-        // ...and a genuinely later reading is taken as is, rather than nudged one tick at a time.
-        let later = first + Duration::from_secs(10);
-        assert_eq!(c.nudged(later), later);
     }
 }
 

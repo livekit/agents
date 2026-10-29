@@ -39,7 +39,7 @@ impl Chain {
             text_next: None,
             speed: 1.0,
             hyphenator: Arc::new(Liang),
-            clock: Arc::new(lk_agents_abi::RealClock::new()),
+            clock: Arc::new(lk_agents_net::clock::RealClock::new()),
             spawner: Arc::new(lk_agents_test_support::TokioSpawner::current()),
         });
         // As the session's first activation does: both legs attached open the gate.

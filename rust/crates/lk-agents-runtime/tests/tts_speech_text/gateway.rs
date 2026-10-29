@@ -20,7 +20,7 @@ fn opts() -> TtsOptions {
 }
 
 fn tts(ws: Arc<FakeWs>) -> GatewayTts {
-    tts_on(ws, Arc::new(lk_agents_abi::RealClock::new()))
+    tts_on(ws, Arc::new(lk_agents_net::clock::RealClock::new()))
 }
 
 fn tts_on(ws: Arc<FakeWs>, clock: Arc<dyn lk_agents_abi::Clock>) -> GatewayTts {
@@ -237,7 +237,13 @@ async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignme
     let mut opts = opts();
     opts.model = "inworld/inworld-tts-2".into();
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let tts = GatewayTts::new(opts, ws.clone(), spawner, Arc::new(lk_agents_abi::RealClock::new()), super::speech());
+    let tts = GatewayTts::new(
+        opts,
+        ws.clone(),
+        spawner,
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+        super::speech(),
+    );
     tts.set_expressive(true);
     let mut source = tts
         .synthesize("say <expr type=\"prosody\" label=\"whisper\">this</expr> now")
@@ -332,7 +338,13 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     ]));
     let opts = TtsOptions { extra_kwargs: map(&[("add_timestamps", json!(true))]), ..opts() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let client = GatewayTts::new(opts, ws, spawner, Arc::new(lk_agents_abi::RealClock::new()), super::speech());
+    let client = GatewayTts::new(
+        opts,
+        ws,
+        spawner,
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+        super::speech(),
+    );
     let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
         .into_iter()
         .collect();
@@ -413,7 +425,7 @@ async fn identified_views_keep_their_expressive_configuration() {
         options,
         ws.clone(),
         Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-        Arc::new(lk_agents_abi::RealClock::new()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
         super::speech(),
     );
     let expressive = client.identified(Headers::default(), None);
@@ -444,7 +456,7 @@ async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
     let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
     let mut source = call.synthesize("hello").await.unwrap();
     let failure = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(250),
         source.next(),
     )
@@ -467,7 +479,7 @@ async fn input_capacity_failure_at_eof_is_not_retryable() {
     sink.push("tail".to_owned()).unwrap();
     sink.end_input();
     let error = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         source.next(),
     )

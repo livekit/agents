@@ -137,7 +137,7 @@ impl WebSocketRealtimeModel for WebSocketRealtime {
             "",
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             Arc::new(TokioSpawner::new(runtime)),
-            Arc::new(lk_agents_abi::RealClock::default()),
+            Arc::new(lk_agents_net::clock::RealClock::default()),
             env.images.clone(),
             env.media_pool,
         )

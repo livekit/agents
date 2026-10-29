@@ -423,7 +423,7 @@ fn drop_cleanup_runs_after_the_callers_async_runtime_has_closed() {
     let (rtc, _) = FakeRtc::with_virtual_clock(crate::rtc::events::RoomEventBus::port);
     let room = rtc.room("drop_after_host_loop");
     room.add_participant("avatar", ParticipantKind::Agent);
-    let clock = Arc::new(lk_agents_abi::RealClock::new());
+    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
     let output = DataStreamAudioOutput::new(
         room.clone(),
         "avatar".into(),

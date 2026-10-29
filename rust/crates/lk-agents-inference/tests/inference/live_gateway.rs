@@ -59,7 +59,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
         },
         Arc::new(TungsteniteTransport),
         Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current())),
-        Arc::new(lk_agents_abi::RealClock::new()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
     );
 
     let (sink, mut source) = stt

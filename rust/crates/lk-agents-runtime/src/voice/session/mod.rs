@@ -859,7 +859,7 @@ impl VoiceSession {
 /// For a host that stopped moving time (awaiting `aclose()`). Paced on real time (1 ms per step) so
 /// host tasks can run between steps.
 async fn advance_until(time: &Timebase, done: impl Future<Output = ()>) {
-    let pacer = lk_agents_abi::RealClock::new();
+    let pacer = lk_agents_net::clock::RealClock::new();
     let mut done = std::pin::pin!(done);
     for _ in 0..=CLOSE_TICK_BUDGET {
         let tick = lk_agents_abi::Clock::wait_until(

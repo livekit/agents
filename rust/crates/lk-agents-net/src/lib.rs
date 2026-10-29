@@ -1,5 +1,6 @@
 //! `lk-agents-net`: the shared async transport of the I/O crates.
 //!
+//! - [`clock`]: the process's clocks, on Tokio time.
 //! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
 //! - [`http`]: HTTPS exchanges reporting transport observations, under [`attempts`].
 //! - [`source`]: a native source as one host consumer pulls and closes it.
@@ -18,6 +19,7 @@ pub mod a2a_auth;
 pub mod a2a_client;
 pub mod attempts;
 pub mod blocking_io;
+pub mod clock;
 pub mod credentials;
 pub mod env;
 pub mod http;

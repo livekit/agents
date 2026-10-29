@@ -5,13 +5,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::Closed;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::inference::avatar_session::AvatarError;
-use lk_agents_abi::{Closed, RealClock};
 use lk_agents_inference::avatar::gateway::GatewayAvatar;
 use lk_agents_inference::avatar::{AvatarOptions, AvatarRoom};
 use lk_agents_inference::headers::Headers;
 use lk_agents_net::attempts::RequestPolicy;
+use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

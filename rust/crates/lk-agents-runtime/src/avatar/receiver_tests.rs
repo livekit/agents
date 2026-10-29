@@ -227,7 +227,7 @@ async fn a_failed_byte_stream_does_not_flush_a_partial_avatar_segment() {
         )
         .unwrap();
     let outcome = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         f.rx.recv(),
     )

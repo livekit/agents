@@ -11,10 +11,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::{ChatContext, RealClock, Role};
+use lk_agents_abi::{ChatContext, Role};
 use lk_agents_inference::llm::LlmOptions;
 use lk_agents_inference::llm::gateway::GatewayLlm;
 use lk_agents_inference::llm::lifecycle::RequestPolicy;
+use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
 
 fn llm(model: &str) -> Option<GatewayLlm> {

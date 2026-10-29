@@ -19,12 +19,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::Maybe;
-use lk_agents_abi::RealClock;
 use lk_agents_inference::realtime::native::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, OPENAI, OptionsPatch,
     SeqIds, WebSocketRealtime, XAI,
 };
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
+use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::TokioSpawner;
 use serde_json::json;
 

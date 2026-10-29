@@ -17,10 +17,11 @@ use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::tool_executor::{ToolOutcome, ToolReport};
 use lk_agents_abi::resources::LlmRef;
 use lk_agents_abi::{
-    ChatMessage, ChoiceDelta, Closed, FunctionToolCall, LlmChunk, LlmStream, ProviderId, RealClock,
-    Role, StreamSource, ToolSpec, WallAnchor,
+    ChatMessage, ChoiceDelta, Closed, FunctionToolCall, LlmChunk, LlmStream, ProviderId, Role,
+    StreamSource, ToolSpec, WallAnchor,
 };
 use lk_agents_core::tool_outcome::Mode;
+use lk_agents_net::clock::RealClock;
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 

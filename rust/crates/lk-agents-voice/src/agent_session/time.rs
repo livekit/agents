@@ -1,6 +1,6 @@
 //! The session clock.
 
-use lk_agents_abi::{Clock, Elapsed, RealClock, Ts, VirtualClock};
+use lk_agents_abi::{Clock, Elapsed, Ts, VirtualClock};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,10 +16,6 @@ pub struct Timebase {
 impl Timebase {
     pub fn of_clock(clock: Arc<dyn Clock>) -> Self {
         Timebase { clock, virt: None }
-    }
-
-    pub fn real() -> Self {
-        Timebase { clock: Arc::new(RealClock::new()), virt: None }
     }
 
     /// Shares an existing clock so the playout model and the driver agree.

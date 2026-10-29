@@ -330,7 +330,7 @@ impl lk_agents_runtime::process::HostTime for HostTime {
     fn clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
         Python::try_attach(loop_clock)
             .flatten()
-            .unwrap_or_else(|| Arc::new(lk_agents_abi::RealClock::new()))
+            .unwrap_or_else(|| Arc::new(lk_agents_runtime::net::clock::RealClock::new()))
     }
 
     fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>> {

@@ -41,7 +41,7 @@ async fn publication_failure_releases_capture_waiters() {
     );
     assert!(output.start().await.is_err());
     let result = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(50),
         output.capture(&lk_agents_abi::voice::rtc::silence_frame(480, 24000, 1)),
     )
@@ -62,7 +62,7 @@ async fn paused_room_output_backpressures_capture() {
     output.start().await.unwrap();
     output.pause();
     let result = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(50),
         async {
             output
@@ -117,7 +117,7 @@ async fn close_finishes_a_captured_segment_as_interrupted() {
     output.capture_frame(&lk_agents_abi::voice::rtc::silence_frame(480, 24000, 1)).await.unwrap();
     output.aclose().await;
     let finished = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(50),
         output.tracker().wait_for_playout(),
     )
@@ -160,7 +160,7 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
 
     async fn finished(output: &ParticipantAudioOutput) -> PlaybackFinished {
         lk_agents_abi::timeout(
-            &lk_agents_abi::RealClock::new(),
+            &lk_agents_net::clock::RealClock::new(),
             Duration::from_secs(1),
             output.tracker().wait_for_playout(),
         )
@@ -215,7 +215,7 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
         output.flush_segment();
         output.aclose().await;
         let settled = lk_agents_abi::timeout(
-            &lk_agents_abi::RealClock::new(),
+            &lk_agents_net::clock::RealClock::new(),
             Duration::from_secs(1),
             output.tracker().wait_for_playout(),
         )

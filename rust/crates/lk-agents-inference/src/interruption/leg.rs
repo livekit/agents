@@ -238,7 +238,7 @@ mod tests {
         .unwrap();
         let transport = Arc::new(FakeWs::new(Vec::new()).keep_open());
         let config = ConnectionConfig { transport: transport.clone(), ..Default::default() };
-        let clock = Arc::new(lk_agents_abi::RealClock::new());
+        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
         let detector = AdaptiveInterruptionDetector::new(opts, config, clock.clone());
         let leg = InterruptionLeg::open(&detector, WallAnchor { wall: 1.0, at: clock.now() });
         leg.signal(S::AgentSpeechStarted);

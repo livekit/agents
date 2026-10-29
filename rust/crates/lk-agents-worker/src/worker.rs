@@ -14,8 +14,9 @@ use crate::{DefaultLoadCalc, WorkerState, WorkerStateEffect, WorkerStateInput};
 use crate::{JobDecision, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use lk_agents_abi::{Clock, RealClock, WallAnchor};
+use lk_agents_abi::{Clock, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::TokioSpawner;
 
 use std::collections::{HashMap, VecDeque};

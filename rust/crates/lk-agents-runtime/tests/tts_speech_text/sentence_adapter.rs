@@ -492,7 +492,7 @@ fn retrying_adapter(tts: Arc<FakeTts>) -> StreamAdapter {
         retry_interval: 0.0,
         ..lk_agents_abi::ApiConnectOptions::default()
     };
-    let clock = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let clock = Arc::new(lk_agents_net::clock::SimClock::new());
     let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
     StreamAdapter::new(tts, splitter, lk_agents_voice::tts::markup::text_processor_factory(), clock)
         .with_budget(budget)

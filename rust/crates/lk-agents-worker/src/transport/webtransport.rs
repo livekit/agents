@@ -402,7 +402,8 @@ mod tests {
 
     #[tokio::test]
     async fn endpoint_stop_during_stalled_io() {
-        use lk_agents_abi::{Clock, RealClock, timeout};
+        use lk_agents_abi::{Clock, timeout};
+        use lk_agents_net::clock::RealClock;
 
         let clock = RealClock::new();
         let (mut server, port) = loopback_server();

@@ -96,7 +96,7 @@ impl Stt for Flaky {
 }
 
 fn retrying(inner: Arc<Flaky>, max_retry: u32) -> RetryingStt {
-    let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
     RetryingStt {
         inner,
         options: ApiConnectOptions { max_retry, ..ApiConnectOptions::default() },
@@ -211,7 +211,7 @@ impl Stt for Dropping {
 }
 
 fn dropping(uptime_secs: u64, options: ApiConnectOptions) -> (RetryingStt, Arc<dyn Clock>) {
-    let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
     let uptime = std::time::Duration::from_secs(uptime_secs);
     let inner = Arc::new(Dropping { uptime, clock: Arc::clone(&clock) });
     (RetryingStt { inner, options, clock: Arc::clone(&clock) }, clock)
@@ -343,7 +343,7 @@ async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing
         accepted: std::sync::atomic::AtomicUsize::new(0),
         closed: closed.clone(),
     });
-    let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
     let stt = RetryingStt {
         inner: Arc::new(StalledHost(host)),
         options: ApiConnectOptions { max_retry: 0, ..Default::default() },
@@ -408,7 +408,7 @@ async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappe
         accepted: std::sync::atomic::AtomicUsize::new(0),
         closed: closed.clone(),
     });
-    let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
     let stt = RetryingStt {
         inner: Arc::new(ReplayRefuses { opened: std::sync::atomic::AtomicUsize::new(0), state }),
         options: ApiConnectOptions { max_retry: 1, ..Default::default() },

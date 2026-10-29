@@ -1,6 +1,6 @@
 //! One call's native lane lease, transport reload and fenced history/context commit.
 
-use lk_agents_abi::RealClock;
+use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};

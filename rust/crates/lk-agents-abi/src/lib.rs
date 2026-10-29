@@ -125,8 +125,8 @@ pub use metrics::base::{EotInferenceMetrics, InterruptionMetrics};
 pub use tts::timed::TimedString;
 
 pub use utils::clock::{
-    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, secs,
-    simulated_epoch, timeout, unix_now, unix_now_ms, unix_secs, wall_from_secs,
+    Clock, Elapsed, TICK_EPSILON, Ts, VirtualClock, WallAnchor, before, secs, simulated_epoch,
+    timeout, unix_now, unix_now_ms, unix_secs, wall_from_secs,
 };
 pub use utils::filters::FilterError;
 pub use utils::frame::FrameId;

@@ -765,7 +765,7 @@ mod tests {
                 conn_options: ApiConnectOptions { max_retry: 0, ..Default::default() },
                 ..Default::default()
             },
-            Arc::new(lk_agents_abi::RealClock::new()),
+            Arc::new(lk_agents_net::clock::RealClock::new()),
         )
     }
 
@@ -793,7 +793,7 @@ mod tests {
                 panic!("a stalled interruption stream accepted unbounded input");
             }
             let event = lk_agents_abi::timeout(
-                &lk_agents_abi::RealClock::new(),
+                &lk_agents_net::clock::RealClock::new(),
                 Duration::from_secs(1),
                 stream.recv_event(),
             )
@@ -830,7 +830,7 @@ mod tests {
         }
         stream.end_input().unwrap();
         lk_agents_abi::timeout(
-            &lk_agents_abi::RealClock::new(),
+            &lk_agents_net::clock::RealClock::new(),
             Duration::from_secs(1),
             stream.finish(),
         )

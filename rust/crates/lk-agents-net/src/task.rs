@@ -288,7 +288,7 @@ mod tests {
         tasks.spawn(&spawner, "pending", std::future::pending());
         tasks.close();
         assert!(tasks.try_spawn(&spawner, "late", async {}).is_none());
-        assert!(tasks.wait_empty(&lk_agents_abi::RealClock::new(), None).await);
+        assert!(tasks.wait_empty(&crate::clock::RealClock::new(), None).await);
     }
 
     async fn outcome_of(

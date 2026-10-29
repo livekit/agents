@@ -13,6 +13,7 @@ use lk_agents_abi::voice::room_owner;
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RtcError, TrackSid};
 use lk_agents_abi::{Clock, Spawner};
+use lk_agents_net::clock::RealClock;
 use lk_agents_net::env::ProcessEnv;
 use std::sync::Arc;
 
@@ -103,7 +104,7 @@ impl room_owner::RoomRuntime for RoomFactory {
     }
 
     fn create_room_session(env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
-        let time = lk_agents_voice::agent_session::Timebase::real();
+        let time = lk_agents_voice::agent_session::Timebase::of_clock(Arc::new(RealClock::new()));
         let pool = room
             .as_ref()
             .and_then(|_| (env.media_pool)().ok())

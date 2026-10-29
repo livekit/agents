@@ -325,7 +325,7 @@ mod tests {
             EndOfSpeech,
         ]));
         let adapter =
-            StreamAdapter::adapted(stt, Some(vad), Arc::new(lk_agents_abi::SimClock::new()));
+            StreamAdapter::adapted(stt, Some(vad), Arc::new(lk_agents_net::clock::SimClock::new()));
         let caps = adapter.capabilities();
         assert!(caps.streaming && !caps.interim_results && caps.keyterms);
         let (_sink, mut source) = adapter.stream(None, None).await.unwrap().unwrap();

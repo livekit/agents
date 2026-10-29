@@ -11,13 +11,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::ApiConnectOptions;
-use lk_agents_abi::RealClock;
 use lk_agents_inference::headers::HEADER_SESSION_ID;
 use lk_agents_inference::interruption::{
     AUDIO_PREFIX_DURATION, AdaptiveInterruptionDetector, ConnectionConfig, DETECTION_INTERVAL,
     InputEvent, InterruptionOptions, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
     REMOTE_INFERENCE_TIMEOUT, StreamClosed, StreamEvent,
 };
+use lk_agents_net::clock::RealClock;
 use support::within;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;

@@ -15,12 +15,13 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::turn::interruption::{InterruptionSignal, InterruptionSource};
-use lk_agents_abi::{Clock, RealClock, WallAnchor};
+use lk_agents_abi::{Clock, WallAnchor};
 use lk_agents_inference::interruption::{
     AUDIO_PREFIX_DURATION, AdaptiveInterruptionDetector, AudioFrame, ConnectionConfig,
     DETECTION_INTERVAL, InputEvent, InterruptionOptions, MAX_AUDIO_DURATION,
     MIN_INTERRUPTION_DURATION, OverlapStart, REMOTE_INFERENCE_TIMEOUT,
 };
+use lk_agents_net::clock::RealClock;
 use support::within;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;

@@ -23,7 +23,7 @@ fn opts() -> SttOptions {
 
 fn stt(ws: Arc<FakeWs>) -> GatewayStt {
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    GatewayStt::new(opts(), ws, spawner, Arc::new(lk_agents_abi::RealClock::new()))
+    GatewayStt::new(opts(), ws, spawner, Arc::new(lk_agents_net::clock::RealClock::new()))
 }
 
 /// A client whose streams do not retry, for tests about one connection's failure.
@@ -31,7 +31,7 @@ fn stt_once(ws: Arc<FakeWs>) -> GatewayStt {
     let mut opts = opts();
     opts.conn_options.max_retry = 0;
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    GatewayStt::new(opts, ws, spawner, Arc::new(lk_agents_abi::RealClock::new()))
+    GatewayStt::new(opts, ws, spawner, Arc::new(lk_agents_net::clock::RealClock::new()))
 }
 
 // Catches: a failed connection ending the stream instead of reconnecting under
@@ -43,11 +43,15 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
     opts.conn_options =
         ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..Default::default() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let stt: GatewayStt =
-        GatewayStt::new(opts, ws.clone(), spawner, Arc::new(lk_agents_abi::RealClock::new()));
+    let stt: GatewayStt = GatewayStt::new(
+        opts,
+        ws.clone(),
+        spawner,
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    );
     let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
     let err = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(5),
         source.next(),
     )
@@ -89,8 +93,12 @@ async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
     let mut opts = opts();
     opts.model = Some("assemblyai/universal-3-6-pro".into());
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let stt: GatewayStt =
-        GatewayStt::new(opts, ws.clone(), spawner, Arc::new(lk_agents_abi::RealClock::new()));
+    let stt: GatewayStt = GatewayStt::new(
+        opts,
+        ws.clone(),
+        spawner,
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    );
     let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
     for _ in 0..32 {
         tokio::task::yield_now().await;
@@ -173,7 +181,7 @@ async fn drain_until(
 ) -> Vec<SpeechEvent> {
     let mut out = Vec::new();
     let drained = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         std::time::Duration::from_millis(500),
         async {
             while let Some(event) = source.next().await.expect("no provider error") {
@@ -355,7 +363,7 @@ async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
 
     crate::testkit::arm_then_advance(&clock, lifecycle::FINAL_TRANSCRIPT_QUIET / 2).await;
     let early = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(50),
         source.next(),
     )
@@ -363,7 +371,7 @@ async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
     assert!(early.is_err(), "ended before the quiet period: {early:?}");
     crate::testkit::arm_then_advance(&clock, lifecycle::FINAL_TRANSCRIPT_QUIET).await;
     let end = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(1),
         source.next(),
     )
@@ -653,7 +661,7 @@ async fn a_call_policy_replaces_native_stt_defaults_without_mutating_the_client(
     let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
     let (_, mut source) = call.stream(None, None).await.unwrap().unwrap();
     let failure = lk_agents_abi::timeout(
-        &lk_agents_abi::RealClock::new(),
+        &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(250),
         source.next(),
     )
@@ -674,7 +682,7 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
         options,
         ws,
         Arc::new(TokioSpawner::current()),
-        Arc::new(lk_agents_abi::RealClock::new()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
     );
     let (sink, mut source) = client.stream(None, None).await.unwrap().unwrap();
     let error = source.next().await.expect_err("the operation expired before launch");
@@ -687,13 +695,16 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
 
 /// Yield until `ready`, or fail; bounded so a bug fails rather than hangs.
 async fn until(what: &str, ready: impl Fn() -> bool) {
-    let reached =
-        lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(2), async {
+    let reached = lk_agents_abi::timeout(
+        &lk_agents_net::clock::RealClock::new(),
+        Duration::from_secs(2),
+        async {
             while !ready() {
                 tokio::task::yield_now().await;
             }
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(reached.is_ok(), "never {what}");
 }
 
@@ -730,7 +741,7 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
         let events = drain_until(source.as_mut(), SpeechEventType::FinalTranscript).await;
         assert_eq!(events.last().unwrap().alternatives[0].text, "second");
         let end = lk_agents_abi::timeout(
-            &lk_agents_abi::RealClock::new(),
+            &lk_agents_net::clock::RealClock::new(),
             Duration::from_secs(2),
             async {
                 loop {

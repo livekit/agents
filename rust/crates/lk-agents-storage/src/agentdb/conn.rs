@@ -596,7 +596,7 @@ impl Conn {
     /// Cancellation of this waiter leaves those tasks owned by the connection tracker.
     pub async fn aclose(&self) {
         self.close();
-        self.0.tasks.wait_empty(&lk_agents_abi::RealClock::new(), None).await;
+        self.0.tasks.wait_empty(&lk_agents_net::clock::RealClock::new(), None).await;
     }
 
     /// Why a closed connection refuses a call: what made it give up, else `Closed`.

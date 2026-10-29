@@ -62,7 +62,7 @@ impl ProcessEnv {
         ProcessEnv {
             runtime,
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
-            clock: Arc::new(lk_agents_abi::RealClock::new()),
+            clock: Arc::new(crate::clock::RealClock::new()),
             http: || GatewayHttp::new().map(Arc::new),
             report_admission: || {
                 static ADMISSION: LazyLock<ReportAdmission> =

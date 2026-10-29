@@ -134,7 +134,7 @@ fn host_time() -> Option<Arc<dyn HostTime>> {
 pub fn host_clock() -> Arc<dyn Clock> {
     match host_time() {
         Some(time) => time.clock(),
-        None => Arc::new(lk_agents_abi::RealClock::new()),
+        None => Arc::new(lk_agents_net::clock::RealClock::new()),
     }
 }
 

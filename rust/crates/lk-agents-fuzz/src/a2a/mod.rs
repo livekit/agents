@@ -31,14 +31,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fastrand::Rng;
+use lk_agents_abi::Clock;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::thread::TaskRow;
 use lk_agents_abi::storage::{StorageError, TaskState};
-use lk_agents_abi::{Clock, SimClock};
 use lk_agents_core::a2a::{
     DebounceSpec, Policy, PolicySpec, TurnOptions, TurnResult, resolve_policy,
 };
 use lk_agents_runtime::a2a::Turn;
+use lk_agents_runtime::net::clock::SimClock;
 use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
 use lk_agents_storage::testing::CommitFault;
 use lk_agents_storage::{SqliteConnection, Thread};
