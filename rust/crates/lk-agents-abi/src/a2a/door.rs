@@ -37,7 +37,7 @@ pub enum DoorError {
 #[cfg(feature = "python")]
 pub fn door_error_to_py(error: DoorError) -> pyo3::PyErr {
     match error {
-        DoorError::Auth(error) => super::auth::auth_error_to_py(error),
+        DoorError::Auth(error) => crate::python::HostException::to_py_err(&error),
         DoorError::Storage(error) => crate::storage::storage_error_to_py(error),
     }
 }

@@ -52,21 +52,14 @@ pub struct AuthPrincipal {
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-#[crate::host(error(with = crate::a2a::auth::auth_error_to_py))]
+#[crate::host(error(kind = "RuntimeError"))]
 pub enum AuthError {
     #[error("{0}")]
+    #[host(kind = "livekit.agents.a2a.auth.Unauthorized")]
     Unauthorized(String),
     #[error("{0}")]
+    #[host(kind = "livekit.agents.a2a.auth.Forbidden")]
     Forbidden(String),
-}
-
-#[cfg(feature = "python")]
-pub fn auth_error_to_py(error: AuthError) -> pyo3::PyErr {
-    let name = match error {
-        AuthError::Unauthorized(_) => "Unauthorized",
-        AuthError::Forbidden(_) => "Forbidden",
-    };
-    crate::python::host_exception("livekit.agents.a2a.auth", name, error.to_string())
 }
 
 #[crate::host(class(name = "_core_Credentials"))]
