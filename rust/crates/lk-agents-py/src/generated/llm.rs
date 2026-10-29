@@ -690,6 +690,10 @@ impl McpSession {
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 type McpToolsImpl = <crate::Selected as super::Implementations>::McpTools;
 
+fn _extract_mcp_tools_timeout_check_seconds(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "seconds")
+}
+
 #[pyfunction]
 #[pyo3(signature = (config))]
 pub fn resolve_mcp_tool_options(config: ::std::option::Option<::lk_agents_abi::llm::mcp::McpToolOptionsPatch>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptions> {
@@ -739,6 +743,14 @@ pub fn mcp_check_result(result: Bound<'_, PyAny>) -> PyResult<()> {
     ::lk_agents_abi::python::check_pid()?;
     let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
     <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::check_result(result).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(())
+}
+
+/// Validate public MCP constructor arguments before a transport can be opened.
+#[pyfunction]
+#[pyo3(signature = (field, seconds))]
+pub fn _core_mcp_timeout_check(field: ::std::string::String, #[pyo3(from_py_with = _extract_mcp_tools_timeout_check_seconds)] seconds: f64) -> PyResult<()> {
+    <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::timeout_check(&field, seconds).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(())
 }
 

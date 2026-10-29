@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort, timeout_duration};
+use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort};
+use lk_agents_core::mcp::timeout_duration;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_core::mcp::{

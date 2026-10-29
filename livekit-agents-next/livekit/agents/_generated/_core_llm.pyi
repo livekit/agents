@@ -260,6 +260,9 @@ def mcp_render_result(tool_name: str, result: object) -> str: ...
 
 def mcp_check_result(result: object) -> None: ...
 
+def _core_mcp_timeout_check(field: str, seconds: float) -> None:
+    """Validate public MCP constructor arguments before a transport can be opened."""
+
 async def to_provider_format(
     format: str,
     items: Sequence[ChatItem],

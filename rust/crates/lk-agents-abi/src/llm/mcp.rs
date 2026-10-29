@@ -244,16 +244,7 @@ pub trait McpTools {
     fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
     #[host(function, name = "mcp_check_result")]
     fn check_result(result: serde_json::Value) -> Result<(), McpError>;
-}
-
-/// Validate a scalar MCP deadline with the shared connection-policy duration range.
-pub fn timeout_duration(field: &str, seconds: f64) -> Result<std::time::Duration, McpError> {
-    crate::types::connect::duration_from_seconds(seconds)
-        .ok_or_else(|| McpError::InvalidTimeout(field.to_owned()))
-}
-
-/// Validate public MCP constructor arguments before a transport can be opened.
-#[crate::host(export(name = "_core_mcp_timeout_check", pid = false))]
-pub fn mcp_timeout_check(field: &str, seconds: f64) -> Result<(), McpError> {
-    timeout_duration(field, seconds).map(|_| ())
+    /// Validate public MCP constructor arguments before a transport can be opened.
+    #[host(function, name = "_core_mcp_timeout_check", pid = false)]
+    fn timeout_check(field: &str, seconds: f64) -> Result<(), McpError>;
 }

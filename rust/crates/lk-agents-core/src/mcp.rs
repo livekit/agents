@@ -349,6 +349,12 @@ fn content(result: &Value) -> Result<&[Value], McpError> {
     Ok(content.map(Vec::as_slice).unwrap_or_default())
 }
 
+/// A scalar MCP deadline within the shared connection-policy duration range.
+pub fn timeout_duration(field: &str, seconds: f64) -> Result<std::time::Duration, McpError> {
+    lk_agents_abi::types::connect::duration_from_seconds(seconds)
+        .ok_or_else(|| McpError::InvalidTimeout(field.to_owned()))
+}
+
 pub fn check_result(result: &Value) -> Result<(), McpError> {
     content(result).map(drop)
 }
@@ -417,5 +423,8 @@ impl McpToolsPort for McpTools {
     }
     fn check_result(result: Value) -> Result<(), McpError> {
         check_result(&result)
+    }
+    fn timeout_check(field: &str, seconds: f64) -> Result<(), McpError> {
+        timeout_duration(field, seconds).map(drop)
     }
 }
