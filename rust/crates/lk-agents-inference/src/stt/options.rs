@@ -56,7 +56,7 @@ pub fn diarization_enabled(extra_kwargs: Option<&Map<String, Value>>) -> bool {
     for key in DIARIZATION_EXTRA_KEYS {
         let Some(value) = extra.get(*key) else { continue };
         // `if not value: continue` -- `false`, `0` and `""` do not turn diarization on.
-        if is_falsy(value) {
+        if !lk_agents_core::llm::provider_format::is_truthy(value) {
             continue;
         }
         // Speechmatics' `diarization` accepts the string "none" to mean off.
@@ -66,18 +66,6 @@ pub fn diarization_enabled(extra_kwargs: Option<&Map<String, Value>>) -> bool {
         return true;
     }
     false
-}
-
-/// Python truthiness for a JSON value: `null`, `false`, `0`, `""`, `[]`, `{}`.
-pub(crate) fn is_falsy(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::Bool(b) => !b,
-        Value::Number(n) => n.as_f64() == Some(0.0),
-        Value::String(s) => s.is_empty(),
-        Value::Array(a) => a.is_empty(),
-        Value::Object(o) => o.is_empty(),
-    }
 }
 
 /// `None` means the model has no keyterm prompting (also the capability check).

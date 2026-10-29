@@ -42,7 +42,7 @@ pub fn has_aligned_transcript(model: &str, extra_kwargs: &Map<String, Value>) ->
 }
 
 fn truthy(value: Option<&Value>) -> bool {
-    value.is_some_and(|v| !crate::stt::options::is_falsy(v))
+    value.is_some_and(lk_agents_core::llm::provider_format::is_truthy)
 }
 
 /// `TTS.Markup._provider_key()`: the markup dialect; "" means the model has no markup.

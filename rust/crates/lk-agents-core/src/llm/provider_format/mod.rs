@@ -53,7 +53,7 @@ pub enum ToolSchema {
 }
 
 /// `null`, `{}`, `[]`, `0` and `""` are falsy, which decides whether keys appear in the body.
-pub(crate) fn is_truthy(value: &Value) -> bool {
+pub fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(b) => *b,
