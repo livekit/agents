@@ -14,6 +14,7 @@ use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
+use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind};
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
 use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
@@ -197,7 +198,20 @@ impl Pump<'_> {
         let text = binding.text();
         let text = self.nodes.text_output(text);
         binding.retain_text_processing(text.clone());
-        let synthesis = matches!(self.voice, Voice::Tts(_)) && audio_out.is_some();
+        let (kind, aligned_provider) = match &self.voice {
+            Voice::Tts(tts) => (VoiceKind::Synthesis, tts.capabilities().aligned_transcript),
+            Voice::Frames(_) => (VoiceKind::CallerFrames, false),
+            Voice::Silent => (VoiceKind::Silent, false),
+        };
+        let plan = SegmentPlan::new(
+            kind,
+            audio_out.is_some(),
+            text.is_some(),
+            self.gate.state.at.is_some(),
+            self.aligned_transcript,
+            aligned_provider,
+        );
+        let synthesis = matches!(plan.route, SegmentRoute::Synthesis);
         if !synthesis && (!self.gate.wait(shared, self.handle).await || !binding.activate().await?)
         {
             return Ok(unheard());
@@ -205,18 +219,13 @@ impl Pump<'_> {
         // One transcript leg per segment: its flush is once-only and the next segment gets its own.
         // Before authorization a synthesised segment's words queue behind its audio.
         let (tx, rx) = mpsc::unbounded_channel();
-        let deferred = (synthesis && self.gate.state.at.is_none()).then_some(&tx);
-        let leg = (synthesis || text.is_some())
-            .then(|| TextLeg::new(text.clone(), deferred, shared, self.handle.id()));
+        let deferred = plan.transcript.filter(|plan| plan.deferred).map(|_| &tx);
+        let leg =
+            plan.transcript.map(|_| TextLeg::new(text.clone(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();
         // The aligned path: an audio output, the option on, and a TTS that aligns. The leg then
         // carries the synthesiser's stamped words instead of the deltas.
-        let aligned_path = match (&self.voice, &audio_out) {
-            (Voice::Tts(tts), Some(_)) => {
-                self.aligned_transcript && tts.capabilities().aligned_transcript
-            }
-            _ => false,
-        };
+        let aligned_path = plan.transcript.is_some_and(|plan| plan.aligned);
         let mut aligned =
             aligned_path.then(|| Aligned { leg: text_out, state: Default::default() });
         let deltas = if aligned_path { None } else { text_out };
@@ -240,8 +249,8 @@ impl Pump<'_> {
             text: text.clone(),
             binding: &mut binding,
         };
-        let heard = match (&mut self.voice, audio_out.as_deref()) {
-            (Voice::Tts(tts), Some(_)) => {
+        let heard = match (plan.route, &mut self.voice, audio_out.as_deref()) {
+            (SegmentRoute::Synthesis, Voice::Tts(tts), Some(_)) => {
                 let tts = Arc::clone(tts);
                 let rx = &mut self.rx;
                 let synthesized = perform_tts_inference(
@@ -290,7 +299,7 @@ impl Pump<'_> {
                     }
                 }
             }
-            (Voice::Frames(frames), Some(out)) => {
+            (SegmentRoute::CallerFrames, Voice::Frames(frames), Some(out)) => {
                 let words = drain_segment_text(&mut self.rx, first, text_out).await;
                 let mut segment = Frames { shared, acc: self.acc, rx: frames };
                 let mut heard =
@@ -300,9 +309,10 @@ impl Pump<'_> {
                 heard.text = words.text;
                 heard
             }
-            (Voice::Silent, Some(_)) | (_, None) => {
+            (SegmentRoute::Text, _, _) => {
                 silent(drain_segment_text(&mut self.rx, first, text_out).await.text, true)
             }
+            _ => unreachable!("segment plan matches its bound ports"),
         };
         // Backstop flush for a segment whose loop broke before its `End`. Once-only.
         if let Some(out) = text_out {
@@ -311,14 +321,13 @@ impl Pump<'_> {
         // Both legs end every segment, one whose words went down the transcript leg with no
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included.
-        if text.is_some()
-            && text_out
-                .is_some_and(|leg| leg.state.lock().unwrap_or_else(|p| p.into_inner()).forwarded)
-            && heard.frames == 0
-            && heard.complete
-            && let Some(out) = audio_out.as_ref()
-        {
-            end_unvoiced(shared, self.handle.id(), out.as_ref());
+        let leg_state = text_out.map(|leg| *leg.state.lock().unwrap_or_else(|p| p.into_inner()));
+        if plan.end_unvoiced(&heard, leg_state) {
+            end_unvoiced(
+                shared,
+                self.handle.id(),
+                audio_out.as_deref().expect("bound audio output"),
+            );
         }
         if synthesis {
             playback.flush_text(shared, self.handle).await?;

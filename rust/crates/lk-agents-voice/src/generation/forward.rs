@@ -163,3 +163,71 @@ impl TurnAccumulator {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+pub enum VoiceKind {
+    Synthesis,
+    CallerFrames,
+    Silent,
+}
+
+#[derive(Clone, Copy)]
+pub enum SegmentRoute {
+    Synthesis,
+    CallerFrames,
+    Text,
+}
+
+#[derive(Clone, Copy)]
+pub struct TranscriptPlan {
+    pub deferred: bool,
+    pub aligned: bool,
+}
+
+/// The binding's fixed output facts decide each segment's audio and transcript path together.
+pub struct SegmentPlan {
+    pub route: SegmentRoute,
+    pub transcript: Option<TranscriptPlan>,
+    audio_output: bool,
+    text_output: bool,
+}
+
+impl SegmentPlan {
+    pub fn new(
+        kind: VoiceKind,
+        audio_output: bool,
+        text_output: bool,
+        authorized: bool,
+        aligned_requested: bool,
+        aligned_provider: bool,
+    ) -> Self {
+        let route = match (kind, audio_output) {
+            (VoiceKind::Synthesis, true) => SegmentRoute::Synthesis,
+            (VoiceKind::CallerFrames, true) => SegmentRoute::CallerFrames,
+            _ => SegmentRoute::Text,
+        };
+        let synthesis = matches!(route, SegmentRoute::Synthesis);
+        Self {
+            route,
+            transcript: (synthesis || text_output).then_some(TranscriptPlan {
+                deferred: synthesis && !authorized,
+                aligned: synthesis && aligned_requested && aligned_provider,
+            }),
+            audio_output,
+            text_output,
+        }
+    }
+
+    /// A transcript-only segment still ends the bound audio leg when all its text was forwarded.
+    pub fn end_unvoiced(
+        &self,
+        heard: &crate::transcription::Heard,
+        leg: Option<TextLegState>,
+    ) -> bool {
+        self.audio_output
+            && self.text_output
+            && leg.is_some_and(|leg| leg.forwarded)
+            && heard.frames == 0
+            && heard.complete
+    }
+}
