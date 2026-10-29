@@ -257,7 +257,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn usage(&self) -> Vec<lk_agents_abi::metrics::usage::ModelUsage> {
         use lk_agents_abi::metrics::usage::UsageCollector as _;
-        lock(&self.host.usage).flatten()
+        self.host.usage.lock().flatten()
     }
 
     fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {
@@ -774,14 +774,14 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn keyterms(&self) -> Option<Vec<String>> {
-        match &*self.lock() {
+        match &*self.stage.lock() {
             Stage::Running(r) => r.keyterms.borrow().clone(),
             _ => None,
         }
     }
 
     fn agent_chat_ctx(&self) -> Vec<ChatItem> {
-        let context = match &*self.lock() {
+        let context = match &*self.stage.lock() {
             Stage::Running(r) => Some(Arc::clone(&r.chat_ctx.borrow())),
             _ => None,
         };

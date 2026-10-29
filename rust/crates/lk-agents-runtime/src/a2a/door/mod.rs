@@ -6,7 +6,7 @@ pub(crate) mod stream;
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 use lk_agents_worker::endpoint::budget::EndpointBudget;
 use std::any::Any;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 
 use a2a::JsonRpcId;
 use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
@@ -38,7 +38,7 @@ pub struct Door {
     /// Accepted operations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
-    budget: Arc<StdMutex<EndpointBudget>>,
+    budget: Arc<parking_lot::Mutex<EndpointBudget>>,
 }
 
 struct Inner {
@@ -87,7 +87,7 @@ impl A2ADoor for Door {
             }),
             tasks: Arc::default(),
             runtime,
-            budget: Arc::new(StdMutex::new(EndpointBudget::new(EndpointLimits::default()))),
+            budget: Arc::new(parking_lot::Mutex::new(EndpointBudget::new(EndpointLimits::default()))),
         })
     }
 
@@ -106,7 +106,7 @@ impl A2ADoor for Door {
     ) -> Response {
         let body_size = body_size.unwrap_or(body.len()).max(body.len());
         let admission = {
-            let mut budget = lk_agents_abi::lock(&self.budget);
+            let mut budget = self.budget.lock();
             if !budget.admit_handler() {
                 None
             } else if !budget.admit_payload(body_size) {
@@ -165,13 +165,13 @@ impl A2ADoor for Door {
 }
 
 struct Admission {
-    budget: Arc<StdMutex<EndpointBudget>>,
+    budget: Arc<parking_lot::Mutex<EndpointBudget>>,
     bytes: usize,
 }
 
 impl Drop for Admission {
     fn drop(&mut self) {
-        let mut budget = lk_agents_abi::lock(&self.budget);
+        let mut budget = self.budget.lock();
         budget.release_payload(self.bytes);
         budget.release_handler();
     }

@@ -69,7 +69,7 @@ pub use lk_agents_abi::worker::worker::{
 pub struct WorkerClient {
     tx: tokio::sync::mpsc::Sender<WorkerCommand>,
     control: tokio::sync::watch::Sender<WorkerControl>,
-    snapshot: Arc<std::sync::Mutex<Snapshot>>,
+    snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
 }
 
@@ -105,7 +105,7 @@ impl WorkerClient {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.snapshot.lock().clone()
     }
 
     /// Holds 128 notifications; a lagging receiver gets `RecvError::Lagged`.
@@ -161,7 +161,7 @@ pub struct Worker {
     cpu: Option<CpuMonitor>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
     control: tokio::sync::watch::Receiver<WorkerControl>,
-    snapshot: Arc<std::sync::Mutex<Snapshot>>,
+    snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
     load_pending: bool,
@@ -200,7 +200,7 @@ pub struct Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.operations.clear();
-        let mut snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        let mut snapshot = self.snapshot.lock();
         if snapshot.finished.is_none() {
             let reason = "worker runtime cancelled".to_string();
             snapshot.finished = Some(reason.clone());
@@ -529,7 +529,7 @@ impl Worker {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
         let (notifications, _) = tokio::sync::broadcast::channel(128);
-        let snapshot = Arc::new(std::sync::Mutex::new(Snapshot::default()));
+        let snapshot = Arc::new(parking_lot::Mutex::new(Snapshot::default()));
         let handle = WorkerClient {
             tx,
             control: control_tx,
@@ -579,8 +579,8 @@ impl Worker {
         )
     }
 
-    fn shared(&self) -> std::sync::MutexGuard<'_, Snapshot> {
-        self.snapshot.lock().unwrap_or_else(|e| e.into_inner())
+    fn shared(&self) -> parking_lot::MutexGuard<'_, Snapshot> {
+        self.snapshot.lock()
     }
 
     fn publish(&self) {

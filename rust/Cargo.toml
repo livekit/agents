@@ -42,6 +42,8 @@ ordered-float = "5"
 indexmap     = "2"
 # --- below the purity line ---
 tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }
+# The async I/O crates' blocking lock: no poisoning, so a panic under a guard is not a second failure.
+parking_lot  = "0.12"
 # The LiveKit protocol: `livekit_protocol::agent` is the generated `livekit.agent` package --
 # `AgentSessionEvent`, `SessionRequest`, the EOT inference messages, the thread schema (v1) -- and
 # `livekit_protocol::{WorkerMessage, ServerMessage}` the worker's own wire. One source for every

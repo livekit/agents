@@ -194,7 +194,7 @@ pub struct ServerRuntime {
     drain_outcome: Outcome,
     /// The lifecycle task `run` starts, outliving a cancelled `run` caller; `close` takes and
     /// awaits it unless a missed cleanup deadline left it holding the stragglers.
-    serving: Arc<std::sync::Mutex<Option<OwnedTask>>>,
+    serving: Arc<parking_lot::Mutex<Option<OwnedTask>>>,
 }
 
 impl ServerRuntime {
@@ -243,7 +243,7 @@ impl ServerRuntime {
         let runtime = self.clone();
         let serving = TokioSpawner::current()
             .spawn(async move { runtime.serve(start, receiver, cleanup_timeout).await });
-        *self.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(serving);
+        *self.serving.lock() = Some(serving);
         wait_outcome(&self.outcome).await
     }
 
@@ -283,7 +283,7 @@ impl ServerRuntime {
         });
         let result = wait_outcome(&self.cleanup_outcome).await;
         if self.snapshot().incomplete_cleanup.is_empty() {
-            let serving = self.serving.lock().unwrap_or_else(|p| p.into_inner()).take();
+            let serving = self.serving.lock().take();
             if let Some(serving) = serving {
                 let _ = serving.await;
             }

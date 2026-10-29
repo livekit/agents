@@ -13,7 +13,8 @@ use lk_agents_voice::agent_session::{
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::trace::{Journal, Step};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
@@ -78,26 +79,24 @@ impl WatchHub {
 
     pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.taps.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
+        self.taps.lock().push(tx);
         rx
     }
 
     /// Cheap with none: the common session runs no system.
     pub fn publish(&self, item: SystemTap) {
-        let mut taps = self.taps.lock().unwrap_or_else(|p| p.into_inner());
+        let mut taps = self.taps.lock();
         taps.retain(|tap| tap.send(item.clone()).is_ok());
     }
 
     pub fn is_empty(&self) -> bool {
-        self.taps.lock().unwrap_or_else(|p| p.into_inner()).is_empty()
+        self.taps.lock().is_empty()
     }
 }
 
 impl std::fmt::Debug for WatchHub {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WatchHub")
-            .field("taps", &self.taps.lock().map(|t| t.len()).unwrap_or(0))
-            .finish()
+        f.debug_struct("WatchHub").field("taps", &self.taps.lock().len()).finish()
     }
 }
 

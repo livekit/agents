@@ -10,7 +10,8 @@ use lk_agents_abi::voice::session_options::{
 use lk_agents_voice::agent_activity::options::{
     AgentSessionOptions, ConfigStack, LegSet, resolved_session_options, session_layer, update_layer,
 };
-use std::sync::{Arc, Mutex, PoisonError};
+use parking_lot::{Mutex, MutexGuard};
+use std::sync::Arc;
 
 /// Shared with the session built over it: a later `update` before `start()` is read at assembly.
 #[derive(Clone)]
@@ -25,8 +26,8 @@ struct State {
 }
 
 impl SessionOptions {
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.0.lock()
     }
 
     pub fn session(&self) -> AgentSessionOptions {

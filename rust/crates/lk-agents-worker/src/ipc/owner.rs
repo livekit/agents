@@ -3,12 +3,12 @@
 //! which continue whether or not the host still awaits them.
 
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::lock;
 use lk_agents_abi::worker::ipc_host::{
     JobExecutor, ProcessSupervisor, SupervisedProcess, WorkerError,
 };
@@ -166,7 +166,7 @@ impl ProcessSupervisor for ProcessOwner {
     }
 
     async fn run(&self) -> bool {
-        let Some(host) = lock(&self.host).take() else {
+        let Some(host) = self.host.lock().take() else {
             return self.wait_ran().await;
         };
         let spawner = TokioSpawner::new(self.io.runtime_handle());
@@ -378,7 +378,7 @@ struct ProcessDiagnostics {
 
 impl ProcessDiagnostics {
     fn emit(&self, level: Level, message: &str, extra: Extra, error: Option<HostError>) {
-        if let Some(host) = lock(&self.host).clone() {
+        if let Some(host) = self.host.lock().clone() {
             queue_diagnostic(host, level, message, extra, error);
         }
     }
@@ -464,7 +464,9 @@ impl ProcessCallbacks for ProcessDiagnostics {
         );
     }
 
+    /// The executor is a host object: it drops after the guard.
     fn release(&self) {
-        drop(lock(&self.host).take());
+        let host = self.host.lock().take();
+        drop(host);
     }
 }

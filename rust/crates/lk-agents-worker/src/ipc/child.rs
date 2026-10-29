@@ -3,9 +3,8 @@
 //! starts the one job and acks the parent's shutdown.
 
 use std::any::Any;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 
-use lk_agents_abi::lock;
 use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
 use tokio::sync::watch;
 
@@ -20,7 +19,7 @@ pub struct ChildChannel {
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
     /// The job the parent started, once it did.
-    run: Mutex<Option<Arc<JobRun>>>,
+    run: OnceLock<Arc<JobRun>>,
     asyncio_debug: bool,
 }
 
@@ -47,7 +46,7 @@ impl ChildChannel {
                 if self.client.send(ToParent::ShutdownAck).await.is_err() {
                     return Ok(false);
                 }
-                let Some(run) = lock(&self.run).clone() else {
+                let Some(run) = self.run.get() else {
                     let _ = self.client.send(ToParent::ShuttingDown).await;
                     return Ok(false);
                 };
@@ -69,16 +68,16 @@ impl ChildChannel {
         host: &dyn JobProcess,
         job: lk_agents_abi::worker::job::StartJobFields,
     ) -> Result<(), WorkerError> {
-        if lock(&self.run).is_some() {
-            return Err(WorkerError::Failed("a job is already running".into()));
+        let running = || WorkerError::Failed("a job is already running".into());
+        if self.run.get().is_some() {
+            return Err(running());
         }
         let run: Arc<dyn Any + Send + Sync> = host.start_job(job).await?;
         let run = run
             .downcast::<JobRun>()
             .map_err(|_| WorkerError::Failed("the runner started a foreign JobRun".into()))?;
         run.report_to(self.client.clone());
-        *lock(&self.run) = Some(run);
-        Ok(())
+        self.run.set(run).map_err(|_| running())
     }
 }
 
@@ -124,7 +123,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             client: Arc::new(client),
             io,
             stop: watch::channel(false).0,
-            run: Mutex::new(None),
+            run: OnceLock::new(),
             asyncio_debug: hello.asyncio_debug,
         })
     }

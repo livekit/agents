@@ -316,7 +316,7 @@ impl Runtime {
         &mut self,
         requests: &'a Requests,
         now: Now,
-    ) -> std::sync::MutexGuard<'a, Vec<SpeechCommand>> {
+    ) -> parking_lot::MutexGuard<'a, Vec<SpeechCommand>> {
         loop {
             let mut held = requests.lock();
             if held.is_empty() {

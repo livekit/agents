@@ -1,7 +1,9 @@
 //! Native watchdog execution for the launcher's signal and loop-cleanup policy.
 
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+
+use parking_lot::{Condvar, Mutex};
 
 use crate::cli::{EXIT_ESCALATION_TIMEOUT, ExitSignals};
 use lk_agents_abi::worker::cli::CliSignals as CliSignalsPort;
@@ -26,7 +28,7 @@ impl CliSignalsPort for CliSignals {
     }
 
     fn signal(&self, exit_served: bool) -> String {
-        let action = self.state.0.lock().unwrap_or_else(|p| p.into_inner()).signal(exit_served);
+        let action = self.state.0.lock().signal(exit_served);
         if action == "schedule" && self.escalate {
             self.arm_watchdog(EXIT_ESCALATION_TIMEOUT, false);
         }
@@ -34,17 +36,17 @@ impl CliSignalsPort for CliSignals {
     }
 
     fn served(&self) {
-        self.state.0.lock().unwrap_or_else(|p| p.into_inner()).served();
+        self.state.0.lock().served();
         self.state.1.notify_all();
     }
 
     fn draining(&self) {
-        self.state.0.lock().unwrap_or_else(|p| p.into_inner()).draining();
+        self.state.0.lock().draining();
         self.state.1.notify_all();
     }
 
     fn closing(&self) {
-        let arm = self.state.0.lock().unwrap_or_else(|p| p.into_inner()).closing();
+        let arm = self.state.0.lock().closing();
         self.state.1.notify_all();
         if arm {
             self.arm_watchdog(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, true);
@@ -52,7 +54,7 @@ impl CliSignalsPort for CliSignals {
     }
 
     fn closed(&self) {
-        self.state.0.lock().unwrap_or_else(|p| p.into_inner()).closed();
+        self.state.0.lock().closed();
         self.state.1.notify_all();
     }
 }
@@ -64,12 +66,12 @@ impl CliSignals {
         let main = self.main;
         std::thread::spawn(move || {
             let (lock, wake) = &*state;
-            let guard = lock.lock().unwrap_or_else(|p| p.into_inner());
-            let (mut guard, result) = wake
-                .wait_timeout_while(guard, timeout, |policy| {
-                    if cleanup { policy.cleanup_due() } else { policy.escalation_pending() }
-                })
-                .unwrap_or_else(|p| p.into_inner());
+            let mut guard = lock.lock();
+            let result = wake.wait_while_for(
+                &mut guard,
+                |policy| if cleanup { policy.cleanup_due() } else { policy.escalation_pending() },
+                timeout,
+            );
             if !result.timed_out() {
                 return;
             }

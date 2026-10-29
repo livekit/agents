@@ -3,11 +3,11 @@
 //! [`Calls`] keeps each reply until the core answers its call.
 
 use crate::voice::session::Tx;
-use lk_agents_abi::lock;
 use lk_agents_voice::agent_session::{Answer, Command, Event, Input, Origin, QueueClosed, RequestId, Sent};
 use crate::voice::speech_handle::SpeechHandle;
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 /// Where an awaited input's answer goes. It travels with the input that names its call; the
@@ -101,7 +101,7 @@ impl Calls {
 
     /// Kept until the core answers `call` or the session ends.
     pub fn register(&self, call: Call) -> RequestId {
-        lock(&self.0).insert(call.id, call.reply_to);
+        self.0.lock().insert(call.id, call.reply_to);
         call.id
     }
 
@@ -121,11 +121,11 @@ impl Calls {
     }
 
     pub fn take(&self, id: RequestId) -> Option<ReplyTo> {
-        lock(&self.0).remove(&id)
+        self.0.lock().remove(&id)
     }
 
     /// The session ended: every call still waiting is dropped unanswered, outside the lock.
     pub fn clear(&self) {
-        drop(std::mem::take(&mut *lock(&self.0)));
+        drop(std::mem::take(&mut *self.0.lock()));
     }
 }

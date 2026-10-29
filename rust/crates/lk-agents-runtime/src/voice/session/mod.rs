@@ -47,7 +47,8 @@ use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_voice::tool_executor::Toolset;
 use lk_agents_voice::trace::{CoreStep, Step};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The host's session handle: assembled at construction, opened once, commanded, and closed.
@@ -209,10 +210,6 @@ struct ModelRefs {
 
 type Leg<T> = Maybe<Option<Arc<T>>>;
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 impl VoiceSession {
     pub fn time(&self) -> &Timebase {
         &self.time
@@ -240,14 +237,14 @@ impl VoiceSession {
     /// Every step the driver journals, from the first, to `observer`. Before `start()`.
     #[cfg(any(test, feature = "dst"))]
     pub fn observe(&self, observer: impl FnMut(&Step) + Send + 'static) {
-        if let Stage::Ready(ready) = &mut *self.lock() {
+        if let Stage::Ready(ready) = &mut *self.stage.lock() {
             ready.builder.journal = lk_agents_voice::trace::Journal::observed(observer);
         }
     }
 
     #[cfg(feature = "dst")]
     pub fn probe(&self, Probe { step, host_event }: Probe) {
-        if let Stage::Ready(ready) = &mut *self.lock() {
+        if let Stage::Ready(ready) = &mut *self.stage.lock() {
             ready.builder.journal = lk_agents_voice::trace::Journal::observed(step);
             ready.probe = Some(host_event);
         }
@@ -262,7 +259,7 @@ impl VoiceSession {
         drain: impl FnOnce(SessionRunner) -> BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<impl Future<Output = Result<(), DriverError>> + Send + 'static, OpenRefused> {
         let ready = {
-            let mut stage = self.lock();
+            let mut stage = self.stage.lock();
             match stage.lifecycle().open()? {
                 OpenAction::Begin => {
                     let Stage::Ready(ready) =
@@ -335,7 +332,7 @@ impl VoiceSession {
             loop_tasks.push(tasks.spawn(spawner.as_ref(), "host event drain", drain(runner)));
 
             {
-                let mut stage = lock(&stage);
+                let mut stage = stage.lock();
                 match stage.lifecycle().opened() {
                     OpenAction::InstallRunning => {
                         *stage = Stage::Running(Running {
@@ -410,7 +407,7 @@ impl VoiceSession {
         &self,
         recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     ) {
-        let mut stage = self.lock();
+        let mut stage = self.stage.lock();
         match (stage.lifecycle().recorder_target(), &mut *stage) {
             (RecorderTarget::Builder, Stage::Ready(ready)) => ready.builder.recorder = recorder,
             (RecorderTarget::Running, Stage::Running(running)) => {
@@ -434,14 +431,14 @@ impl VoiceSession {
         &self,
         f: impl FnOnce(&mut Running) -> Result<R, SessionRefused>,
     ) -> Result<R, SessionRefused> {
-        let mut stage = self.lock();
+        let mut stage = self.stage.lock();
         stage.lifecycle().running()?;
         let Stage::Running(running) = &mut *stage else { unreachable!("running resources") };
         f(running)
     }
 
     fn remote_host(&self) -> Option<Arc<dyn SessionHosting>> {
-        match &*self.lock() {
+        match &*self.stage.lock() {
             Stage::Opening(remote) | Stage::Closed(remote) => remote.clone(),
             Stage::Ready(_) => None,
             Stage::Running(running) => running.remote.clone(),
@@ -554,7 +551,7 @@ impl VoiceSession {
         error: Option<lk_agents_voice::events::ErrorEvent>,
     ) -> impl Future<Output = ()> + Send + 'static {
         let running = {
-            let mut stage = self.lock();
+            let mut stage = self.stage.lock();
             match (stage.lifecycle().close(), &mut *stage) {
                 (CloseAction::Running, Stage::Running(running)) => Some((
                     running.api.clone(),
@@ -585,7 +582,7 @@ impl VoiceSession {
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on
             // the host stream, and the drain only ends when every sender is gone.
             {
-                let mut stage = lock(&stage);
+                let mut stage = stage.lock();
                 match stage.lifecycle().closed() {
                     CloseAction::Closed => *stage = Stage::Closed(remote),
                     _ => unreachable!("close completion installs closed resources"),
@@ -611,10 +608,6 @@ impl VoiceSession {
             }
             let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, room_io.aclose()).await;
         }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Stage> {
-        lock(&self.stage)
     }
 
     /// Given present, given `None` clears, not-given keeps. Each provider given is wrapped, under
@@ -1040,7 +1033,7 @@ impl HostDrain {
                     };
                     // `_on_metrics_collected`: a record is folded into the session's usage, then
                     // `session_usage_updated` follows it.
-                    let updated = session_usage_updated(&mut lock(&self.usage), &wire);
+                    let updated = session_usage_updated(&mut self.usage.lock(), &wire);
                     for wire in std::iter::once(wire).chain(updated) {
                         self.deliver(wire);
                     }
@@ -1173,12 +1166,12 @@ struct HostAgents(Arc<Mutex<std::collections::HashMap<String, HostRef>>>);
 impl HostAgents {
     fn install(&self, agent: &str, host: Option<HostRef>) {
         if let Some(host) = host {
-            lock(&self.0).insert(agent.to_owned(), host);
+            self.0.lock().insert(agent.to_owned(), host);
         }
     }
 
     fn get(&self, agent: &str) -> Option<HostRef> {
-        lock(&self.0).get(agent).cloned()
+        self.0.lock().get(agent).cloned()
     }
 }
 
@@ -1190,7 +1183,7 @@ impl<T: Send + 'static> Pusher<T> {
     /// Queue one item. A full channel waits rather than dropping (every chunk is spoken, in
     /// order). `false` once the speech is gone.
     pub async fn push(&self, item: T) -> bool {
-        let tx = lock(&self.0).clone();
+        let tx = self.0.lock().clone();
         match tx {
             Some(tx) => tx.send(item).await.is_ok(),
             None => false,
@@ -1199,12 +1192,12 @@ impl<T: Send + 'static> Pusher<T> {
 
     /// No more items. Idempotent.
     pub fn end(&self) {
-        lock(&self.0).take();
+        self.0.lock().take();
     }
 
     /// Resolves once the speech stopped reading.
     async fn closed(&self) {
-        let tx = lock(&self.0).clone();
+        let tx = self.0.lock().clone();
         if let Some(tx) = tx {
             tx.closed().await;
         }

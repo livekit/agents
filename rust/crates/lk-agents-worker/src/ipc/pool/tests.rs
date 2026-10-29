@@ -36,11 +36,11 @@ struct Host {
 
 impl Host {
     fn process(&self, n: usize) -> Executor {
-        self.created.lock().unwrap()[n].clone()
+        self.created.lock()[n].clone()
     }
 
     fn created(&self) -> usize {
-        self.created.lock().unwrap().len()
+        self.created.lock().len()
     }
 }
 
@@ -127,7 +127,7 @@ fn job() -> HostRef {
 #[async_trait::async_trait]
 impl Executors for Host {
     async fn create(&self) -> Result<Executor, HostError> {
-        let mut created = self.created.lock().unwrap();
+        let mut created = self.created.lock();
         let process = Executor::new(Arc::new(Numbered(created.len())));
         created.push(process.clone());
         Ok(process)
@@ -156,7 +156,7 @@ impl Executors for Host {
         if let Some(gate) = &self.close_gate {
             let _ = gate.subscribe().wait_for(|released| *released).await;
         }
-        self.closed.lock().unwrap().push(number(p));
+        self.closed.lock().push(number(p));
         self.exits.notify_waiters();
         if self.fail_close { Err(HostError::new("close failed")) } else { Ok(()) }
     }
@@ -184,7 +184,7 @@ impl Executors for Host {
             let exited = self.exits.notified();
             tokio::pin!(exited);
             exited.as_mut().enable();
-            if self.closed.lock().unwrap().contains(&number(p)) {
+            if self.closed.lock().contains(&number(p)) {
                 return Ok(());
             }
             exited.await;
@@ -195,7 +195,7 @@ impl Executors for Host {
             let exited = self.exits.notified();
             tokio::pin!(exited);
             exited.as_mut().enable();
-            if self.closed.lock().unwrap().contains(&number(p)) {
+            if self.closed.lock().contains(&number(p)) {
                 if self.join_receipt.as_ref().is_some_and(|receipt| !*receipt.borrow()) {
                     return Err(HostError::new("join failed"));
                 }
@@ -211,7 +211,7 @@ impl Executors for Host {
         if let Some(pool) = self.reads_pool.get() {
             pool.processes();
         }
-        self.events.lock().unwrap().push((event, number(p)));
+        self.events.lock().push((event, number(p)));
     }
 }
 
@@ -225,7 +225,7 @@ fn pool(host: &Arc<Host>, idle: usize) -> ProcPool {
 }
 
 fn count(host: &Host, event: PoolEvent) -> usize {
-    host.events.lock().unwrap().iter().filter(|(e, _)| *e == event).count()
+    host.events.lock().iter().filter(|(e, _)| *e == event).count()
 }
 
 // Catches: start() returning before the idle processes are warm, a launch that does not
@@ -242,7 +242,7 @@ async fn keeps_the_idle_processes_warm_and_replaces_the_one_a_job_takes() {
     tokio::time::sleep(REFILL_INTERVAL * 3).await;
     assert_eq!(count(&host, PoolEvent::Ready), 3, "the taken process is replaced");
     pool.aclose().await;
-    let mut closed = host.closed.lock().unwrap().clone();
+    let mut closed = host.closed.lock().clone();
     closed.sort_unstable();
     closed.dedup();
     assert_eq!(closed, vec![0, 1, 2]);
@@ -266,7 +266,6 @@ async fn exited_warm_process_is_never_assigned_to_a_job() {
     assert!(
         host.events
             .lock()
-            .unwrap()
             .iter()
             .all(|(event, process)| *event != PoolEvent::JobLaunched || *process != 0),
         "an exited warmed process was assigned to a new job"
@@ -324,7 +323,7 @@ async fn a_cancelled_launch_releases_its_wait_and_its_process() {
     launching.abort();
     let _ = launching.await;
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(slow.closed.lock().unwrap().contains(&0), "the process taken is closed");
+    assert!(slow.closed.lock().contains(&0), "the process taken is closed");
     pool.aclose().await;
 }
 
@@ -356,7 +355,7 @@ async fn a_failed_launch_is_retried_on_a_fresh_process() {
     pool.start().await.unwrap();
     pool.launch_job("j1", job()).await.unwrap();
     assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
-    assert!(host.closed.lock().unwrap().contains(&0), "the process that failed is closed");
+    assert!(host.closed.lock().contains(&0), "the process that failed is closed");
     pool.aclose().await;
 }
 
@@ -530,7 +529,6 @@ async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
     let dead_process_was_launched = host
         .events
         .lock()
-        .unwrap()
         .iter()
         .any(|(event, process)| *event == PoolEvent::JobLaunched && *process == 0);
     reaped.send_replace(true);

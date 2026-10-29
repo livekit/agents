@@ -62,7 +62,7 @@ pub struct WsExchange {
     io: Arc<dyn StreamIo>,
     key: Vec<u8>,
     subprotocols: Vec<String>,
-    ws: std::sync::Mutex<WebSocket<Pipe>>,
+    ws: parking_lot::Mutex<WebSocket<Pipe>>,
 
     /// Holds the order of writes: bytes are taken from the pipe and written under it.
     write_lock: Mutex<()>,
@@ -83,8 +83,8 @@ struct InboxEvent {
 }
 
 impl WsExchange {
-    fn ws(&self) -> std::sync::MutexGuard<'_, WebSocket<Pipe>> {
-        self.ws.lock().unwrap_or_else(|p| p.into_inner())
+    fn ws(&self) -> parking_lot::MutexGuard<'_, WebSocket<Pipe>> {
+        self.ws.lock()
     }
 
     pub async fn receive(&self) -> Received {
@@ -388,7 +388,7 @@ pub(super) async fn serve_ws(
         io,
         key,
         subprotocols,
-        ws: std::sync::Mutex::new(WebSocket::from_raw_socket(pipe, Role::Server, Some(config))),
+        ws: parking_lot::Mutex::new(WebSocket::from_raw_socket(pipe, Role::Server, Some(config))),
         write_lock: Mutex::new(()),
         events,
         inbox: Mutex::new(inbox),
@@ -401,7 +401,7 @@ pub(super) async fn serve_ws(
         closed: AtomicBool::new(false),
     });
     let id = registry.next.fetch_add(1, Ordering::Relaxed);
-    registry.lock().insert(id, Arc::downgrade(&ex));
+    registry.open.lock().insert(id, Arc::downgrade(&ex));
     // Cancelled when this exchange is, with or without the guard.
     let reader = TokioSpawner::current().spawn(ex.clone().read_loop());
 
@@ -432,7 +432,7 @@ pub(super) async fn serve_ws(
             }
         }
     }
-    registry.lock().remove(&id);
+    registry.open.lock().remove(&id);
     reader.cancel();
     let _ = reader.await;
     ex.close(1000, "").await;

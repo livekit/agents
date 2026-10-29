@@ -5,7 +5,7 @@
 //! recording's setup.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
@@ -13,9 +13,10 @@ use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{
     JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
 };
-use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef, lock};
+use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
+use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
@@ -112,7 +113,7 @@ fn cancelled(error: &HostError) -> bool {
 
 impl Inner {
     fn end(&self, reason: String, user_initiated: bool) {
-        let mut st = lock(&self.state);
+        let mut st = self.state.lock();
         st.user_shutdown |= user_initiated;
         if st.shutdown.is_none() {
             st.shutdown = Some((reason, user_initiated));
@@ -202,7 +203,7 @@ impl Inner {
                         }
                         Ok(()) => {
                             let unfinished = {
-                                let st = lock(&self.state);
+                                let st = self.state.lock();
                                 !st.connected && !st.user_shutdown && !self.fake
                             };
                             if unfinished {
@@ -214,7 +215,7 @@ impl Inner {
                 () = &mut warn_at, if !entry_done && !warned => {
                     warned = true;
                     let unconnected = {
-                        let st = lock(&self.state);
+                        let st = self.state.lock();
                         !st.connected && !st.user_shutdown
                     };
                     if unconnected {
@@ -224,7 +225,7 @@ impl Inner {
                 _ = ended.wait_for(|e| *e) => break,
             }
         }
-        let (reason, user_initiated) = lock(&self.state).shutdown.clone().unwrap_or_default();
+        let (reason, user_initiated) = self.state.lock().shutdown.clone().unwrap_or_default();
         host.shutdown_began(cx, reason.clone(), user_initiated).await?;
 
         // The entrypoint returns, or is cancelled.
@@ -294,7 +295,7 @@ impl Inner {
         disconnected?;
 
         // The shutdown callbacks run together.
-        let callbacks = std::mem::take(&mut lock(&self.state).shutdown_callbacks);
+        let callbacks = std::mem::take(&mut self.state.lock().shutdown_callbacks);
         let spawner = TokioSpawner::new(self.io.runtime_handle());
         let runs: Vec<_> = callbacks
             .into_iter()
@@ -381,7 +382,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         framework: bool,
         name: String,
     ) {
-        lock(&self.inner.state).shutdown_callbacks.push(ShutdownCallback {
+        self.inner.state.lock().shutdown_callbacks.push(ShutdownCallback {
             callback,
             takes_reason,
             framework,
@@ -404,7 +405,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     }
 
     fn connected(&self) {
-        lock(&self.inner.state).connected = true;
+        self.inner.state.lock().connected = true;
     }
 
     async fn connect(
@@ -417,11 +418,11 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             .io
             .run(async move {
                 let _connecting = inner.connecting.lock().await;
-                if lock(&inner.state).connected {
+                if inner.state.lock().connected {
                     return Ok(());
                 }
                 connect.call(&context).await?;
-                lock(&inner.state).connected = true;
+                inner.state.lock().connected = true;
                 Ok(())
             })
             .await
@@ -433,7 +434,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         kinds: Vec<i32>,
         name: String,
     ) {
-        lock(&self.inner.state).entrypoints.push(Entrypoint { run: entrypoint, kinds, name });
+        self.inner.state.lock().entrypoints.push(Entrypoint { run: entrypoint, kinds, name });
     }
 
     fn participant_joined(
@@ -447,7 +448,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let mut starts = Vec::new();
         let mut overlapping = false;
         {
-            let mut st = lock(&self.inner.state);
+            let mut st = self.inner.state.lock();
             let matching: Vec<(usize, Arc<dyn ParticipantEntrypoint>, String)> = st
                 .entrypoints
                 .iter()
@@ -473,7 +474,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             self.inner.participants.spawn(&spawner, "participant entrypoint", async move {
                 let ran = entry.run(&context, job, participant).await;
                 {
-                    let mut st = lock(&inner.state);
+                    let mut st = inner.state.lock();
                     if st.participant_runs.get(&key) == Some(&run) {
                         st.participant_runs.remove(&key);
                     }
@@ -538,7 +539,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             let _ = tx.send(called);
         });
         {
-            let mut st = lock(&self.inner.state);
+            let mut st = self.inner.state.lock();
             st.tasks.retain(|t| !t.is_finished());
             st.tasks.push(task);
         }
@@ -547,7 +548,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
 
     async fn close_tasks(&self) {
         self.inner.tasks_closed.send_replace(true);
-        let tasks = std::mem::take(&mut lock(&self.inner.state).tasks);
+        let tasks = std::mem::take(&mut self.inner.state.lock().tasks);
         for task in tasks {
             let _ = task.await;
         }
@@ -557,7 +558,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<Option<bool>, WorkerError> {
         let observability = self.inner.observability_url.is_some();
         let get = |key: &str, default: bool| options.get(key).copied().unwrap_or(default);
-        let mut st = lock(&self.inner.state);
+        let mut st = self.inner.state.lock();
         let redaction = st.redaction || get("redaction", false);
         if redaction && get("audio", true) && !get("transcript", true) {
             return Err(WorkerError::Invalid(
@@ -574,11 +575,11 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     }
 
     fn recording_initialized(&self) -> bool {
-        lock(&self.inner.state).recording_initialized
+        self.inner.state.lock().recording_initialized
     }
 
     fn redaction(&self) -> bool {
-        lock(&self.inner.state).redaction
+        self.inner.state.lock().redaction
     }
 
     async fn run(

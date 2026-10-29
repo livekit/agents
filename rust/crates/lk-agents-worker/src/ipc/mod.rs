@@ -10,7 +10,7 @@
 //! - [`ProcessOwner`], [`ProcessPool`], [`ChildChannel`] and [`JobRun`]: the classes the host
 //!   drives them through, calling back into it only through declared proxies.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt};
@@ -41,7 +41,6 @@ pub use supervisor::{
 pub use supervisor::{MemoryError, ProcSupervisor, ProcessCallbacks};
 pub use wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 
-use lk_agents_abi::lock;
 
 /// The child's grace on top of the parent's `ping_timeout` before it calls itself orphaned.
 pub const HEALTH_CHECK_GRACE: f64 = 10.0;
@@ -121,7 +120,7 @@ impl IpcClient {
 
     /// Queues a message for the parent, waiting while the queue is full.
     pub async fn send(&self, msg: ToParent) -> Result<(), Closed> {
-        let outbox = lock(&self.outbox).clone().ok_or(Closed)?;
+        let outbox = self.outbox.lock().clone().ok_or(Closed)?;
         outbox.send(msg).await.map_err(|_| Closed)
     }
 
@@ -132,7 +131,7 @@ impl IpcClient {
 
     /// The reader's original transport/protocol outcome after its inbox closes.
     pub async fn wait_reader(&self) -> Result<(), WireError> {
-        let reader = lock(&self.reader).take();
+        let reader = self.reader.lock().take();
         match reader {
             Some(reader) => {
                 reader.await.map_err(|error| WireError::Unexpected(error.to_string()))?
@@ -143,13 +142,13 @@ impl IpcClient {
 
     /// Stops reading, writes what is queued (for up to [`FLUSH_TIMEOUT`]) and closes the socket.
     pub async fn close(&self) {
-        let reader = lock(&self.reader).take();
+        let reader = self.reader.lock().take();
         if let Some(reader) = reader {
             reader.cancel();
             let _ = reader.await;
         }
-        lock(&self.outbox).take();
-        let writer = lock(&self.writer).take();
+        self.outbox.lock().take();
+        let writer = self.writer.lock().take();
         if let Some(mut writer) = writer
             && tokio::time::timeout(FLUSH_TIMEOUT, &mut writer).await.is_err()
         {

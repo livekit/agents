@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
+
+use parking_lot::Mutex;
 
 use super::WsExchange;
 
@@ -27,11 +29,11 @@ impl EndpointAdmission {
     }
 
     pub fn occupancy(&self) -> EndpointOccupancy {
-        lk_agents_abi::lock(&self.budget).occupancy()
+        self.budget.lock().occupancy()
     }
 
     pub fn try_exchange(&self, bytes: usize) -> Option<EndpointReservation> {
-        let mut budget = lk_agents_abi::lock(&self.budget);
+        let mut budget = self.budget.lock();
         if !budget.admit_handler() {
             return None;
         }
@@ -43,7 +45,7 @@ impl EndpointAdmission {
     }
 
     pub fn try_payload(&self, bytes: usize) -> Option<EndpointReservation> {
-        let mut budget = lk_agents_abi::lock(&self.budget);
+        let mut budget = self.budget.lock();
         if !budget.admit_payload(bytes) {
             return None;
         }
@@ -59,13 +61,13 @@ pub(super) struct EndpointReservation {
 
 impl EndpointReservation {
     pub(super) fn release_payload(&mut self) {
-        lk_agents_abi::lock(&self.budget).release_payload(std::mem::take(&mut self.bytes));
+        self.budget.lock().release_payload(std::mem::take(&mut self.bytes));
     }
 }
 
 impl Drop for EndpointReservation {
     fn drop(&mut self) {
-        let mut budget = lk_agents_abi::lock(&self.budget);
+        let mut budget = self.budget.lock();
         budget.release_payload(self.bytes);
         if self.handler {
             budget.release_handler();
@@ -87,7 +89,7 @@ impl MessageAdmission {
         worker: &EndpointAdmission,
         bytes: usize,
     ) -> Option<MessageReservation> {
-        let mut budget = lk_agents_abi::lock(&self.budget);
+        let mut budget = self.budget.lock();
         if !budget.reserve(bytes) {
             return None;
         }
@@ -107,7 +109,7 @@ pub(super) struct MessageReservation {
 
 impl Drop for MessageReservation {
     fn drop(&mut self) {
-        lk_agents_abi::lock(&self.budget).release(self.bytes);
+        self.budget.lock().release(self.bytes);
     }
 }
 
@@ -116,7 +118,7 @@ impl Drop for MessageReservation {
 pub struct Registry {
     pub(super) admission: EndpointAdmission,
     pub(super) next: AtomicU64,
-    open: std::sync::Mutex<HashMap<u64, Weak<WsExchange>>>,
+    pub(super) open: Mutex<HashMap<u64, Weak<WsExchange>>>,
 }
 
 impl Registry {
@@ -135,11 +137,7 @@ impl Registry {
 
     /// A close frame to every open WebSocket, so clients reconnect to another worker.
     pub async fn close_all(&self, code: u16, reason: &str) {
-        let open: Vec<_> = self.lock().values().filter_map(Weak::upgrade).collect();
+        let open: Vec<_> = self.open.lock().values().filter_map(Weak::upgrade).collect();
         futures_util::future::join_all(open.iter().map(|ws| ws.close(code, reason))).await;
-    }
-
-    pub(super) fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Weak<WsExchange>>> {
-        lk_agents_abi::lock(&self.open)
     }
 }

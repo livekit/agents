@@ -5,7 +5,7 @@
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,6 +17,7 @@ use lk_agents_abi::worker::server_host::{
     EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
 };
 use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions, ServerOptions};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::endpoint::host::{Endpoints, NativeStream};
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
@@ -36,7 +37,7 @@ pub struct Configuration {
 
 impl Configuration {
     fn get(&self) -> MutexGuard<'_, ServerSettings> {
-        self.settings.lock().unwrap_or_else(|e| e.into_inner())
+        self.settings.lock()
     }
 }
 
@@ -258,7 +259,7 @@ pub struct AgentServerRuntime {
 
 impl AgentServerRuntime {
     fn settings(&self) -> ServerSettings {
-        self.settings.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.settings.lock().clone()
     }
 }
 

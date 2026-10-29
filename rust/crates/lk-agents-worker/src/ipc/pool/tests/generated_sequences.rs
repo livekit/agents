@@ -111,7 +111,7 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
     phase.set("verify events");
     let mut retired = std::collections::BTreeSet::new();
     let mut launched = std::collections::BTreeSet::new();
-    let events = host.events.lock().unwrap();
+    let events = host.events.lock();
     for &(event, process) in events.iter() {
         match event {
             PoolEvent::Closed => {

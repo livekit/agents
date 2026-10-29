@@ -663,7 +663,7 @@ async fn child_inbox_saturation_health() {
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(
-        lk_agents_abi::lock(&client.reader).as_ref().unwrap().is_finished(),
+        client.reader.lock().as_ref().unwrap().is_finished(),
         "an undrained application inbox must not suspend the health loop"
     );
     client.close().await;

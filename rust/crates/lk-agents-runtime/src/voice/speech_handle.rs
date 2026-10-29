@@ -4,13 +4,14 @@
 
 use super::session::Tx;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport, lock};
+use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport};
 use lk_agents_net::monotone::Monotone;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Event, SpeechCommand};
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use parking_lot::{Mutex, MutexGuard};
+use std::sync::{Arc, OnceLock};
 use tokio::sync::{mpsc, watch};
 
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.
@@ -177,12 +178,12 @@ impl SpeechHandle {
 
     /// What `say()` streams, for the speech's task to take.
     pub fn hold_say(&self, stream: SayStream) {
-        lock(&self.inner).say = Some(stream);
+        self.inner.lock().say = Some(stream);
     }
 
     /// `say()`'s text chunks, once.
     pub fn take_text_stream(&self) -> Option<mpsc::Receiver<String>> {
-        match lock(&self.inner).say.take() {
+        match self.inner.lock().say.take() {
             Some(SayStream::Text(rx)) => Some(rx),
             _ => None,
         }
@@ -190,7 +191,7 @@ impl SpeechHandle {
 
     /// `say(audio=)`'s frames, once.
     pub fn take_audio(&self) -> Option<mpsc::Receiver<AudioFrame>> {
-        match lock(&self.inner).say.take() {
+        match self.inner.lock().say.take() {
             Some(SayStream::Audio(rx)) => Some(rx),
             _ => None,
         }
@@ -204,10 +205,10 @@ impl SpeechHandle {
                 let _ = self.id.set(id);
             }
             SpeechUpdate::View(view) => self.publish(view),
-            SpeechUpdate::ItemAdded(item) => lock(&self.inner).chat_items.push(item),
-            SpeechUpdate::UserMetrics(metrics) => lock(&self.inner).user_metrics = Some(metrics),
-            SpeechUpdate::InterruptRefused => lock(&self.inner).requested = false,
-            SpeechUpdate::Released => lock(&self.inner).say = None,
+            SpeechUpdate::ItemAdded(item) => self.inner.lock().chat_items.push(item),
+            SpeechUpdate::UserMetrics(metrics) => self.inner.lock().user_metrics = Some(metrics),
+            SpeechUpdate::InterruptRefused => self.inner.lock().requested = false,
+            SpeechUpdate::Released => self.inner.lock().say = None,
         }
     }
 
@@ -215,7 +216,7 @@ impl SpeechHandle {
     /// generation exists before its authorization is announced.
     fn publish(&self, view: SpeechView) {
         {
-            let mut generations = lock(&self.generations);
+            let mut generations = self.generations.lock();
             for (step, done) in view.generations.iter().enumerate() {
                 if step == generations.len() {
                     generations.push(Arc::new(Monotone::new(false)));
@@ -229,7 +230,7 @@ impl SpeechHandle {
         self.interrupted.set(view.interrupted);
         self.done.set(view.done);
         self.authorized.set(view.generations.len());
-        lock(&self.inner).view = view;
+        self.inner.lock().view = view;
     }
 
     /// The loop answered the host's call: with the speech it created over this handle, or, when
@@ -238,7 +239,7 @@ impl SpeechHandle {
     /// the session closed) never ran: an interrupt asked of it lands nowhere.
     pub fn answered(&self, created: bool) {
         let mut requests = self.requests.lock();
-        let mut inner = lock(&self.inner);
+        let mut inner = self.inner.lock();
         let settled = self.creation.send_if_modified(|creation| {
             if *creation != Creation::Pending {
                 return false;
@@ -297,7 +298,7 @@ impl SpeechHandle {
 
     fn request(&self, command: SpeechCommand) {
         let mut requests = self.requests.lock();
-        let mut inner = lock(&self.inner);
+        let mut inner = self.inner.lock();
         self.ask(&mut requests, &mut inner, command);
     }
 
@@ -311,7 +312,7 @@ impl SpeechHandle {
     }
 
     fn view<T>(&self, read: impl FnOnce(&SpeechView) -> T) -> T {
-        read(&lock(&self.inner).view)
+        read(&self.inner.lock().view)
     }
 
     /// The loop interrupted the speech: its playout, its tools and any follow-up step.
@@ -343,13 +344,13 @@ impl SpeechHandle {
 
     /// The metrics of the user turn a preemptive reply was adopted for.
     pub fn user_metrics(&self) -> Option<MetricsReport> {
-        lock(&self.inner).user_metrics.clone()
+        self.inner.lock().user_metrics.clone()
     }
 
     /// `chat_items` (`speech_handle.py:156`): what this speech committed to the conversation.
     /// A copy, so it does not grow under a caller.
     pub fn chat_items(&self) -> Vec<ChatItem> {
-        lock(&self.inner).chat_items.clone()
+        self.inner.lock().chat_items.clone()
     }
 
     /// `_wait_for_scheduled`. The caller must re-check [`interrupted`](Self::interrupted) after:
@@ -396,7 +397,7 @@ impl SpeechHandle {
 
     /// The lock is released before any await.
     fn generation_cell(&self, step: usize) -> Arc<Monotone<bool>> {
-        lock(&self.generations).get(step).cloned().expect("the accepted generation was published")
+        self.generations.lock().get(step).cloned().expect("the accepted generation was published")
     }
 
     /// The speech waits on tool call `call_id` (`name`) until [`tool_returned`]: from its start
@@ -404,25 +405,25 @@ impl SpeechHandle {
     ///
     /// [`tool_returned`]: Self::tool_returned
     pub fn tool_blocking(&self, call_id: &str, name: &str) {
-        lock(&self.inner).blocking_tools.push((call_id.to_owned(), name.to_owned()));
+        self.inner.lock().blocking_tools.push((call_id.to_owned(), name.to_owned()));
     }
 
     pub fn tool_returned(&self, call_id: &str) {
-        lock(&self.inner).blocking_tools.retain(|(c, _)| c != call_id);
+        self.inner.lock().blocking_tools.retain(|(c, _)| c != call_id);
     }
 
     /// The tool `origin` names, when this speech is waiting on it: awaiting the speech from inside
     /// it would wait forever.
     fn self_wait(&self, origin: Option<&str>) -> Result<(), SpeechRefused> {
         let Some(call_id) = origin.and_then(|o| o.strip_prefix("tool:")) else { return Ok(()) };
-        match lock(&self.inner).blocking_tools.iter().find(|(c, _)| c == call_id) {
+        match self.inner.lock().blocking_tools.iter().find(|(c, _)| c == call_id) {
             Some((_, name)) => Err(SpeechRefused::SelfWait { name: name.clone() }),
             None => Ok(()),
         }
     }
 
     pub fn host(&self) -> Option<HostRef> {
-        lock(&self.inner).host.clone()
+        self.inner.lock().host.clone()
     }
 }
 
@@ -444,7 +445,7 @@ impl Requests {
     /// The list, held by a host call while it checks the speech's view and asks, and by the loop
     /// from its last request through the views its step publishes.
     pub fn lock(&self) -> MutexGuard<'_, Vec<SpeechCommand>> {
-        lock(&self.list)
+        self.list.lock()
     }
 
     fn send(&self, list: &mut Vec<SpeechCommand>, command: SpeechCommand) {
@@ -471,22 +472,22 @@ impl Speeches {
     /// The handle a host call returns, under the id the loop will create its speech with.
     pub fn register(&self, handle: Arc<SpeechHandle>) {
         let id = handle.reserved.expect("a host call's handle has its id");
-        lock(&self.handles).insert(id, handle);
+        self.handles.lock().insert(id, handle);
     }
 
     pub fn get(&self, id: SpeechId) -> Option<Arc<SpeechHandle>> {
-        lock(&self.handles).get(&id).cloned()
+        self.handles.lock().get(&id).cloned()
     }
 
     /// Nothing names `id` any more: the session lets its handle go (the host keeps its own).
     pub fn retire(&self, id: SpeechId) {
-        lock(&self.handles).remove(&id);
+        self.handles.lock().remove(&id);
     }
 
     /// How many speeches the session holds.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        lock(&self.handles).len()
+        self.handles.lock().len()
     }
 
     /// The host's object for `id`; a speech the session never held reads as a fresh one.
@@ -499,7 +500,7 @@ impl Speeches {
     /// the host's handle, when a call reserved the id).
     pub fn apply(&self, id: SpeechId, update: SpeechUpdate, wake: &Tx) {
         let handle = {
-            let mut speeches = lock(&self.handles);
+            let mut speeches = self.handles.lock();
             let entry = speeches.entry(id).or_insert_with(|| {
                 Arc::new(SpeechHandle::new(id, true, self.requests(wake.clone())))
             });
@@ -546,7 +547,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     }
 
     fn set_host_object(&self, host: HostRef) {
-        lock(&self.inner).host = Some(host);
+        self.inner.lock().host = Some(host);
     }
 
     /// Empty until the loop has minted `speech_{n}`; a detached handle answers the id it was
@@ -570,7 +571,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     /// From the tick `interrupt()` was called, and once the loop has interrupted the speech for
     /// any reason (an interruption, a supersede, the close).
     fn interrupted(&self) -> bool {
-        let inner = lock(&self.inner);
+        let inner = self.inner.lock();
         inner.view.host_interrupted(inner.requested)
     }
 
@@ -583,7 +584,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
     }
 
     fn set_allow_interruptions(&self, value: bool) -> Result<(), HostRefused> {
-        let mut inner = lock(&self.inner);
+        let mut inner = self.inner.lock();
         inner.view.host_set_allow_interruptions(value, inner.requested).map_err(refused)?;
         // A detached handle's setter is its own, with no loop to tell.
         if *self.creation.borrow() == Creation::Detached {
@@ -610,7 +611,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         // Under the list's lock: the loop has published every step it took before this request,
         // so a speech not done here is one the request reaches before anything ends it.
         let mut requests = self.requests.lock();
-        let mut inner = lock(&self.inner);
+        let mut inner = self.inner.lock();
         if !inner.view.host_interrupt(inner.requested, force).map_err(refused)? {
             return Ok(());
         }
@@ -626,7 +627,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
 
     fn hold_interruptions(&self) -> Result<(), HostRefused> {
         let speech = self.attached().map_err(refused)?;
-        lock(&self.inner).view.host_hold_interruptions().map_err(refused)?;
+        self.inner.lock().view.host_hold_interruptions().map_err(refused)?;
         self.request(SpeechCommand::HoldInterruptions { speech, hold: true });
         Ok(())
     }

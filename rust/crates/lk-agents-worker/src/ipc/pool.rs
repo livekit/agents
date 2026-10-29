@@ -4,19 +4,19 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::FutureExt;
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
+use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::HostError;
 
-use super::lock;
 use super::process_pool::Executor;
 
 pub const MAX_ACQUIRE_ATTEMPTS: u32 = 3;
@@ -311,15 +311,15 @@ impl ProcPool {
     }
 
     pub fn processes(&self) -> Vec<Executor> {
-        lock(&self.0.state).processes.values().filter_map(|p| p.executor.clone()).collect()
+        self.0.state.lock().processes.values().filter_map(|p| p.executor.clone()).collect()
     }
 
     pub fn jobs_waiting(&self) -> usize {
-        lock(&self.0.state).pending.len()
+        self.0.state.lock().pending.len()
     }
 
     pub fn target_idle(&self) -> usize {
-        lock(&self.0.state).target_idle
+        self.0.state.lock().target_idle
     }
 
     pub fn set_target_idle(&self, n: usize) {
@@ -331,7 +331,7 @@ impl ProcPool {
     /// and wakes the waiters. No host call is made under the lock.
     fn update<R>(&self, f: impl FnOnce(&Self, &mut State) -> R) -> R {
         let (result, released) = {
-            let mut st = lock(&self.0.state);
+            let mut st = self.0.state.lock();
             if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
                 st.refill_paused_until = None;
             }
@@ -372,7 +372,7 @@ impl ProcPool {
 
     pub async fn start(&self) -> Result<(), PoolStartError> {
         let first = {
-            let st = lock(&self.0.state);
+            let st = self.0.state.lock();
             if st.closed {
                 return Err(PoolStartError::Closed);
             }
@@ -390,7 +390,7 @@ impl ProcPool {
             Ok(Ok(readiness)) if *readiness == Readiness::Ready => Ok(()),
             Ok(_) => Err(PoolStartError::Closed),
             Err(_) => Err(PoolStartError::WarmupTimedOut {
-                ready: lock(&self.0.state).ready.len(),
+                ready: self.0.state.lock().ready.len(),
                 required: self.0.opts.num_idle_processes,
             }),
         }
@@ -400,7 +400,7 @@ impl ProcPool {
     async fn refill(&self) {
         loop {
             {
-                let st = lock(&self.0.state);
+                let st = self.0.state.lock();
                 if st.closed && st.processes.is_empty() {
                     break;
                 }
@@ -740,7 +740,7 @@ impl ProcPool {
             tokio::pin!(changed);
             changed.as_mut().enable();
             {
-                let st = lock(&self.0.state);
+                let st = self.0.state.lock();
                 match st.reservation(request) {
                     Some(ReservationState::Reserved(id)) => {
                         if let Some(executor) = st.executor(id) {
@@ -840,7 +840,7 @@ impl ProcPool {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if !lock(&self.0.state).has_jobs() {
+            if !self.0.state.lock().has_jobs() {
                 return;
             }
             changed.await;
@@ -875,9 +875,9 @@ impl ProcPool {
                         let changed = pool.0.changed.notified();
                         tokio::pin!(changed);
                         changed.as_mut().enable();
-                        let tasks = std::mem::take(&mut lock(&pool.0.state).tasks);
+                        let tasks = std::mem::take(&mut pool.0.state.lock().tasks);
                         if tasks.is_empty() {
-                            if lock(&pool.0.state).processes.is_empty() {
+                            if pool.0.state.lock().processes.is_empty() {
                                 break;
                             }
                             changed.await;
@@ -895,14 +895,14 @@ impl ProcPool {
                 };
                 tokio::pin!(cleanup);
                 if tokio::time::timeout(pool.0.cleanup_timeout, &mut cleanup).await.is_err() {
-                    let processes = lock(&pool.0.state).processes.keys().copied().collect();
+                    let processes = pool.0.state.lock().processes.keys().copied().collect();
                     pool.0.host.cleanup_incomplete(PoolCleanupObservation { processes });
                     pool.0.close_ready.send_replace(true);
                     cleanup.await;
                 }
                 pool.0.close_ready.send_replace(true);
             });
-            lock(&self.0.state).cleanup = Some(cleanup);
+            self.0.state.lock().cleanup = Some(cleanup);
         }
         let _ = self.0.close_ready.subscribe().wait_for(|done| *done).await;
     }
