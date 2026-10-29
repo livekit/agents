@@ -295,13 +295,22 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     }
     if s.stop == Some(Stop::ClientCanceled) || (settled.interrupted && s.answer_canceled) {
         // the answer row is the client's; the history keeps what ran, the run says why it ended
-        if let Some(ask) = s.continued.filter(|_| !s.answer_canceled) {
-            // the client canceled the reply continuing it: its question waits for an answer again
-            settled.transitions.push(TaskTransition {
-                task_id: answer,
-                status: TaskState::InputRequired,
-                patch: TaskPatch { ask: Some(ask.clone()), ..TaskPatch::default() },
-            });
+        if !s.answer_canceled {
+            let transition = match s.continued {
+                // the client canceled the reply continuing it: its question waits again
+                Some(ask) => TaskTransition {
+                    task_id: answer,
+                    status: TaskState::InputRequired,
+                    patch: TaskPatch { ask: Some(ask.clone()), ..TaskPatch::default() },
+                },
+                // nothing to put back: the row ends canceled, so no row is left `working`
+                None => TaskTransition {
+                    task_id: answer,
+                    status: TaskState::Canceled,
+                    patch: TaskPatch::default(),
+                },
+            };
+            settled.transitions.push(transition);
         }
         settled.outcome = RunOutcome::Canceled;
         settled.reason = Some("client-cancel".into());
@@ -635,6 +644,10 @@ mod tests {
         let canceled = settled(text("late"), Some(Stop::ClientCanceled), true);
         assert_eq!(statuses(&canceled), vec![("AST_1", TaskState::Completed)]);
         assert_eq!(canceled.outcome, RunOutcome::Canceled);
+        // A2A_SEED=2316 (review12): a stop on a client's cancel whose answer row read back
+        // uncanceled still ends that row, rather than leave it `working` with no run holding it
+        let unseen = settled(text("late"), Some(Stop::ClientCanceled), false);
+        assert_eq!(unseen.transitions.last().map(|t| t.status), Some(TaskState::Canceled));
     }
     #[test]
     fn a_plain_question_can_continue_its_existing_task() {
