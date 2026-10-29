@@ -294,6 +294,7 @@ impl Inner {
                         updated_after: query.updated_after,
                         page_size: query.page_size,
                         page_token: query.page_token.clone(),
+                        ..TaskQuery::default()
                     })
                     .await;
                 thread.close().await;

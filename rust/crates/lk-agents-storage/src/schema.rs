@@ -674,10 +674,11 @@ FROM tasks WHERE task_id = :task_id
 }
 
 statement! {
-    /// One page of the thread's tasks, every lane's, in A2A `tasks/list` order: last updated
-    /// first, then by task id. Only those of `status` when given, updated after `updated_after`,
-    /// and past the previous page's last row, `(before_at, before_id)`.
+    /// One page of the thread's tasks in A2A `tasks/list` order: last updated first, then by
+    /// task id. Of `lane` and `status` when given, updated after `updated_after`, and past the
+    /// previous page's last row, `(before_at, before_id)`.
     SelectThreadTasksPage<'a> {
+        lane: Option<&'a str>,
         status: Option<&'a str>,
         updated_after: i64,
         before_at: i64,
@@ -687,7 +688,8 @@ statement! {
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
   json(data), json(internal)
 FROM tasks
-WHERE (:status IS NULL OR status = :status)
+WHERE (:lane IS NULL OR lane = :lane)
+  AND (:status IS NULL OR status = :status)
   AND updated_at > :updated_after
   AND (updated_at < :before_at OR (updated_at = :before_at AND task_id < :before_id))
 ORDER BY updated_at DESC, task_id DESC
@@ -696,9 +698,33 @@ LIMIT :limit
 }
 
 statement! {
-    /// How many tasks [`SelectThreadTasksPage`]'s filters match, every page.
-    CountThreadTasks<'a> { status: Option<&'a str>, updated_after: i64 } => r#"
-SELECT COUNT(*) FROM tasks WHERE (:status IS NULL OR status = :status) AND updated_at > :updated_after
+    /// One page of the thread's tasks in insertion order (`pos`), after `after`, with
+    /// [`SelectThreadTasksPage`]'s filters: each row its position, then the task.
+    SelectThreadTasksInserted<'a> {
+        lane: Option<&'a str>,
+        status: Option<&'a str>,
+        updated_after: i64,
+        after: i64,
+        limit: i64,
+    } => r#"
+SELECT pos, task_id, lane, seq, name, message_id, status, updated_at,
+  json(data), json(internal)
+FROM tasks
+WHERE (:lane IS NULL OR lane = :lane)
+  AND (:status IS NULL OR status = :status)
+  AND updated_at > :updated_after
+  AND pos > :after
+ORDER BY pos
+LIMIT :limit
+"#
+}
+
+statement! {
+    /// How many tasks a task page's filters match, every page.
+    CountThreadTasks<'a> { lane: Option<&'a str>, status: Option<&'a str>, updated_after: i64 } => r#"
+SELECT COUNT(*) FROM tasks
+WHERE (:lane IS NULL OR lane = :lane) AND (:status IS NULL OR status = :status)
+  AND updated_at > :updated_after
 "#
 }
 

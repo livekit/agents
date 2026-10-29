@@ -20,6 +20,7 @@ from ._generated.storage_class import (
     StreamInfo,
     TaskPage,
     TaskRecord,
+    ThreadItemPage,
 )
 from ._generated.storage_context import ContextScope, ContextScopeWrite
 from ._generated.storage_options import Policy, TurnOptions
@@ -85,12 +86,19 @@ class Thread:
 
     def list_tasks(
         self,
+        lane: str | None = None,
         status: str | None = None,
-        updated_after: int = 0,
+        order: str = "updated",
         page_size: int = 50,
         page_token: str | None = None,
     ) -> Awaitable[TaskPage]:
-        """One page of every lane's tasks, last updated first (A2A ``tasks/list``)."""
+        """One page of the thread's tasks: ``"updated"``, last updated first (A2A
+        ``tasks/list``), or ``"inserted"``, oldest first; of ``lane`` and ``status`` when given."""
+
+    def list_items(
+        self, lane: str | None = None, after: str | None = None, limit: int = 100
+    ) -> Awaitable[ThreadItemPage]:
+        """One page of the thread's committed items in insertion order, after a page's ``after``."""
 
     def lane_info(self, lane: str) -> Awaitable[LaneRow | None]:
         """A lane's row, ``None`` before its first run."""

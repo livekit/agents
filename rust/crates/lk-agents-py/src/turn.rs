@@ -12,6 +12,8 @@ use lk_agents_abi::python::{check_pid, value_from_py, value_to_py};
 use lk_agents_abi::storage as host;
 use lk_agents_abi::{Clock, RealClock};
 use lk_agents_runtime::a2a::Turn;
+use lk_agents_runtime::storage::db::TaskOrder;
+use lk_agents_runtime::storage::host::thread_item_page;
 use lk_agents_runtime::storage::{
     CommitOptions, ItemRow, Run, RunOptions, RunOutcome, TaskQuery, TaskState, Thread,
 };
@@ -139,14 +141,16 @@ impl PyThread {
         })
     }
 
-    /// One page of every lane's tasks, last updated first, as a `TaskPage` (A2A `tasks/list`).
+    /// One page of the thread's tasks as a `TaskPage`: `order` `"updated"`, last updated first
+    /// (A2A `tasks/list`), or `"inserted"`, oldest first; of `lane` and `status` when given.
     /// Awaitable.
-    #[pyo3(signature = (status=None, updated_after=0, page_size=50, page_token=None))]
+    #[pyo3(signature = (lane=None, status=None, order="updated", page_size=50, page_token=None))]
     fn list_tasks<'py>(
         &self,
         py: Python<'py>,
+        lane: Option<String>,
         status: Option<Bound<'py, PyAny>>,
-        updated_after: i64,
+        order: &str,
         page_size: i64,
         page_token: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -155,7 +159,12 @@ impl PyThread {
             .map(|s| crate::generated::records::storage_class::task_state_from_py(&s))
             .transpose()?;
         let status = status.and_then(|s| TaskState::parse(s.as_str()));
-        let query = TaskQuery { status, updated_after, page_size, page_token };
+        let order = match order {
+            "updated" => TaskOrder::Updated,
+            "inserted" => TaskOrder::Inserted,
+            other => return Err(PyValueError::new_err(format!("unknown task order {other:?}"))),
+        };
+        let query = TaskQuery { lane, status, order, page_size, page_token, updated_after: 0 };
         let thread = self.inner.clone();
         crate::host::future_into_py(py, async move {
             let page = thread.list_tasks(&query).await.map_err(to_py_err)?;
@@ -165,6 +174,31 @@ impl PyThread {
                     host::TaskPage::from(page),
                 )?
                 .unbind())
+            })
+        })
+    }
+
+    /// One page of the thread's committed items in insertion order, of `lane` when given, after
+    /// the previous page's `after` cursor: a `ThreadItemPage`. Awaitable.
+    #[pyo3(signature = (lane=None, after=None, limit=100))]
+    fn list_items<'py>(
+        &self,
+        py: Python<'py>,
+        lane: Option<String>,
+        after: Option<String>,
+        limit: i64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let thread = self.inner.clone();
+        crate::host::future_into_py(py, async move {
+            let page = thread
+                .list_items(lane.as_deref(), after.as_deref().filter(|a| !a.is_empty()), limit)
+                .await
+                .and_then(thread_item_page)
+                .map_err(to_py_err)?;
+            Python::attach(|py| {
+                Ok(crate::generated::records::storage_class::thread_item_page_to_py(py, page)?
+                    .unbind())
             })
         })
     }

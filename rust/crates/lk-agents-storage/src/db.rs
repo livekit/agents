@@ -16,10 +16,13 @@ const MAX_TASK_PAGE: i64 = 100;
 /// The largest state, in bytes.
 pub const STATE_LIMIT: usize = 64 * 1024;
 
-/// A2A `tasks/list`'s filters and position.
-#[derive(Debug, Clone)]
+/// A task listing's filters, order and position: A2A `tasks/list`, or browsing a thread.
+#[derive(Debug, Clone, Default)]
 pub struct TaskQuery {
+    /// Only this lane's tasks when given.
+    pub lane: Option<String>,
     pub status: Option<TaskState>,
+    pub order: TaskOrder,
     /// Unix milliseconds: only tasks updated after it.
     pub updated_after: i64,
     pub page_size: i64,
@@ -27,7 +30,17 @@ pub struct TaskQuery {
     pub page_token: Option<String>,
 }
 
-/// One page of A2A `tasks/list`.
+/// How a task listing is ordered (docs/internals/storage.md#reading-thread-items-and-tasks).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskOrder {
+    /// Last updated first, ties by task id: A2A `tasks/list`.
+    #[default]
+    Updated,
+    /// Insertion order (`tasks.pos`), oldest first: browsing a thread.
+    Inserted,
+}
+
+/// One page of a task listing.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TaskPage {
     pub tasks: Vec<TaskRow>,
@@ -753,51 +766,99 @@ pub struct ListTasksDecode {
     page: usize,
     count: usize,
     page_size: i64,
+    order: TaskOrder,
     filters: String,
 }
 
-/// One page of the thread's tasks, last updated first (ties by task id), as A2A `tasks/list`
-/// answers it. A page token made under other filters is refused.
+/// One page of the thread's tasks in `q.order`. A page token is opaque, bound to the filters
+/// and order it was made under: another listing's token is refused.
 pub fn list_tasks(q: &TaskQuery) -> Result<Plan<ListTasksDecode>, StorageError> {
     let filters = task_filters(q);
-    let (before_at, before_id) = match q.page_token.as_deref().filter(|t| !t.is_empty()) {
-        None => (i64::MAX, String::new()),
-        Some(token) => token
-            .strip_prefix(&filters)
-            .and_then(|rest| rest.split_once(':'))
-            .and_then(|(at, id)| Some((at.parse().ok()?, id.to_owned())))
-            .ok_or_else(|| {
+    let position = q
+        .page_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .map(|token| {
+            token.strip_prefix(&filters).ok_or_else(|| {
                 StorageError::Invalid(format!("page token {token:?} for this listing"))
-            })?,
-    };
-    let (status, updated_after) = (q.status.map(TaskState::as_str), q.updated_after);
+            })
+        })
+        .transpose()?;
+    let invalid =
+        || StorageError::Invalid(format!("page token {:?} for this listing", q.page_token));
+    let (lane, status, updated_after) =
+        (q.lane.as_deref(), q.status.map(TaskState::as_str), q.updated_after);
     let page_size = q.page_size.clamp(1, MAX_TASK_PAGE);
     let mut b = Batch::default();
-    let page = b.add(SelectThreadTasksPage {
-        status,
-        updated_after,
-        before_at,
-        before_id: &before_id,
-        limit: page_size + 1,
-    });
-    let count = b.add(CountThreadTasks { status, updated_after });
-    Ok(b.plan(ListTasksDecode { page, count, page_size, filters }))
+    let page = match q.order {
+        TaskOrder::Updated => {
+            let (before_at, before_id) = match position {
+                None => (i64::MAX, String::new()),
+                Some(at) => at
+                    .split_once(':')
+                    .and_then(|(at, id)| Some((at.parse().ok()?, id.to_owned())))
+                    .ok_or_else(invalid)?,
+            };
+            b.add(SelectThreadTasksPage {
+                lane,
+                status,
+                updated_after,
+                before_at,
+                before_id: &before_id,
+                limit: page_size + 1,
+            })
+        }
+        TaskOrder::Inserted => {
+            let after = position.map_or(Ok(0), |pos| pos.parse().map_err(|_| invalid()))?;
+            b.add(SelectThreadTasksInserted {
+                lane,
+                status,
+                updated_after,
+                after,
+                limit: page_size + 1,
+            })
+        }
+    };
+    let count = b.add(CountThreadTasks { lane, status, updated_after });
+    Ok(b.plan(ListTasksDecode { page, count, page_size, order: q.order, filters }))
 }
 
-/// The filters a task page token is bound to, as its prefix.
+/// The filters and order a task page token is bound to, as its prefix.
 fn task_filters(q: &TaskQuery) -> String {
-    format!("{}:{}:", q.status.map_or("*", TaskState::as_str), q.updated_after)
+    let order = match q.order {
+        TaskOrder::Updated => "u",
+        TaskOrder::Inserted => "i",
+    };
+    let status = q.status.map_or("*", TaskState::as_str);
+    format!("{order}:{status}:{}:{}:", q.updated_after, q.lane.as_deref().unwrap_or("*"))
 }
 
 impl Decode for ListTasksDecode {
     type Output = TaskPage;
 
     fn decode(self, out: &BatchResult) -> Result<TaskPage, StorageError> {
-        let mut tasks = rows(out, self.page, TaskRow::from_row)?;
+        let (mut tasks, mut positions) = (Vec::new(), Vec::new());
+        for row in out.at(self.page)?.rows() {
+            match self.order {
+                TaskOrder::Updated => tasks.push(TaskRow::from_row(row)?),
+                TaskOrder::Inserted => {
+                    let pos = row.first().and_then(SqlValue::as_i64);
+                    let pos =
+                        pos.ok_or_else(|| StorageError::Unavailable("a task page row".into()))?;
+                    positions.push(pos);
+                    tasks.push(TaskRow::from_row(&row[1..].to_vec())?);
+                }
+            }
+        }
         let more = tasks.len() as i64 > self.page_size;
         tasks.truncate(self.page_size as usize);
-        let next_page_token = match tasks.last() {
-            Some(last) if more => format!("{}{}:{}", self.filters, last.updated_at, last.task_id),
+        let next_page_token = match (tasks.last(), self.order) {
+            (Some(last), TaskOrder::Updated) if more => {
+                format!("{}{}:{}", self.filters, last.updated_at, last.task_id)
+            }
+            (Some(_), TaskOrder::Inserted) if more => {
+                format!("{}{}", self.filters, positions[tasks.len() - 1])
+            }
             _ => String::new(),
         };
         let total_size = out.at(self.count)?.first_int().unwrap_or(0);

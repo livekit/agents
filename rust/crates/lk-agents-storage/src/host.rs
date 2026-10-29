@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
 use crate::context::store::ContextStore;
-use crate::db::{TaskPage, TaskQuery};
+use crate::db::{ItemPage, TaskPage, TaskQuery};
 use crate::engine::LeaseTiming;
 use crate::sqlite::SqliteStorage;
 use crate::voice::VoiceStore;
@@ -166,6 +166,24 @@ fn json<T: serde::Serialize>(v: &T) -> Result<Value, StorageError> {
     serde_json::to_value(v).map_err(|e| StorageError::Invalid(e.to_string()))
 }
 
+/// A thread handle's item page as the host record: the same shape Cloud's `GetThreadItems`
+/// answers.
+pub fn thread_item_page(page: ItemPage) -> Result<ThreadItemPage, StorageError> {
+    let items = page
+        .items
+        .into_iter()
+        .map(|p| {
+            Ok(ThreadItem {
+                agent: p.lane,
+                seq: p.seq,
+                message_id: p.item.message_id.unwrap_or_default(),
+                item: json(&p.item.payload)?,
+            })
+        })
+        .collect::<Result<_, StorageError>>()?;
+    Ok(ThreadItemPage { items, after: page.next.unwrap_or_default() })
+}
+
 fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
     Ok(ThreadItem {
         agent: i.agent,
@@ -199,7 +217,7 @@ async fn local_tasks(
     loop {
         // the host's state names the row state of the same spelling
         let status = status.and_then(|s| crate::TaskState::parse(s.as_str()));
-        let query = TaskQuery { status, updated_after: 0, page_size: 100, page_token };
+        let query = TaskQuery { status, page_size: 100, page_token, ..TaskQuery::default() };
         let page = thread.list_tasks(&query).await?;
         for row in page.tasks {
             tasks.push(ThreadTask {
@@ -364,20 +382,7 @@ impl<E: Env> HostStorageClass for HostStorage<E> {
                 let limit = limit.map_or(LOCAL_PAGE, i64::from);
                 let page = thread.list_items(agent.as_deref(), after.as_deref(), limit).await;
                 thread.close().await;
-                let page = page?;
-                let items = page
-                    .items
-                    .into_iter()
-                    .map(|p| {
-                        Ok(ThreadItem {
-                            agent: p.lane,
-                            seq: p.seq,
-                            message_id: p.item.message_id.unwrap_or_default(),
-                            item: json(&p.item.payload)?,
-                        })
-                    })
-                    .collect::<Result<_, StorageError>>()?;
-                Ok(ThreadItemPage { items, after: page.next.unwrap_or_default() })
+                thread_item_page(page?)
             }
         }
     }

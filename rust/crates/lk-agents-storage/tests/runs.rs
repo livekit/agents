@@ -573,9 +573,9 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     lane.cancel_task("AST_2", Default::default()).await.unwrap();
     let query = |status, page_token| lk_agents_storage::db::TaskQuery {
         status,
-        updated_after: 0,
         page_size: 2,
         page_token,
+        ..Default::default()
     };
     let (mut seen, mut token) = (Vec::new(), None);
     loop {
@@ -603,8 +603,48 @@ async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
+/// A thread's tasks browse in insertion order, of one lane when asked, whatever was updated
+/// since; the token is bound to that order and lane.
+async fn tasks_browse_in_insertion_order_by_lane(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    for (lane, id) in [(LANE, "AST_1"), ("expert", "AST_2"), (LANE, "AST_3"), (LANE, "AST_4")] {
+        assert!(s.lane(lane).submit(&submitted(id)).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    s.lane(LANE).cancel_task("AST_1", Default::default()).await.unwrap();
+    let query = |page_token| lk_agents_storage::db::TaskQuery {
+        lane: Some(LANE.into()),
+        order: lk_agents_storage::db::TaskOrder::Inserted,
+        page_size: 2,
+        page_token,
+        ..Default::default()
+    };
+    let (mut seen, mut token) = (Vec::new(), None);
+    loop {
+        let page = s.list_tasks(&query(token)).await.unwrap();
+        assert_eq!(page.total_size, 3);
+        seen.extend(page.tasks.into_iter().map(|t| t.task_id));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = Some(page.next_page_token);
+    }
+    assert_eq!(seen, ["AST_1", "AST_3", "AST_4"], "oldest first, the lane's only");
+    let first = s.list_tasks(&query(None)).await.unwrap();
+    let crossed = s
+        .list_tasks(&lk_agents_storage::db::TaskQuery {
+            page_token: Some(first.next_page_token),
+            ..Default::default()
+        })
+        .await;
+    assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a token of another listing");
+    fx.cleanup(&[&s]).await;
+}
+
 lk_agents_storage::contract!(
     tasks_page_by_last_update_with_a_filter_bound_token,
+    tasks_browse_in_insertion_order_by_lane,
     items_page_by_position_with_a_filter_bound_cursor,
     a_run_loads_its_whole_history_in_its_acquire,
     a_concurrent_run_refuses_to_edit_or_delete_loaded_history,
