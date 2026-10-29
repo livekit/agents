@@ -21,7 +21,7 @@ use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner, SpawnerExt,
     TOPIC_CHAT, TaskSet, Ts,
 };
-use lk_agents_voice::room_io::coordinator::RoomCoordinator;
+use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
 use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -339,46 +339,34 @@ impl RoomIo {
 
     /// `set_participant`.
     pub async fn set_participant(&self, identity: Option<ParticipantIdentity>) -> Result<()> {
-        let Some(identity) = identity else {
-            return self.unset_participant().await;
+        let participant = match &identity {
+            Some(identity) => self.room.participant(identity)?,
+            None => None,
         };
-
-        let participant = self.room.participant(&identity)?;
-        let present = participant.is_some();
-        let Some((previous, event)) = self.coordinate(|coordinator| {
-            if !coordinator.is_open() {
-                return Result::Ok(None);
-            }
-            let previous = coordinator.state().linked;
-            let event = if present && previous.as_ref() != Some(&identity) {
-                Some(self.reserve_event()?)
-            } else {
-                None
-            };
-            coordinator.select(Some(identity.clone()), participant.as_ref().map(|p| p.sid()));
-            Ok(Some((previous, event)))
-        })?
-        else {
+        let listed = participant.as_ref().map(|p| p.sid().to_owned());
+        let Some(relink) = self.coordinate(|coordinator| {
+            coordinator.set_participant(identity.clone(), listed.as_deref())
+        }) else {
             return Ok(());
         };
-        if let Some(event) = event {
-            event.send(RoomIoEvent::ParticipantLinked(ParticipantLinked {
+        if relink.announce
+            && let Some(identity) = &identity
+        {
+            self.emit(RoomIoEvent::ParticipantLinked(ParticipantLinked {
                 identity: identity.clone(),
-            }));
+            }))?;
         }
-
-        // A repeated selection retires the old attachment's buffered media too.
-        if previous.as_ref() == Some(&identity) {
+        if relink.detach {
             self.attach_participant(None).await?;
         }
-        self.attach_participant(Some(identity)).await
+        match identity {
+            Some(identity) => self.attach_participant(Some(identity)).await,
+            None => Ok(()),
+        }
     }
 
     pub async fn unset_participant(&self) -> Result<()> {
-        if self.coordinate(|coordinator| coordinator.select(None, None)) {
-            self.attach_participant(None).await?;
-        }
-        Ok(())
+        self.set_participant(None).await
     }
 
     async fn attach_participant(&self, identity: Option<ParticipantIdentity>) -> Result<()> {
@@ -423,28 +411,15 @@ impl RoomIo {
     }
 
     async fn handle_event(self: &Arc<Self>, event: &RoomEvent) -> Result<()> {
-        let participant = match event {
-            RoomEvent::TrackSubscribed { participant, .. }
-            | RoomEvent::TrackUnsubscribed { participant, .. }
-            | RoomEvent::TrackPublished { participant, .. }
-            | RoomEvent::TrackUnpublished { participant, .. }
-            | RoomEvent::ParticipantConnected { participant }
-            | RoomEvent::ParticipantActive { participant }
-            | RoomEvent::ParticipantAttributesChanged { participant }
-            | RoomEvent::ParticipantDisconnected { participant, .. } => Some(participant),
-            _ => None,
-        };
-        if let Some(participant) = participant {
-            let current = self.room.participant(participant.identity())?;
-            let accepted = match current {
-                Some(current) => current.sid() == participant.sid(),
-                None if matches!(event, RoomEvent::ParticipantDisconnected { .. }) => self
-                    .coordinator
-                    .borrow()
-                    .accepts_participant(participant.identity(), participant.sid()),
-                None => false,
-            };
-            if !accepted {
+        if let Some(participant) = event_participant(event) {
+            let listed = self.room.participant(participant.identity())?;
+            let departure = matches!(event, RoomEvent::ParticipantDisconnected { .. });
+            if !self.coordinator.borrow().current_event(
+                participant.identity(),
+                participant.sid(),
+                listed.as_ref().map(|listed| listed.sid()),
+                departure,
+            ) {
                 return Ok(());
             }
         }

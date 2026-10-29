@@ -2,7 +2,26 @@
 
 use lk_agents_abi::Closed;
 use lk_agents_abi::voice::io::{IoError, Result};
-use lk_agents_abi::voice::rtc::{ParticipantIdentity, ParticipantKind};
+use lk_agents_abi::voice::rtc::{
+    ParticipantIdentity, ParticipantKind, RemoteParticipant, RoomEvent,
+};
+use std::sync::Arc;
+
+/// The remote participant a room event is about, whose lifetime
+/// [`RoomCoordinator::current_event`] checks.
+pub fn event_participant(event: &RoomEvent) -> Option<&Arc<dyn RemoteParticipant>> {
+    match event {
+        RoomEvent::TrackSubscribed { participant, .. }
+        | RoomEvent::TrackUnsubscribed { participant, .. }
+        | RoomEvent::TrackPublished { participant, .. }
+        | RoomEvent::TrackUnpublished { participant, .. }
+        | RoomEvent::ParticipantConnected { participant }
+        | RoomEvent::ParticipantActive { participant }
+        | RoomEvent::ParticipantAttributesChanged { participant }
+        | RoomEvent::ParticipantDisconnected { participant, .. } => Some(participant),
+        _ => None,
+    }
+}
 
 use super::decide_link;
 
@@ -18,6 +37,15 @@ enum Phase {
     Started,
     Closing,
     Closed(Closed),
+}
+
+/// What `set_participant` does after the selection.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Relink {
+    /// Emit `ParticipantLinked`: a present participant other than the one linked.
+    pub announce: bool,
+    /// Detach the media of the previous attachment first, even for the same participant.
+    pub detach: bool,
 }
 
 pub struct RoomCoordinator {
@@ -104,6 +132,40 @@ impl RoomCoordinator {
         self.linked = target.filter(|_| sid.is_some());
         self.linked_sid = sid.map(str::to_owned);
         true
+    }
+
+    /// `set_participant`: `listed_sid` is the participant's SDK sid when it is in the room.
+    /// `None` once closing.
+    pub fn set_participant(
+        &mut self,
+        identity: Option<ParticipantIdentity>,
+        listed_sid: Option<&str>,
+    ) -> Option<Relink> {
+        if !self.is_open() {
+            return None;
+        }
+        let relink = Relink {
+            announce: listed_sid.is_some() && identity.is_some() && self.linked != identity,
+            detach: identity.is_none() || self.linked == identity,
+        };
+        self.select(identity, listed_sid);
+        Some(relink)
+    }
+
+    /// Whether a room event about this participant lifetime is current: the SDK still lists that
+    /// lifetime, or it is the linked one departing. A delayed event of an earlier lifetime of
+    /// the same identity is dropped.
+    pub fn current_event(
+        &self,
+        identity: &ParticipantIdentity,
+        sid: &str,
+        listed_sid: Option<&str>,
+        departure: bool,
+    ) -> bool {
+        match listed_sid {
+            Some(listed) => listed == sid,
+            None => departure && self.accepts_participant(identity, sid),
+        }
     }
 
     pub fn disconnect(&mut self, identity: &ParticipantIdentity, sid: &str) -> bool {
@@ -216,6 +278,33 @@ mod tests {
         assert!(room.accepts_participant(&identity, "PA_new"));
         assert!(room.disconnect(&identity, "PA_new"));
         assert!(room.state().linked.is_none());
+    }
+
+    #[test]
+    fn selecting_the_linked_participant_again_reattaches_without_announcing() {
+        let person = ParticipantIdentity::from("person");
+        let mut room = RoomCoordinator::new(None);
+        room.start();
+        let first = room.set_participant(Some(person.clone()), Some("PA_1")).unwrap();
+        assert_eq!(first, Relink { announce: true, detach: false });
+        let again = room.set_participant(Some(person.clone()), Some("PA_1")).unwrap();
+        assert_eq!(again, Relink { announce: false, detach: true });
+        let absent = room.set_participant(Some("absent".into()), None).unwrap();
+        assert!(!absent.announce, "nobody to announce until they join");
+        room.begin_close();
+        assert!(room.set_participant(None, None).is_none());
+    }
+
+    #[test]
+    fn an_event_of_an_earlier_participant_lifetime_is_dropped() {
+        let person = ParticipantIdentity::from("person");
+        let mut room = RoomCoordinator::new(None);
+        room.start();
+        room.select(Some(person.clone()), Some("PA_new"));
+        assert!(!room.current_event(&person, "PA_old", Some("PA_new"), false));
+        assert!(room.current_event(&person, "PA_new", Some("PA_new"), false));
+        assert!(room.current_event(&person, "PA_new", None, true), "the linked one departs");
+        assert!(!room.current_event(&person, "PA_old", None, true));
     }
 
     #[test]

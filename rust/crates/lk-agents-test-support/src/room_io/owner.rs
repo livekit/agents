@@ -14,7 +14,7 @@ use lk_agents_abi::voice::room_io::{
 use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomIoEvent, RoomVideoInput};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RoomEvent, RtcRoom};
 use lk_agents_abi::{AbortHandle, Clock, Closed, Monotone, Spawner, TaskSet, Ts};
-use lk_agents_voice::room_io::coordinator::RoomCoordinator;
+use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
 use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
@@ -175,6 +175,18 @@ impl RoomIo {
         Ok(())
     }
     async fn event(&self, event: &RoomEvent) -> Result<()> {
+        if let Some(participant) = event_participant(event) {
+            let listed = self.room.participant(participant.identity())?;
+            let departure = matches!(event, RoomEvent::ParticipantDisconnected { .. });
+            if !self.coordinator.lock().unwrap().current_event(
+                participant.identity(),
+                participant.sid(),
+                listed.as_ref().map(|listed| listed.sid()),
+                departure,
+            ) {
+                return Ok(());
+            }
+        }
         match event {
             RoomEvent::ParticipantConnected { participant }
             | RoomEvent::ParticipantAttributesChanged { participant } => {
@@ -610,11 +622,23 @@ impl room_owner::RoomIo for RoomIo {
                 .transpose()?
                 .flatten()
                 .map(|p| p.sid().to_owned());
-            if self.coordinator.lock().unwrap().select(who.clone(), sid.as_deref()) {
-                self.attach(None).await?;
-                self.attach(who).await?;
-                self.changed.notify_waiters();
+            let relink =
+                self.coordinator.lock().unwrap().set_participant(who.clone(), sid.as_deref());
+            let Some(relink) = relink else { return Ok(()) };
+            if relink.announce
+                && let Some(who) = &who
+            {
+                self.emit(RoomIoEvent::ParticipantLinked(ParticipantLinked {
+                    identity: who.clone(),
+                }));
             }
+            if relink.detach {
+                self.attach(None).await?;
+            }
+            if who.is_some() {
+                self.attach(who).await?;
+            }
+            self.changed.notify_waiters();
             Ok(())
         })
     }
