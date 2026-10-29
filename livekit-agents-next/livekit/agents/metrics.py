@@ -4,8 +4,7 @@ declarations), with the usage collector and the log helper."""
 from __future__ import annotations
 
 import logging
-
-from pydantic import TypeAdapter
+from dataclasses import dataclass
 
 from . import _core
 from ._generated.metrics import (
@@ -23,7 +22,6 @@ from ._generated.metrics import (
     _BaseMetrics,
 )
 from ._generated.usage import (
-    AgentSessionUsage,
     EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
@@ -60,7 +58,9 @@ __all__ = [
 ]
 
 
-_MODEL_USAGE: TypeAdapter[ModelUsage] = TypeAdapter(ModelUsage)
+@dataclass
+class AgentSessionUsage:
+    model_usage: list[ModelUsage]
 
 
 class ModelUsageCollector:
@@ -77,7 +77,7 @@ class ModelUsageCollector:
 
     def flatten(self) -> list[ModelUsage]:
         """Returns a list of usage summaries, one per model/provider combination."""
-        return [_MODEL_USAGE.validate_python(u) for u in self._native.flatten()]
+        return self._native.flatten()
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:

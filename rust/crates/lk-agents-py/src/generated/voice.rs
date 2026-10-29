@@ -1250,10 +1250,10 @@ impl VoiceSession {
 
     /// `session.usage.model_usage`: the usage of every model the session was billed for.
     #[getter]
-    fn usage(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::metrics::ModelUsage>> {
+    fn usage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::usage(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::usage::model_usage_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh

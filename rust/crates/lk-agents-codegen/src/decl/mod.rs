@@ -53,6 +53,9 @@ pub struct RecordDecl {
     /// `record(.., enum)`: a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`,
     /// its `.value` the string) rather than a `Literal` of its strings.
     pub enumeration: bool,
+    /// `record(.., pydantic)`: a struct whose model is a mutable pydantic `BaseModel` (the public
+    /// records users and plugins build, mutate and validate), not a frozen dataclass.
+    pub pydantic: Option<Pydantic>,
     /// `record(.., constant(type = "stt_metrics"))`: fields the model holds at a fixed value (a
     /// discriminator its readers compare), never Rust state; read past, emitted by default.
     pub constants: Vec<(String, String)>,
@@ -66,6 +69,14 @@ pub struct RecordDecl {
     /// class through `_generated/<dispatch>.py` (each variant's [`Route`]).
     pub dispatch: Option<String>,
     pub body: RecordBody,
+}
+
+/// A pydantic record's model class: `base = ".."` names the pydantic record of the same module it
+/// subclasses (else `BaseModel`); `repr = ".."` the `_bindings` function its `__repr__` calls.
+#[derive(Debug, Clone, Default)]
+pub struct Pydantic {
+    pub base: Option<String>,
+    pub repr: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +188,7 @@ impl RecordDecl {
             .iter()
             .filter(|f| f.omitted.is_some())
             .map(|f| {
-                let record = resolve::snake(&self.name.replace('.', ""));
+                let record = resolve::snake(self.rust.rsplit("::").next().unwrap_or(&self.rust));
                 (f, format!("_core_omitted_{record}_{}", f.host_name()))
             })
             .collect()

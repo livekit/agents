@@ -1,7 +1,6 @@
 //! `metrics/usage.py`'s records. A `///` is API (generated pydantic); Rust notes go in `//`. Counts
 //! are session-long sums, hence `u64`.
 
-use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 
 // The Python `module` and `path` of every record here that names none of its own.
@@ -9,24 +8,27 @@ use serde::{Deserialize, Serialize};
 const _: () = ();
 
 // `_BaseModelUsage`. Python-only: a zero-eliding `__repr__`, and the base the gate records.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(pydantic, name = "_BaseModelUsage", repr = "model_usage_repr")]
+#[crate::host(record(
+    module = "usage",
+    name = "_BaseModelUsage",
+    pydantic,
+    repr = "model_usage_repr",
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BaseModelUsage {}
 
 // `usage.py:27`. LLM and realtime-model usage both fold in here.
 /// Usage summary for LLM models.
-#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
-    zero_defaults,
+#[crate::host(record(
+    module = "usage",
     name = "LLMModelUsage",
+    pydantic,
     base = "_BaseModelUsage",
-    tag = "type",
-    tag_const = TYPE
-)]
-// Both directions; the read side is all-`default` (a missing counter is zero), as the reference's
-// `.get(k, 0)` reads were.
-#[binding(emit, extract, from_items, default)]
+    constant(type = "llm_usage"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmModelUsage {
     /// The provider name (e.g., 'openai', 'anthropic').
@@ -34,33 +36,47 @@ pub struct LlmModelUsage {
     /// The model name (e.g., 'gpt-4o', 'claude-3-5-sonnet').
     pub model: String,
     /// Total input tokens.
+    #[host(default = 0)]
     pub input_tokens: u64,
     /// Input tokens served from cache.
+    #[host(default = 0)]
     pub input_cached_tokens: u64,
     // Fed only by `LlmMetrics::cache_creation_tokens`; zero for realtime.
     /// Input tokens used to write to the prompt cache (e.g. Anthropic cache writes).
+    #[host(default = 0)]
     pub input_cache_creation_tokens: u64,
     /// Input audio tokens (for multimodal models).
+    #[host(default = 0)]
     pub input_audio_tokens: u64,
     /// Cached input audio tokens.
+    #[host(default = 0)]
     pub input_cached_audio_tokens: u64,
     /// Input text tokens.
+    #[host(default = 0)]
     pub input_text_tokens: u64,
     /// Cached input text tokens.
+    #[host(default = 0)]
     pub input_cached_text_tokens: u64,
     /// Input image tokens (for multimodal models).
+    #[host(default = 0)]
     pub input_image_tokens: u64,
     /// Cached input image tokens.
+    #[host(default = 0)]
     pub input_cached_image_tokens: u64,
     /// Total output tokens.
+    #[host(default = 0)]
     pub output_tokens: u64,
     /// Output audio tokens (for multimodal models).
+    #[host(default = 0)]
     pub output_audio_tokens: u64,
     /// Output text tokens.
+    #[host(default = 0)]
     pub output_text_tokens: u64,
     /// Output tokens spent on hidden reasoning. Already counted in ``output_tokens``.
+    #[host(default = 0)]
     pub output_reasoning_tokens: u64,
     /// Total session connection duration in seconds (for session-based billing like xAI).
+    #[host(default = 0.0)]
     pub session_duration: f64,
 }
 
@@ -70,16 +86,16 @@ impl LlmModelUsage {
 
 // `usage.py:65`.
 /// Usage summary for TTS models.
-#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
-    zero_defaults,
+#[crate::host(record(
+    module = "usage",
     name = "TTSModelUsage",
+    pydantic,
     base = "_BaseModelUsage",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract, from_items, default)]
+    constant(type = "tts_usage"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TtsModelUsage {
     /// The provider name (e.g., 'elevenlabs', 'cartesia').
@@ -87,12 +103,16 @@ pub struct TtsModelUsage {
     /// The model name (e.g., 'eleven_turbo_v2', 'sonic').
     pub model: String,
     /// Input text tokens (for token-based TTS billing, e.g., OpenAI TTS).
+    #[host(default = 0)]
     pub input_tokens: u64,
     /// Output audio tokens (for token-based TTS billing, e.g., OpenAI TTS).
+    #[host(default = 0)]
     pub output_tokens: u64,
     /// Number of characters synthesized (for character-based TTS billing).
+    #[host(default = 0)]
     pub characters_count: u64,
     /// Duration of generated audio in seconds.
+    #[host(default = 0.0)]
     pub audio_duration: f64,
 }
 
@@ -102,16 +122,16 @@ impl TtsModelUsage {
 
 // `usage.py:83`.
 /// Usage summary for STT models.
-#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
-    zero_defaults,
+#[crate::host(record(
+    module = "usage",
     name = "STTModelUsage",
+    pydantic,
     base = "_BaseModelUsage",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract, from_items, default)]
+    constant(type = "stt_usage"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SttModelUsage {
     /// The provider name (e.g., 'deepgram', 'assemblyai').
@@ -119,12 +139,16 @@ pub struct SttModelUsage {
     /// The model name (e.g., 'nova-2', 'best').
     pub model: String,
     /// Total input tokens, including both audio and text (for token-based STT billing).
+    #[host(default = 0)]
     pub input_tokens: u64,
     /// Audio input tokens, a subset of input_tokens when reported by the provider.
+    #[host(default = 0)]
     pub input_audio_tokens: u64,
     /// Output text tokens (for token-based STT billing).
+    #[host(default = 0)]
     pub output_tokens: u64,
     /// Duration of processed audio in seconds.
+    #[host(default = 0.0)]
     pub audio_duration: f64,
 }
 
@@ -134,15 +158,15 @@ impl SttModelUsage {
 
 // `usage.py:100`. One counter only: the interruption model is billed per request.
 /// Usage summary for interruption detection models.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host, Serialize, Deserialize)]
-#[python(
+#[crate::host(record(
+    module = "usage",
     pydantic,
-    name = "InterruptionModelUsage",
     base = "_BaseModelUsage",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract, from_items, default)]
+    constant(type = "interruption_usage"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InterruptionModelUsage {
     /// The provider name (e.g., 'livekit').
@@ -150,7 +174,7 @@ pub struct InterruptionModelUsage {
     /// The model name (e.g., 'adaptive').
     pub model: String,
     /// Total number of requests sent to the interruption detection model.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub total_requests: u64,
 }
 
@@ -160,15 +184,16 @@ impl InterruptionModelUsage {
 
 // `usage.py:112`.
 /// Usage summary for end-of-turn detection models.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
+#[crate::host(record(
+    module = "usage",
     name = "EOTModelUsage",
+    pydantic,
     base = "_BaseModelUsage",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract, from_items, default)]
+    constant(type = "eot_usage"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EotModelUsage {
     /// The provider name (e.g., 'livekit').
@@ -176,7 +201,7 @@ pub struct EotModelUsage {
     /// The model name (e.g., 'turn-detector-v1').
     pub model: String,
     /// Total number of inference requests sent to the EOT model.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub total_requests: u64,
 }
 
@@ -186,9 +211,8 @@ impl EotModelUsage {
 
 // `usage.py:124`'s `ModelUsage`: a plain PEP-604 union, not a discriminated one.
 /// Union type for all model usage types.
-#[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
-#[python(union, name = "ModelUsage")]
-#[binding(emit, extract, from_items)]
+#[crate::host(record(module = "usage", transparent, emit, extract))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ModelUsage {
     #[serde(rename = "llm_usage")]
@@ -215,28 +239,10 @@ impl ModelUsage {
     }
 }
 
-// `usage.py:129`. A `@dataclass` in the reference, not a pydantic model: it has no `model_dump`.
-#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
-#[python(dataclass, name = "AgentSessionUsage")]
+// `usage.py:129`. The host's `AgentSessionUsage` is a hand-written dataclass (`metrics.py`); this
+// is the session report's reading of it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentSessionUsage {
     pub model_usage: Vec<ModelUsage>,
-}
-
-/// Each dict read by its own `type`: an unknown one raises rather than silently leaving the bill.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::types::PyAnyMethods as _;
-        if obj.is_none() {
-            return Ok(AgentSessionUsage::default());
-        }
-        let model_usage = obj
-            .try_iter()?
-            .map(|item| item?.extract::<ModelUsage>())
-            .collect::<pyo3::PyResult<_>>()?;
-        Ok(AgentSessionUsage { model_usage })
-    }
 }

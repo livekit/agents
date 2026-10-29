@@ -321,7 +321,7 @@ class LLMStream(ABC):
         record = self._metrics.finish(
             time.perf_counter(), False, _bindings.metrics_context(self._llm)
         )
-        _bindings.emit_metrics(self._llm, "LLMMetrics", record)
+        _bindings.emit_metrics(self._llm, record)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)

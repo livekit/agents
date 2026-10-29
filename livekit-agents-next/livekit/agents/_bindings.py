@@ -24,7 +24,6 @@ from .types import APIConnectOptions, NotGivenOr
 if TYPE_CHECKING:
     from ._generated.chat_items import ChatMessage
     from ._generated.llm import ChatChunk
-    from ._generated.metrics import STTMetrics
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 _InputT = TypeVar("_InputT")
 _OutputT = TypeVar("_OutputT", covariant=True)
-_MetricsT = TypeVar("_MetricsT", bound="STTMetrics")
 
 
 class _PumpStream(Protocol[_OutputT]):
@@ -305,14 +303,10 @@ def metrics_context(
     return (time.time(), provider.label, cancelled, provider.model, provider.provider)
 
 
-def emit_metrics(provider: _MetricsProvider, kind: str, record: dict[str, object] | None) -> None:
+def emit_metrics(provider: _MetricsProvider, record: BaseModel | None) -> None:
     """A request's metrics, folded by the core, as the provider's ``metrics_collected`` event."""
-    if record is None:
-        return
-    from ._generated import metrics
-
-    metric_type: type[BaseModel] = getattr(metrics, kind)
-    provider.emit("metrics_collected", metric_type.model_validate(record))
+    if record is not None:
+        provider.emit("metrics_collected", record)
 
 
 async def recognize(
@@ -336,7 +330,7 @@ async def recognize(
         [f.duration for f in frames],
         metrics_context(stt),
     )
-    emit_metrics(stt, "STTMetrics", record)
+    emit_metrics(stt, record)
     return event
 
 
@@ -366,12 +360,6 @@ def model_usage_repr(usage: BaseModel) -> str:
     # skip zeros for concise display
     fields = {k: v for k, v in usage.model_dump().items() if v != 0 and v != 0.0}
     return f"{type(usage).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
-
-
-def _default_total_tokens(metrics: _MetricsT) -> _MetricsT:
-    if "total_tokens" not in metrics.model_fields_set:
-        metrics.total_tokens = metrics.input_tokens + metrics.output_tokens
-    return metrics
 
 
 def speech_data_post_init(data: SpeechData) -> None:

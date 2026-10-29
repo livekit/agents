@@ -168,7 +168,7 @@ pub(super) const RECOGNIZE: &str = r#"
         """Hand ``event`` to the reader."""
         self._core_attempts.observe(event)
         record, _ = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
-        _bindings.emit_metrics(self._stt, "STTMetrics", record)
+        _bindings.emit_metrics(self._stt, record)
         try:
             self._event_ch.send_nowait(event)
         except aio.ChanFull:
@@ -280,7 +280,7 @@ pub(super) const CHUNKED: &str = r#"
                     _bindings.metrics_context(self._tts),
                 )
                 self._metrics = None
-                _bindings.emit_metrics(self._tts, "TTSMetrics", record)
+                _bindings.emit_metrics(self._tts, record)
             raise StopAsyncIteration from None
         if self._metrics is not None:
             self._metrics.observe(time.perf_counter(), self._started_time, val)
@@ -395,7 +395,7 @@ pub(super) const SYNTHESIZE: &str = r#"
                 False,
                 _bindings.metrics_context(self._tts),
             )
-            _bindings.emit_metrics(self._tts, "TTSMetrics", record)
+            _bindings.emit_metrics(self._tts, record)
             self._started_time = 0
         return val
 
@@ -462,7 +462,7 @@ pub(super) const CHAT: &str = r#"
         record = self._metrics.finish(
             time.perf_counter(), False, _bindings.metrics_context(self._llm)
         )
-        _bindings.emit_metrics(self._llm, "LLMMetrics", record)
+        _bindings.emit_metrics(self._llm, record)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)

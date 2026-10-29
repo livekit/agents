@@ -1,39 +1,36 @@
 //! `metrics/base.py`. A `///` on a declared type or field is API (it lands in the schema digest the
 //! gate compares); Rust-only notes go in `//`. Counts are `u32` here, `u64` in `usage`.
 
-use lk_agents_host_derive::Host;
-
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "metrics", path = "livekit.agents.metrics"))]
 const _: () = ();
 
 // `metrics/base.py:8`. `Some("")` and `None` differ under `model_dump(exclude_none=True)`, so the
 // fields stay `Option`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(pydantic, zero_defaults, name = "Metadata")]
-#[binding(emit, extract)]
+#[crate::host(record(module = "metrics", pydantic, emit, extract))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Metadata {
+    #[host(default = None)]
     pub model_name: Option<String>,
+    #[host(default = None)]
     pub model_provider: Option<String>,
 }
 
 // `metrics/base.py:13`. Generated because the gate records `bases`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(pydantic, name = "_BaseMetrics", repr = "metrics_repr")]
+#[crate::host(record(module = "metrics", name = "_BaseMetrics", pydantic, repr = "metrics_repr"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BaseMetrics {}
 
 // `metrics/base.py:188`. The counters are per event, not cumulative: totals are the collector's.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
+#[crate::host(record(
+    module = "metrics",
     pydantic,
-    name = "InterruptionMetrics",
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-// Both directions: the emit half is the detector's `"metrics"` event, the read half rebuilds this
-// model (`agent_session.py:2370`). The channel tag is `"metrics"`, not the union's `TYPE`.
-#[binding(emit, extract, tag = "type", tag_value = "metrics")]
+    constant(type = "interruption_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InterruptionMetrics {
     // A `float` on the model, so not a `SystemTime`.
     pub timestamp: f64,
@@ -49,9 +46,7 @@ pub struct InterruptionMetrics {
     pub num_backchannels: u32,
     /// Number of requests sent to the interruption detection model, incrementally counted.
     pub num_requests: u32,
-    // Emit side only: the host builds `Metadata` itself.
-    #[binding(skip)]
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -59,37 +54,19 @@ impl InterruptionMetrics {
     pub const TYPE: &'static str = "interruption_metrics";
 }
 
-// A second projection `from` the same record, so fields cannot drift.
-#[derive(Host)]
-#[binding(
-    emit,
-    from = lk_agents_abi::metrics::base::InterruptionMetrics,
-    tag = "type",
-    tag_value = "interruption_metrics"
-)]
-pub struct InterruptionMetricsModel {
-    pub timestamp: f64,
-    pub total_duration: f64,
-    pub prediction_duration: f64,
-    pub detection_delay: f64,
-    pub num_interruptions: u32,
-    pub num_backchannels: u32,
-    pub num_requests: u32,
-    pub metadata: Option<Metadata>,
-}
-
 // `metrics/base.py:121`, emitted per `eot_prediction` (`inference/eot/transports.py:234`).
 // `total_duration` (server's `client_e2e_latency`) and `detection_delay` (local) are not synonyms.
 /// Per-inference metrics emitted by the EOT model on each prediction.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
+#[crate::host(record(
+    module = "metrics",
     name = "EOTInferenceMetrics",
+    pydantic,
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract)]
+    constant(type = "eot_inference_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EotInferenceMetrics {
     pub timestamp: f64,
     /// Earliest audio creation time in an inference to response receive time.
@@ -99,9 +76,9 @@ pub struct EotInferenceMetrics {
     /// Server side model inference time.
     pub prediction_duration: f64,
     /// Number of inference requests made during one inference.
-    #[python(default = "1")]
+    #[host(default = 1)]
     pub num_requests: u32,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -112,17 +89,18 @@ impl EotInferenceMetrics {
 }
 
 // `metrics/base.py:19`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "LLMMetrics",
-    base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
 // Both directions on every record below: read by the collectors, emitted as the dict the pydantic
 // `AgentMetrics` union validates. `type` comes from `tag_const`.
-#[binding(emit, extract)]
+#[crate::host(record(
+    module = "metrics",
+    name = "LLMMetrics",
+    pydantic,
+    base = "_BaseMetrics",
+    constant(type = "llm_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LlmMetrics {
     pub label: String,
     pub request_id: String,
@@ -138,19 +116,19 @@ pub struct LlmMetrics {
     /// The number of tokens used to write to the prompt cache (e.g. Anthropic cache writes).
     ///
     /// Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub cache_creation_tokens: u32,
     /// The number of completion tokens spent on hidden reasoning.
     ///
     /// Already counted in ``completion_tokens``; do not add it to totals. Not all providers
     /// break reasoning out separately, and it is 0 when they don't.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub reasoning_tokens: u32,
     pub total_tokens: u32,
     pub tokens_per_second: f64,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub speech_id: Option<String>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -159,16 +137,16 @@ impl LlmMetrics {
 }
 
 // `metrics/base.py:44`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
+#[crate::host(record(
+    module = "metrics",
     name = "STTMetrics",
+    pydantic,
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE,
-    validator = "_default_total_tokens"
-)]
-#[binding(emit, extract)]
+    constant(type = "stt_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SttMetrics {
     pub label: String,
     pub request_id: String,
@@ -180,43 +158,49 @@ pub struct SttMetrics {
     /// Whether the STT is streaming (e.g using websocket).
     pub streamed: bool,
     /// Total input tokens, including both audio and text (for token-based billing).
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub input_tokens: u32,
     /// Total output tokens (for token-based billing).
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub output_tokens: u32,
     /// Sum of input and output tokens.
     ///
     /// Defaults to ``input_tokens + output_tokens`` when omitted.
-    #[python(default = "0")]
+    #[host(omitted = Self::default_total_tokens)]
     pub total_tokens: u32,
     /// Audio input tokens, a subset of input_tokens when reported by the provider.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub input_audio_tokens: u32,
     /// Time in seconds to acquire the connection. (WebSocket only)
-    #[python(default = "0.0")]
+    #[host(default = 0.0)]
     pub acquire_time: f64,
     /// Whether the connection was reused from a pool. (WebSocket only)
-    #[python(default = "False")]
+    #[host(default = false)]
     pub connection_reused: bool,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
 impl SttMetrics {
     pub const TYPE: &'static str = "stt_metrics";
+
+    /// `total_tokens` when the host leaves it out: input plus output.
+    pub fn default_total_tokens(&self) -> u32 {
+        self.input_tokens + self.output_tokens
+    }
 }
 
 // `metrics/base.py:67`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
+#[crate::host(record(
+    module = "metrics",
     name = "TTSMetrics",
+    pydantic,
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract)]
+    constant(type = "tts_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TtsMetrics {
     pub label: String,
     pub request_id: String,
@@ -228,23 +212,23 @@ pub struct TtsMetrics {
     /// Number of characters synthesized (for character-based billing).
     pub characters_count: u32,
     /// Input text tokens (for token-based billing, e.g., OpenAI TTS).
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub input_tokens: u32,
     /// Output audio tokens (for token-based billing, e.g., OpenAI TTS).
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub output_tokens: u32,
     pub streamed: bool,
     /// Time in seconds to acquire the connection. (WebSocket only)
-    #[python(default = "0.0")]
+    #[host(default = 0.0)]
     pub acquire_time: f64,
     /// Whether the connection was reused from a pool. (WebSocket only)
-    #[python(default = "False")]
+    #[host(default = false)]
     pub connection_reused: bool,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub segment_id: Option<String>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub speech_id: Option<String>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -253,22 +237,23 @@ impl TtsMetrics {
 }
 
 // `metrics/base.py:94`. Never reaches the usage rollups.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
+#[crate::host(record(
+    module = "metrics",
     name = "VADMetrics",
+    pydantic,
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract)]
+    constant(type = "vad_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VadMetrics {
     pub label: String,
     pub timestamp: f64,
     pub idle_time: f64,
     pub inference_duration_total: f64,
     pub inference_count: u32,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -278,15 +263,16 @@ impl VadMetrics {
 
 // `metrics/base.py:103`. A real zero and an absent measurement are the same value in the delay
 // fields, as in the reference.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
+#[crate::host(record(
+    module = "metrics",
     name = "EOUMetrics",
+    pydantic,
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract)]
+    constant(type = "eou_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EouMetrics {
     pub timestamp: f64,
     /// Amount of time between the end of speech from VAD and the decision to end the user's turn.
@@ -297,9 +283,9 @@ pub struct EouMetrics {
     pub transcription_delay: f64,
     /// Time taken to invoke the user's `Agent.on_user_turn_completed` callback.
     pub on_user_turn_completed_delay: f64,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub speech_id: Option<String>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -307,85 +293,116 @@ impl EouMetrics {
     pub const TYPE: &'static str = "eou_metrics";
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(pydantic, zero_defaults, name = "CachedTokenDetails", nested_in = "RealtimeModelMetrics")]
-#[binding(emit, extract)]
+#[crate::host(record(
+    module = "metrics",
+    nested_in = "RealtimeModelMetrics",
+    pydantic,
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CachedTokenDetails {
+    #[host(default = 0)]
     pub audio_tokens: u32,
+    #[host(default = 0)]
     pub text_tokens: u32,
+    #[host(default = 0)]
     pub image_tokens: u32,
 }
 
 // A cached total without a breakdown adds nothing to the per-modality cached counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(pydantic, zero_defaults, name = "InputTokenDetails", nested_in = "RealtimeModelMetrics")]
-#[binding(emit, extract)]
+#[crate::host(record(
+    module = "metrics",
+    nested_in = "RealtimeModelMetrics",
+    pydantic,
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InputTokenDetails {
+    #[host(default = 0)]
     pub audio_tokens: u32,
+    #[host(default = 0)]
     pub text_tokens: u32,
+    #[host(default = 0)]
     pub image_tokens: u32,
+    #[host(default = 0)]
     pub cached_tokens: u32,
-    #[python(ty = "RealtimeModelMetrics.CachedTokenDetails | None", default = "None")]
+    #[host(default = None)]
     pub cached_tokens_details: Option<CachedTokenDetails>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(pydantic, zero_defaults, name = "OutputTokenDetails", nested_in = "RealtimeModelMetrics")]
-#[binding(emit, extract)]
+#[crate::host(record(
+    module = "metrics",
+    nested_in = "RealtimeModelMetrics",
+    pydantic,
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OutputTokenDetails {
+    #[host(default = 0)]
     pub text_tokens: u32,
+    #[host(default = 0)]
     pub audio_tokens: u32,
     // Deprecated upstream; `ModelUsageCollector` does not sum it.
+    #[host(default = 0)]
     pub image_tokens: u32,
 }
 
 // `metrics/base.py:136`. Rolls up into an `LlmModelUsage` merged with a text LLM of the same
 // provider/model.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
+#[crate::host(record(
+    module = "metrics",
     pydantic,
-    zero_defaults,
-    name = "RealtimeModelMetrics",
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract)]
+    constant(type = "realtime_model_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RealtimeModelMetrics {
     // The only metric whose label has a default.
-    #[python(default = "\"\"")]
+    #[host(default = "")]
     pub label: String,
     pub request_id: String,
     /// The timestamp of the response creation.
-    #[python(required)]
     pub timestamp: f64,
     /// The duration of the response from created to done in seconds.
+    #[host(default = 0.0)]
     pub duration: f64,
     /// The duration of the session connection in seconds (for session-based billing like xAI).
+    #[host(default = 0.0)]
     pub session_duration: f64,
     /// Time to first audio token in seconds. -1 if no audio token was sent.
-    #[python(default = "-1")]
+    #[host(default = -1)]
     pub ttft: f64,
     /// Whether the request was cancelled.
-    #[python(default = "False")]
+    #[host(default = false)]
     pub cancelled: bool,
     /// The number of input tokens used in the Response, including text and audio tokens.
+    #[host(default = 0)]
     pub input_tokens: u32,
     /// The number of output tokens sent in the Response, including text and audio tokens.
+    #[host(default = 0)]
     pub output_tokens: u32,
     /// The total number of tokens in the Response.
+    #[host(default = 0)]
     pub total_tokens: u32,
     /// The number of tokens per second.
+    #[host(default = 0.0)]
     pub tokens_per_second: f64,
     /// Details about the input tokens used in the Response.
     pub input_token_details: InputTokenDetails,
     /// Details about the output tokens used in the Response.
     pub output_token_details: OutputTokenDetails,
     /// Time in seconds to acquire the connection. (WebSocket only)
+    #[host(default = 0.0)]
     pub acquire_time: f64,
     /// Whether the connection was reused from a pool. (WebSocket only)
-    #[python(default = "False")]
+    #[host(default = false)]
     pub connection_reused: bool,
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -396,26 +413,27 @@ impl RealtimeModelMetrics {
 }
 
 // `metrics/base.py:200`. `exclude_none` tells `Some(0.0)` from `None`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
+#[crate::host(record(
+    module = "metrics",
     pydantic,
-    zero_defaults,
-    name = "AvatarMetrics",
     base = "_BaseMetrics",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit, extract)]
+    constant(type = "avatar_metrics"),
+    emit,
+    extract,
+))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AvatarMetrics {
-    #[python(required)]
     pub timestamp: f64,
     /// Delay between forwarding the first audio frame to the avatar and the playback started.
-    #[python(default = "0")]
+    #[host(default = 0)]
     pub playback_latency: f64,
     /// Time when the avatar session was started.
+    #[host(default = None)]
     pub session_started_time: Option<f64>,
     /// Time when the avatar participant joined and started video track.
+    #[host(default = None)]
     pub avatar_joined_time: Option<f64>,
+    #[host(default = None)]
     pub metadata: Option<Metadata>,
 }
 
@@ -423,10 +441,9 @@ impl AvatarMetrics {
     pub const TYPE: &'static str = "avatar_metrics";
 }
 
-/// `metrics/base.py:224`'s `AgentMetrics` union, in the reference's order.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(union, name = "AgentMetrics")]
-#[binding(emit, extract)]
+// `metrics/base.py:224`'s `AgentMetrics` union, in the reference's order.
+#[crate::host(record(module = "metrics", transparent, emit, extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AgentMetrics {
     Stt(SttMetrics),
     Llm(LlmMetrics),
@@ -435,7 +452,6 @@ pub enum AgentMetrics {
     Eou(EouMetrics),
     EotInference(EotInferenceMetrics),
     RealtimeModel(RealtimeModelMetrics),
-    #[binding(twin = InterruptionMetricsModel)]
     Interruption(InterruptionMetrics),
     Avatar(AvatarMetrics),
 }

@@ -175,8 +175,8 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         resolved = conn_options if is_given(conn_options) else self._conn_options
         return self._detector.stream(list(get_inference_headers().items()), resolved)
 
-    def _emit_metrics(self, ev: dict[str, object]) -> None:
-        self.emit("metrics_collected", EOTInferenceMetrics.model_validate(ev))
+    def _emit_metrics(self, ev: EOTInferenceMetrics) -> None:
+        self.emit("metrics_collected", ev)
 
 
 TurnDetectorStream = _core.EotStream

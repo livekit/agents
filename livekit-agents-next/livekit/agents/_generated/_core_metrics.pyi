@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 from .chat_items import MetricsReport
-from .metrics import AgentMetrics
+from .metrics import AgentMetrics, STTMetrics
 from .telemetry import OtelValue
+from .usage import ModelUsage
 
 def metrics_log_fields(metrics: AgentMetrics) -> tuple[str, dict[str, object]] | None:
     """`log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
@@ -30,4 +31,6 @@ class ModelUsageCollector:
     """`metrics.ModelUsageCollector` -- the live per-model rollup."""
     def __init__(self) -> None: ...
     def collect(self, metrics: AgentMetrics) -> None: ...
-    def flatten(self) -> list[dict[str, object]]: ...
+    def flatten(self) -> list[ModelUsage]: ...
+
+def _core_omitted_stt_metrics_total_tokens(record: STTMetrics) -> int: ...

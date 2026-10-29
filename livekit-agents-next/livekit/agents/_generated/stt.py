@@ -488,7 +488,7 @@ class RecognizeStream(ABC):
         """Hand ``event`` to the reader."""
         self._core_attempts.observe(event)
         record, _ = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
-        _bindings.emit_metrics(self._stt, "STTMetrics", record)
+        _bindings.emit_metrics(self._stt, record)
         try:
             self._event_ch.send_nowait(event)
         except aio.ChanFull:

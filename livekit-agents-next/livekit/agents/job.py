@@ -1080,9 +1080,7 @@ class SessionReport:
                     ),
                     chat_history=None,
                     timestamp=self.timestamp,
-                    usage=[usage.model_dump() for usage in self.model_usage]
-                    if self.model_usage
-                    else None,
+                    usage=list(self.model_usage) if self.model_usage else None,
                     sdk_version=self.sdk_version,
                 )
             )

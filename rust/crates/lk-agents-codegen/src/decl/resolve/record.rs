@@ -16,6 +16,22 @@ impl Resolver<'_> {
         let transparent = voc::find(&record.nested, "transparent").is_some();
         let enumeration = voc::find(&record.nested, "enum").is_some();
         let typed_dict = voc::find(&record.nested, "typed_dict").is_some();
+        let pydantic = match voc::find(&record.nested, "pydantic") {
+            None if ["base", "repr"].iter().any(|w| voc::find(&record.nested, w).is_some()) => {
+                return Err(format!("{at}: `base` and `repr` shape a pydantic record's model"));
+            }
+            None => None,
+            Some(_) if typed_dict || enumeration || transparent || persisted => {
+                return Err(format!("{at}: a pydantic record is a model struct"));
+            }
+            Some(_) if !matches!(item, syn::Item::Struct(_)) => {
+                return Err(format!("{at}: a pydantic record is a model struct"));
+            }
+            Some(_) => Some(Pydantic {
+                base: voc::text(at, &record.nested, "base")?,
+                repr: voc::text(at, &record.nested, "repr")?,
+            }),
+        };
         let dispatch = voc::text(at, &record.nested, "dispatch")?;
         if dispatch.is_some() && !transparent {
             return Err(format!(
@@ -151,6 +167,7 @@ impl Resolver<'_> {
             transparent,
             typed_dict,
             enumeration,
+            pydantic,
             constants,
             persisted,
             members,
@@ -387,6 +404,9 @@ pub(super) fn record_target(
             "dispatch",
             "typed_dict",
             "default",
+            "pydantic",
+            "base",
+            "repr",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?
@@ -399,7 +419,8 @@ pub(super) fn record_target(
     };
     let extract = voc::find(&record.nested, "extract").is_some();
     let emit = voc::find(&record.nested, "emit").is_some();
-    if !extract && !emit {
+    // A pydantic base model (`_BaseMetrics`) is only subclassed.
+    if !extract && !emit && voc::find(&record.nested, "pydantic").is_none() {
         return Err(format!("{at}: a record crosses some way: extract, emit or both"));
     }
     Ok((module, name, extract, emit))

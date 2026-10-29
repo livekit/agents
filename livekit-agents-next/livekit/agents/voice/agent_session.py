@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 import numpy as np
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
-from pydantic import TypeAdapter
 from typing_extensions import TypedDict, TypeVar
 
 from livekit import rtc
@@ -71,7 +70,7 @@ from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
 from ..llm import LLM, ChatContext, FunctionCall, RealtimeModel, StopResponse, function_tool
 from ..log import logger
-from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
+from ..metrics import AgentSessionUsage
 from ..stt import STT
 from ..telemetry._export import attribute_bytes
 from ..telemetry.metrics import collect_usage, record_span_metric
@@ -435,7 +434,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def usage(self) -> AgentSessionUsage:
         model_usage = self._core.usage if self._core is not None else []
-        return AgentSessionUsage(model_usage=[_MODEL_USAGE.validate_python(u) for u in model_usage])
+        return AgentSessionUsage(model_usage=list(model_usage))
 
     def _live_usage(self) -> RunUsage:
         """``ctx.usage`` on this call: one accumulator, brought up to the session's model usage."""
@@ -1102,7 +1101,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("tool_execution_updated", ToolExecutionUpdatedEvent(update=update))
 
     def _on_metrics(self, wire: MetricsCollectedWire) -> None:
-        record = _AGENT_METRICS.validate_python(wire.metrics)
+        record = wire.metrics
         collect_usage(record)
         # a record the session metered for a provider (its VAD's) is that provider's event
         if (leg := wire.leg) is not None and (
@@ -1166,8 +1165,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("error", ErrorEvent(error=error, source=source))
 
     def _on_usage(self, wire: SessionUsageWire) -> None:
-        usage = [_MODEL_USAGE.validate_python(u) for u in wire.model_usage]
-        self.emit("session_usage_updated", SessionUsageUpdatedEvent(usage=AgentSessionUsage(usage)))
+        self.emit(
+            "session_usage_updated",
+            SessionUsageUpdatedEvent(usage=AgentSessionUsage(wire.model_usage)),
+        )
 
     def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
         ev = dict(wire.event)
@@ -1274,8 +1275,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._event_snapshots.append(snapshot)
         super().emit(event, arg)
 
-
-_AGENT_METRICS: TypeAdapter[AgentMetrics] = TypeAdapter(AgentMetrics)
 
 _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
     "llm_error": (llm.LLMError, "llm"),

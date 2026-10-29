@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/metrics/base.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -8,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, model_validator
 from typing_extensions import Self
@@ -104,7 +105,7 @@ class STTMetrics(_BaseMetrics):
     """Total input tokens, including both audio and text (for token-based billing)."""
     output_tokens: int = 0
     """Total output tokens (for token-based billing)."""
-    total_tokens: int = 0
+    total_tokens: int = None  # type: ignore[assignment]
     """Sum of input and output tokens.
 
     Defaults to ``input_tokens + output_tokens`` when omitted.
@@ -118,8 +119,12 @@ class STTMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
     @model_validator(mode="after")
-    def _default_total_tokens(self) -> Self:
-        return _bindings._default_total_tokens(self)
+    def _omitted_total_tokens(self) -> Self:
+        from .. import _core
+
+        if self.total_tokens is None:
+            self.total_tokens = _core._core_omitted_stt_metrics_total_tokens(self)
+        return self
 
 
 class TTSMetrics(_BaseMetrics):
@@ -213,9 +218,9 @@ class RealtimeModelMetrics(_BaseMetrics):
     """The total number of tokens in the Response."""
     tokens_per_second: float = 0.0
     """The number of tokens per second."""
-    input_token_details: InputTokenDetails
+    input_token_details: RealtimeModelMetrics.InputTokenDetails
     """Details about the input tokens used in the Response."""
-    output_token_details: OutputTokenDetails
+    output_token_details: RealtimeModelMetrics.OutputTokenDetails
     """Details about the output tokens used in the Response."""
     acquire_time: float = 0.0
     """Time in seconds to acquire the connection. (WebSocket only)"""
@@ -236,7 +241,7 @@ class AvatarMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
-AgentMetrics = (
+AgentMetrics: TypeAlias = (
     STTMetrics
     | LLMMetrics
     | TTSMetrics
@@ -249,13 +254,6 @@ AgentMetrics = (
 )
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
 Metadata.__module__ = "livekit.agents.metrics"
 _BaseMetrics.__module__ = "livekit.agents.metrics"
 InterruptionMetrics.__module__ = "livekit.agents.metrics"

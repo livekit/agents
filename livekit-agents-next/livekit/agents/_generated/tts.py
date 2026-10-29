@@ -380,7 +380,7 @@ class ChunkedStream(ABC):
                     _bindings.metrics_context(self._tts),
                 )
                 self._metrics = None
-                _bindings.emit_metrics(self._tts, "TTSMetrics", record)
+                _bindings.emit_metrics(self._tts, record)
             raise StopAsyncIteration from None
         if self._metrics is not None:
             self._metrics.observe(time.perf_counter(), self._started_time, val)
@@ -534,7 +534,7 @@ class SynthesizeStream(ABC):
                 False,
                 _bindings.metrics_context(self._tts),
             )
-            _bindings.emit_metrics(self._tts, "TTSMetrics", record)
+            _bindings.emit_metrics(self._tts, record)
             self._started_time = 0
         return val
 

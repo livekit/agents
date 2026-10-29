@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from .tool_context import DuplicateMode, DuplicateScope
 
+
 class ResolvedToolOptions(TypedDict):
     """Resolved per-tool behavior passed to the host's function-tool decorator."""
 

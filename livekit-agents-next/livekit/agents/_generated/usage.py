@@ -1,6 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/metrics/usage/records.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -8,8 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel
 
@@ -119,25 +119,15 @@ class EOTModelUsage(_BaseModelUsage):
     """Total number of inference requests sent to the EOT model."""
 
 
-ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage | EOTModelUsage
+ModelUsage: TypeAlias = (
+    LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage | EOTModelUsage
+)
+"""Union type for all model usage types."""
 
 
-@dataclass
-class AgentSessionUsage:
-    model_usage: list[ModelUsage]
-
-
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
 _BaseModelUsage.__module__ = "livekit.agents.metrics"
 LLMModelUsage.__module__ = "livekit.agents.metrics"
 TTSModelUsage.__module__ = "livekit.agents.metrics"
 STTModelUsage.__module__ = "livekit.agents.metrics"
 InterruptionModelUsage.__module__ = "livekit.agents.metrics"
 EOTModelUsage.__module__ = "livekit.agents.metrics"
-AgentSessionUsage.__module__ = "livekit.agents.metrics"

@@ -28,7 +28,9 @@ const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `c
 /// The conversions of every record, `records.rs` of the registration shell's generated adapters:
 /// one module per model module, `<record>_from_py` and `<record>_to_py` in each.
 pub fn conversions(decls: &Declarations) -> Result<Out, String> {
-    let mut modules: Vec<&str> = decls.records.iter().map(|r| r.module.as_str()).collect();
+    // A pydantic base model crosses no way.
+    let crossing = || decls.records.iter().filter(|r| r.extract || r.emit);
+    let mut modules: Vec<&str> = crossing().map(|r| r.module.as_str()).collect();
     modules.sort();
     modules.dedup();
     let mut text = format!(
@@ -36,7 +38,7 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
     );
     for module in modules {
         text.push_str(&format!("\npub mod {module} {{\n    use pyo3::prelude::*;\n"));
-        for r in decls.records.iter().filter(|r| r.module == module) {
+        for r in crossing().filter(|r| r.module == module) {
             text.push_str(&format!("\n    // Declared in {}.\n", r.source));
             let body = record_rust(r, decls)?;
             for line in body.lines() {

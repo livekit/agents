@@ -12,6 +12,7 @@ from livekit.local_inference import EOT
 from livekit.rtc import AudioFrame
 
 from .keyterms import KeytermDetectionOptions, ResolvedKeytermDetection
+from .metrics import EOTInferenceMetrics
 from .turn_events import EotPrediction, ThresholdOverride, TurnDetectorModel
 
 class InferenceEot:
@@ -31,7 +32,7 @@ class InferenceEot:
         api_secret: str,
         sample_rate: int,
         local_model: Callable[[], EOT],
-        on_metrics: Callable[[dict[str, object]], None] | None = None,
+        on_metrics: Callable[[EOTInferenceMetrics], None] | None = None,
     ) -> None:
         """`turn-detector-v1` connects to the gateway at `base_url`; `local_fallback` lets it degrade
         to the mini model, which `local_model` builds when the build links none.

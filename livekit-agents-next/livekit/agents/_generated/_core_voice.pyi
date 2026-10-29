@@ -40,6 +40,7 @@ from .session_options import (
 from .session_wire import StartPlan
 from .tool_report import ToolReport
 from .turn import InterruptionMode
+from .usage import ModelUsage
 from .voice_session import UpdateAgentArgs, VoiceSessionArgs
 from .workflows import InstructionsArg
 
@@ -419,7 +420,7 @@ class VoiceSession:
         has handled the opening events.
         """
     @property
-    def usage(self) -> list[dict[str, object]]:
+    def usage(self) -> list[ModelUsage]:
         """`session.usage.model_usage`: the usage of every model the session was billed for."""
     @property
     def audio_input(self) -> RoomAudioInput | None:

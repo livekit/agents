@@ -17,8 +17,9 @@ type MetricsRecordsImpl = <crate::Selected as super::Implementations>::MetricsRe
 /// (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).
 #[pyfunction]
 #[pyo3(signature = (metrics))]
-pub fn metrics_log_fields<'py>(py: Python<'py>, metrics: ::lk_agents_abi::metrics::AgentMetrics) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+pub fn metrics_log_fields<'py>(py: Python<'py>, metrics: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     crate::host::check_pid()?;
+    let metrics = crate::generated::records::metrics::agent_metrics_from_py(&metrics)?;
     let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::metrics_log_fields(metrics);
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>({ let (x0, x1,) = value; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::lk_agents_abi::python::extra_to_py(py, &x1)?.into_any()])?.into_any() })).transpose()?)
 }
@@ -37,8 +38,9 @@ pub fn otel_turn_records<'py>(py: Python<'py>, report: ::std::option::Option<::l
 /// unhandled types, unknown types and honest zeros alike (the reference gates on truthiness).
 #[pyfunction]
 #[pyo3(signature = (metrics))]
-pub fn otel_usage_records<'py>(py: Python<'py>, metrics: ::lk_agents_abi::metrics::AgentMetrics) -> PyResult<Bound<'py, PyAny>> {
+pub fn otel_usage_records<'py>(py: Python<'py>, metrics: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
+    let metrics = crate::generated::records::metrics::agent_metrics_from_py(&metrics)?;
     let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_usage_records(metrics);
     Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2, x3,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?, crate::generated::records::telemetry::otel_value_to_py(py, x2)?, { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x3 { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() }])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
 }
@@ -59,13 +61,23 @@ impl ModelUsageCollector {
     }
 
     #[pyo3(signature = (metrics))]
-    fn collect(&mut self, metrics: ::lk_agents_abi::metrics::AgentMetrics) -> PyResult<()> {
+    fn collect(&mut self, metrics: Bound<'_, PyAny>) -> PyResult<()> {
+        let metrics = crate::generated::records::metrics::agent_metrics_from_py(&metrics)?;
         <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::collect(&mut self.0, &metrics);
         Ok(())
     }
 
-    fn flatten(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::metrics::ModelUsage>> {
+    fn flatten<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out = <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::flatten(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::usage::model_usage_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
+
+/// `STTMetrics.total_tokens` when the host leaves it out.
+#[pyfunction]
+pub fn _core_omitted_stt_metrics_total_tokens<'py>(py: Python<'py>, record: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let record = crate::generated::records::metrics::s_t_t_metrics_from_py(&record)?;
+    Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(record.total_tokens, py)?)
 }

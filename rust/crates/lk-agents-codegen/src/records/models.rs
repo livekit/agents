@@ -202,7 +202,8 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
             }
         }
         // isort: one blank line after the imports unless a class follows.
-        text.push_str(if body.starts_with("\n\n@") { &body } else { &body[1..] });
+        let class = body.starts_with("\n\n@") || body.starts_with("\n\nclass ");
+        text.push_str(if class { &body } else { &body[1..] });
         out.push(Out { path: format!("{module}.py"), text });
     }
     for r in decls.records.iter().filter(|r| r.dispatch.is_some()) {
@@ -346,14 +347,30 @@ fn model(
     if !r.typed_dict && all.iter().any(|f| matches!(f.ty, Ty::Maybe(_))) {
         runtime.add("..types", "NOT_GIVEN");
     }
+    let pydantic = r.pydantic.as_ref();
     for factory in all.iter().filter_map(|f| f.factory.as_deref()) {
-        runtime.add("dataclasses", "field");
+        match pydantic {
+            Some(_) => runtime.add("pydantic", "Field"),
+            None => runtime.add("dataclasses", "field"),
+        }
         runtime.add_module(factory.rsplit_once('.').map_or(factory, |(m, _)| m));
     }
+    // A pydantic model's discriminator constants lead its fields, as pydantic declares them.
+    let constants: String = r
+        .constants
+        .iter()
+        .map(|(name, value)| format!("    {name}: Literal[{value:?}] = {value:?}\n"))
+        .collect();
     let mut class = |name: &str, doc: &[String], fields: &[&Field], nested: &str| {
         let name = name.rsplit('.').next().unwrap_or(name);
-        let mut s =
-            format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n");
+        let mut s = match pydantic {
+            Some(p) => {
+                format!("\n\nclass {name}({}):\n", p.base.as_deref().unwrap_or("BaseModel"))
+            }
+            None => {
+                format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n")
+            }
+        };
         s.push_str(&docstring(doc, "    "));
         if !nested.is_empty() {
             if !doc.is_empty() {
@@ -362,8 +379,9 @@ fn model(
             s.push_str(nested);
         }
         let fields: Vec<&&Field> = fields.iter().filter(|f| f.modeled()).collect();
-        if fields.is_empty() {
-            if doc.is_empty() && nested.is_empty() {
+        let lead = if pydantic.is_some() { constants.as_str() } else { "" };
+        if fields.is_empty() && lead.is_empty() {
+            if doc.is_empty() && nested.is_empty() && pydantic.is_none() {
                 s.push_str("    pass\n");
             }
             return s;
@@ -371,11 +389,13 @@ fn model(
         if !doc.is_empty() || !nested.is_empty() {
             s.push('\n');
         }
+        s.push_str(lead);
         for f in fields {
             let default = match (&f.default, &f.omitted) {
-                _ if let Some(factory) = &f.factory => {
-                    format!(" = field(default_factory={factory})")
-                }
+                _ if let Some(factory) = &f.factory => match pydantic {
+                    Some(_) => format!(" = Field(default_factory={factory})"),
+                    None => format!(" = field(default_factory={factory})"),
+                },
                 (Some(d), _) => format!(" = {}", py_literal(d)),
                 // Computed in `__post_init__` when left out: the field is never `None` after.
                 (None, Some(_)) => " = None  # type: ignore[assignment]".to_owned(),
@@ -423,6 +443,34 @@ fn model(
             }
             s
         }
+        RecordBody::Struct(fields) if let Some(p) = pydantic => {
+            if p.base.is_none() {
+                runtime.add("pydantic", "BaseModel");
+            }
+            if !r.constants.is_empty() {
+                runtime.add("typing", "Literal");
+            }
+            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested);
+            for (f, function) in r.omitted() {
+                runtime.add("pydantic", "model_validator");
+                runtime.add("typing_extensions", "Self");
+                let field = f.host_name();
+                s.push_str(&format!(
+                    "\n    @model_validator(mode=\"after\")\n    def _omitted_{field}(self) -> Self:\n        from .. import _core\n\n        if self.{field} is None:\n            self.{field} = _core.{function}(self)\n        return self\n"
+                ));
+            }
+            if let Some(repr) = &p.repr {
+                runtime.add("..", "_bindings");
+                if s.ends_with(":\n") {
+                    s.pop();
+                }
+                s.push_str(&format!(
+                    "\n    def __repr__(self) -> str:\n        return _bindings.{repr}(self)\n"
+                ));
+            }
+            s.push_str(&properties(r));
+            s
+        }
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested);
@@ -430,9 +478,7 @@ fn model(
                 runtime.add("typing", "Literal");
                 s = s.replace("    pass\n", "");
             }
-            for (name, value) in &r.constants {
-                s.push_str(&format!("    {name}: Literal[{value:?}] = {value:?}\n"));
-            }
+            s.push_str(&constants);
             let omitted = r.omitted();
             if !omitted.is_empty() {
                 s.push_str(
@@ -445,18 +491,7 @@ fn model(
                     ));
                 }
             }
-            for member in &r.members {
-                s.push_str("\n    @property\n");
-                s.push_str(&format!("    def {}(self) -> {}:\n", member.name, member.ret));
-                s.push_str(&docstring(
-                    &member.doc.lines().map(str::to_owned).collect::<Vec<_>>(),
-                    "        ",
-                ));
-                s.push_str(&format!(
-                    "        from .. import _core\n\n        return _core.{}(self)\n",
-                    member.hook
-                ));
-            }
+            s.push_str(&properties(r));
             if r.persisted {
                 let (persist, restore) = r.persistence();
                 s.push_str(&format!(
@@ -541,6 +576,24 @@ fn model(
             s
         }
     }
+}
+
+/// A record's computed views: properties answered by `_core`.
+fn properties(r: &RecordDecl) -> String {
+    let mut s = String::new();
+    for member in &r.members {
+        s.push_str("\n    @property\n");
+        s.push_str(&format!("    def {}(self) -> {}:\n", member.name, member.ret));
+        s.push_str(&docstring(
+            &member.doc.lines().map(str::to_owned).collect::<Vec<_>>(),
+            "        ",
+        ));
+        s.push_str(&format!(
+            "        from .. import _core\n\n        return _core.{}(self)\n",
+            member.hook
+        ));
+    }
+    s
 }
 
 /// `Name: TypeAlias = A | B`, wrapped as ruff formats it at 100 columns.

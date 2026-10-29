@@ -13,6 +13,7 @@ from typing import NotRequired
 
 from typing_extensions import TypedDict
 
+
 class FallbackModel(TypedDict):
     """Inference Fallback Adapter: configuration for a fallback STT model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 

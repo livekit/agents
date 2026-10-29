@@ -1544,7 +1544,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::metrics::ModelUsage>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::usage::model_usage_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

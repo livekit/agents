@@ -438,6 +438,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::NodeText>()?;
     m.add_class::<voice::NodeAudio>()?;
     m.add_class::<voice::NodeTranscript>()?;
+    m.add_function(wrap_pyfunction!(metrics::_core_omitted_stt_metrics_total_tokens, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     Ok(())

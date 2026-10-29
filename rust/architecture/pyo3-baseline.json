@@ -8,7 +8,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/llm.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/llm/realtime.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/metrics/usage/records.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/bridge.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/buffers.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/python/conversion_tests.rs",

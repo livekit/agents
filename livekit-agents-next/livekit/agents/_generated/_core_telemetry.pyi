@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 
 from .._core import ChatItem
 from .llm import ChatChunk
+from .metrics import LLMMetrics, STTMetrics, TTSMetrics
 from .stt import SpeechEvent
 from .telemetry import (
     EvaluationRecord,
@@ -81,13 +82,13 @@ def stt_batch_metrics(
     now: float,
     audio_durations: Sequence[float],
     host: tuple[float, str, bool, str, str],
-) -> dict[str, object]:
+) -> STTMetrics:
     """`STT.recognize`'s metrics for one batch recognition."""
 
 def stt_stream_metrics(
     event: SpeechEvent,
     host: tuple[float, str, bool, str, str],
-) -> tuple[dict[str, object] | None, bool]:
+) -> tuple[STTMetrics | None, bool]:
     """`RecognizeStream`'s metrics for one event, and whether it resets the retry count."""
 
 class LlmMetricState:
@@ -100,7 +101,7 @@ class LlmMetricState:
         now: float,
         failed: bool,
         host: tuple[float, str, bool, str, str],
-    ) -> dict[str, object] | None:
+    ) -> LLMMetrics | None:
         """`None` for a failed attempt or one that yielded no chunk."""
 
 class TtsMetricState:
@@ -121,7 +122,7 @@ class TtsMetricState:
         acquire_time: float,
         connection_reused: bool,
         host: tuple[float, str, bool, str, str],
-    ) -> dict[str, object] | None:
+    ) -> TTSMetrics | None:
         """The record of a finished request or segment, then the figures reset."""
 
 class Tagger:

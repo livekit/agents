@@ -35,7 +35,9 @@ if TYPE_CHECKING:
     from .._core import ChatItem
     from .agent_run import RunError
     from .events import CloseReason
+    from .metrics import AgentMetrics
     from .telemetry import RecordingOptions
+    from .usage import ModelUsage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -287,7 +289,7 @@ class CloseWire:
 class MetricsCollectedWire:
     """`metrics_collected`'s wire payload: the record plus the driver's `speech_id` correlation."""
 
-    metrics: dict[str, object]
+    metrics: AgentMetrics
     """The `AgentMetrics` record as the dict `TypeAdapter(AgentMetrics)` validates."""
     speech_id: str | None
     """`speech_{n}` of the speech the record belongs to; `None` for a leg that has none."""
@@ -301,7 +303,7 @@ class MetricsCollectedWire:
 class SessionUsageWire:
     """`session_usage_updated`'s wire payload: the session's usage once a record was folded in."""
 
-    model_usage: list[dict[str, object]]
+    model_usage: list[ModelUsage]
     """`AgentSessionUsage.model_usage`."""
 
 
