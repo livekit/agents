@@ -465,40 +465,6 @@ async def test_agent_run_returns_a_typed_result() -> None:
     assert len(second.all_messages()) > len(second.new_messages())
 
 
-async def test_agent_run_stops_at_input_required() -> None:
-    fnol = Agent(
-        instructions="claims",
-        llm=FakeLLM(
-            fake_responses=[
-                FakeLLMResponse(
-                    input="my car is damaged",
-                    content="",
-                    ttft=0,
-                    duration=0,
-                    tool_calls=[
-                        FunctionToolCall(name="request_photo", arguments="{}", call_id="p1")
-                    ],
-                ),
-                FakeLLMResponse(input="here it is", content="thanks", ttft=0, duration=0),
-            ]
-        ),
-    )
-
-    @fnol.tool
-    async def request_photo(ctx: RunContext) -> InputRequired:
-        """Ask for a photo."""
-        return InputRequired("Could you send a photo?")
-
-    result = await fnol.run("my car is damaged")
-    assert result.status == "input_required"
-    assert result.question == "Could you send a photo?"
-    assert result.new_messages()[-1].type == "message"
-    assert result.new_messages()[-1].text_content == "Could you send a photo?"
-
-    second = await fnol.run("here it is", message_history=result.all_messages())
-    assert second.status == "completed" and second.output == "thanks"
-
-
 async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     thread_storage: Storage,
 ) -> None:
@@ -721,19 +687,3 @@ async def test_a_tool_in_an_a2a_turn_reads_its_task_and_thread(thread_storage: S
 
     task = events[0]["task"]
     assert seen == [(task["id"], task["contextId"], None)]
-
-
-def test_the_dropped_execution_surface_is_refused() -> None:
-    # decision 55: no documented use and no pydantic-ai counterpart
-    import livekit.agents as agents
-    from livekit.agents import llm as agents_llm
-    from livekit.agents.llm import ToolFlag, Working
-
-    for module in (agents, agents_llm):
-        assert not hasattr(module, "Transition")
-    assert not hasattr(ToolFlag, "CANCELLABLE")
-    with pytest.raises(TypeError):
-        InputRequired("Which day?", timeout=None)  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        Working(tool=None)  # type: ignore[call-arg]
-    assert not hasattr(VoiceSession, "run")  # decision 106: tests run agent.run

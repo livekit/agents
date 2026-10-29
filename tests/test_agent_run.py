@@ -1,5 +1,6 @@
-"""``agent.run()`` and ``agent.run_stream()`` through the core's ``AgentRunner``: the tool
-outcome table in text mode, output contracts, the stream's events and lifecycle, and usage."""
+"""``agent.run()`` and ``agent.run_stream()`` through the core's ``AgentRunner``: output
+contracts, the stream's events and lifecycle, and usage. The tool outcome table runs on every
+entrypoint in ``test_shared_execution.py``."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from livekit.agents import Agent, ModelRetry, RunContext, RunUsage, StopResponse
+from livekit.agents import Agent, ModelRetry, RunContext, RunUsage
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -22,57 +23,6 @@ def respond(input: str, content: str = "", *calls: FunctionToolCall) -> FakeLLMR
 
 def call(name: str, arguments: str = "{}", call_id: str = "c1") -> FunctionToolCall:
     return FunctionToolCall(name=name, arguments=arguments, call_id=call_id)
-
-
-async def test_model_retry_from_a_tool_is_feedback_the_model_corrects() -> None:
-    llm = FakeLLM(
-        fake_responses=[
-            respond("book", "", call("book", '{"day": "someday"}')),
-            respond("give a weekday", "", call("book", '{"day": "monday"}', "c2")),
-            respond("booked monday", "Booked for Monday."),
-        ]
-    )
-    desk = Agent(instructions="desk", llm=llm)
-
-    @desk.tool
-    async def book(ctx: RunContext, day: str) -> str:
-        """Book a day."""
-        if day == "someday":
-            raise ModelRetry("give a weekday")
-        return f"booked {day}"
-
-    result = await desk.run("book")
-    assert result.status == "completed" and result.output == "Booked for Monday."
-    retried = [i for i in result.new_messages() if i.type == "function_call_output"][0]
-    assert retried.output == "give a weekday" and retried.is_error
-
-
-async def test_a_none_return_continues_and_stop_response_ends_without_output() -> None:
-    llm = FakeLLM(
-        fake_responses=[
-            respond("note it", "", call("note")),
-            respond("", "Noted."),
-            respond("hang up", "", call("hang_up")),
-        ]
-    )
-    desk = Agent(instructions="desk", llm=llm)
-
-    @desk.tool
-    async def note(ctx: RunContext) -> None:
-        """Note."""
-
-    @desk.tool
-    def hang_up(ctx: RunContext) -> str:  # a sync body
-        """Hang up."""
-        raise StopResponse()
-
-    noted = await desk.run("note it")
-    assert noted.status == "completed" and noted.output == "Noted."
-    assert noted.usage.requests == 2
-
-    stopped = await desk.run("hang up")
-    assert stopped.status == "completed" and stopped.output is None
-    assert stopped.usage.requests == 1
 
 
 @dataclass
