@@ -10,6 +10,7 @@ use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{BoxFuture, TokioSpawner};
 use lk_agents_voice::avatar::ReceiverEnd;
+use lk_agents_voice::avatar::receiver::frame_size;
 
 type AudioReceipt = (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>);
 
@@ -29,9 +30,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
         rpc_max_retries: u32,
         on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
     ) -> Result<Self, ProviderError> {
-        if frame_size_ms == 0 {
-            return Err(ApiError::new("frame_size_ms must be positive").into());
-        }
+        let frame_size = frame_size(frame_size_ms).map_err(failure)?;
         let handle = crate::process::handle().map_err(|error| ApiError::new(error.to_string()))?;
         let on_clear = on_clear_buffer.map(|listener| {
             Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
@@ -40,7 +39,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
             receiver: Receiver::new(
                 crate::rtc::room::Room::wrap(room),
                 sender_identity,
-                frame_size_ms,
+                frame_size,
                 rpc_max_retries,
                 on_clear,
                 crate::process::host_clock(),

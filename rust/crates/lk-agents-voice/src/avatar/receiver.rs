@@ -1,6 +1,7 @@
 //! Synchronous receive-side framing, clear epochs and segment identity.
 
 use std::collections::VecDeque;
+use std::num::NonZeroU32;
 
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::StreamInfo;
@@ -9,6 +10,12 @@ use lk_agents_abi::{AudioByteStream, AudioFrame};
 use super::{Received, ReceiverEnd, stream_segment};
 
 pub type Receipt = (u64, bool, Option<AvatarPlaybackSegment>, Option<Received>);
+
+/// The receiver's frame length: a zero-length frame never fills.
+pub fn frame_size(frame_size_ms: u32) -> Result<NonZeroU32, ReceiverEnd> {
+    NonZeroU32::new(frame_size_ms)
+        .ok_or_else(|| ReceiverEnd::Failed("frame_size_ms must be positive".into()))
+}
 
 #[derive(Default)]
 pub struct ReceiverState {
@@ -69,7 +76,7 @@ impl ReceiverState {
     pub fn begin(
         &mut self,
         info: &StreamInfo,
-        frame_size_ms: u32,
+        frame_size: NonZeroU32,
     ) -> Result<ReaderState, ReceiverEnd> {
         self.superseded = false;
         self.reading = true;
@@ -89,7 +96,7 @@ impl ReceiverState {
                 "sample_rate or num_channels not found in byte stream".into(),
             ));
         };
-        let samples = (u64::from(rate) * u64::from(frame_size_ms.max(1))).div_ceil(1000) as u32;
+        let samples = (u64::from(rate) * u64::from(frame_size.get())).div_ceil(1000) as u32;
         Ok(ReaderState {
             segment,
             epoch: self.epoch,
@@ -149,6 +156,7 @@ impl ReceiverState {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    const FRAME: NonZeroU32 = NonZeroU32::new(100).unwrap();
     fn info() -> StreamInfo {
         StreamInfo {
             id: "STREAM".into(),
@@ -163,7 +171,7 @@ mod tests {
     #[test]
     fn framing_and_identity_belong_to_the_admitted_reader() {
         let mut state = ReceiverState::default();
-        let mut reader = state.begin(&info(), 100).unwrap();
+        let mut reader = state.begin(&info(), FRAME).unwrap();
         assert!(state.chunk(&mut reader, &vec![0; 5000]));
         state.flush(&mut reader);
         state.finish(Some(&mut reader));
@@ -182,7 +190,7 @@ mod tests {
     #[test]
     fn a_clear_discards_queued_audio_but_keeps_the_old_end_epoch() {
         let mut state = ReceiverState::default();
-        let mut old = state.begin(&info(), 100).unwrap();
+        let mut old = state.begin(&info(), FRAME).unwrap();
         state.chunk(&mut old, &vec![0; 4000]);
         state.clear();
         assert!(state.superseded());
@@ -192,7 +200,7 @@ mod tests {
         let end = state.take().unwrap().unwrap();
         assert_eq!(end.0, 0);
         assert!(matches!(end.3, Some(Received::SegmentEnd)));
-        let mut next = state.begin(&info(), 100).unwrap();
+        let mut next = state.begin(&info(), FRAME).unwrap();
         state.chunk(&mut next, &vec![0; 2000]);
         assert_eq!(state.take().unwrap().unwrap().0, 1);
     }
@@ -200,11 +208,11 @@ mod tests {
     fn a_superseding_header_releases_only_the_active_reader() {
         let mut state = ReceiverState::default();
         assert!(!state.stream_admitted());
-        let mut reader = state.begin(&info(), 100).unwrap();
+        let mut reader = state.begin(&info(), FRAME).unwrap();
         assert!(state.stream_admitted());
         assert!(state.superseded());
         state.finish(Some(&mut reader));
-        state.begin(&info(), 100).unwrap();
+        state.begin(&info(), FRAME).unwrap();
         assert!(!state.superseded());
     }
 }

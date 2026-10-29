@@ -61,7 +61,7 @@ async fn receiver(name: &str) -> RxFixture {
     let rx = DataStreamAudioReceiver::new(
         crate::rtc::room::Room::wrap(room.clone()),
         None,
-        100,
+        std::num::NonZeroU32::new(100).unwrap(),
         3,
         Some(on_clear),
         clock.clone(),

@@ -5,11 +5,12 @@ use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
 use lk_agents_abi::{AbortHandle, Clock, Spawner, SpawnerExt};
 use lk_agents_voice::avatar::receiver::ReceiverState;
 use lk_agents_voice::avatar::{
-    AUDIO_STREAM_TOPIC, ClearBufferListener, FinishedPayload, RPC_CLEAR_BUFFER,
+    AUDIO_STREAM_TOPIC, FinishedPayload, RPC_CLEAR_BUFFER,
     RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
     playback_method,
 };
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
@@ -23,7 +24,7 @@ enum RpcEvent {
 struct RxInner {
     room: Arc<dyn RtcRoom>,
     sender_identity: Option<String>,
-    frame_size_ms: u32,
+    frame_size: NonZeroU32,
     rpc_max_retries: u32,
     clock: Arc<dyn Clock>,
     on_clear: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -71,7 +72,7 @@ impl RxInner {
                 .state
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .begin(&stream.info, self.frame_size_ms);
+                .begin(&stream.info, self.frame_size);
             let outcome = match &mut reader {
                 Err(error) => Err(error.clone()),
                 Ok(reader) => async {
@@ -208,36 +209,12 @@ impl Drop for DataStreamAudioReceiver {
 }
 
 impl DataStreamAudioReceiver {
-    /// `room` is the avatar's `rtc.Room`; `on_clear_buffer` hears the agent clear.
-    pub fn for_host(
-        room: Arc<dyn RtcRoom>,
-        sender_identity: Option<String>,
-        frame_size_ms: u32,
-        rpc_max_retries: u32,
-        on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        let on_clear = on_clear_buffer
-            .map(|l| Arc::new(move || l.clear_buffer()) as Arc<dyn Fn() + Send + Sync>);
-        let frame_size_ms = frame_size_ms.max(1);
-        DataStreamAudioReceiver::new(
-            room,
-            sender_identity,
-            frame_size_ms,
-            rpc_max_retries,
-            on_clear,
-            clock,
-            spawner,
-        )
-    }
-
     /// `sender_identity` `None` follows the first agent participant; `on_clear` is the
     /// `clear_buffer` event the avatar runner listens to.
     pub fn new(
         room: Arc<dyn RtcRoom>,
         sender_identity: Option<String>,
-        frame_size_ms: u32,
+        frame_size: NonZeroU32,
         rpc_max_retries: u32,
         on_clear: Option<Arc<dyn Fn() + Send + Sync>>,
         clock: Arc<dyn Clock>,
@@ -248,7 +225,7 @@ impl DataStreamAudioReceiver {
             inner: Arc::new(RxInner {
                 room,
                 sender_identity,
-                frame_size_ms,
+                frame_size,
                 rpc_max_retries,
                 clock,
                 on_clear,
