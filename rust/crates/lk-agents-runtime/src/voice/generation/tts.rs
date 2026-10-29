@@ -47,7 +47,7 @@ pub(super) async fn perform_tts_inference(
     mut aligned: Option<&mut Aligned<'_>>,
     playback: &mut SynthesisPlayout<'_>,
 ) -> Result<Heard, Lost> {
-    let mut state = SynthesisAttempt::new(shared.conn.tts, first);
+    let mut state = SynthesisAttempt::new(shared.conn.tts.unwrap_or_default(), first);
     loop {
         if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
             return Err(lost);

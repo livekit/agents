@@ -320,7 +320,7 @@ impl Generation<'_> {
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
         // Opened as the pipeline's synthesis is: a failed open is retried on the same budget.
-        let mut attempt = lk_agents_voice::generation::Attempt::new(self.shared.conn.tts);
+        let mut attempt = lk_agents_voice::generation::Attempt::new(self.shared.conn.tts.unwrap_or_default());
         let (sink, source) = loop {
             let error = match tts.stream().await {
                 Ok(pair) => break pair,

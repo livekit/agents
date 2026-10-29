@@ -442,6 +442,10 @@ impl Stt for GatewayStt {
         Some(Arc::new(self.configured(Some(*conn))))
     }
 
+    fn conn_options(&self) -> Option<ApiConnectOptions> {
+        self.conn_options
+    }
+
     /// The provider's `error` event, on the host provider this view serves.
     fn failed(&self, error: ProviderError, recoverable: bool) {
         if let Some(reporter) = &self.reporter {

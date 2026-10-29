@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, VoiceSession, utils
+from livekit.agents import Agent, APIConnectOptions, VoiceSession, utils
 from livekit.agents.llm import ChatContext
 
 from .fake_io import FakeAudioOutput
@@ -89,6 +89,19 @@ def _synthesized(tts: FakeTTS) -> int:
         except utils.aio.ChanEmpty:
             return streams
         streams += 1
+
+
+async def test_a_session_without_conn_options_keeps_the_provider_policy() -> None:
+    class PolicyTTS(FakeTTS):
+        def _core_conn_options(self) -> APIConnectOptions | None:
+            return APIConnectOptions(read_timeout=7.0, max_retry=1)
+
+    tts = PolicyTTS(fake_audio_duration=0.1)
+    async with _voiced_session(tts) as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        await asyncio.wait_for(session.say("One moment."), timeout=5)
+    stream = tts.stream_ch.recv_nowait()
+    assert stream._conn_options.read_timeout == 7.0
 
 
 async def test_update_options_replaces_the_session_voice_in_place() -> None:

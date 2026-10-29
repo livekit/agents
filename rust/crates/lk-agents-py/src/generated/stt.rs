@@ -409,6 +409,7 @@ pub struct SttProxy {
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::SttCapabilities,
     id: ::lk_agents_abi::ProviderId,
+    conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
     /// Appended to every awaited call once bound.
     conn: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
 }
@@ -456,7 +457,11 @@ impl SttProxy {
             let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, conn: None })
+        let conn_options = {
+            let v = crate::host::read(obj, "_core_conn_options")?;
+            if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ApiConnectOptions>()).map(Some) }?
+        };
+        Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, conn_options, conn: None })
     }
 }
 
@@ -527,6 +532,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
 
     fn with_conn_options(&self, conn: &::lk_agents_abi::ApiConnectOptions) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Stt>> {
         Some(::lk_agents_runtime::inference::stt::retrying::RetryingStt::bound(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }), conn, ::lk_agents_runtime::process::host_clock()))
+    }
+
+    fn conn_options(&self) -> ::std::option::Option<::lk_agents_abi::ApiConnectOptions> {
+        ::std::clone::Clone::clone(&self.conn_options)
     }
 
     fn recognize(&self, buffer: &[::lk_agents_abi::AudioFrame], language: Option<&::lk_agents_abi::LanguageCode>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::SpeechEvent, ::lk_agents_abi::errors::ProviderError>> {

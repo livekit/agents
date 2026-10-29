@@ -374,6 +374,7 @@ pub struct TtsProxy {
     num_channels: u16,
     markup_provider: ::std::string::String,
     lowers_markup: bool,
+    conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
     /// Appended to every awaited call once bound.
     conn: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>,
 }
@@ -437,7 +438,11 @@ impl TtsProxy {
             let v = crate::host::read(obj, "_core_lowers_markup")?;
             v.extract::<bool>()?
         };
-        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
+        let conn_options = {
+            let v = crate::host::read(obj, "_core_conn_options")?;
+            if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::ApiConnectOptions>()).map(Some) }?
+        };
+        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), instance_id, label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn_options, conn: None })
     }
 }
 
@@ -497,6 +502,10 @@ impl ::lk_agents_abi::Tts for TtsProxy {
 
     fn with_conn_options(&self, conn: &::lk_agents_abi::ApiConnectOptions) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Tts>> {
         Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))
+    }
+
+    fn conn_options(&self) -> ::std::option::Option<::lk_agents_abi::ApiConnectOptions> {
+        ::std::clone::Clone::clone(&self.conn_options)
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {

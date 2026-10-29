@@ -143,12 +143,13 @@ impl BackchannelBoundary {
     }
 }
 
-/// `SessionConnectOptions`: each leg's retry budget and timeout; not given is the defaults.
+/// `SessionConnectOptions`: each leg's retry budget and timeout; not given (`None`) is the
+/// provider's own policy, else the defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SessionConnOptions {
-    pub stt: crate::ApiConnectOptions,
-    pub llm: crate::ApiConnectOptions,
-    pub tts: crate::ApiConnectOptions,
+    pub stt: Option<crate::ApiConnectOptions>,
+    pub llm: Option<crate::ApiConnectOptions>,
+    pub tts: Option<crate::ApiConnectOptions>,
 }
 
 /// A kwarg whose value is a host object, or a dict that holds one: only presence crosses.
@@ -836,10 +837,12 @@ mod host {
             let MaybeNull::Given(options) = obj.extract::<MaybeNull<Bound<'py, PyAny>>>()? else {
                 return Ok(SessionConnOptions::default());
             };
-            let leg = |name: &str| -> PyResult<crate::ApiConnectOptions> {
-                let conn: crate::ApiConnectOptions = options.getattr(name)?.extract()?;
-                conn.validate()
-                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let leg = |name: &str| -> PyResult<Option<crate::ApiConnectOptions>> {
+                let conn: Option<crate::ApiConnectOptions> = options.getattr(name)?.extract()?;
+                if let Some(conn) = &conn {
+                    conn.validate()
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                }
                 Ok(conn)
             };
             Ok(SessionConnOptions {

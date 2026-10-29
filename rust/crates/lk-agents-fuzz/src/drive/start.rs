@@ -537,7 +537,11 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
                 retry_interval: secs(c.interval_ms),
                 ..lk_agents_abi::ApiConnectOptions::default()
             };
-            SessionConnOptions { stt: leg(c.stt), llm: leg(c.llm), tts: leg(c.tts) }
+            SessionConnOptions {
+                stt: Some(leg(c.stt)),
+                llm: Some(leg(c.llm)),
+                tts: Some(leg(c.tts)),
+            }
         }),
     }
 }

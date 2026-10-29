@@ -270,6 +270,9 @@ class TTS(
     def _core_set_expressive(self, enabled: bool) -> None:
         self._set_expressive(enabled)
 
+    def _core_conn_options(self) -> APIConnectOptions | None:
+        return None
+
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
         self._emit_error(error, recoverable)
 

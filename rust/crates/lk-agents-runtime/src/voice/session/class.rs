@@ -78,7 +78,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                     cfg.keyterm_detection.as_ref(),
                 ),
                 static_keyterms: cfg.keyterms.clone().unwrap_or_default(),
-                llm: args.keyterm_llm.map(|l| llm_leg(l, &conn.llm)),
+                llm: args.keyterm_llm.map(|l| llm_leg(l, conn.llm)),
                 tools_host: args.keyterm_tools,
             });
         let remote = args.remote_session
@@ -128,7 +128,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let interruption = args.interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let nodes = Nodes { llm: args.llm_node, tts: None, stt: None };
-        let llm = args.llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
+        let llm = args.llm.map(|l| nodes.llm(llm_leg(l, conn.llm)));
         // Facts, not options: the legs the two leg-dependent defaults need.
         let legs = LegSet {
             stt: args.stt.is_some(),
@@ -469,9 +469,12 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let setup = lk_agents_voice::amd::AmdSetup {
             config,
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
-            llm: llm_leg(llm, &self.conn.llm),
+            llm: llm_leg(llm, self.conn.llm),
             tools_host: tools,
-            stt: stt.map(|s| s.with_conn_options(&self.conn.stt).unwrap_or(s)),
+            stt: stt.map(|s| {
+                let conn = self.conn.stt.or_else(|| s.conn_options()).unwrap_or_default();
+                s.with_conn_options(&conn).unwrap_or(s)
+            }),
             room: self.host.call_room.clone(),
             participant: participant_identity,
         };

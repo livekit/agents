@@ -644,8 +644,14 @@ fn speech_event(py: Python<'_>, ev: &SpeechEvent) -> PyResult<Py<PyAny>> {
 
 // ----------------------------------------------------------------------------- the default nodes
 
-fn conn_options(options: &Bound<'_, PyAny>) -> PyResult<lk_agents_abi::ApiConnectOptions> {
-    let options: lk_agents_abi::ApiConnectOptions = options.extract()?;
+/// The node's `conn_options`, else the provider's own policy (models.md), else the defaults.
+fn conn_options(
+    options: &Bound<'_, PyAny>,
+    provider: Option<lk_agents_abi::ApiConnectOptions>,
+) -> PyResult<lk_agents_abi::ApiConnectOptions> {
+    let Some(options) = options.extract::<Option<lk_agents_abi::ApiConnectOptions>>()? else {
+        return Ok(provider.unwrap_or_default());
+    };
     options.validate().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(options)
 }
@@ -733,9 +739,9 @@ fn tts_node(
     conn_options: &Bound<'_, PyAny>,
 ) -> PyResult<Py<ItemStream>> {
     check_pid()?;
-    let options = self::conn_options(conn_options)?;
     let clock = lk_agents_runtime::process::host_clock();
     let tts = <dyn Tts as HostProxy>::from_host(tts)?;
+    let options = self::conn_options(conn_options, tts.conn_options())?;
     let tts = tts.with_conn_options(&options).unwrap_or(tts);
     let tts = lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter::adapted_for(
         tts,
@@ -767,9 +773,9 @@ fn stt_node(
     vad: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Py<ItemStream>> {
     check_pid()?;
-    let options = self::conn_options(conn_options)?;
     let clock = lk_agents_runtime::process::host_clock();
     let stt = <dyn Stt as HostProxy>::from_host(stt)?;
+    let options = self::conn_options(conn_options, stt.conn_options())?;
     let vad = vad.map(|v| <dyn lk_agents_abi::Vad as HostProxy>::from_host(v)).transpose()?;
     let stt = stt.with_conn_options(&options).unwrap_or(stt);
     let stt = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter::adapted(

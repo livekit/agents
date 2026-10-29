@@ -77,7 +77,6 @@ from ..telemetry.metrics import collect_usage, record_span_metric
 from ..telemetry.traces import capture_content_enabled, tracer
 from ..tts import TTS
 from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
@@ -183,9 +182,12 @@ class RecordingOptions(TypedDict, total=False):
 
 @dataclass
 class SessionConnectOptions:
-    stt_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    """Each leg's connection policy; ``None`` keeps the provider's own (models.md), else the
+    defaults."""
+
+    stt_conn_options: APIConnectOptions | None = None
+    llm_conn_options: APIConnectOptions | None = None
+    tts_conn_options: APIConnectOptions | None = None
     max_unrecoverable_errors: int = 3
     """Maximum number of consecutive unrecoverable errors from stt, llm, or tts."""
 

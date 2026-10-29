@@ -254,6 +254,14 @@ pub trait Tts: Send + Sync {
         None
     }
 
+    // The connection policy this provider was given at construction, which applies to the
+    // calls of a session or run that supplies none (models.md); `None`: the defaults.
+    #[python(value = "None")]
+    #[host(read_once, name = "_core_conn_options")]
+    fn conn_options(&self) -> Option<ApiConnectOptions> {
+        None
+    }
+
     // The framework's report of a failed attempt of a call it retries: the provider's `error`
     // event, `recoverable` while the call is retried. A wrapper forwards it.
     #[python(report)]

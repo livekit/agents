@@ -335,6 +335,11 @@ class STT(stt.STT):
             vad=self._vad,
         )
 
+    def _core_conn_options(self) -> APIConnectOptions | None:
+        """The policy this provider was given, which a session or run that supplies none
+        keeps (models.md)."""
+        return self._conn
+
     def _core_leg(self) -> Any:
         """The core's own client, unless a subclass replaces what it would bypass."""
         return self if _bindings.overrides(self, STT, "stream") else self._core_native()

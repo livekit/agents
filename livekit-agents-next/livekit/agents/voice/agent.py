@@ -111,7 +111,8 @@ class _VoiceBinding(NamedTuple):
 
     @property
     def llm_conn_options(self) -> APIConnectOptions:
-        return self.session.conn_options.llm_conn_options
+        # no LLM takes a policy of its own: not given is the defaults
+        return self.session.conn_options.llm_conn_options or DEFAULT_API_CONNECT_OPTIONS
 
 
 class _LiveHook:
@@ -780,16 +781,14 @@ class Agent(Generic[Context_T, Output_T]):
             binding = agent._get_binding_or_raise()
             if isinstance(binding, _VoiceBinding):
                 model = binding.session.llm
-                conn_options = binding.session.conn_options.llm_conn_options
             else:
                 model = binding.llm
-                conn_options = binding.llm_conn_options
             assert isinstance(model, llm.LLM), "llm_node needs an LLM (not a realtime model)"
             async with model.chat(
                 chat_ctx=chat_ctx,
                 tools=tools,
                 tool_choice=model_settings.tool_choice,
-                conn_options=conn_options,
+                conn_options=binding.llm_conn_options,
             ) as stream:
                 async for chunk in stream:
                     yield chunk

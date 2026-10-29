@@ -249,8 +249,8 @@ impl Writer<'_> {
                 "rtc.AudioFrame".to_owned()
             }
             "ApiConnectOptions" => {
-                self.need("typing", "Any");
-                "dict[str, Any]".to_owned()
+                self.need("..types", "APIConnectOptions");
+                "APIConnectOptions".to_owned()
             }
             "ProviderId" => "dict[str, str]".to_owned(),
             "ProviderError" => "Exception".to_owned(),

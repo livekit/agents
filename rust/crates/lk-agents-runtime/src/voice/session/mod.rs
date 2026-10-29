@@ -624,10 +624,10 @@ impl VoiceSession {
             }
         };
         ModelRefs {
-            llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l, &self.conn.llm)))),
+            llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l, self.conn.llm)))),
             tts: map(tts, |t| {
                 let t = match &adapters {
-                    Some((adapter, _)) => tts_leg(t, adapter, clock.clone(), &self.conn.tts),
+                    Some((adapter, _)) => tts_leg(t, adapter, clock.clone(), self.conn.tts),
                     None => t,
                 };
                 r.register_tts(nodes.tts(t))
@@ -635,7 +635,7 @@ impl VoiceSession {
             stt: map(stt, |s| {
                 let s = match &adapters {
                     Some((_, adapter)) => {
-                        stt_leg(s, adapter, vad_now, clock.clone(), &self.conn.stt)
+                        stt_leg(s, adapter, vad_now, clock.clone(), self.conn.stt)
                     }
                     None => s,
                 };

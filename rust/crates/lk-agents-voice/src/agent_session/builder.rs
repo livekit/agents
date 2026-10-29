@@ -261,16 +261,18 @@ impl DriverBuilder {
         let adapter = executor.stt_adapter();
         self.stt = self.stt.take().map(|stt| {
             let vad = self.vad.clone();
-            nodes.stt(stt_leg(stt, &adapter, vad, self.time.clock(), &self.conn.stt))
+            nodes.stt(stt_leg(stt, &adapter, vad, self.time.clock(), self.conn.stt))
         });
         if let Some(stt) = &self.stt {
             stt.prewarm();
         }
         let adapter = executor.tts_adapter();
+        // The engine's TTS budget: the session's, else the TTS's own policy (models.md).
+        self.conn.tts = self.conn.tts.or_else(|| self.tts.as_ref().and_then(|t| t.conn_options()));
         self.tts = self
             .tts
             .take()
-            .map(|tts| nodes.tts(tts_leg(tts, &adapter, self.time.clock(), &self.conn.tts)));
+            .map(|tts| nodes.tts(tts_leg(tts, &adapter, self.time.clock(), self.conn.tts)));
         if let Some(tts) = &self.tts {
             tts.prewarm();
         }
@@ -561,13 +563,14 @@ pub fn stt_leg(
     adapter: &SttAdapter,
     vad: Option<Arc<dyn Vad>>,
     clock: Arc<dyn lk_agents_abi::Clock>,
-    conn: &lk_agents_abi::ApiConnectOptions,
+    conn: Option<lk_agents_abi::ApiConnectOptions>,
 ) -> Arc<dyn Stt> {
-    adapter(stt.with_conn_options(conn).unwrap_or(stt), vad, clock)
+    let conn = conn.or_else(|| stt.conn_options()).unwrap_or_default();
+    adapter(stt.with_conn_options(&conn).unwrap_or(stt), vad, clock)
 }
 
-pub fn llm_leg(llm: Arc<dyn Llm>, conn: &lk_agents_abi::ApiConnectOptions) -> Arc<dyn Llm> {
-    llm.with_conn_options(&one_attempt(conn)).unwrap_or(llm)
+pub fn llm_leg(llm: Arc<dyn Llm>, conn: Option<lk_agents_abi::ApiConnectOptions>) -> Arc<dyn Llm> {
+    llm.with_conn_options(&one_attempt(&conn.unwrap_or_default())).unwrap_or(llm)
 }
 
 /// One attempt per call, adapted by the executor when it has no duplex path.
@@ -575,7 +578,8 @@ pub fn tts_leg(
     tts: Arc<dyn Tts>,
     adapter: &TtsAdapter,
     clock: Arc<dyn lk_agents_abi::Clock>,
-    conn: &lk_agents_abi::ApiConnectOptions,
+    conn: Option<lk_agents_abi::ApiConnectOptions>,
 ) -> Arc<dyn Tts> {
-    adapter(tts.with_conn_options(&one_attempt(conn)).unwrap_or(tts), clock, *conn)
+    let conn = conn.or_else(|| tts.conn_options()).unwrap_or_default();
+    adapter(tts.with_conn_options(&one_attempt(&conn)).unwrap_or(tts), clock, conn)
 }

@@ -177,6 +177,14 @@ pub trait Stt: Send + Sync {
         None
     }
 
+    // The connection policy this provider was given at construction, which applies to the
+    // calls of a session or run that supplies none (models.md); `None`: the defaults.
+    #[python(value = "None")]
+    #[host(read_once, name = "_core_conn_options")]
+    fn conn_options(&self) -> Option<ApiConnectOptions> {
+        None
+    }
+
     /// Recognize a recording, its attempts retried per `conn_options`.
     ///
     /// Args:

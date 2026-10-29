@@ -249,6 +249,11 @@ class TTS(tts.TTS):
             conn_options=self._conn,
         )
 
+    def _core_conn_options(self) -> APIConnectOptions | None:
+        """The policy this provider was given, which a session or run that supplies none
+        keeps (models.md)."""
+        return self._conn
+
     def _core_leg(self) -> Any:
         """The core's own client, unless a subclass replaces what it would bypass."""
         return (

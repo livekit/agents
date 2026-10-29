@@ -116,7 +116,7 @@ async fn perform_llm_inference(
         tools_host_extra: ctx.providers.tools_host_extra.clone(),
         // `plan_request` already applied the on-enter exclusion: the list *this step* may call.
         tools: ctx.request.tools.clone(),
-        conn_options: shared.conn.llm,
+        conn_options: shared.conn.llm.unwrap_or_default(),
         ..ChatRequest::default()
     };
     let (speech, step) = (handle.id(), handle.num_steps());
