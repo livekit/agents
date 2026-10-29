@@ -500,3 +500,48 @@ async fn settle() {
         tokio::task::yield_now().await;
     }
 }
+
+// Catches: interruption metrics never reaching `metrics_collected`. The detector's verdict carries
+// them; the session reported only the overlap event.
+#[tokio::test(start_paused = true)]
+async fn an_overlap_verdict_reports_its_interruption_metrics() {
+    use crate::agent_session::effects::Effect;
+    use lk_agents_abi::Ts;
+    use lk_agents_abi::metrics::base::{AgentMetrics, InterruptionMetrics};
+    use lk_agents_abi::turn::detector::LegEvent;
+    use lk_agents_abi::turn::interruption::OverlapVerdict;
+
+    let api = unobserved(fake_room("interruption-metrics").1, None);
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed(None)) else {
+        panic!("session must be ready");
+    };
+    let (mut cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();
+    let driver = &mut cores.driver;
+    let mut out = driver.out();
+    let metrics = InterruptionMetrics {
+        timestamp: 1.0,
+        total_duration: 0.2,
+        prediction_duration: 0.02,
+        detection_delay: 0.3,
+        num_interruptions: 1,
+        num_backchannels: 0,
+        num_requests: 1,
+        metadata: None,
+    };
+    let verdict = OverlapVerdict {
+        is_interruption: true,
+        agent_ended: false,
+        ignore_user_transcript_until: Ts::ZERO,
+        reported: None,
+        metrics: Some(metrics.clone()),
+    };
+    driver.on_overlap_verdict(Ts::ZERO, LegEvent::Verdict { req: None, verdict }, &mut out);
+    let reported = driver.settle_step(out).into_iter().find_map(|effect| match effect {
+        Effect::Emit(SessionEvent::MetricsCollected { metrics, .. }) => match *metrics {
+            AgentMetrics::Interruption(m) => Some(m),
+            _ => None,
+        },
+        _ => None,
+    });
+    assert_eq!(reported, Some(metrics));
+}
