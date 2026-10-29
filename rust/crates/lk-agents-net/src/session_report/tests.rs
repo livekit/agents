@@ -183,7 +183,7 @@ async fn retry_info_is_decoded_from_the_upstream_google_rpc_record() {
 
 #[test]
 fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversize_content() {
-    use lk_agents_abi::{ChatContent, ChatContext, ChatItem, ChatMessage, Role, ToDictOptions};
+    use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role, ToDictOptions};
     let message = |text: String| {
         ChatItem::Message(ChatMessage::new(
             "message",
@@ -193,12 +193,14 @@ fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversi
         ))
     };
     let items = vec![message("a transcript".into())];
-    let expected = ChatContext::new(items.clone())
-        .to_dict(
+    let expected = serde_json::Value::Object(
+        lk_agents_core::llm::chat_dict::to_dict(
+            &items,
             &ToDictOptions { exclude_timestamp: false, ..Default::default() },
             &Default::default(),
         )
-        .unwrap();
+        .unwrap(),
+    );
     let actual: serde_json::Value = {
         let builder = Builder::new().unwrap();
         for item in items {

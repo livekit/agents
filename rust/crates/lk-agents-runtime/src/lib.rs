@@ -10,6 +10,7 @@
 /// runtime): the declared classes a core implements outright.
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
+    pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::text::TextAlgorithms;
     pub use lk_agents_core::telemetry::loop_monitor::{LoopMonitorOptions, LoopMonitorPolicy};
     pub use lk_agents_core::telemetry::metrics::MetricSeries;

@@ -14,34 +14,9 @@ use super::MarkupExt;
 
 pub struct SpeechMarkup;
 
-impl lk_agents_abi::llm::to_dict::ChatContextDict for SpeechMarkup {
-    fn chat_ctx_to_dict(
-        items: Vec<ChatItem>,
-        exclude_image: bool,
-        exclude_audio: bool,
-        exclude_timestamp: bool,
-        exclude_function_call: bool,
-        exclude_metrics: bool,
-        exclude_config_update: bool,
-        strip_markup: bool,
-    ) -> Result<serde_json::Map<String, serde_json::Value>, lk_agents_abi::ToDictError> {
-        let opts = lk_agents_abi::ToDictOptions {
-            exclude_image,
-            exclude_audio,
-            exclude_timestamp,
-            exclude_function_call,
-            exclude_metrics,
-            exclude_config_update,
-        };
-        let strip = |text: &str| super::transcript::strip_expr_markup(text);
-        let host = lk_agents_abi::ToDictHost {
-            media: None,
-            strip_expr_markup: strip_markup.then_some(&strip as &dyn Fn(&str) -> String),
-        };
-        match lk_agents_abi::ChatContext::new(items).to_dict(&opts, &host)? {
-            serde_json::Value::Object(dict) => Ok(dict),
-            _ => unreachable!("to_dict is the items envelope"),
-        }
+impl lk_agents_core::llm::chat_dict::AssistantMarkup for SpeechMarkup {
+    fn strip_expr_markup(text: &str) -> String {
+        super::strip_expr_markup(text)
     }
 }
 

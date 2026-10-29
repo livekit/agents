@@ -1,15 +1,14 @@
-//! `ChatContext.to_dict` (`chat_context.py:629`): `model_dump(mode="json", exclude_none=True)`, pinned
-//! against pydantic 2.13 by a differential proptest. The records' dumps are generated
-//! (`#[binding(model_dump)]`); the filters and the markup strip are here.
+//! `ChatContext.to_dict` (`chat_context.py:629`) records: `model_dump(mode="json", exclude_none=True)`,
+//! generated per record (`#[binding(model_dump)]`), and the declared host function. The item
+//! filters are `lk_agents_core::llm::chat_dict`.
 
 use std::time::SystemTime;
 
 use crate::MediaRef;
 use serde_json::{Map, Value};
 
-use crate::llm::chat_context::ChatContext;
 use crate::llm::chat_context::{
-    ChatContent, ChatItem, ChatMessage, Extra, ImageSource, InferenceDetail, ItemKind, Role,
+    ChatContent, ChatItem, ChatMessage, Extra, ImageSource, InferenceDetail, Role,
 };
 
 /// The `time.time()` float the reference stores. Pre-epoch stamps come back negative.
@@ -75,44 +74,16 @@ pub enum ToDictError {
     MediaNotRenderable { kind: &'static str },
 }
 
-impl ChatContext {
-    /// `{"items": [...]}` and nothing else: `from_dict` and the session report read that envelope.
-    pub fn to_dict(
-        &self,
-        opts: &ToDictOptions,
-        host: &ToDictHost<'_>,
-    ) -> Result<Value, ToDictError> {
-        let mut items = Vec::with_capacity(self.items.len());
-        for item in &self.items {
-            if let Some(v) = item_to_dict(item, opts, host)? {
-                items.push(v);
-            }
+/// An item's dump as its own record; the item filters are the core's.
+impl ModelDump for ChatItem {
+    fn model_dump(&self, cx: &DumpCx<'_>, _: &'static str) -> Dumped {
+        match self {
+            ChatItem::Message(m) => m.model_dump(cx, "ChatMessage"),
+            ChatItem::FunctionCall(f) => f.model_dump(cx, "FunctionCall"),
+            ChatItem::FunctionCallOutput(f) => f.model_dump(cx, "FunctionCallOutput"),
+            ChatItem::AgentHandoff(h) => h.model_dump(cx, "AgentHandoff"),
+            ChatItem::AgentConfigUpdate(c) => c.model_dump(cx, "AgentConfigUpdate"),
         }
-        let mut out = Map::new();
-        out.insert("items".to_owned(), Value::Array(items));
-        Ok(Value::Object(out))
-    }
-}
-
-/// The item filters (`chat_context.py:642`), then the item's generated [`ModelDump`].
-pub fn item_to_dict(
-    item: &ChatItem,
-    opts: &ToDictOptions,
-    host: &ToDictHost<'_>,
-) -> Result<Option<Value>, ToDictError> {
-    if opts.exclude_function_call && item.kind().is_function_call_pair() {
-        return Ok(None);
-    }
-    if opts.exclude_config_update && item.kind() == ItemKind::AgentConfigUpdate {
-        return Ok(None);
-    }
-    let cx = DumpCx { opts, host };
-    match item {
-        ChatItem::Message(m) => m.model_dump(&cx, "ChatMessage"),
-        ChatItem::FunctionCall(f) => f.model_dump(&cx, "FunctionCall"),
-        ChatItem::FunctionCallOutput(f) => f.model_dump(&cx, "FunctionCallOutput"),
-        ChatItem::AgentHandoff(h) => h.model_dump(&cx, "AgentHandoff"),
-        ChatItem::AgentConfigUpdate(c) => c.model_dump(&cx, "AgentConfigUpdate"),
     }
 }
 
@@ -340,8 +311,12 @@ mod tests {
         ToDictHost { media: Some(&fake_media), strip_expr_markup: None }
     }
 
+    fn dump_with(items: Vec<ChatItem>, opts: ToDictOptions, host: &ToDictHost<'_>) -> Dumped {
+        items.model_dump(&DumpCx { opts: &opts, host }, "ChatItem")
+    }
+
     fn dump(items: Vec<ChatItem>, opts: ToDictOptions) -> Value {
-        ChatContext::new(items).to_dict(&opts, &host()).unwrap()
+        json!({ "items": dump_with(items, opts, &host()).unwrap() })
     }
 
     /// Serialized text: an `IndexMap`'s `PartialEq` ignores key order, so every order assertion
@@ -531,15 +506,15 @@ mod tests {
             inference_detail: InferenceDetail::Auto,
             mime_type: None,
         };
-        let ctx = ChatContext::new(vec![msg(Role::User, vec![ChatContent::Image(img)])]);
+        let items = vec![msg(Role::User, vec![ChatContent::Image(img)])];
         let bare = ToDictHost::default();
         let opts = ToDictOptions { exclude_image: false, ..Default::default() };
         assert_eq!(
-            ctx.to_dict(&opts, &bare),
+            dump_with(items.clone(), opts, &bare),
             Err(ToDictError::MediaNotRenderable { kind: "ImageContent.image" })
         );
         // ...and the default flags never reach it.
-        assert!(ctx.to_dict(&ToDictOptions::default(), &bare).is_ok());
+        assert!(dump_with(items, ToDictOptions::default(), &bare).is_ok());
     }
 
 

@@ -124,7 +124,7 @@ pub use vad::events::{VadEvent, VadEventType};
 // `metrics::base::Metadata` is deliberately not at the root, beside the unrelated `MetricsMetadata`.
 pub use llm::to_dict::{
     DumpCx, DumpMap, DumpValue, Dumped, ModelDump, ToDictError, ToDictHost, ToDictOptions,
-    epoch_secs, item_to_dict, wall_from_secs,
+    epoch_secs, wall_from_secs,
 };
 pub use metrics::base::{EotInferenceMetrics, InterruptionMetrics};
 pub use tts::timed::TimedString;
