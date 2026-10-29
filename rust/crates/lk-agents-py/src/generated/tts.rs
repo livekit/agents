@@ -345,7 +345,7 @@ pub struct TtsProxy {
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
     notifier: crate::host::Notifier,
-    instance_id: usize,
+    instance_id: ::std::option::Option<usize>,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::TtsCapabilities,
     id: ::lk_agents_abi::ProviderId,
@@ -386,7 +386,7 @@ impl TtsProxy {
         };
         let instance_id = {
             let v = crate::host::read(obj, "_core_instance_id")?;
-            ::lk_agents_abi::python::number_from_py::<usize>(&v, "Tts._core_instance_id")?
+            if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<usize>(&v, "Tts._core_instance_id")).map(Some) }?
         };
         let label = {
             let v = crate::host::read(obj, "_core_label")?;
@@ -425,7 +425,7 @@ impl TtsProxy {
 }
 
 impl ::lk_agents_abi::Tts for TtsProxy {
-    fn instance_id(&self) -> usize {
+    fn instance_id(&self) -> ::std::option::Option<usize> {
         ::std::clone::Clone::clone(&self.instance_id)
     }
 

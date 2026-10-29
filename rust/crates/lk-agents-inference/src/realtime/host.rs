@@ -52,7 +52,7 @@ impl<E> HostRealtimeModel<E> {
 }
 
 impl<E: Send + 'static> Realtime for HostRealtimeModel<E> {
-    fn instance_id(&self) -> usize {
+    fn instance_id(&self) -> Option<usize> {
         self.host.instance_id()
     }
 

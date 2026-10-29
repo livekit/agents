@@ -86,3 +86,14 @@ mod resampling_tests {
         assert_eq!(resampling_plan(&[22_050], None), (22_050, vec![false]));
     }
 }
+
+/// A backend's identity: its host object's, else the retained native allocation (alive for the
+/// chain's lifetime, shared by clones), so rebinding options never adds a backend.
+pub(crate) fn backend_resource<T: ?Sized>(
+    provider: &T,
+    host_instance: Option<usize>,
+) -> lk_agents_abi::resources::ResourceId {
+    let instance =
+        host_instance.unwrap_or_else(|| std::ptr::from_ref(provider).cast::<()>() as usize);
+    lk_agents_abi::resources::ResourceId(instance as u64)
+}

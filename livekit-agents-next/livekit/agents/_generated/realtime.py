@@ -138,7 +138,7 @@ class RealtimeModel(ABC):
     ) -> None:
         await self.aclose()
 
-    def _core_instance_id(self) -> int:
+    def _core_instance_id(self) -> int | None:
         return id(self)
 
     def _core_label(self) -> str:

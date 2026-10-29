@@ -162,9 +162,7 @@ impl Backend for Fake {
     type Session = Step;
 
     fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
-        lk_agents_abi::resources::ResourceId(
-            lk_agents_abi::types::identity::provider_instance(self) as u64,
-        )
+        super::backend_resource(self, None)
     }
 
     fn label(&self) -> String {

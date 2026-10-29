@@ -43,9 +43,3 @@ impl ProviderId {
         }
     }
 }
-
-/// Identity of a retained native provider object. Host proxies retain their originating
-/// object's identity instead, so rebinding options never creates another backend.
-pub fn provider_instance<T: ?Sized>(provider: &T) -> usize {
-    std::ptr::from_ref(provider).cast::<()>() as usize
-}

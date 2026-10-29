@@ -17,7 +17,7 @@ use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, Wal
 
 use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest, Modality};
 use crate::fallback::realtime::{FallbackBacklog, RealtimeCapabilities, merge_capabilities};
-use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy};
+use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy, backend_resource};
 use crate::realtime::host::HostRealtimeModel;
 use lk_agents_abi::resources::ResourceId;
 
@@ -32,11 +32,10 @@ pub enum RealtimeChild {
 
 impl RealtimeChild {
     fn resource_id(&self) -> ResourceId {
-        let instance = match self {
-            Self::Native(model) => model.instance_id(),
-            Self::Host(model, _) => model.instance_id(),
-        };
-        ResourceId(instance as u64)
+        match self {
+            Self::Native(model) => backend_resource(model.as_ref(), model.instance_id()),
+            Self::Host(model, _) => backend_resource(model.as_ref(), model.instance_id()),
+        }
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

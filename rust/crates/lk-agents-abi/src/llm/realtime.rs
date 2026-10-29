@@ -436,8 +436,9 @@ mod tests {
 /// `async fn session` because the reference's session starts running in its constructor.
 #[crate::host(native(refused = "expected NativeRealtime"))]
 pub trait Realtime: Send + Sync + 'static {
-    fn instance_id(&self) -> usize {
-        crate::types::identity::provider_instance(self)
+    /// The host model's identity; `None` for a native model.
+    fn instance_id(&self) -> Option<usize> {
+        None
     }
 
     fn label(&self) -> String;
@@ -676,11 +677,12 @@ pub struct Truncate {
     error(name = "RealtimeModelError", kind = "realtime_model_error")
 ))]
 pub trait HostRealtime: Send + Sync {
-    /// Stable object identity, independent of proxy instances and bound connection options.
+    /// The host object's identity, independent of proxy instances and bound connection options;
+    /// `None` for a native provider.
     #[python(value = "id(self)")]
     #[host(read_once, name = "_core_instance_id")]
-    fn instance_id(&self) -> usize {
-        crate::types::identity::provider_instance(self)
+    fn instance_id(&self) -> Option<usize> {
+        None
     }
 
     /// The name logs and metrics give this instance: its class path.
