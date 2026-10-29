@@ -463,7 +463,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             assert job_ctx is not None
             plan = _core.plan_session_start(
                 job_default=job_ctx.job.enable_recording,
-                has_job_context=True,
                 another_session_is_primary=not job_ctx._claim_session(self),
             )
             self._recording_options = cast(RecordingOptions, dataclasses.asdict(plan.recording))

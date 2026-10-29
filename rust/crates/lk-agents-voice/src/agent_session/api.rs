@@ -630,10 +630,9 @@ impl lk_agents_abi::voice::session_effects::SessionStart for SessionStartPlans {
     /// job neither records nor hosts.
     fn plan_session_start(
         job_default: bool,
-        has_job_context: bool,
         another_session_is_primary: bool,
     ) -> StartPlan {
-        let is_primary = !has_job_context || !another_session_is_primary;
+        let is_primary = !another_session_is_primary;
         let recording =
             if job_default && is_primary { RECORDING_ALL_ON } else { RECORDING_ALL_OFF };
         StartPlan {

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from datetime import date
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
@@ -216,15 +217,35 @@ class PlayoutLedger:
     def snapshot(self, queued: float) -> PlaybackInfo: ...
     def settle(self) -> PlaybackInfo: ...
 
-def plan_session_start(
-    *,
-    job_default: bool,
-    has_job_context: bool,
-    another_session_is_primary: bool,
-) -> StartPlan:
+def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -> StartPlan:
     """The job's recording and whether this session is its primary (records) and hosts the
     remote session protocol; `another_session_is_primary` is the job's claim already taken.
     """
+
+def validate_card_number(card_number: str) -> bool:
+    """The Luhn checksum over an all-digit string."""
+
+def card_expired(month: int, year: int, today: date) -> bool:
+    """Whether a two-digit expiry year and its month precede `today`'s month."""
+
+def normalize_date_of_birth(year: int, month: int, day: int, today: date) -> date:
+    """A two-digit year is this century's when it is not past this year's two digits, else the
+    last century's; an invalid or future date is refused.
+    """
+
+def normalize_email_address(email: str) -> str:
+    """Stripped, and refused unless it reads `local@label.….tld`."""
+
+def normalize_phone_number(phone_number: str) -> str:
+    """Whitespace, hyphens, parentheses and dots dropped, and refused unless it reads `+?[1-9]`
+    followed by six to fourteen digits.
+    """
+
+def dtmf_code(symbol: str) -> int:
+    """Digits are themselves, `*` is 10, `#` is 11 and `A`-`D` are 12-15."""
+
+def format_dtmf(symbols: Sequence[str]) -> str:
+    """The space-joined digits that fill the DTMF read-back's `{digits}` hole."""
 
 class GetDtmfResult:
     """A collected, space-separated keypad sequence."""

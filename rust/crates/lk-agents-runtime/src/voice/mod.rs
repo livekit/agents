@@ -31,6 +31,7 @@ use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
 
 pub use lk_agents_voice::agent_session::{SessionApi, SessionStartPlans};
+pub use lk_agents_voice::workflows::WorkflowRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 
 pub struct Runtime {

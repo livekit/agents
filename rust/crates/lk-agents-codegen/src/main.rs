@@ -85,14 +85,12 @@ const SOURCES: &[&str] = &[
 
 /// `#[host(export ..)]` / `#[host(object ..)]` files. Any core crate may appear.
 const EXPORT_SOURCES: &[&str] = &[
-    "rust/crates/lk-agents-voice/src/workflows/mod.rs",
     "rust/crates/lk-agents-abi/src/voice/background_audio.rs",
     "rust/crates/lk-agents-voice/src/tool_executor.rs",
     "rust/crates/lk-agents-voice/src/keyterm_detection.rs",
     "rust/crates/lk-agents-voice/src/amd/classifier.rs",
     "rust/crates/lk-agents-voice/src/agent_activity/options.rs",
     "rust/crates/lk-agents-voice/src/speech_handle.rs",
-    "rust/crates/lk-agents-voice/src/workflows/dtmf.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs",
     "rust/crates/lk-agents-voice/src/workflows/prompts.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",

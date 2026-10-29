@@ -23,7 +23,6 @@ pub trait SessionStart {
     #[host(function)]
     fn plan_session_start(
         #[host(kw)] job_default: bool,
-        has_job_context: bool,
         another_session_is_primary: bool,
     ) -> StartPlan;
 }

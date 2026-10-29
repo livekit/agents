@@ -10,10 +10,10 @@ pub mod twilio;
 pub mod warm_transfer;
 
 use crate::tokenize::{is_py_space, py_strip};
-use lk_agents_abi::utils::dates::{Date, DateError};
+use lk_agents_abi::utils::dates::Date;
+use lk_agents_abi::voice::workflows::{CaptureRefused, UnknownDtmfSymbol, WorkflowChecks};
 
 /// `validate_card_number`: the Luhn checksum over an all-digit string.
-#[lk_agents_abi::host(export(pid = false))]
 pub fn validate_card_number(card_number: &str) -> bool {
     if card_number.is_empty() || !card_number.chars().all(|c| c.is_ascii_digit()) {
         return false;
@@ -37,24 +37,14 @@ pub fn validate_card_number(card_number: &str) -> bool {
 
 /// `is_expired(month, year)`: whether a two-digit expiry year and its month precede `today`'s
 /// month.
-#[lk_agents_abi::host(export(pid = false))]
 pub fn card_expired(month: i64, year: i64, today: Date) -> bool {
     (2000 + year, month) < (i64::from(today.year()), i64::from(today.month()))
 }
 
-/// Why a date of birth is refused (`ValueError`).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[lk_agents_abi::host(error(kind = "ValueError"))]
-pub enum DateOfBirthRefused {
-    #[error(transparent)]
-    Invalid(#[from] DateError),
-    #[error("Date of birth cannot be in the future")]
-    Future,
-}
+pub use lk_agents_abi::voice::workflows::DateOfBirthRefused;
 
 /// `normalize_date_of_birth`: a two-digit year is this century's when it is not past this year's
 /// two digits, else the last century's; an invalid or future date is refused.
-#[lk_agents_abi::host(export(pid = false))]
 pub fn normalize_date_of_birth(
     year: i64,
     month: i64,
@@ -76,7 +66,6 @@ pub fn normalize_date_of_birth(
 /// `normalize_email_address`: stripped, and refused unless it reads `local@label.….tld` (the
 /// reference's `EMAIL_REGEX`: a local part starting alphanumeric over `[A-Za-z0-9._%+-]`, labels
 /// alphanumeric at both ends with inner hyphens, and an alphabetic TLD of two or more).
-#[lk_agents_abi::host(export(pid = false, err = "livekit.agents.llm.tool_context.ToolError"))]
 pub fn normalize_email_address(email: &str) -> Result<String, String> {
     let email = py_strip(email);
     let valid = email.split_once('@').is_some_and(|(local, domain)| {
@@ -103,7 +92,6 @@ pub fn normalize_email_address(email: &str) -> Result<String, String> {
 
 /// `normalize_phone_number`: whitespace, hyphens, parentheses and dots dropped, and refused unless
 /// it reads `+?[1-9]` followed by six to fourteen digits (the reference's `PHONE_REGEX`).
-#[lk_agents_abi::host(export(pid = false, err = "livekit.agents.llm.tool_context.ToolError"))]
 pub fn normalize_phone_number(phone_number: &str) -> Result<String, String> {
     let cleaned: String = py_strip(phone_number)
         .chars()
@@ -114,6 +102,46 @@ pub fn normalize_phone_number(phone_number: &str) -> Result<String, String> {
         && (7..=15).contains(&digits.len())
         && digits.chars().all(|c| c.is_ascii_digit());
     if valid { Ok(cleaned) } else { Err(format!("Invalid phone number provided: {phone_number}")) }
+}
+
+/// The capture tools' checks and DTMF symbols, as the host calls them.
+pub struct WorkflowRules;
+
+impl WorkflowChecks for WorkflowRules {
+    fn validate_card_number(card_number: String) -> bool {
+        validate_card_number(&card_number)
+    }
+
+    fn card_expired(month: i64, year: i64, today: Date) -> bool {
+        card_expired(month, year, today)
+    }
+
+    fn normalize_date_of_birth(
+        year: i64,
+        month: i64,
+        day: i64,
+        today: Date,
+    ) -> Result<Date, DateOfBirthRefused> {
+        normalize_date_of_birth(year, month, day, today)
+    }
+
+    fn normalize_email_address(email: String) -> Result<String, CaptureRefused> {
+        normalize_email_address(&email).map_err(CaptureRefused)
+    }
+
+    fn normalize_phone_number(phone_number: String) -> Result<String, CaptureRefused> {
+        normalize_phone_number(&phone_number).map_err(CaptureRefused)
+    }
+
+    fn dtmf_code(symbol: String) -> Result<u8, UnknownDtmfSymbol> {
+        dtmf::dtmf_code(&symbol).map_err(|_| UnknownDtmfSymbol(symbol))
+    }
+
+    fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol> {
+        // the space-joined digits that fill `prompts::dtmf`'s `{digits}` hole
+        let keys = dtmf::parse_all(&symbols, str::to_owned).map_err(UnknownDtmfSymbol)?;
+        Ok(dtmf::format_dtmf(&keys))
+    }
 }
 
 #[cfg(test)]

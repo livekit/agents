@@ -254,7 +254,7 @@ fn assembled(
 #[test]
 fn only_the_primary_session_records_or_hosts() {
     use lk_agents_abi::voice::session_effects::SessionStart as _;
-    let plan = |primary_taken| SessionStartPlans::plan_session_start(true, true, primary_taken);
+    let plan = |primary_taken| SessionStartPlans::plan_session_start(true, primary_taken);
     let first = plan(false);
     assert!(first.is_primary && first.hosting && first.records && first.recording.audio);
     let second = plan(true);

@@ -332,3 +332,59 @@ const _: () = {
 pub mod dtmf;
 
 pub mod warm_transfer;
+
+/// Why a date of birth is refused (`ValueError`).
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DateOfBirthRefused {
+    #[error(transparent)]
+    Invalid(#[from] crate::utils::dates::DateError),
+    #[error("Date of birth cannot be in the future")]
+    Future,
+}
+
+/// What a capture tool heard is not what it collects: the reference's `ToolError`, its message
+/// the model's.
+#[crate::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct CaptureRefused(pub String);
+
+/// A key that is no DTMF symbol (`ValueError`).
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown DTMF symbol {0:?}")]
+pub struct UnknownDtmfSymbol(pub String);
+
+/// The checks the capture tools run on what the model heard, and the DTMF symbols they read.
+#[crate::host(functions(pid = false))]
+pub trait WorkflowChecks {
+    /// The Luhn checksum over an all-digit string.
+    #[host(function)]
+    fn validate_card_number(card_number: String) -> bool;
+    /// Whether a two-digit expiry year and its month precede `today`'s month.
+    #[host(function)]
+    fn card_expired(month: i64, year: i64, today: Date) -> bool;
+    /// A two-digit year is this century's when it is not past this year's two digits, else the
+    /// last century's; an invalid or future date is refused.
+    #[host(function)]
+    fn normalize_date_of_birth(
+        year: i64,
+        month: i64,
+        day: i64,
+        today: Date,
+    ) -> Result<Date, DateOfBirthRefused>;
+    /// Stripped, and refused unless it reads `local@label.….tld`.
+    #[host(function)]
+    fn normalize_email_address(email: String) -> Result<String, CaptureRefused>;
+    /// Whitespace, hyphens, parentheses and dots dropped, and refused unless it reads `+?[1-9]`
+    /// followed by six to fourteen digits.
+    #[host(function)]
+    fn normalize_phone_number(phone_number: String) -> Result<String, CaptureRefused>;
+    /// Digits are themselves, `*` is 10, `#` is 11 and `A`-`D` are 12-15.
+    #[host(function)]
+    fn dtmf_code(symbol: String) -> Result<u8, UnknownDtmfSymbol>;
+    /// The space-joined digits that fill the DTMF read-back's `{digits}` hole.
+    #[host(function)]
+    fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol>;
+}

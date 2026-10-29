@@ -70,7 +70,7 @@ pub fn dtmf_result(inputs: &[DtmfEvent]) -> GetDtmfResult {
 }
 
 /// Each symbol a key, or the first that is not one, refused by name.
-fn parse_all(
+pub(crate) fn parse_all(
     symbols: &[String],
     refusal: impl Fn(&str) -> String,
 ) -> Result<Vec<DtmfEvent>, String> {
@@ -79,7 +79,6 @@ fn parse_all(
 
 /// `dtmf_event_to_code` (`beta/workflows/utils.py:30`): digits are themselves, `*` is 10, `#` is 11
 /// and `A`-`D` are 12-15.
-#[lk_agents_abi::host(export(name = "dtmf_code", pid = false))]
 pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
     let event =
         DtmfEvent::parse(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
@@ -119,13 +118,6 @@ pub fn dtmf_send_answer(events: &[String], outcome: Result<(), DtmfSendError>) -
             format!("Failed to send DTMF event: {event}. Error: {error}")
         }
     }
-}
-
-/// `format_dtmf` (`beta/workflows/utils.py:44`): the space-joined digits that fill
-/// `prompts::dtmf`'s `{digits}` hole.
-#[lk_agents_abi::host(export(name = "format_dtmf", pid = false))]
-pub fn format_dtmf_symbols(symbols: Vec<String>) -> Result<String, String> {
-    Ok(format_dtmf(&parse_all(&symbols, |s| format!("unknown DTMF symbol {s:?}"))?))
 }
 
 /// `GetDtmfResult` as a `_core` value: the record plus its constructor from the keys pressed.

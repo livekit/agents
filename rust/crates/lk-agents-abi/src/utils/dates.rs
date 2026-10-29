@@ -5,6 +5,7 @@ use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+#[crate::host(handwritten(extract, emit, host = "datetime.date"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Date(NaiveDate);
 

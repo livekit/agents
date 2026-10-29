@@ -636,11 +636,92 @@ type SessionStartImpl = <crate::Selected as super::Implementations>::SessionStar
 /// The job's recording and whether this session is its primary (records) and hosts the
 /// remote session protocol; `another_session_is_primary` is the job's claim already taken.
 #[pyfunction]
-#[pyo3(signature = (*, job_default, has_job_context, another_session_is_primary))]
-pub fn plan_session_start<'py>(py: Python<'py>, job_default: bool, has_job_context: bool, another_session_is_primary: bool) -> PyResult<Bound<'py, PyAny>> {
+#[pyo3(signature = (*, job_default, another_session_is_primary))]
+pub fn plan_session_start<'py>(py: Python<'py>, job_default: bool, another_session_is_primary: bool) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
-    let out = <SessionStartImpl as ::lk_agents_abi::voice::session_effects::SessionStart>::plan_session_start(job_default, has_job_context, another_session_is_primary);
+    let out = <SessionStartImpl as ::lk_agents_abi::voice::session_effects::SessionStart>::plan_session_start(job_default, another_session_is_primary);
     Ok(crate::generated::records::session_wire::start_plan_to_py(py, out)?)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+type WorkflowChecksImpl = <crate::Selected as super::Implementations>::WorkflowChecks;
+
+fn _extract_workflow_checks_card_expired_month(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "month")
+}
+
+fn _extract_workflow_checks_card_expired_year(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "year")
+}
+
+fn _extract_workflow_checks_normalize_date_of_birth_year(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "year")
+}
+
+fn _extract_workflow_checks_normalize_date_of_birth_month(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "month")
+}
+
+fn _extract_workflow_checks_normalize_date_of_birth_day(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
+    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "day")
+}
+
+/// The Luhn checksum over an all-digit string.
+#[pyfunction]
+#[pyo3(signature = (card_number))]
+pub fn validate_card_number(card_number: ::std::string::String) -> PyResult<bool> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::validate_card_number(card_number);
+    Ok(out)
+}
+
+/// Whether a two-digit expiry year and its month precede `today`'s month.
+#[pyfunction]
+#[pyo3(signature = (month, year, today))]
+pub fn card_expired(#[pyo3(from_py_with = _extract_workflow_checks_card_expired_month)] month: i64, #[pyo3(from_py_with = _extract_workflow_checks_card_expired_year)] year: i64, today: ::lk_agents_abi::utils::dates::Date) -> PyResult<bool> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::card_expired(month, year, today);
+    Ok(out)
+}
+
+/// A two-digit year is this century's when it is not past this year's two digits, else the
+/// last century's; an invalid or future date is refused.
+#[pyfunction]
+#[pyo3(signature = (year, month, day, today))]
+pub fn normalize_date_of_birth(#[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_year)] year: i64, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_month)] month: i64, #[pyo3(from_py_with = _extract_workflow_checks_normalize_date_of_birth_day)] day: i64, today: ::lk_agents_abi::utils::dates::Date) -> PyResult<::lk_agents_abi::utils::dates::Date> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::normalize_date_of_birth(year, month, day, today).map_err(|e: ::lk_agents_abi::voice::workflows::DateOfBirthRefused| <::lk_agents_abi::voice::workflows::DateOfBirthRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// Stripped, and refused unless it reads `local@label.….tld`.
+#[pyfunction]
+#[pyo3(signature = (email))]
+pub fn normalize_email_address(email: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::normalize_email_address(email).map_err(|e: ::lk_agents_abi::voice::workflows::CaptureRefused| <::lk_agents_abi::voice::workflows::CaptureRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// Whitespace, hyphens, parentheses and dots dropped, and refused unless it reads `+?[1-9]`
+/// followed by six to fourteen digits.
+#[pyfunction]
+#[pyo3(signature = (phone_number))]
+pub fn normalize_phone_number(phone_number: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::normalize_phone_number(phone_number).map_err(|e: ::lk_agents_abi::voice::workflows::CaptureRefused| <::lk_agents_abi::voice::workflows::CaptureRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// Digits are themselves, `*` is 10, `#` is 11 and `A`-`D` are 12-15.
+#[pyfunction]
+#[pyo3(signature = (symbol))]
+pub fn dtmf_code(symbol: ::std::string::String) -> PyResult<u8> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::dtmf_code(symbol).map_err(|e: ::lk_agents_abi::voice::workflows::UnknownDtmfSymbol| <::lk_agents_abi::voice::workflows::UnknownDtmfSymbol as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// The space-joined digits that fill the DTMF read-back's `{digits}` hole.
+#[pyfunction]
+#[pyo3(signature = (symbols))]
+pub fn format_dtmf(symbols: ::std::vec::Vec<::std::string::String>) -> PyResult<::std::string::String> {
+    let out = <WorkflowChecksImpl as ::lk_agents_abi::voice::workflows::WorkflowChecks>::format_dtmf(symbols).map_err(|e: ::lk_agents_abi::voice::workflows::UnknownDtmfSymbol| <::lk_agents_abi::voice::workflows::UnknownDtmfSymbol as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs.
