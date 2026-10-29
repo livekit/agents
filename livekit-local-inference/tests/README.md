@@ -21,6 +21,8 @@ Set `LIVEKIT_BOUNDARY_PACKAGE_ROOT` to the source root only when testing a sourc
 
 The boundary probe checks concurrent EOT/VAD calls, recurrent affinity, reset isolation, array layout compatibility and worker retirement. The transport and lifecycle probes add partial-spawn failures, partial replies, deadlines, close during work and parent loss.
 
+On macOS, the boundary probe first checks the installed wheel tags and every bundled Mach-O payload, including the engine. Each payload must be ARM64; a universal2 interpreter does not make this engine universal2.
+
 The [C++ fake](../native/fake.cpp) can replace the Python fake backend through `LIVEKIT_BOUNDARY_FAKE_ADDON`. Build it as a shared library against the frozen headers, retaining unresolved Node-API symbols for the loaded host to supply.
 
 The separate `probe_sdk_cleanup.py` runs checked native close subclasses through actual SDK cleanup methods. It requires the SDK cleanup patch, an installed source path and an output path; it does not open model weights or mutate installed engine metadata.

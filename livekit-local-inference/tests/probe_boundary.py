@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from email.parser import Parser
+from importlib.metadata import distribution
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
+from typing import NotRequired, TypedDict
 
 import numpy as np
 
@@ -26,6 +30,73 @@ from livekit.local_inference._pool import Pool, StateLostError
 
 
 HERE = Path(__file__).resolve().parent
+
+
+class BoundaryReport(TypedDict):
+    scope: str
+    python: str
+    normal: dict[str, int | float | bool | str]
+    pending_close: dict[str, int | float | bool | str]
+    installed_architecture: NotRequired[dict[str, str]]
+
+
+def installed_architecture() -> dict[str, str]:
+    """Check every installed Mach-O payload and the distribution's wheel tags."""
+    installed = distribution("livekit-local-inference")
+    wheel = installed.read_text("WHEEL")
+    files = installed.files
+    assert wheel is not None and files, "installed wheel metadata and inventory are required"
+    tags = Parser().parsestr(wheel).get_all("Tag", [])
+    assert tags, "installed wheel requires compatibility tags"
+    failures: list[str] = []
+    for tag in tags:
+        _, _, platforms = tag.split("-")
+        if not all(
+            target.startswith("macosx_") and target.endswith("_arm64")
+            for target in platforms.split(".")
+        ):
+            failures.append(f"wheel tag advertises an unsupported architecture: {tag}")
+    native: dict[str, str] = {}
+    macho_magic = {
+        bytes.fromhex(value)
+        for value in (
+            "cffaedfe",
+            "feedfacf",
+            "cefaedfe",
+            "feedface",
+            "cafebabe",
+            "bebafeca",
+            "cafebabf",
+            "bfbafeca",
+        )
+    }
+    for entry in files:
+        path = Path(str(installed.locate_file(entry)))
+        with path.open("rb") as source:
+            magic = source.read(4)
+        if magic not in macho_magic:
+            continue
+        result = subprocess.run(
+            ["lipo", "-archs", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        native[str(entry)] = result.stdout.strip()
+        if result.stdout.split() != ["arm64"]:
+            failures.append(
+                f"native payload has unsupported architectures: {entry}: {result.stdout.strip()}"
+            )
+    assert "livekit/local_inference/_vendor/engine.node" in native, (
+        "engine payload was not inspected"
+    )
+    assert any(
+        name.startswith("livekit/local_inference/_napi_host315.") and name.endswith(".so")
+        for name in native
+    ), "host payload was not inspected"
+    assert not failures, "; ".join(failures)
+    return native
 
 
 def alive(pid: int) -> bool:
@@ -156,14 +227,17 @@ if __name__ == "__main__":
     if sys.version_info[:3] != (3, 15, 2):
         message = "every boundary probe process must run3.15.2"
         raise RuntimeError(message)
+    architecture = installed_architecture() if sys.platform == "darwin" else {}
     os.environ["BILLY_BOUNDARY_DUMMY_SECRET"] = str(time.monotonic_ns())
     try:
-        result = {
+        result: BoundaryReport = {
             "scope": "first-party working fake at public facade/worker seam; no vendor execution",
             "python": sys.version,
             "normal": asyncio.run(normal()),
             "pending_close": pending_close(),
         }
+        if sys.platform == "darwin":
+            result["installed_architecture"] = architecture
     finally:
         os.environ.pop("BILLY_BOUNDARY_DUMMY_SECRET", None)
     print(json.dumps(result), flush=True)
