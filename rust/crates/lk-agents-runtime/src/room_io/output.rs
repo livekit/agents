@@ -8,7 +8,9 @@ use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::voice::rtc::{AudioSource, PlaybackInfo, RtcError, RtcRoom, TrackSid};
 use lk_agents_abi::{AbortHandle, Closed, HOST_TEARDOWN_TIMEOUT, timeout};
 use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt, Ts};
-use lk_agents_voice::room_io::output::{CaptureAdmission, Playback, PlaybackReport};
+use lk_agents_voice::room_io::output::{
+    CaptureAdmission, Playback, PlaybackReport, capture_chunks,
+};
 use lk_agents_voice::room_io::publication::Publication;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -614,18 +616,7 @@ impl AudioOutput for ParticipantAudioOutput {
         Box::pin(async move {
             let segment = self.shared.tracker.current_segment();
             self.shared.lock().playback.validate(frame)?;
-            let sample_bytes = usize::from(frame.num_channels) * 2;
-            let chunk_bytes = (frame.sample_rate as usize / 20).max(1) * sample_bytes;
-            if frame.data.len() <= chunk_bytes {
-                return self.capture_chunk(segment, frame).await;
-            }
-            for bytes in frame.data.chunks(chunk_bytes) {
-                let chunk = AudioFrame::new(
-                    bytes.to_vec(),
-                    frame.sample_rate,
-                    frame.num_channels,
-                    (bytes.len() / sample_bytes) as u32,
-                );
+            for chunk in capture_chunks(frame) {
                 self.capture_chunk(segment, &chunk).await?;
             }
             Ok(())

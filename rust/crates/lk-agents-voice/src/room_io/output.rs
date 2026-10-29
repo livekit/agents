@@ -3,6 +3,7 @@
 use lk_agents_abi::voice::io::{IoError, PlaybackFinished, PlaybackSegment, Result};
 use lk_agents_abi::voice::rtc::{PlaybackInfo, frame_duration};
 use lk_agents_abi::{AudioByteStream, AudioFrame, Ts};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -83,6 +84,28 @@ fn tail_of(frame: &AudioFrame, keep: Duration) -> AudioFrame {
         frame.num_channels,
         keep_samples,
     )
+}
+
+/// A captured frame in 50 ms chunks, so one long frame cannot hold the whole backlog; a frame
+/// that fits passes through unchanged.
+pub fn capture_chunks(frame: &AudioFrame) -> Vec<Cow<'_, AudioFrame>> {
+    let sample_bytes = usize::from(frame.num_channels) * 2;
+    let chunk_bytes = (frame.sample_rate as usize / 20).max(1) * sample_bytes;
+    if frame.data.len() <= chunk_bytes {
+        return vec![Cow::Borrowed(frame)];
+    }
+    frame
+        .data
+        .chunks(chunk_bytes)
+        .map(|bytes| {
+            Cow::Owned(AudioFrame::new(
+                bytes.to_vec(),
+                frame.sample_rate,
+                frame.num_channels,
+                (bytes.len() / sample_bytes) as u32,
+            ))
+        })
+        .collect()
 }
 
 /// The progressed-run ledger, in the segment's captured timeline; the playhead comes from
