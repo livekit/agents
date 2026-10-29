@@ -13,9 +13,10 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 pub mod child;
@@ -60,9 +61,9 @@ pub struct Closed;
 /// sends nothing for that long, whatever the state of the child's event loop.
 pub struct IpcClient {
     outbox: Mutex<Option<mpsc::Sender<ToParent>>>,
-    writer: Mutex<Option<JoinHandle<()>>>,
+    writer: Mutex<Option<OwnedTask>>,
     inbox: tokio::sync::Mutex<mpsc::Receiver<ToChild>>,
-    reader: Mutex<Option<JoinHandle<Result<(), WireError>>>>,
+    reader: Mutex<Option<OwnedTask<Result<(), WireError>>>>,
 }
 
 impl IpcClient {
@@ -97,7 +98,7 @@ impl IpcClient {
             return Err(error);
         }
         let (outbox, mut queued) = mpsc::channel::<ToParent>(QUEUE);
-        let writer = tokio::spawn(async move {
+        let writer = TokioSpawner::current().spawn(async move {
             while let Some(msg) = queued.recv().await {
                 if wire::write(&mut writer, &msg).await.is_err() {
                     return;
@@ -107,7 +108,8 @@ impl IpcClient {
         });
         let (inbox_tx, inbox) = mpsc::channel(QUEUE);
         let health_timeout = hello.health_timeout_ms.map(Duration::from_millis);
-        let reader = tokio::spawn(read_parent(reader, inbox_tx, health_timeout, on_orphan));
+        let reader =
+            TokioSpawner::current().spawn(read_parent(reader, inbox_tx, health_timeout, on_orphan));
         let client = Self {
             outbox: Mutex::new(Some(outbox)),
             writer: Mutex::new(Some(writer)),
@@ -143,7 +145,7 @@ impl IpcClient {
     pub async fn close(&self) {
         let reader = lock(&self.reader).take();
         if let Some(reader) = reader {
-            reader.abort();
+            reader.cancel();
             let _ = reader.await;
         }
         lock(&self.outbox).take();
@@ -151,7 +153,7 @@ impl IpcClient {
         if let Some(mut writer) = writer
             && tokio::time::timeout(FLUSH_TIMEOUT, &mut writer).await.is_err()
         {
-            writer.abort();
+            writer.cancel();
             let _ = writer.await;
         }
     }

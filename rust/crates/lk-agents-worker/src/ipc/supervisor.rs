@@ -1,6 +1,8 @@
 //! One job process's supervisor: the IPC connection, health sampling and cleanup ownership around
 //! [`Supervision`].
 
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,6 +91,8 @@ pub struct ProcSupervisor {
     commands: mpsc::Sender<Command>,
     control: watch::Sender<Control>,
     status: watch::Receiver<Status>,
+    /// The actor's owner; dropping the supervisor does not cancel it.
+    _driver: Arc<TaskSet>,
 }
 
 impl ProcSupervisor {
@@ -100,7 +104,8 @@ impl ProcSupervisor {
     ) -> Self {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (messages_tx, messages) = mpsc::channel(QUEUE);
-        let reading = tokio::spawn(async move {
+        let spawner = TokioSpawner::current();
+        let reading = spawner.spawn(async move {
             loop {
                 let read = wire::read::<ToParent, _>(&mut reader).await;
                 let failed = read.is_err();
@@ -111,7 +116,7 @@ impl ProcSupervisor {
         });
         let (writes, mut queued) = mpsc::channel::<(u64, ToChild)>(QUEUE);
         let (written_tx, written) = mpsc::channel(QUEUE);
-        let writing = tokio::spawn(async move {
+        let writing = spawner.spawn(async move {
             while let Some((id, message)) = queued.recv().await {
                 let result = wire::write(&mut writer, &message)
                     .await
@@ -136,8 +141,11 @@ impl ProcSupervisor {
             next_job_id: 0,
             status: status_tx,
         };
-        tokio::spawn(driver.run(commands_rx, control_rx, messages, written, reading, writing));
-        Self { commands, control, status }
+        // Self-owned: it ends once the supervisor's channels close, after shutting the child down.
+        let driving = Arc::new(TaskSet::default());
+        let run = driver.run(commands_rx, control_rx, messages, written, reading, writing);
+        driving.spawn(&spawner, "process supervisor", run);
+        Self { commands, control, status, _driver: driving }
     }
 
     pub fn killed(&self) -> bool {
@@ -257,8 +265,8 @@ impl Driver {
         mut control: watch::Receiver<Control>,
         mut messages: mpsc::Receiver<Result<ToParent, Arc<WireError>>>,
         mut written: mpsc::Receiver<(u64, Result<(), Arc<WireError>>)>,
-        reading: tokio::task::JoinHandle<()>,
-        writing: tokio::task::JoinHandle<()>,
+        reading: OwnedTask,
+        writing: OwnedTask,
     ) {
         let mut reader_open = true;
         let mut commands_open = true;
@@ -351,8 +359,8 @@ impl Driver {
             self.apply(input, &mut sampling);
             self.publish();
         }
-        reading.abort();
-        writing.abort();
+        reading.cancel();
+        writing.cancel();
         let _ = reading.await;
         let _ = writing.await;
         // Started blocking samples cannot be aborted: retain the host until they settle.

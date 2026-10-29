@@ -1,5 +1,7 @@
 //! Health and Prometheus listeners with bounded connection ownership.
 use super::*;
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_net::task::TokioSpawner;
 /// What the health and metrics listeners read from the host, beside the server's own state.
 #[async_trait::async_trait]
 pub trait HealthProbe: Send + Sync {
@@ -154,7 +156,10 @@ where
     R: std::future::Future<Output = Response> + Send + 'static,
 {
     let respond = Arc::new(respond);
-    let mut connections = tokio::task::JoinSet::new();
+    use futures_util::StreamExt as _;
+    let spawner = TokioSpawner::current();
+    // Each connection's task; dropping the set cancels them.
+    let mut connections = futures_util::stream::FuturesUnordered::<OwnedTask>::new();
     let mut result = Ok(());
     loop {
         tokio::select! {
@@ -162,7 +167,7 @@ where
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow_and_update() { break; }
             }
-            joined = connections.join_next(), if !connections.is_empty() => {
+            joined = connections.next(), if !connections.is_empty() => {
                 if let Some(Err(error)) = joined {
                     result = Err(format!("health/metrics connection: {error}"));
                     break;
@@ -171,17 +176,17 @@ where
             accepted = listener.accept(), if connections.len() < 64 => {
                 match accepted {
                     Ok((socket, _)) => {
-                        connections.spawn(serve_connection(socket, respond.clone()));
+                        connections.push(spawner.spawn(serve_connection(socket, respond.clone())));
                     }
                     Err(error) => { result = Err(error.to_string()); break; }
                 }
             }
         }
     }
-    connections.abort_all();
-    while let Some(joined) = connections.join_next().await {
+    connections.iter().for_each(OwnedTask::cancel);
+    while let Some(joined) = connections.next().await {
         if let Err(error) = joined {
-            if !error.is_cancelled() {
+            if !matches!(error, TaskError::Cancelled) {
                 result = Err(format!("health/metrics connection: {error}"));
             }
         }

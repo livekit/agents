@@ -7,6 +7,8 @@ use crate::server_host::HostedServer;
 use crate::{Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -493,7 +495,7 @@ impl ServerRuntime {
                 .await
                 .map_err(|error| error.to_string())?;
             self.snapshot.send_modify(|snapshot| snapshot.http_port = port);
-            resources.health = Some(tokio::spawn(serve_health(
+            resources.health = Some(TokioSpawner::current().spawn(serve_health(
                 listener,
                 Arc::new(settings.clone()),
                 status.clone(),
@@ -504,8 +506,11 @@ impl ServerRuntime {
         if let Some(port) = settings.prometheus_port {
             let (listener, _) =
                 bind_listener(&settings.host, port).await.map_err(|error| error.to_string())?;
-            resources.metrics =
-                Some(tokio::spawn(serve_metrics(listener, probe, stop.subscribe())));
+            resources.metrics = Some(TokioSpawner::current().spawn(serve_metrics(
+                listener,
+                probe,
+                stop.subscribe(),
+            )));
         }
         if settings.multiprocessing_fallback {
             crate::diagnostics::emit(
@@ -530,7 +535,7 @@ impl ServerRuntime {
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();
             let (snapshots, failed) = (self.snapshot.clone(), status.clone());
-            resources.connection = Some(tokio::spawn(async move {
+            resources.connection = Some(TokioSpawner::current().spawn(async move {
                 let forward = async {
                     while let Ok(event) = notifications.recv().await {
                         match event {
@@ -556,7 +561,7 @@ impl ServerRuntime {
         }
         let (host, worker) = (self.host.clone(), resources.worker.clone());
         let readiness = status.ready.clone();
-        resources.load = Some(tokio::spawn(async move {
+        resources.load = Some(TokioSpawner::current().spawn(async move {
             let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
             loop {
                 interval.tick().await;
@@ -631,8 +636,8 @@ async fn pending_drain(
 }
 
 async fn pending_worker(
-    worker: &mut Option<tokio::task::JoinHandle<Result<(), String>>>,
-) -> Result<Result<(), String>, tokio::task::JoinError> {
+    worker: &mut Option<OwnedTask<Result<(), String>>>,
+) -> Result<Result<(), String>, TaskError> {
     match worker {
         Some(worker) => worker.await,
         None => std::future::pending().await,
@@ -645,10 +650,10 @@ struct Resources {
         lk_agents_net::worker_io::WorkerIoTask<Result<(Option<String>, Option<f32>), String>>,
     >,
     worker: Option<WorkerHandle>,
-    connection: Option<tokio::task::JoinHandle<Result<(), String>>>,
-    load: Option<tokio::task::JoinHandle<Result<(), String>>>,
-    health: Option<tokio::task::JoinHandle<Result<(), String>>>,
-    metrics: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    connection: Option<OwnedTask<Result<(), String>>>,
+    load: Option<OwnedTask<Result<(), String>>>,
+    health: Option<OwnedTask<Result<(), String>>>,
+    metrics: Option<OwnedTask<Result<(), String>>>,
 }
 
 impl Resources {
@@ -698,18 +703,14 @@ impl Resources {
             if resource == ServerResource::Load
                 && let Some(task) = &task
             {
-                task.abort();
+                task.cancel();
             }
             closing.push(
                 async move {
                     let result = match task {
                         Some(task) => match task.await {
                             Ok(result) => result,
-                            Err(error)
-                                if resource == ServerResource::Load && error.is_cancelled() =>
-                            {
-                                Ok(())
-                            }
+                            Err(TaskError::Cancelled) if resource == ServerResource::Load => Ok(()),
                             Err(error) => Err(error.to_string()),
                         },
                         None => Ok(()),

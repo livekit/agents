@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::FutureExt;
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{Notify, watch};
-use tokio::task::JoinHandle;
 
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::HostError;
@@ -160,6 +161,7 @@ impl ProcPool {
                 allocation: Allocation::new(limits),
                 executors: BTreeMap::new(),
                 tasks: Vec::new(),
+                cleanup: None,
                 next_request: 0,
                 now: Duration::ZERO,
             }),
@@ -186,7 +188,7 @@ impl ProcPool {
         self.handle(PoolInput::TargetIdle(n));
     }
 
-    fn track(&self, task: JoinHandle<()>) {
+    fn track(&self, task: OwnedTask) {
         let completed = {
             let mut state = lock(&self.0.state);
             let (completed, active) = std::mem::take(&mut state.tasks)
@@ -237,7 +239,7 @@ impl ProcPool {
         self.handle(PoolInput::Wake);
         if start {
             let pool = self.clone();
-            self.track(tokio::spawn(async move { pool.refill().await }));
+            self.track(TokioSpawner::current().spawn(async move { pool.refill().await }));
         }
         let mut ready = self.0.idle_ready.subscribe();
         let wait = self.0.opts.initialize_timeout + Duration::from_secs(2);
@@ -280,13 +282,15 @@ impl ProcPool {
             match effect {
                 PoolEffect::Create(id) => {
                     let pool = self.clone();
-                    self.track(tokio::spawn(async move { pool.spawn_proc(id).await }));
+                    self.track(
+                        TokioSpawner::current().spawn(async move { pool.spawn_proc(id).await }),
+                    );
                 }
                 PoolEffect::Close(id) => {
                     let process = lock(&self.0.state).executors.get(&id).cloned();
                     if let Some(process) = process {
                         let pool = self.clone();
-                        self.track(tokio::spawn(async move {
+                        self.track(TokioSpawner::current().spawn(async move {
                             if let Err(error) = pool.0.host.close(&process).await {
                                 pool.0.host.emit(PoolEvent::CleanupIncomplete, &process);
                                 pool.0.host.close_failed(&process, error);
@@ -299,7 +303,7 @@ impl ProcPool {
                     let process = lock(&self.0.state).executors.get(&id).cloned();
                     if let Some(process) = process {
                         let pool = self.clone();
-                        self.track(tokio::spawn(async move {
+                        self.track(TokioSpawner::current().spawn(async move {
                             match pool.0.host.wait_exit(&process).await {
                                 Ok(()) => pool.handle(PoolInput::Exited(id)),
                                 Err(error) => {
@@ -315,7 +319,7 @@ impl ProcPool {
                     let process = lock(&self.0.state).executors.get(&id).cloned();
                     if let Some(process) = process {
                         let pool = self.clone();
-                        self.track(tokio::spawn(async move {
+                        self.track(TokioSpawner::current().spawn(async move {
                             match pool.0.host.join(&process).await {
                                 Ok(outcome) => {
                                     pool.handle(PoolInput::Joined { process: id, outcome })
@@ -489,8 +493,8 @@ impl ProcPool {
         self.handle(PoolInput::Wake);
         if first {
             let pool = self.clone();
-            // A caller's cancellation cannot discard the join obligations.
-            tokio::spawn(async move {
+            // A caller's cancellation cannot discard the join obligations: the pool owns them.
+            let cleanup = TokioSpawner::current().spawn(async move {
                 let cleanup = async {
                     loop {
                         let changed = pool.0.changed.notified();
@@ -528,6 +532,7 @@ impl ProcPool {
                 }
                 pool.handle(PoolInput::CleanupComplete);
             });
+            lock(&self.0.state).cleanup = Some(cleanup);
         }
         let _ = self.0.close_ready.subscribe().wait_for(|done| *done).await;
     }
@@ -537,7 +542,9 @@ impl ProcPool {
 struct Shared {
     allocation: Allocation,
     executors: BTreeMap<ProcessId, Executor>,
-    tasks: Vec<JoinHandle<()>>,
+    tasks: Vec<OwnedTask>,
+    /// The close's join of `tasks`, started by the first close.
+    cleanup: Option<OwnedTask>,
     next_request: u64,
     now: Duration,
 }

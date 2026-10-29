@@ -1,6 +1,8 @@
 //! A WebSocket after its upgrade request: frames in, ASGI `websocket` events to the app,
 //! frames out.
 
+use lk_agents_abi::SpawnerExt;
+use lk_agents_net::task::TokioSpawner;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -400,12 +402,12 @@ pub(super) async fn serve_ws(
     });
     let id = registry.next.fetch_add(1, Ordering::Relaxed);
     registry.lock().insert(id, Arc::downgrade(&ex));
-    let reader = tokio::spawn(ex.clone().read_loop());
+    // Cancelled when this exchange is, with or without the guard.
+    let reader = TokioSpawner::current().spawn(ex.clone().read_loop());
 
     let guard = {
-        let (ex, reader) = (ex.clone(), reader.abort_handle());
+        let ex = ex.clone();
         OnCancel(Some(Box::new(move || {
-            reader.abort();
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
                 rt.spawn(async move { ex.close(1001, "worker stopped").await });
             }
@@ -429,7 +431,7 @@ pub(super) async fn serve_ws(
         }
     }
     registry.lock().remove(&id);
-    reader.abort();
+    reader.cancel();
     let _ = reader.await;
     ex.close(1000, "").await;
 }

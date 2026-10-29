@@ -1,5 +1,7 @@
 //! The `/agent` binary control protocol over the shared WebSocket transport.
 
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,7 +40,7 @@ impl WorkerTransport for WebSocketTransport {
         // tungstenite originates no pings, so without this a half-open connection is invisible
         // and every offered job times out.
         let pinger = write.clone();
-        let pinger = tokio::spawn(async move {
+        let pinger = TokioSpawner::current().spawn(async move {
             let mut tick = tokio::time::interval(heartbeat);
             tick.tick().await; // the first tick is immediate
             loop {
@@ -61,14 +63,9 @@ impl WorkerTransport for WebSocketTransport {
 }
 
 struct WsSink {
-    pinger: tokio::task::JoinHandle<()>,
+    /// Cancelled with the sink.
+    pinger: OwnedTask,
     write: Arc<Mutex<futures_util::stream::SplitSink<RawWebSocket, Message>>>,
-}
-
-impl Drop for WsSink {
-    fn drop(&mut self) {
-        self.pinger.abort();
-    }
 }
 
 #[async_trait]
@@ -87,7 +84,7 @@ impl WorkerSink for WsSink {
     }
 
     async fn close(&self) {
-        self.pinger.abort();
+        self.pinger.cancel();
         let _ = self.write.lock().await.close().await;
     }
 }

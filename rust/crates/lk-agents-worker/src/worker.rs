@@ -13,9 +13,10 @@ use crate::transport::{
 use crate::{DefaultLoadCalc, WorkerState, WorkerStateEffect, WorkerStateInput};
 use crate::{JobDecision, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
-use futures_util::future::{AbortHandle, Abortable};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lk_agents_abi::{Clock, RealClock, WallAnchor};
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -164,8 +165,10 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
     load_pending: bool,
     send_failure: Option<TransportError>,
-    requests: HashMap<Slot, AbortHandle>,
-    endpoints: HashMap<u64, AbortHandle>,
+    /// Host decisions and endpoint exchanges in flight, each its own task; removing one
+    /// cancels it, and its completion still reaches `operations`.
+    requests: HashMap<Slot, OwnedTask>,
+    endpoints: HashMap<u64, OwnedTask>,
     next_endpoint: u64,
     closing: bool,
     generation: u64,
@@ -705,11 +708,15 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         let host = self.host.clone();
         let id = self.next_endpoint;
         self.next_endpoint = self.next_endpoint.wrapping_add(1);
-        let (abort, registration) = AbortHandle::new_pair();
-        self.endpoints.insert(id, abort);
+        let (served, done) = tokio::sync::oneshot::channel::<()>();
+        let task = TokioSpawner::current().spawn(async move {
+            let _served = served;
+            serve_endpoint(host, stream).await;
+        });
+        self.endpoints.insert(id, task);
         self.operations.push(
             async move {
-                let _ = Abortable::new(serve_endpoint(host, stream), registration).await;
+                let _ = done.await;
                 Completion::EndpointDone(id)
             }
             .boxed(),
@@ -740,12 +747,8 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
     fn disconnect(&mut self, connection: &mut ConnectionIo) {
         self.rollover_requested = false;
         connection.disconnect();
-        for (_, request) in self.requests.drain() {
-            request.abort();
-        }
-        for (_, endpoint) in self.endpoints.drain() {
-            endpoint.abort();
-        }
+        self.requests.clear();
+        self.endpoints.clear();
         self.feed(
             WorkerStateInput::Disconnected { generation: self.generation },
             &mut connection.outbox,
@@ -845,11 +848,14 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 }
                 WorkerStateEffect::AskUser { slot, request } => {
                     let generation = self.generation;
-                    let (abort, registration) = AbortHandle::new_pair();
-                    self.requests.insert(slot, abort);
+                    let (decided, decision) = tokio::sync::oneshot::channel();
+                    let task = TokioSpawner::current().spawn(async move {
+                        let _ = decided.send(host.on_job_request(request).await);
+                    });
+                    self.requests.insert(slot, task);
                     self.operations.push(
                         async move {
-                            match Abortable::new(host.on_job_request(request), registration).await {
+                            match decision.await {
                                 Ok(decision) => {
                                     Completion::Input(WorkerStateInput::RequestDecision {
                                         generation,
@@ -864,9 +870,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                     );
                 }
                 WorkerStateEffect::CancelRequest { slot } => {
-                    if let Some(request) = self.requests.remove(&slot) {
-                        request.abort();
-                    }
+                    self.requests.remove(&slot);
                 }
                 WorkerStateEffect::LaunchJob { slot, info } => {
                     let generation = self.generation;

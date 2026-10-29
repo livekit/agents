@@ -14,8 +14,9 @@ use lk_agents_abi::worker::ipc_host::{
     JobCall, JobExecution, JobHost, ParticipantEntrypoint, WorkerError, WorkerJobRun,
 };
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef, lock};
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 use tokio::sync::{oneshot, watch};
-use tokio::task::JoinHandle;
 
 use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
 use lk_agents_net::env::ProcessEnv;
@@ -39,7 +40,7 @@ struct State {
     participant_runs: HashMap<(String, usize), u64>,
     runs: u64,
     /// The application calls (`delete_room`, ...) still running.
-    tasks: Vec<JoinHandle<()>>,
+    tasks: Vec<OwnedTask>,
     /// Whether `init_recording` ran, and the redaction it resolved (the job's until then).
     recording_initialized: bool,
     redaction: bool,
@@ -292,13 +293,13 @@ impl Inner {
 
         // The shutdown callbacks run together.
         let callbacks = std::mem::take(&mut lock(&self.state).shutdown_callbacks);
-        let runtime = self.io.runtime_handle();
+        let spawner = TokioSpawner::new(self.io.runtime_handle());
         let runs: Vec<_> = callbacks
             .into_iter()
             .map(|ShutdownCallback { callback, takes_reason, framework, name }| {
                 let (host, cx) = (host.clone(), cx.clone());
                 let reason = takes_reason.then(|| reason.clone());
-                runtime.spawn(async move {
+                spawner.spawn(async move {
                     let span = match framework {
                         true => None,
                         false => Some(host.span("shutdown_callback".into(), Some(name))?),
@@ -516,7 +517,7 @@ impl WorkerJobRun for JobRun {
         let (tx, rx) = oneshot::channel();
         let mut closed = self.inner.tasks_closed.subscribe();
         let inner = self.inner.clone();
-        let task = self.inner.io.runtime_handle().spawn(async move {
+        let task = TokioSpawner::new(self.inner.io.runtime_handle()).spawn(async move {
             let called = tokio::select! {
                 called = call.call(&context) => called.map_err(WorkerError::Host),
                 _ = closed.wait_for(|closed| *closed) => Err(WorkerError::Cancelled),

@@ -1,5 +1,7 @@
 //! Explicit real-TCP endpoint capacity profile; kept out of the fast unit lane.
 
+use lk_agents_abi::SpawnerExt;
+use lk_agents_net::task::TokioSpawner;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
@@ -59,24 +61,26 @@ impl AsgiApp for ProfileApp {
 async fn batch(sessions: usize, registry: Arc<Registry>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let accept = tokio::spawn(async move {
-        let mut tasks = tokio::task::JoinSet::new();
+    let spawner = TokioSpawner::current();
+    let accept = spawner.spawn(async move {
+        let spawner = TokioSpawner::current();
+        let mut tasks = Vec::new();
         for _ in 0..sessions {
             let (socket, _) = listener.accept().await.unwrap();
             let (read, write) = socket.into_split();
             let io = Arc::new(SocketIo { read: Mutex::new(read), write: Mutex::new(write) });
             let registry = registry.clone();
-            tasks.spawn(async move {
+            tasks.push(spawner.spawn(async move {
                 serve(io, RequestInfo::default(), &ProfileApp, &registry).await;
-            });
+            }));
         }
-        while let Some(result) = tasks.join_next().await {
-            result.unwrap();
+        for task in tasks {
+            task.await.unwrap();
         }
     });
-    let mut clients = tokio::task::JoinSet::new();
+    let mut clients = Vec::new();
     for _ in 0..sessions {
-        clients.spawn(async move {
+        clients.push(spawner.spawn(async move {
             let mut socket = TcpStream::connect(address).await.unwrap();
             socket.set_nodelay(true).unwrap();
             socket.write_all(UPGRADE).await.unwrap();
@@ -91,10 +95,10 @@ async fn batch(sessions: usize, registry: Arc<Registry>) {
             socket.read_to_end(&mut response).await.unwrap();
             assert!(response.starts_with(b"HTTP/1.1 101"));
             assert!(response.len() >= MESSAGE_BYTES);
-        });
+        }));
     }
-    while let Some(result) = clients.join_next().await {
-        result.unwrap();
+    for client in clients {
+        client.await.unwrap();
     }
     accept.await.unwrap();
 }
