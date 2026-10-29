@@ -1,3 +1,4 @@
+use super::pump::shifted;
 use super::*;
 use crate::testkit::{FakeWs, text};
 use async_trait::async_trait;
