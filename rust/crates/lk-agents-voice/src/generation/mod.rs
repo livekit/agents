@@ -1,6 +1,8 @@
 //! `voice/generation.py`: the pure planning of a step (request, turn metrics, retries), what a
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
+pub mod forward;
+
 use crate::tts::markup::MarkupExt;
 
 use crate::agent_activity::scheduling::SpeechId;

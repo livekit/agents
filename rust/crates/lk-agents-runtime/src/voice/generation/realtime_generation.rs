@@ -667,9 +667,16 @@ impl Segment for Generation<'_> {
                     if let Some(leg) = &self.leg {
                         leg.capture(&delta).await;
                     }
-                    if self.speaks_text && !delta.is_empty() {
-                        first_text_started_speaking(self.shared, self.handle, self.acc);
-                    }
+                    first_text_started_speaking(
+                        self.shared,
+                        self.handle,
+                        self.acc,
+                        lk_agents_voice::generation::forward::ForwardEvent::TextDelta {
+                            delta: &delta,
+                            has_audio_output: !self.speaks_text,
+                            interrupted: self.handle.interrupted(),
+                        },
+                    );
                 }
                 Event::AudioDelta(rt::AudioDelta { frame, .. }) => {
                     self.add_audio(&frame);

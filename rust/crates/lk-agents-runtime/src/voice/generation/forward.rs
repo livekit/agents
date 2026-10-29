@@ -13,6 +13,7 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
+use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
 use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::PlayoutStep;
@@ -228,9 +229,15 @@ impl Pump<'_> {
         capture(deltas, &first.text).await;
         // With no audio output the first words start the turn speaking, text output or not (the
         // reference's `first_text_fut`): a session with neither still speaks, then listens.
-        if audio_out.is_none() {
-            first_text_started_speaking(shared, self.handle, self.acc);
-        }
+        first_text_started_speaking(
+            shared,
+            self.handle,
+            self.acc,
+            ForwardEvent::SegmentOpened {
+                has_audio_output: audio_out.is_some(),
+                interrupted: self.handle.interrupted(),
+            },
+        );
         let mut playback = SynthesisPlayout {
             tx: tx.clone(),
             rx,
@@ -452,13 +459,13 @@ pub(super) fn first_text_started_speaking(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     acc: &mut TurnAccumulator,
+    event: ForwardEvent<'_>,
 ) {
-    if acc.started_speaking_at().is_some() || handle.interrupted() {
-        return;
-    }
-    // `at: None`: the accumulator falls back to the wall clock.
-    if acc.on_first_frame(None, shared.time.wall_secs()) {
-        shared.report(GenEvent::FirstFrame { speech: handle.id() });
+    match acc.on_forwarded(event, shared.time.wall_secs()) {
+        Some(ForwardEffect::StartedSpeaking) => {
+            shared.report(GenEvent::FirstFrame { speech: handle.id() })
+        }
+        None => {}
     }
 }
 

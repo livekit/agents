@@ -86,7 +86,10 @@ async fn with_playout_controls<S: Segment, T: Send>(
 /// Once per turn; not gated on interruption, since nothing is pushed for a speech cut before its
 /// first frame. Bookkeeping only: the `speaking` edge is [`GenEvent::PlaybackStarted`]'s.
 pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator, at: f64) {
-    acc.on_first_frame(Some(at), shared.time.wall_secs());
+    acc.on_forwarded(
+        lk_agents_voice::generation::forward::ForwardEvent::Audio { at },
+        shared.time.wall_secs(),
+    );
 }
 
 /// A segment whose source failed: the error, and the synchroniser's words up to where its audio
