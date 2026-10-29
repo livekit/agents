@@ -4,7 +4,7 @@
 use serde_json::{Map, Value};
 
 use crate::errors::ProviderError;
-use crate::storage::context::{ContextScope, ContextScopeWrite};
+use crate::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use crate::storage::{ItemRow, RunUsage, TaskRecord};
 use crate::{StreamSink, StreamSource};
 
@@ -53,6 +53,8 @@ pub struct HandlerOutput {
     pub new_items: Vec<Value>,
     pub state: Option<Value>,
     pub scope_writes: Vec<ContextScopeWrite>,
+    /// What the handler's managed transactions staged, applied in the turn's commit.
+    pub app_writes: Vec<AppStatement>,
     pub usage: RunUsage,
     pub input_required: Option<String>,
     pub pending_call: Option<PendingCall>,

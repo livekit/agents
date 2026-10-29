@@ -1897,6 +1897,29 @@ pub mod storage_context {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+    static APP_STATEMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn app_statement_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::storage::context::AppStatement> {
+        let py = obj.py();
+            if !obj.is_instance(APP_STATEMENT.import(py, "livekit.agents._generated.storage_context", "AppStatement")?)? {
+                return Err(super::not_a(obj, "AppStatement"));
+            }
+            Ok(::lk_agents_abi::storage::context::AppStatement {
+                sql: ::lk_agents_abi::python::attr_with(obj, "AppStatement", "sql", |v| v.extract::<::std::string::String>())?,
+                params: ::lk_agents_abi::python::attr_with(obj, "AppStatement", "params", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; ::lk_agents_abi::python::value_from_py(item, "AppStatement.params") }).collect::<PyResult<Vec<_>>>())?,
+            })
+    }
+
+    pub fn app_statement_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::storage::context::AppStatement) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::storage::context::AppStatement { sql, params } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("sql", ::pyo3::IntoPyObjectExt::into_bound_py_any(sql, py)?)?;
+            kwargs.set_item("params", ::pyo3::types::PyList::new(py, params.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(APP_STATEMENT.import(py, "livekit.agents._generated.storage_context", "AppStatement")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
     static CONTEXT_VALUES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2091,6 +2114,7 @@ pub mod storage_turn {
                 new_items: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "new_items", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; ::lk_agents_abi::python::value_from_py(item, "HandlerOutput.new_items") }).collect::<PyResult<Vec<_>>>())?,
                 state: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "state", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "HandlerOutput.state")).map(Some) })?,
                 scope_writes: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "scope_writes", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::storage_context::context_scope_write_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
+                app_writes: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "app_writes", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; crate::generated::records::storage_context::app_statement_from_py(item) }).collect::<PyResult<Vec<_>>>())?,
                 usage: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "usage", |v| crate::generated::records::storage_class::run_usage_from_py(v))?,
                 input_required: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "input_required", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
                 pending_call: ::lk_agents_abi::python::attr_with(obj, "HandlerOutput", "pending_call", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::storage_turn::pending_call_from_py(v)).map(Some) })?,

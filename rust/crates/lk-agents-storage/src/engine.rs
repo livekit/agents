@@ -22,7 +22,7 @@ use crate::schema::{
 use crate::sql::Statement;
 use crate::{Fence, StorageError, TaskWrite};
 use livekit_protocol::agent::chat_context::ChatItem;
-use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
+use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;
@@ -462,6 +462,7 @@ impl Lane {
             state,
             context_scopes,
             scope_writes: Vec::new(),
+            app_writes: Vec::new(),
             events: EventLog::default(),
             tasks,
             submitted,
@@ -648,6 +649,8 @@ pub struct Run {
     pub state: Option<Value>,
     pub context_scopes: Vec<ContextScope>,
     pub scope_writes: Vec<ContextScopeWrite>,
+    /// Application statements managed transactions staged, applied first in the commit.
+    pub app_writes: Vec<AppStatement>,
     loaded_state: Option<Value>,
     pub events: EventLog,
     pub tasks: Tasks,
@@ -699,6 +702,7 @@ impl Run {
         })?;
         commit.context_scopes = self.context_scopes.clone();
         commit.scope_writes = self.scope_writes.clone();
+        commit.app_writes = self.app_writes.clone();
         Ok(commit)
     }
 
@@ -739,9 +743,27 @@ impl Run {
                         }
                         resolved
                     }
+                    Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
+                        Err(self.refused_commit(&commit, why).await)
+                    }
                     out => out,
                 }
             }
+        }
+    }
+
+    /// A commit carrying application SQL the database refused: a lane that moved on aborted it
+    /// at its fence (`VersionConflict`); otherwise an application statement was refused.
+    async fn refused_commit(&self, commit: &Commit, why: String) -> StorageError {
+        let fence = self.lease.as_ref().map(Lease::fence);
+        let lookup =
+            db::resolve_commit(self.lane.name(), &self.run_id, fence, commit.read_task.as_deref());
+        match self.lane.thread.execute(lookup).await {
+            Ok(Resolution::Rejected) => StorageError::VersionConflict {
+                lane: self.lane.name().to_owned(),
+                expected: fence.map_or(0, |f| f.version),
+            },
+            _ => StorageError::Invalid(why),
         }
     }
 

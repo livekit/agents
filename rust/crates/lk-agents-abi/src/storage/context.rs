@@ -44,6 +44,16 @@ pub struct ContextScopeWrite {
     pub scope: ContextScope,
 }
 
+/// One application SQL statement a managed transaction staged for the turn's commit. `params`
+/// are JSON scalars: null, booleans, numbers and strings.
+#[crate::host(record(module = "storage_context", extract, emit))]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AppStatement {
+    pub sql: String,
+    pub params: Vec<Value>,
+}
+
 /// Values to hydrate in the host after the core accepted their schema contracts.
 #[crate::host(record(module = "storage_context", extract, emit))]
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +65,9 @@ pub struct ContextValues {
 /// Activation state and revision/schema decisions. Application type validation stays in the host.
 #[crate::host(class(name = "_core_ContextActivation"))]
 pub trait ContextActivation: Send + Sync + Sized + 'static {
+    #[host(class(name = "_core_AppTransaction"))]
+    type Transaction: Send + Sync + 'static;
+
     #[host(new)]
     fn new(
         scopes: Vec<ContextScope>,
@@ -84,10 +97,43 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn writes(&self) -> Vec<ContextScopeWrite>;
 
+    /// The application statements managed transactions staged for the turn's commit.
+    #[host(getter)]
+    fn statements(&self) -> Vec<AppStatement>;
+
+    /// Application SQL (docs/context.md#application-records-and-transactions): `independent`
+    /// commits when the transaction ends; otherwise it joins the managed turn's commit, or
+    /// commits like an independent one outside a managed turn.
+    #[host(await)]
+    async fn transaction(&self, independent: bool) -> Result<Self::Transaction, StorageError>;
+
     #[host(call)]
     fn acknowledge(&self);
 
     /// End the activation, refusing subsequent loads or saves.
     #[host(call)]
     fn close(&self);
+}
+
+/// One application transaction. Reads observe committed records; writes are staged and
+/// applied atomically when the transaction ends, so a read after a write in the same
+/// transaction is refused.
+#[crate::host(class(name = "_core_AppTransaction"))]
+pub trait AppTransaction: Send + Sync + Sized + 'static {
+    /// Stages one statement; `params` are JSON scalars.
+    #[host(await)]
+    async fn execute(&self, sql: String, params: Vec<Value>) -> Result<(), StorageError>;
+
+    /// One read's rows, each a list of column values in select order.
+    #[host(await)]
+    async fn fetch(&self, sql: String, params: Vec<Value>)
+    -> Result<Vec<Vec<Value>>, StorageError>;
+
+    /// Ends the transaction: its writes commit (independent) or join the turn's commit.
+    #[host(await)]
+    async fn commit(&self) -> Result<(), StorageError>;
+
+    /// Ends the transaction, discarding its writes.
+    #[host(call)]
+    fn rollback(&self);
 }

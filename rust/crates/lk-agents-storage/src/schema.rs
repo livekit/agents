@@ -569,6 +569,19 @@ RETURNING version
 }
 
 statement! {
+    /// Aborts the enclosing batch unless the lease still holds the lane at `version`: inserting
+    /// a lane row without a version fails its NOT NULL constraint. What follows it in the batch,
+    /// application SQL that cannot itself be fenced, then never applies after a takeover.
+    AssertFence<'a> { lane: &'a str, version: i64, token: &'a str } => r#"
+INSERT INTO lanes (lane, version)
+SELECT :lane, NULL
+WHERE NOT EXISTS (
+  SELECT 1 FROM lanes WHERE lane = :lane AND version = :version AND lease_token = :token
+)
+"#
+}
+
+statement! {
     /// [`CommitAndRelease`] that keeps the lease, extended, for a runner that continues.
     CommitAndExtend<'a> {
         lane: &'a str,

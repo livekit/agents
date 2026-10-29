@@ -1,34 +1,68 @@
 //! A lane's context field store as the host uses it: snapshot staging in a turn, fenced direct
-//! saves outside one.
+//! saves outside one, and the application transactions over the same database.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::storage::context::{
-    ContextActivation as HostContextActivation, ContextField, ContextScope, ContextScopeWrite,
-    ContextValues,
+    AppStatement, ContextActivation as HostContextActivation, ContextField, ContextScope,
+    ContextScopeWrite, ContextValues,
 };
 use serde_json::Value;
 
 use super::ContextActivation as Activation;
+use super::transaction::Transaction;
 use crate::run::RunOutcome;
-use crate::{CommitOptions, RunOptions, Storage, StorageError, shortuuid};
+use crate::sql::{Row, Statement};
+use crate::{CommitOptions, RunOptions, Storage, StorageError, Thread, shortuuid};
 
 #[derive(Clone)]
 pub struct ContextStore {
     activation: Arc<Mutex<Activation>>,
-    direct: Option<DirectStore>,
+    database: Option<Database>,
     operation: Arc<tokio::sync::Mutex<()>>,
-    managed: Arc<std::sync::atomic::AtomicBool>,
+    managed: Arc<AtomicBool>,
+    /// Bumped as each managed turn begins and ends: a transaction joins only the turn it began
+    /// in.
+    turn: Arc<AtomicU64>,
+    /// What managed transactions staged for the turn's commit.
+    statements: Arc<Mutex<Vec<AppStatement>>>,
 }
 
+/// The lane's thread database: direct saves outside a managed turn, and application SQL.
 #[derive(Clone)]
-struct DirectStore {
+pub(crate) struct Database {
     storage: Arc<dyn Storage>,
     thread_id: String,
     lane: String,
 }
 
-impl DirectStore {
+impl Database {
+    /// `f` over the thread opened for it, its schema applied, then closed.
+    async fn with_thread<T>(
+        &self,
+        f: impl AsyncFnOnce(&Thread) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let thread = self.storage.open(&self.thread_id, "application").await?;
+        let result = async {
+            thread.ensure_schema().await?;
+            f(&thread).await
+        }
+        .await;
+        thread.close().await;
+        result
+    }
+
+    /// One read over committed records.
+    pub(crate) async fn query(&self, read: Statement) -> Result<Vec<Row>, StorageError> {
+        self.with_thread(async |thread| thread.conn().query(read).await).await
+    }
+
+    /// The statements in one atomic batch.
+    pub(crate) async fn batch(&self, statements: Vec<Statement>) -> Result<(), StorageError> {
+        self.with_thread(async |thread| thread.conn().batch(statements).await.map(drop)).await
+    }
+
     async fn snapshot(&self) -> Result<(Vec<ContextScope>, Option<Value>), StorageError> {
         let thread = self.storage.open(&self.thread_id, "context").await?;
         let result = async {
@@ -74,6 +108,51 @@ impl DirectStore {
 }
 
 impl ContextStore {
+    fn with(activation: Activation, database: Option<Database>, managed: bool) -> Self {
+        Self {
+            activation: Arc::new(Mutex::new(activation)),
+            database,
+            operation: Arc::new(tokio::sync::Mutex::new(())),
+            managed: Arc::new(AtomicBool::new(managed)),
+            turn: Arc::new(AtomicU64::new(0)),
+            statements: Arc::default(),
+        }
+    }
+
+    /// A managed turn's store over the scopes and routing state its run loaded: saves and
+    /// joining transactions stage for that turn's commit.
+    pub async fn turn(
+        storage: Arc<dyn Storage>,
+        thread_id: String,
+        lane: String,
+        scopes: Vec<ContextScope>,
+        routing: Option<Value>,
+        read_only: bool,
+    ) -> Result<Self, StorageError> {
+        let activation = Activation::new(scopes, routing, read_only)?;
+        Ok(Self::with(activation, Some(Database { storage, thread_id, lane }), true))
+    }
+
+    /// Stages a joining transaction's writes, unless its managed turn has ended.
+    pub(crate) async fn join_turn(
+        &self,
+        turn: u64,
+        writes: Vec<AppStatement>,
+    ) -> Result<(), StorageError> {
+        let _operation = self.operation.lock().await;
+        if !self.managed.load(Ordering::Acquire) || self.turn.load(Ordering::Acquire) != turn {
+            return Err(StorageError::Invalid(
+                "the managed turn this transaction joined has ended; nothing was written".into(),
+            ));
+        }
+        self.statements.lock().expect("staged statements").extend(writes);
+        Ok(())
+    }
+
+    fn clear_statements(&self) {
+        self.statements.lock().expect("staged statements").clear();
+    }
+
     pub(crate) async fn lock_managed(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.operation.clone().lock_owned().await
     }
@@ -85,7 +164,9 @@ impl ContextStore {
         _operation: &tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<(), StorageError> {
         self.activation.lock().expect("context activation").rebase(scopes, routing)?;
-        self.managed.store(true, std::sync::atomic::Ordering::Release);
+        self.clear_statements();
+        self.turn.fetch_add(1, Ordering::AcqRel);
+        self.managed.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -100,7 +181,9 @@ impl ContextStore {
         } else {
             activation.abandon();
         }
-        self.managed.store(false, std::sync::atomic::Ordering::Release);
+        self.clear_statements();
+        self.turn.fetch_add(1, Ordering::AcqRel);
+        self.managed.store(false, Ordering::Release);
     }
 
     pub async fn bound(
@@ -108,29 +191,21 @@ impl ContextStore {
         thread_id: String,
         lane: String,
     ) -> Result<Self, StorageError> {
-        let direct = DirectStore { storage, thread_id, lane };
-        let (scopes, routing) = direct.snapshot().await?;
-        Ok(Self {
-            activation: Arc::new(Mutex::new(Activation::new(scopes, routing, false)?)),
-            direct: Some(direct),
-            operation: Arc::new(tokio::sync::Mutex::new(())),
-            managed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        })
+        let database = Database { storage, thread_id, lane };
+        let (scopes, routing) = database.snapshot().await?;
+        Ok(Self::with(Activation::new(scopes, routing, false)?, Some(database), false))
     }
 }
 
 impl HostContextActivation for ContextStore {
+    type Transaction = Transaction;
+
     fn new(
         scopes: Vec<ContextScope>,
         routing_state: Option<Value>,
         read_only: bool,
     ) -> Result<Self, StorageError> {
-        Ok(Self {
-            activation: Arc::new(Mutex::new(Activation::new(scopes, routing_state, read_only)?)),
-            direct: None,
-            operation: Arc::new(tokio::sync::Mutex::new(())),
-            managed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        })
+        Ok(Self::with(Activation::new(scopes, routing_state, read_only)?, None, false))
     }
 
     async fn load(
@@ -140,10 +215,10 @@ impl HostContextActivation for ContextStore {
         fields: Vec<ContextField>,
     ) -> Result<ContextValues, StorageError> {
         let _operation = self.operation.lock().await;
-        if let Some(direct) = &self.direct
-            && !self.managed.load(std::sync::atomic::Ordering::Acquire)
+        if let Some(database) = &self.database
+            && !self.managed.load(Ordering::Acquire)
         {
-            let (scopes, routing) = direct.snapshot().await?;
+            let (scopes, routing) = database.snapshot().await?;
             self.activation.lock().expect("context activation").rebase(scopes, routing)?;
         }
         self.activation.lock().expect("context activation").load(&scope_id, &identity, &fields)
@@ -162,13 +237,13 @@ impl HostContextActivation for ContextStore {
             .lock()
             .expect("context activation")
             .save(&scope_id, &identity, revision, &fields)?;
-        if let Some(direct) = &self.direct
-            && !self.managed.load(std::sync::atomic::Ordering::Acquire)
+        if let Some(database) = &self.database
+            && !self.managed.load(Ordering::Acquire)
         {
             let writes = self.activation.lock().expect("context activation").writes();
-            if let Err(error) = direct.commit(writes).await {
+            if let Err(error) = database.commit(writes).await {
                 if !matches!(error, StorageError::Uncertain(_))
-                    && let Ok((scopes, routing)) = direct.snapshot().await
+                    && let Ok((scopes, routing)) = database.snapshot().await
                 {
                     *self.activation.lock().expect("context activation") =
                         Activation::new(scopes, routing, false)?;
@@ -184,8 +259,25 @@ impl HostContextActivation for ContextStore {
         self.activation.lock().expect("context activation").writes()
     }
 
+    fn statements(&self) -> Vec<AppStatement> {
+        self.statements.lock().expect("staged statements").clone()
+    }
+
+    async fn transaction(&self, independent: bool) -> Result<Transaction, StorageError> {
+        self.activation.lock().expect("context activation").ensure_open()?;
+        let database = self.database.clone().ok_or_else(|| {
+            StorageError::Invalid("this context store has no thread database".into())
+        })?;
+        // Outside a managed turn, a joining transaction commits like an independent one.
+        let _operation = self.operation.lock().await;
+        let joins = (!independent && self.managed.load(Ordering::Acquire))
+            .then(|| (self.clone(), self.turn.load(Ordering::Acquire)));
+        Ok(Transaction::new(database, joins))
+    }
+
     fn acknowledge(&self) {
         self.activation.lock().expect("context activation").acknowledge();
+        self.clear_statements();
     }
 
     fn close(&self) {

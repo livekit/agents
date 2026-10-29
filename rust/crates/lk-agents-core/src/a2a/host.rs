@@ -72,6 +72,7 @@ impl TryFrom<host::HandlerOutput> for HandlerOutput {
             new_items,
             state: output.state,
             scope_writes: output.scope_writes,
+            app_writes: output.app_writes,
             usage: output.usage,
             input_required: output.input_required,
             pending_call: output.pending_call.map(|p| PendingCall {
@@ -114,6 +115,7 @@ impl From<HandlerOutput> for host::HandlerOutput {
                 .collect(),
             state: output.state,
             scope_writes: output.scope_writes,
+            app_writes: output.app_writes,
             usage: output.usage,
             input_required: output.input_required,
             pending_call: output.pending_call.map(|p| host::PendingCall {

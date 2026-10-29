@@ -78,7 +78,8 @@ pub trait Implementations: 'static {
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;
-    type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
+    type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation<Transaction = Self::AppTransaction>;
+    type AppTransaction: ::lk_agents_abi::storage::context::AppTransaction;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
@@ -263,6 +264,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::_core_ContextActivation>()?;
+    m.add_class::<storage::_core_AppTransaction>()?;
     m.add_class::<storage::_core_VoiceStore>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;

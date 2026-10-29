@@ -3,7 +3,7 @@
 //! a connection and hands the [`BatchResult`] back to its [`Decode`]; nothing here performs I/O,
 //! reads a clock or mints an id: lease tokens, timestamps and run ids are supplied.
 
-use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
+use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use serde_json::{Map, Value};
 
 use crate::run::TaskState;
@@ -96,6 +96,9 @@ pub struct Commit {
     /// The lane's loaded scopes; staged replacements are substituted before size accounting.
     pub context_scopes: Vec<ContextScope>,
     pub scope_writes: Vec<ContextScopeWrite>,
+    /// Application statements a managed turn staged: applied first, and only while the fence
+    /// holds.
+    pub app_writes: Vec<AppStatement>,
     pub drained_id: Option<i64>,
     pub run_ended: EventWrite,
     /// A task row to read back after the writes, in the same batch: the answer's record.
@@ -573,6 +576,15 @@ pub fn commit(
         ));
     }
     let mut b = Batch(schema);
+    if !c.app_writes.is_empty() {
+        if let Some(Fenced { fence, .. }) = &fenced {
+            // arbitrary SQL cannot be made conditional on the fence: abort the batch instead
+            b.add(AssertFence { lane, version: fence.version, token: fence.token.as_str() });
+        }
+        for write in &c.app_writes {
+            b.0.push(crate::context::transaction::statement(write)?);
+        }
+    }
     match &fenced {
         Some(Fenced { fence, .. }) => {
             let (version, token) = (fence.version, fence.token.as_str());

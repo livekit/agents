@@ -249,6 +249,9 @@ pub struct HandlerOutput {
     pub state: Option<Value>,
     #[serde(default)]
     pub scope_writes: Vec<lk_agents_abi::storage::context::ContextScopeWrite>,
+    /// What the handler's managed transactions staged, applied in the turn's commit.
+    #[serde(default)]
+    pub app_writes: Vec<lk_agents_abi::storage::context::AppStatement>,
     #[serde(default)]
     pub usage: RunUsage,
     /// A conversation tool's `InputRequired(question)`.

@@ -13,6 +13,7 @@ use crate::db::STATE_LIMIT;
 
 pub mod db;
 pub mod store;
+pub mod transaction;
 
 /// One activation's mutable scope state. Runtime owns serialization between callers.
 pub struct ContextActivation {
@@ -55,7 +56,7 @@ impl ContextActivation {
         })
     }
 
-    fn ensure_open(&self) -> Result<(), StorageError> {
+    pub(crate) fn ensure_open(&self) -> Result<(), StorageError> {
         if self.closed {
             return Err(StorageError::Invalid("the context store's activation has ended".into()));
         }

@@ -137,6 +137,7 @@
     "WarmTransfer",
     "_core_A2ADoor",
     "_core_A2AResponse",
+    "_core_AppTransaction",
     "_core_AsgiReceive",
     "_core_AsgiSend",
     "_core_ContextActivation",

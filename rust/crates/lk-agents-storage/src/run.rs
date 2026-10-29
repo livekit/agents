@@ -94,6 +94,7 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         loaded_state: w.loaded_state.cloned(),
         context_scopes: Vec::new(),
         scope_writes: Vec::new(),
+        app_writes: Vec::new(),
         drained_id: w.drained_id.filter(|_| w.exclusive),
         run_ended: EventWrite::run_ended(
             w.now_ms,

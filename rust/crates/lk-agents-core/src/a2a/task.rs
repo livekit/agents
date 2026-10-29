@@ -28,7 +28,7 @@ use crate::a2a::{
     unpersisted_failed,
 };
 use lk_agents_abi::storage::RunUsage;
-use lk_agents_abi::storage::context::ContextScopeWrite;
+use lk_agents_abi::storage::context::{AppStatement, ContextScopeWrite};
 use lk_agents_abi::storage::thread::ItemRow;
 use turn::{Step, Turning};
 
@@ -155,6 +155,7 @@ pub struct RunEnd {
     /// The state after the handler; `None` keeps the loaded one.
     pub state: Option<Value>,
     pub scope_writes: Vec<ContextScopeWrite>,
+    pub app_writes: Vec<AppStatement>,
     pub usage: RunUsage,
 }
 

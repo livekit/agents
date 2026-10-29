@@ -187,6 +187,21 @@ impl Storage {
         })
     }
 
+    /// A managed turn's field store over the scopes and routing state its run loaded: saves
+    /// and `transaction()` writes stage for the turn's commit.
+    #[pyo3(signature = (thread_id, lane, scopes, *, routing_state = None, read_only = false))]
+    fn _core_turn_store<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, lane: ::std::string::String, scopes: Bound<'_, PyAny>, routing_state: Option<Bound<'_, PyAny>>, read_only: bool) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let scopes = scopes.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_scope_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let routing_state = routing_state.map(|v| ::lk_agents_abi::python::value_from_py(&v, "routing_state")).transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_turn_store(&this, thread_id, lane, scopes, routing_state, read_only)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::storage::_core_ContextActivation(::std::sync::Arc::new(out)), py))
+        })
+    }
+
     /// The storage's response streams, shared by its threads.
     fn streams<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
@@ -278,6 +293,28 @@ impl _core_ContextActivation {
         Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_context::context_scope_write_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
+    /// The application statements managed transactions staged for the turn's commit.
+    #[getter]
+    fn statements<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::statements(&self.0);
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_context::app_statement_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
+    }
+
+    /// Application SQL (docs/context.md#application-records-and-transactions): `independent`
+    /// commits when the transaction ends; otherwise it joins the managed turn's commit, or
+    /// commits like an independent one outside a managed turn.
+    #[pyo3(signature = (independent))]
+    fn transaction<'py>(&self, py: Python<'py>, independent: bool) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::transaction(&this, independent)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::storage::_core_AppTransaction(::std::sync::Arc::new(out)), py))
+        })
+    }
+
     fn acknowledge(&self) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::acknowledge(&self.0);
@@ -288,6 +325,62 @@ impl _core_ContextActivation {
     fn close(&self) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::close(&self.0);
+        Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/context.rs.
+type _core_AppTransactionImpl = <crate::Selected as super::Implementations>::AppTransaction;
+
+/// One application transaction. Reads observe committed records; writes are staged and
+/// applied atomically when the transaction ends, so a read after a write in the same
+/// transaction is refused.
+#[pyclass(frozen, name = "_core_AppTransaction", module = "livekit.agents._core")]
+pub struct _core_AppTransaction(::std::sync::Arc<_core_AppTransactionImpl>);
+
+#[pymethods]
+impl _core_AppTransaction {
+    /// Stages one statement; `params` are JSON scalars.
+    #[pyo3(signature = (sql, params))]
+    fn execute<'py>(&self, py: Python<'py>, sql: ::std::string::String, params: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let params = params.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::value_from_py(&item, "params") }).collect::<PyResult<Vec<_>>>())?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <_core_AppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::execute(&this, sql, params)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// One read's rows, each a list of column values in select order.
+    #[pyo3(signature = (sql, params))]
+    fn fetch<'py>(&self, py: Python<'py>, sql: ::std::string::String, params: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let params = params.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::value_from_py(&item, "params") }).collect::<PyResult<Vec<_>>>())?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <_core_AppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::fetch(&this, sql, params)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
+        })
+    }
+
+    /// Ends the transaction: its writes commit (independent) or join the turn's commit.
+    fn commit<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <_core_AppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::commit(&this, )
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// Ends the transaction, discarding its writes.
+    fn rollback(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <_core_AppTransactionImpl as ::lk_agents_abi::storage::context::AppTransaction>::rollback(&self.0);
         Ok(())
     }
 }

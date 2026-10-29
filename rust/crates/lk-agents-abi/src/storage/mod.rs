@@ -186,6 +186,18 @@ pub trait Storage: Send + Sync + Sized + 'static {
         lane: String,
     ) -> Result<Self::ContextActivation, StorageError>;
 
+    /// A managed turn's field store over the scopes and routing state its run loaded: saves
+    /// and `transaction()` writes stage for the turn's commit.
+    #[host(await)]
+    async fn _core_turn_store(
+        &self,
+        thread_id: String,
+        lane: String,
+        scopes: Vec<context::ContextScope>,
+        #[host(kw, default = None)] routing_state: Option<Value>,
+        #[host(default = false)] read_only: bool,
+    ) -> Result<Self::ContextActivation, StorageError>;
+
     /// The storage's response streams, shared by its threads.
     #[host(await)]
     async fn streams(&self) -> Result<Self::Streams, StorageError>;

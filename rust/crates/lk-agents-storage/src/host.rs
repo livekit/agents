@@ -28,6 +28,7 @@ use crate::engine::LeaseTiming;
 use crate::sqlite::SqliteStorage;
 use crate::voice::VoiceStore;
 use crate::{QueuedStreams, Storage, Thread};
+use lk_agents_abi::storage::context::ContextScope;
 
 /// What the lazily opened backend is built from.
 enum Config {
@@ -433,6 +434,18 @@ impl<E: Env> HostStorageClass for HostStorage<E> {
         lane: String,
     ) -> Result<Self::ContextActivation, StorageError> {
         ContextStore::bound(self.backend().await?.shared_storage(), thread_id, lane).await
+    }
+
+    async fn _core_turn_store(
+        &self,
+        thread_id: String,
+        lane: String,
+        scopes: Vec<ContextScope>,
+        routing_state: Option<Value>,
+        read_only: bool,
+    ) -> Result<Self::ContextActivation, StorageError> {
+        let storage = self.backend().await?.shared_storage();
+        ContextStore::turn(storage, thread_id, lane, scopes, routing_state, read_only).await
     }
 
     async fn streams(&self) -> Result<Arc<QueuedStreams>, StorageError> {

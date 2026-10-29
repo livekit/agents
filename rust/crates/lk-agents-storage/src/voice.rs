@@ -214,6 +214,7 @@ impl VoiceStore {
             Ok(history) => {
                 active.run.history = history;
                 active.run.scope_writes = self.activation.writes();
+                active.run.app_writes = self.activation.statements();
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
             }
             Err(error) => {
