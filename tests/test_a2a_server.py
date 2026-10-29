@@ -948,6 +948,24 @@ async def test_application_typed_output_crosses_the_native_door(thread_storage: 
     assert task["artifacts"][0]["parts"][0]["data"] == {"reservation": "R42"}
 
 
+async def test_handler_transitions_answer_the_task(thread_storage: Storage) -> None:
+    from livekit.agents import Completed, Failed
+
+    async def handler(ctx: A2ASessionContext) -> Completed[str] | Failed:
+        if ctx.message.text_content == "fail":
+            return Failed("no room on that date")
+        return Completed("booked")
+
+    server, _ = make_server(thread_storage, handler)
+    async with http_client(server) as http:
+        done = (await rpc(http, "message/send", {"message": wire("book", "ok")})).json()
+        failed = (await rpc(http, "message/send", {"message": wire("fail", "no")})).json()
+    done_task, failed_task = done["result"]["task"], failed["result"]["task"]
+    assert done_task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert done_task["artifacts"][0]["parts"][0]["text"] == "booked"
+    assert failed_task["status"]["state"] == "TASK_STATE_FAILED"
+
+
 async def test_payload_budget_refuses_before_durable_receipt(thread_storage: Storage) -> None:
     calls = 0
 

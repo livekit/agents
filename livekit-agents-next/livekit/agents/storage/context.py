@@ -28,7 +28,7 @@ from .._generated.storage_turn import (
     TurnEvent,
 )
 from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
-from ..llm.tool_context import WAITING_PREFIX
+from ..llm.tool_context import WAITING_PREFIX, Completed, Failed
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunCompleted, RunInputRequired, RunResult
@@ -215,15 +215,23 @@ class TurnHost:
         error: str | None = None,
     ) -> HandlerOutput:
         """The answer, new history, explicitly saved fields and any pending question."""
-        # a run returned as is answers with its question while it waits, else its output
+        from ..a2a.extension import VERBATIM
+
+        metadata: dict[str, object] = dict(ctx.metadata)
+        # a run returned as is answers with its question while it waits, else its output; a
+        # transport transition answers the task (docs/server.md#handler-outcomes)
         if isinstance(output, RunInputRequired):
             output = InputRequired(output.question)
         elif isinstance(output, RunCompleted):
             output = output.output
-        from ..a2a.extension import VERBATIM
+        elif isinstance(output, Completed):
+            if output.verbatim and isinstance(output.value, str):
+                metadata[VERBATIM] = output.value
+            output = output.value
+        elif isinstance(output, Failed):
+            error, output = output.error, None
 
         asked = next((r for r in reversed(results) if isinstance(r, RunInputRequired)), None)
-        metadata: dict[str, object] = dict(ctx.metadata)
         last = results[-1] if results else None
         if last is not None and last.verbatim is not None:
             # what must reach the person as written: the delegate relays it unchanged
@@ -369,4 +377,4 @@ def _usage(results: list[RunResult[object]]) -> RunUsage:
     )
 
 
-__all__ = ["A2ASessionContext", "Handler", "TokenHook", "TurnHost", "TurnStream", "UpdateHook"]
+__all__ = ["A2ASessionContext"]
