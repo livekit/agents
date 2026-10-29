@@ -138,11 +138,23 @@ class RunInputRequired(_Settled):
         return f"RunInputRequired(question={self.question!r})"
 
 
+class RunNoOutput(_Settled):
+    """``RunResult`` with ``status == "no_output"``: the turn ended without an output, on
+    ``StopResponse``, a tool result asking for no reply, a silent step or an interruption."""
+
+    status: Literal["no_output"] = "no_output"
+
+    def __repr__(self) -> str:
+        return "RunNoOutput()"
+
+
 RunResult = TypeAliasType(
-    "RunResult", RunCompleted[Output_T] | RunInputRequired, type_params=(Output_T,)
+    "RunResult",
+    RunCompleted[Output_T] | RunInputRequired | RunNoOutput,
+    type_params=(Output_T,),
 )
 """One agent invocation (agents.md "Running a turn"): narrow on ``status`` for ``output`` or
-``question``; both branches expose ``new_messages()``, ``all_messages()`` and ``usage``."""
+``question``; every branch exposes ``new_messages()``, ``all_messages()`` and ``usage``."""
 
 
 @dataclass

@@ -92,7 +92,7 @@ fn a_tool_that_asks_for_no_reply_ends_the_turn() {
         more: None,
     });
     assert_eq!(d.requests(), 1);
-    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Nothing });
+    assert_eq!(d.result().outcome, RunOutcome::NoOutput);
 }
 
 // Catches: a tool returning `None` ending the turn; `None` is a value the model reads and goes
@@ -117,10 +117,7 @@ fn stop_response_and_verbatim_results_end_or_lead_the_turn() {
     let mut d = Driver::new(text_agent(vec![string_tool("stop", "x")]), "stop", vec![]);
     d.reply("", &[("stop", json!({"x": "1"}))]);
     d.run_tools(|_| ToolOutcome::StopResponse);
-    assert_eq!(
-        (d.requests(), &d.result().outcome),
-        (1, &RunOutcome::Completed { output: Output::Nothing })
-    );
+    assert_eq!((d.requests(), &d.result().outcome), (1, &RunOutcome::NoOutput));
 
     let mut d = Driver::new(text_agent(vec![string_tool("code", "x")]), "my code?", vec![]);
     d.reply("", &[("code", json!({"x": "1"}))]);

@@ -84,6 +84,8 @@ async def quick_balance(ctx: RunContext[CustomerContext], account_number: str) -
     )
     if result.status == "input_required":
         return f"Balance lookup needs more information: {result.question}"
+    if result.status == "no_output":
+        return "The balance lookup ended without an answer."
     return str(result.output)
 ```
 
@@ -205,7 +207,7 @@ parent conversation while returning only its accepted result.
 | `ToolResult(text, verbatim=True)` | the person gets the text exactly as written; the model reads that it was delivered and continues, or the turn ends there with `reply_required=False`; see [human input](#human-input) |
 | raise `ToolError(message)` | the model reads the message as an error output and continues |
 | raise `ModelRetry(reason)` | the model reads the reason and calls again, within the tool's [retry budget](#retries); the same in `agent.run()` and on a call |
-| raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with no output |
+| raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with `status="no_output"` |
 | any other exception | logged; the model reads "An internal error occurred" |
 | `InputRequired(question)` | the turn waits for the person; see [human input](#human-input) |
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |

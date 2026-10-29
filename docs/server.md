@@ -33,8 +33,9 @@ async def text(ctx: A2ASessionContext) -> RunResult[Appointment]:
 ```
 
 Return the full `RunResult` so the transport can map `status="input_required"`
-and `question` to A2A `input-required`, or `status="completed"` and `output`
-to a completed task artifact. The handler saves application fields explicitly
+and `question` to A2A `input-required`, `status="completed"` and `output`
+to a completed task artifact, or `status="no_output"` to a completed task with
+no artifact. The handler saves application fields explicitly
 before returning either result.
 
 Called once per turn with the agent's lane already loaded; a batched burst

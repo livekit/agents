@@ -204,9 +204,8 @@ async def test_the_journal_records_a_tool_call_and_its_progress(thread_storages:
         await ctx.update("looking")
         return "found"
 
-    async def handler(ctx: A2ASessionContext) -> str | None:
-        result = await front.run(ctx.message, message_history=ctx.message_history)
-        return result.output
+    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
+        return await front.run(ctx.message, message_history=ctx.message_history)
 
     r = await run_turn(a, sid, LANE, a2a("first", "m1"), "queue", handler)
     assert r.task.status == "completed"
@@ -290,9 +289,8 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(thread_storages:
         await waiter_set.wait()
         return "found"
 
-    async def handler(ctx: A2ASessionContext) -> str | None:
-        result = await front.run(ctx.message, message_history=ctx.message_history)
-        return result.output
+    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
+        return await front.run(ctx.message, message_history=ctx.message_history)
 
     first = asyncio.create_task(run_turn(a, sid, LANE, a2a("first", "m1"), "interrupt", handler))
     await tool_entered.wait()

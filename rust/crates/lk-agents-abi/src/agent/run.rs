@@ -46,6 +46,9 @@ pub enum RunOutcome {
         verbatim: bool,
         answer_tool: Option<String>,
     },
+    /// The turn ended with no output: `StopResponse`, a tool result asking for no reply, an
+    /// all-silent step or an interruption. Never `Completed`, whose output is the declared type.
+    NoOutput,
 }
 
 /// The accepted output of a completed invocation.
@@ -59,8 +62,6 @@ pub enum Output {
     /// carries it.
     #[host(skip)]
     Validated(ValidationId),
-    /// `StopResponse`, or a turn ended by a tool that asks for no reply.
-    Nothing,
 }
 
 #[crate::host(record(module = "agent_run", emit))]

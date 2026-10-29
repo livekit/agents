@@ -613,7 +613,7 @@ impl Driver {
                     RunOutcome::Completed { output: Output::Text(_) } => {
                         reply.accepted.pop_last().map(|(_, v)| RunOutput::Value(v))
                     }
-                    RunOutcome::Completed { output: Output::Nothing } => None,
+                    RunOutcome::NoOutput => None,
                     RunOutcome::InputRequired { question, verbatim, answer_tool } => {
                         Some(RunOutput::Ask { question, verbatim, answer_tool })
                     }

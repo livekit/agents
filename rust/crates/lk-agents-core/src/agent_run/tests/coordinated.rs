@@ -127,7 +127,7 @@ fn an_interrupted_or_ended_step_ends_the_run_without_another_request() {
         d.send(Event::StepVerdict { step, verdict });
         assert_eq!(d.plans().len(), 1);
         let result = d.result();
-        assert_eq!(result.outcome, RunOutcome::Completed { output: Output::Nothing });
+        assert_eq!(result.outcome, RunOutcome::NoOutput);
         assert_eq!(result.interrupted, interrupted);
     }
 }

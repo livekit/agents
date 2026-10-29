@@ -20,7 +20,6 @@ from .. import _core, llm, utils
 from .._exceptions import UnexpectedModelBehavior
 from .._generated.agent_run import (
     FunctionToolInfo,
-    OutputNothing,
     OutputText,
     OutputValidated,
     ReadBack,
@@ -33,6 +32,7 @@ from .._generated.agent_run import (
     RunErrorToolRetriesExceeded,
     RunOutcomeCompleted,
     RunOutcomeInputRequired,
+    RunOutcomeNoOutput,
     RunRequest,
     RunSettled,
 )
@@ -43,7 +43,14 @@ from ..llm.tool_context import Toolset
 from ..types import APIConnectOptions
 from .agent import _BindingContextVar
 from .events import Context_T
-from .run_result import Output_T, RunCompleted, RunInputRequired, RunResult, RunUsage
+from .run_result import (
+    Output_T,
+    RunCompleted,
+    RunInputRequired,
+    RunNoOutput,
+    RunResult,
+    RunUsage,
+)
 
 if TYPE_CHECKING:
     from ..storage.backends import Storage
@@ -295,8 +302,8 @@ def settled_result(
             return RunCompleted(output=text, **common)
         case RunOutcomeCompleted(output=OutputValidated()):
             return RunCompleted(output=settled.output, **common)
-        case RunOutcomeCompleted(output=OutputNothing()):
-            return RunCompleted(output=None, **common)
+        case RunOutcomeNoOutput():
+            return RunNoOutput(**common)
 
 
 def run_error(error: RunError) -> BaseException:

@@ -75,7 +75,7 @@ impl AgentRun {
         match (verdict, next) {
             (_, next @ (Next::Fail(_) | Next::Output(_))) => self.proceed(next, now, fx),
             (StepVerdict::Interrupted, _) => self.complete_interrupted(fx),
-            (StepVerdict::End, Next::Continue) => self.complete(Output::Nothing, fx),
+            (StepVerdict::End, Next::Continue) => self.end_without_output(fx),
             (StepVerdict::Continue { tools_forbidden }, Next::Continue) => {
                 self.tools_forbidden = tools_forbidden;
                 self.next_step(now, fx)

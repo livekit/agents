@@ -31,7 +31,7 @@ from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, In
 from ..llm.tool_context import WAITING_PREFIX, Completed, Failed, Rejected, Working
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
-from ..voice.run_result import RunCompleted, RunInputRequired, RunResult
+from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
 from .context_store import ContextStore
 from .protocol import (
     StorageError,
@@ -227,6 +227,8 @@ class _TurnHost:
             output = InputRequired(output.question)
         elif isinstance(output, RunCompleted):
             output = output.output
+        elif isinstance(output, RunNoOutput):
+            output = None
         elif isinstance(output, Completed):
             if output.verbatim and isinstance(output.value, str):
                 metadata[VERBATIM] = output.value

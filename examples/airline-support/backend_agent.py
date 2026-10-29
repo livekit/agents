@@ -125,6 +125,8 @@ async def call(agent: Agent[Ctx, T], prompt: str) -> T:
     result = await agent.run(prompt)
     if result.status == "input_required":
         raise ToolError("The specialist needs more information; ask the customer before retrying.")
+    if result.status == "no_output":
+        raise ToolError("The specialist ended without an answer.")
     return result.output
 
 

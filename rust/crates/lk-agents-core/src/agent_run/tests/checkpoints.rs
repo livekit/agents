@@ -68,7 +68,7 @@ fn a_waiter_after_a_tool_preserves_its_result_without_starting_the_next_model() 
     assert!(result.interrupted);
     assert_eq!(result.usage.requests, 1);
     assert_eq!(result.usage.tool_calls, 1);
-    assert_eq!(result.outcome, RunOutcome::Completed { output: Output::Nothing });
+    assert_eq!(result.outcome, RunOutcome::NoOutput);
     assert!(result.new_messages.iter().any(|item| matches!(item,
         ChatItem::FunctionCallOutput(output) if output.output == "suite found"
     )));

@@ -817,6 +817,8 @@ pub mod agent_run {
         ::pyo3::sync::PyOnceLock::new();
     static RUN_OUTCOME_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
+    static RUN_OUTCOME_NO_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn run_outcome_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::agent::run::RunOutcome) -> PyResult<Bound<'py, PyAny>> {
             match value {
@@ -832,6 +834,7 @@ pub mod agent_run {
                     kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
                     crate::host::construct(RUN_OUTCOME_INPUT_REQUIRED.import(py, "livekit.agents._generated.agent_run", "RunOutcomeInputRequired")?.as_any(), (), Some(&kwargs))
                 },
+                ::lk_agents_abi::agent::run::RunOutcome::NoOutput => crate::host::construct(RUN_OUTCOME_NO_OUTPUT.import(py, "livekit.agents._generated.agent_run", "RunOutcomeNoOutput")?.as_any(), (), None),
             }
     }
 
@@ -839,8 +842,6 @@ pub mod agent_run {
     static OUTPUT_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static OUTPUT_VALIDATED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static OUTPUT_NOTHING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn output_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::agent::run::Output) -> PyResult<Bound<'py, PyAny>> {
@@ -851,7 +852,6 @@ pub mod agent_run {
                     crate::host::construct(OUTPUT_TEXT.import(py, "livekit.agents._generated.agent_run", "OutputText")?.as_any(), (), Some(&kwargs))
                 },
                 ::lk_agents_abi::agent::run::Output::Validated(_) => crate::host::construct(OUTPUT_VALIDATED.import(py, "livekit.agents._generated.agent_run", "OutputValidated")?.as_any(), (), None),
-                ::lk_agents_abi::agent::run::Output::Nothing => crate::host::construct(OUTPUT_NOTHING.import(py, "livekit.agents._generated.agent_run", "OutputNothing")?.as_any(), (), None),
             }
     }
 

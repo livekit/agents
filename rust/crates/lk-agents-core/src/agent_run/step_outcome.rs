@@ -121,7 +121,7 @@ impl AgentRun {
             Next::Fail(error) => self.finish(Err(error), fx),
             Next::Output(validation) => self.complete(Output::Validated(validation), fx),
             Next::Ask(ask) => self.ask_from_tool(ask, now, fx),
-            Next::Stop => self.complete(Output::Nothing, fx),
+            Next::Stop => self.end_without_output(fx),
             Next::Continue => self.next_step(now, fx),
         }
     }

@@ -17,7 +17,7 @@ from a2a.client.card_resolver import A2ACardResolver
 from a2a.types import a2a_pb2 as pb
 from a2a.utils.constants import TransportProtocol
 
-from livekit.agents import Agent, AgentServer, RunContext
+from livekit.agents import Agent, AgentServer, RunContext, RunResult
 from livekit.agents._generated.storage_class import ThreadInfo
 from livekit.agents.a2a import (
     A2ASessionContext,
@@ -388,8 +388,8 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     tool_entered, release = asyncio.Event(), asyncio.Event()
     front = _blocking_agent(tool_entered, release)
 
-    async def handler(ctx: A2ASessionContext) -> str | None:
-        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
+        return await front.run(ctx.message, message_history=ctx.message_history)
 
     server_a, _ = make_server(a, handler)
     server_b, _ = make_server(b, handler)
@@ -624,8 +624,8 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
     entered, release = asyncio.Event(), asyncio.Event()
     front = _blocking_agent(entered, release)
 
-    async def handler(ctx: A2ASessionContext) -> str | None:
-        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+    async def handler(ctx: A2ASessionContext) -> RunResult[str]:
+        return await front.run(ctx.message, message_history=ctx.message_history)
 
     server, _ = make_server(thread_storage, handler)
     ctx_id = (await thread_storage.threads.create_thread()).thread_id

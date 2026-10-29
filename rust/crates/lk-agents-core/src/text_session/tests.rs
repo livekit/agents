@@ -573,7 +573,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
                     frame_id,
                     result: RunResult {
                         interrupted: false,
-                        outcome: RunOutcome::Completed { output: Output::Nothing },
+                        outcome: RunOutcome::NoOutput,
                         all_messages: Vec::new(),
                         new_messages: Vec::new(),
                         usage: RunUsage::default(),

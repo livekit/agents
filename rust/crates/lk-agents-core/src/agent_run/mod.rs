@@ -953,18 +953,25 @@ impl AgentRun {
     fn complete(&mut self, output: Output, fx: &mut Vec<Effect>) {
         let output = match output {
             Output::Text(text) => Output::Text(self.composed(Some(text)).unwrap_or_default()),
-            Output::Nothing if !self.verbatim.is_empty() => {
-                Output::Text(self.composed(None).unwrap_or_default())
-            }
             other => other,
         };
         let verbatim = self.verbatim_text();
         self.finish(Ok(self.result(RunOutcome::Completed { output }, verbatim)), fx)
     }
 
+    /// The turn ended producing no output (agents.md "Running a turn"). A `str` agent whose text
+    /// reached the person as written completes with it; anything else has no output.
+    fn end_without_output(&mut self, fx: &mut Vec<Effect>) {
+        if matches!(self.agent.output, OutputSpec::Text { .. }) && !self.verbatim.is_empty() {
+            return self.complete(Output::Text(String::new()), fx);
+        }
+        let verbatim = self.verbatim_text();
+        self.finish(Ok(self.result(RunOutcome::NoOutput, verbatim)), fx)
+    }
+
     /// Ends the invocation as cut by the person (a managed turn's verdict, a voice interruption).
     fn complete_interrupted(&mut self, fx: &mut Vec<Effect>) {
-        let outcome = RunOutcome::Completed { output: Output::Nothing };
+        let outcome = RunOutcome::NoOutput;
         let mut result = self.result(outcome, self.verbatim_text());
         result.interrupted = true;
         self.finish_now(Ok(result), fx);

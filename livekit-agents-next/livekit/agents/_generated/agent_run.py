@@ -319,7 +319,14 @@ class RunOutcomeInputRequired:
     answer_tool: str | None
 
 
-RunOutcome: TypeAlias = RunOutcomeCompleted | RunOutcomeInputRequired
+@dataclass(frozen=True, kw_only=True, slots=True)
+class RunOutcomeNoOutput:
+    """The turn ended with no output: `StopResponse`, a tool result asking for no reply, an
+    all-silent step or an interruption. Never `Completed`, whose output is the declared type.
+    """
+
+
+RunOutcome: TypeAlias = RunOutcomeCompleted | RunOutcomeInputRequired | RunOutcomeNoOutput
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -336,12 +343,7 @@ class OutputValidated:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class OutputNothing:
-    """`StopResponse`, or a turn ended by a tool that asks for no reply."""
-
-
-Output: TypeAlias = OutputText | OutputValidated | OutputNothing
+Output: TypeAlias = OutputText | OutputValidated
 """The accepted output of a completed invocation."""
 
 

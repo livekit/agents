@@ -108,7 +108,7 @@ result = await scheduler.run(
     usage=None,                          # a RunUsage to add this run's usage to
     retries=None,                        # this run's retry budgets; see "Retries"
 )
-result.status                            # "completed" or "input_required"
+result.status                            # "completed", "input_required" or "no_output"
 # After narrowing on status:
 # result.output                          # declared output type when completed
 # result.question                        # str when input_required
@@ -119,9 +119,13 @@ result.usage                             # requests, input/output/total_tokens, 
 
 `RunResult[Output]` separates framework status from the application's output.
 It is a discriminated union: `status == "completed"` exposes `output: Output`,
-and `status == "input_required"` exposes `question: str`. The branches are
-`RunCompleted[Output]` and `RunInputRequired`, exported with `RunResult` from
-`livekit.agents`. Both branches expose history and usage. A tool's
+`status == "input_required"` exposes `question: str`, and `status ==
+"no_output"` is a turn that ended without an output: a tool raised
+`StopResponse` or returned `ToolResult(reply_required=False)`, a step ended
+silently, or the turn was interrupted. A completed result always carries a
+value of the declared type, never a missing one. The branches are
+`RunCompleted[Output]`, `RunInputRequired` and `RunNoOutput`, exported with
+`RunResult` from `livekit.agents`. Every branch exposes history and usage. A tool's
 `InputRequired(...)` sets the framework outcome; `output_type` contains only
 the application's final-result contract. See the
 [result and A2A mapping](server.md#handler-outcomes).
@@ -130,7 +134,7 @@ the application's final-result contract. See the
 
 | Member | Purpose |
 | --- | --- |
-| `status` | Distinguish completion from a request for human input |
+| `status` | Distinguish completion, a request for human input, and a turn with no output |
 | `output` | The accepted application value in the completed branch |
 | `question` | The question in the input-required branch |
 | `new_messages()` | This invocation’s input and recorded messages, including tool calls/results |
@@ -149,7 +153,7 @@ this invocation; it is not limited to assistant output. `all_messages()` also
 includes the supplied history. Neither method combines private histories from
 other session frames. User-visible dialogue is a separate view.
 
-Both outcome branches retain the same history and usage access. Streaming
+Every outcome branch retains the same history and usage access. Streaming
 delivers incremental text and events; the settled result uses this contract.
 `TextSession.run()` returns an envelope containing this result as
 `turn.result` and routing state as `turn.state`. Frame selection, parent
@@ -396,7 +400,7 @@ async with assistant.run_stream(
 
 if result.status == "input_required":
     question = result.question
-else:
+elif result.status == "completed":
     output = result.output
 
 history = result.all_messages()
