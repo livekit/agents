@@ -1,11 +1,11 @@
 //! Deterministic boundary ordering: clear overtakes an audio result already yielded by the host.
+use super::{AvatarIo, AvatarRunner, Event};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
+use lk_agents_abi::voice::avatar::AvatarRunner as _;
 use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::{AudioFrame, TokioSpawner, VirtualClock};
-use lk_agents_abi::voice::avatar::AvatarRunner as _;
-use super::{AvatarIo, AvatarRunner, Event};
 use lk_agents_test_support::rtc::FakeRtc;
 use std::sync::{
     Arc, OnceLock, Weak,
