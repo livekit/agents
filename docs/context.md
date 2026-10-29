@@ -318,8 +318,10 @@ async with ctx.store.independent_transaction() as tx:   # durable when the block
 | `await tx.fetch(sql, params)` | `list[Row]` |
 | `await tx.fetch_one(sql, params)` | one `Row`, or `None` |
 
-A `Row` is a tuple of column values in select order; parameters are `None`,
-booleans, numbers or strings. Reads observe committed records and writes
+A `Row` is a tuple of column values in select order: `None`, numbers or
+strings (a boolean reads back as 0 or 1); parameters are `None`, booleans,
+numbers or strings. There are no BLOBs: a BLOB column
+read as a row value is refused, so select `hex(...)` instead. Reads observe committed records and writes
 apply together when the transaction commits, so a transaction reads before
 its first write; a read after a write is refused.
 

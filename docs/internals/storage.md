@@ -155,6 +155,10 @@ SQL and backends do not implement a separate history/task repository.
 | `task(task_id)` | One task record, or no record if it does not exist in this thread |
 | `journal(after_id, limit)` | A page of journal events for authorized runtime/operations callers |
 
+Python's `ctx.thread` exposes the same three content reads under the same
+names, `list_items`, `list_tasks` and `task` ([threads](../threads.md)), with
+`journal` beside them.
+
 Content reads require neither an active agent run nor a lane lease. A backend
 can open a thread solely for reading. Reads observe committed records; staged
 context writes and in-flight history are not exposed. The worker holder passed
@@ -376,6 +380,12 @@ Application SQL is unrestricted: it may read and write any table, including
 the framework's. `async with ctx.store.transaction()` joins the managed commit;
 `async with ctx.store.independent_transaction()` commits durably when its block
 exits. No SQL transaction stays open across model or tool network calls.
+Writes are staged and apply together when the transaction commits, so a read
+after a write in the same transaction is refused. A row is a tuple of column
+values in select order: null, integers, floats or strings (a boolean reads back
+as 0 or 1); parameters may also be booleans. There are no BLOBs: a BLOB column read as a row value is
+refused (select `hex(...)`), and bytes are not a parameter
+([context.md](../context.md#application-records-and-transactions)).
 
 Durable execution, operation outboxes, and durable timers are outside this
 storage contract.
