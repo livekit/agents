@@ -9,8 +9,9 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{
     AudioFrame, BoundedLossy, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LossyTx, Pushed, Spawner,
-    SpawnerExt, StreamSource, Ts,
+    StreamSource, Ts,
 };
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::input_state::{
     AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, Publication, TrackReaders, VIDEO_SOURCES,
     end_of_track, replayed_head,
@@ -265,6 +266,8 @@ pub struct ParticipantVideoInput {
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     readers: Readers<VideoFrameRef>,
+    /// A track's pump, which ends once its generation is replaced or its stream ends.
+    pumps: Arc<TaskSet>,
 }
 
 impl ParticipantVideoInput {
@@ -278,6 +281,7 @@ impl ParticipantVideoInput {
             spawner,
             clock,
             readers: Readers::new(VIDEO_SOURCES, lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
+            pumps: Arc::default(),
         })
     }
 
@@ -318,7 +322,7 @@ impl Reader for ParticipantVideoInput {
     ) -> Result<()> {
         let stream = publication.open_video_stream()?;
         let (owner, generation) = (self.clone(), open.generation);
-        self.spawner.spawn_unboxed(async move {
+        self.pumps.spawn(self.spawner.as_ref(), "video track pump", async move {
             let readers = &owner.readers;
             pump(readers, owner.clock.as_ref(), generation, stream, async { true }, || None).await;
         });
@@ -348,6 +352,8 @@ pub struct ParticipantAudioInput {
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
     readers: Readers<AudioFrame>,
+    /// A track's pump, which ends once its generation is replaced or its stream ends.
+    pumps: Arc<TaskSet>,
 }
 
 impl ParticipantAudioInput {
@@ -365,6 +371,7 @@ impl ParticipantAudioInput {
             config,
             pre_connect,
             readers: Readers::new(AUDIO_SOURCES, lk_agents_abi::AUDIO_QUEUE_FRAMES),
+            pumps: Arc::default(),
         })
     }
 
@@ -453,7 +460,7 @@ impl Reader for ParticipantAudioInput {
         let replay = publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer)
             && self.readers.decide(|readers| readers.replay_pre_connect(owner, &open.sid));
         let (input, generation, sid) = (self.clone(), open.generation, open.sid.clone());
-        self.spawner.spawn_unboxed(async move {
+        self.pumps.spawn(self.spawner.as_ref(), "audio track pump", async move {
             let (sample_rate, num_channels) = (input.config.sample_rate, input.config.num_channels);
             let replay = input.replay(generation, &sid, replay.then_some(input_stream));
             let end = || Some(end_of_track(sample_rate, num_channels));

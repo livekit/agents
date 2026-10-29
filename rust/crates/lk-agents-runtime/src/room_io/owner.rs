@@ -57,6 +57,8 @@ pub struct RoomIo {
     events_rx: Mutex<Option<mpsc::Receiver<RoomIoEvent>>>,
 
     tasks: Arc<TaskSet>,
+    /// The close, which waits `tasks` out; it holds this object until it ends.
+    closing: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
     execution: Mutex<Execution>,
     stopped: Notify,
     started: Notify,
@@ -153,6 +155,7 @@ impl RoomIo {
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
             tasks: Arc::default(),
+            closing: std::sync::OnceLock::new(),
             execution: Mutex::new(Execution {
                 closing: false,
                 starting: 0,
@@ -593,10 +596,11 @@ impl RoomIo {
         if closing {
             let owner = self.clone();
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-            self.spawner.spawn_unboxed(async move {
+            let close = self.spawner.spawn(async move {
                 let outcome = owner.close(deadline).await;
                 owner.coordinate(|coordinator| coordinator.finish_close(outcome));
             });
+            let _ = self.closing.set(close);
         }
     }
 

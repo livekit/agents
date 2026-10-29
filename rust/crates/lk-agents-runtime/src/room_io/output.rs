@@ -6,8 +6,9 @@ use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::room_io::AudioOutputConfig;
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::voice::rtc::{AudioSource, PlaybackInfo, RtcError, RtcRoom, TrackSid};
-use lk_agents_abi::{AbortHandle, Closed, HOST_TEARDOWN_TIMEOUT, timeout};
-use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt, Ts};
+use lk_agents_abi::{AudioFrame, Clock, Spawner, Ts};
+use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, timeout};
+use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::room_io::output::{
     CaptureAdmission, Playback, PlaybackReport, capture_chunks,
 };
@@ -337,9 +338,11 @@ pub struct ParticipantAudioOutput {
     spawner: Arc<dyn Spawner>,
     config: AudioOutputConfig,
     shared: Arc<Shared>,
-    /// The pump, the watcher and the progress reporter: for the life of the output, not one per
-    /// segment.
-    tasks: Mutex<Vec<AbortHandle>>,
+    /// The pump, the watcher, the progress reporter and the track creation: for the life of the
+    /// output, not one per segment. Cancelled by the close.
+    started: Mutex<Vec<TaskId>>,
+    /// Those, the close's cleanup and the source closes that outlive a close waiter.
+    tasks: Arc<TaskSet>,
 }
 
 impl ParticipantAudioOutput {
@@ -369,24 +372,38 @@ impl ParticipantAudioOutput {
                 wake: Notify::new(),
                 sample_rate,
             }),
-            tasks: Mutex::new(Vec::new()),
+            started: Mutex::new(Vec::new()),
+            tasks: Arc::default(),
             config,
         })
     }
 
     fn begin_start(&self) {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut started = self.started.lock().unwrap();
         if self.shared.lock().publication.begin() {
-            tasks.push(self.spawner.spawn_unboxed(self.shared.clone().forward_audio()));
-            tasks.push(self.spawner.spawn_unboxed(self.shared.clone().wait_for_playout()));
-            tasks.push(self.spawner.spawn_unboxed(self.shared.clone().report_progress()));
+            let (tasks, spawner) = (&self.tasks, self.spawner.as_ref());
+            started.push(tasks.spawn(
+                spawner,
+                "audio output pump",
+                self.shared.clone().forward_audio(),
+            ));
+            started.push(tasks.spawn(
+                spawner,
+                "playout watcher",
+                self.shared.clone().wait_for_playout(),
+            ));
+            started.push(tasks.spawn(
+                spawner,
+                "progress reporter",
+                self.shared.clone().report_progress(),
+            ));
             let room = self.room.clone();
             let shared = self.shared.clone();
             let options = self.config.publish.clone();
-            let self_spawner = self.spawner.clone();
+            let self_spawner = (self.tasks.clone(), self.spawner.clone());
             // Creation belongs to the output, even when the caller abandons start(). Close drains
             // this task before releasing its handles, so a late SID can always be unpublished.
-            tasks.push(self.spawner.spawn_unboxed(async move {
+            started.push(tasks.spawn(spawner, "track creation", async move {
                 let (source, publication) = match room.local().publish_audio_track(options).await {
                     Ok(published) => published,
                     Err(error) => {
@@ -486,16 +503,16 @@ impl ParticipantAudioOutput {
             // Stop frame/progress producers before the terminal playback event. Creation keeps its
             // separate obligation to deliver or retire the track, even if start() was cancelled.
             {
-                let mut tasks = self.tasks.lock().unwrap();
-                let workers = tasks.len().min(3);
-                for handle in tasks.drain(..workers) {
-                    handle.abort();
+                let mut started = self.started.lock().unwrap();
+                let workers = started.len().min(3);
+                for task in started.drain(..workers) {
+                    self.tasks.cancel(task);
                 }
             }
             let shared = self.shared.clone();
             let room = self.room.clone();
-            let spawner = self.spawner.clone();
-            self.spawner.spawn_unboxed(async move {
+            let spawner = (self.tasks.clone(), self.spawner.clone());
+            self.tasks.spawn(self.spawner.as_ref(), "audio output cleanup", async move {
                 shared.wait_until(|s| !s.publication.creating()).await;
                 let (source, sid) = {
                     let mut state = shared.lock();
@@ -547,8 +564,8 @@ impl ParticipantAudioOutput {
             state.cleanup_outcome.unwrap_or(Closed::TimedOut)
         };
         if settled {
-            for handle in self.tasks.lock().unwrap().drain(..) {
-                handle.abort();
+            for task in self.started.lock().unwrap().drain(..) {
+                self.tasks.cancel(task);
             }
         }
         outcome
@@ -559,12 +576,12 @@ async fn retire_publication(
     room: Arc<dyn RtcRoom>,
     source: Arc<dyn AudioSource>,
     sid: TrackSid,
-    spawner: Arc<dyn Spawner>,
+    (tasks, spawner): (Arc<TaskSet>, Arc<dyn Spawner>),
 ) -> Closed {
     // Source closure and SID retirement are separate obligations: either SDK call may hang.
     // This task retains both receipts after a close waiter reports its deadline outcome.
     let (closed, closing) = tokio::sync::oneshot::channel();
-    spawner.spawn_unboxed(async move {
+    tasks.spawn(spawner.as_ref(), "audio source close", async move {
         let outcome = cleanup_outcome(source.close().await, "audio source");
         let _ = closed.send(outcome);
     });

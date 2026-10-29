@@ -1,7 +1,7 @@
 //! `_output.py`'s `_ParticipantTranscriptionOutput`: a participant's transcript, as a text stream
 //! and as a legacy transcription, and its host object.
 
-use lk_agents_abi::AbortHandle;
+use lk_agents_abi::OwnedTask;
 
 pub use super::segment_ids::SegmentIds;
 use lk_agents_abi::voice::io::TextOutput;
@@ -149,7 +149,8 @@ pub struct ParticipantTranscriptionOutput {
     changed: Notify,
     performer_done: Monotone<bool>,
     next_in_chain: Option<Arc<dyn TextOutput>>,
-    tasks: Mutex<Vec<AbortHandle>>,
+    /// The performer, which holds the output until it ends.
+    performer: Mutex<Option<OwnedTask>>,
 }
 
 impl ParticipantTranscriptionOutput {
@@ -175,13 +176,13 @@ impl ParticipantTranscriptionOutput {
             changed: Notify::new(),
             performer_done: Monotone::new(false),
             next_in_chain,
-            tasks: Mutex::new(Vec::new()),
+            performer: Mutex::new(None),
         });
         let owner = output.clone();
-        let task = spawner.spawn_unboxed(async move {
+        let task = spawner.spawn(async move {
             owner.run(Performer { room, writer: None }).await;
         });
-        output.tasks.lock().unwrap().push(task);
+        *output.performer.lock().unwrap() = Some(task);
         output
     }
 
@@ -364,7 +365,7 @@ impl ParticipantTranscriptionOutput {
             self.fail(IoError::Rtc("transcription cleanup deadline expired".into()));
         }
         if self.performer_done.get() {
-            self.tasks.lock().unwrap().clear();
+            self.performer.lock().unwrap().take();
         }
         self.writer.lock().unwrap().admission.failure().cloned().map_or(Ok(()), Err)
     }
