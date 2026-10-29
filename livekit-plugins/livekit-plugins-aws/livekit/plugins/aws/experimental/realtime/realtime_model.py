@@ -1167,9 +1167,8 @@ class RealtimeSession(  # noqa: F811
             logger.warning(f"No event handler found for event type: {event_type}")
 
     async def _handle_completion_start_event(self, event_data: dict) -> None:
-        """Handle completionStart - create new generation for this completion cycle."""
+        """Handle completionStart (no generation: it precedes the first user turn, see #8260)."""
         log_event_data(event_data)
-        self._create_response_generation()
 
     def _create_response_generation(self) -> None:
         """Instantiate _ResponseGeneration and emit the GenerationCreated event.
