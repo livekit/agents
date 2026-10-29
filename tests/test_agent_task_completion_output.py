@@ -255,6 +255,167 @@ async def test_unrelated_completion_does_not_replace_run_output(unrelated_result
         await session.aclose()
 
 
+@pytest.mark.parametrize(
+    "paused_result",
+    [NOT_GIVEN, "wrong answer", True, None, ValueError("paused task failed")],
+    ids=["control", "same_type", "wrong_type", "explicit_none", "error"],
+)
+async def test_paused_completion_does_not_replace_run_output(paused_result: Any) -> None:
+    outer_ready = asyncio.Event()
+    answer_ready = asyncio.Event()
+    completed = asyncio.Event()
+    parent_finished = asyncio.Event()
+
+    class Answer(AgentTask[str]):
+        async def on_enter(self) -> None:
+            self.complete("correct answer")
+
+    class Inner(AgentTask[None]):
+        @function_tool
+        async def answer(self) -> ToolResult:
+            """Provide this run's typed answer."""
+            assert await Answer(instructions="Return the answer.") == "correct answer"
+            answer_ready.set()
+            await completed.wait()
+            return ToolResult(None, reply_required=False)
+
+    inner = Inner(instructions="Handle the current turn.")
+
+    class Outer(AgentTask[Any]):
+        async def on_enter(self) -> None:
+            outer_ready.set()
+
+        @function_tool
+        async def start_inner(self) -> ToolResult:
+            """Start the inner task."""
+            await inner
+            return ToolResult(None, reply_required=False)
+
+    outer = Outer(instructions="Wait for the inner task.")
+
+    class Parent(Agent):
+        async def on_enter(self) -> None:
+            try:
+                await outer
+            except ValueError:
+                pass
+            parent_finished.set()
+
+    session = AgentSession(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="start_inner", arguments="{}", call_id="start")
+                    ],
+                ),
+                FakeLLMResponse(
+                    input="answer",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="answer", arguments="{}", call_id="answer")],
+                ),
+            ]
+        )
+    )
+    await session.start(Parent(instructions="Start the task chain."), session_host=False)
+    try:
+        await asyncio.wait_for(outer_ready.wait(), timeout=3)
+        assert outer._activity is not None
+        await asyncio.wait_for(session.run(user_input="start"), timeout=3)
+        run = session.run(user_input="answer", output_type=str, output_options=None)
+        await asyncio.wait_for(answer_ready.wait(), timeout=3)
+        assert session.current_agent is inner
+        assert outer._activity.scheduling_paused
+        assert not run.done()
+        if paused_result is not NOT_GIVEN:
+            outer.complete(paused_result)
+        completed.set()
+
+        result = await asyncio.wait_for(run, timeout=3)
+        assert result.final_output == "correct answer"
+    finally:
+        completed.set()
+        inner.complete(None)
+        await asyncio.wait_for(inner._wait_for_inactive(), timeout=3)
+        if not outer.done():
+            outer.complete(None)
+        await asyncio.wait_for(parent_finished.wait(), timeout=3)
+        # Outer may already be complete when Inner resumes it.
+        await session._update_activity(Agent(instructions="Finish the conversation."))
+        await session.aclose()
+
+
+async def test_current_task_completion_during_drain_supplies_run_output() -> None:
+    ready = asyncio.Event()
+    tool_started = asyncio.Event()
+    release = asyncio.Event()
+    draining = asyncio.Event()
+
+    class Confirm(AgentTask[bool]):
+        async def on_enter(self) -> None:
+            ready.set()
+
+        @function_tool
+        async def confirm(self) -> ToolResult:
+            """Confirm the answer."""
+            tool_started.set()
+            await release.wait()
+            self.complete(True)
+            return ToolResult(None, reply_required=False)
+
+    confirm = Confirm(instructions="Confirm the answer.")
+
+    class Parent(Agent):
+        async def on_enter(self) -> None:
+            assert await confirm is True
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="yes",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="confirm", arguments="{}", call_id="confirm")],
+            )
+        ]
+    )
+    async with AgentSession(llm=llm) as session:
+        await session.start(Parent(instructions="Start confirmation."), session_host=False)
+        await asyncio.wait_for(ready.wait(), timeout=3)
+        run = session.run(user_input="yes", output_type=bool, output_options=None)
+        try:
+            await asyncio.wait_for(tool_started.wait(), timeout=3)
+            activity = confirm._activity
+            assert activity is not None
+            clear_resumed = activity._scheduling_resumed.clear
+
+            def notify_draining() -> None:
+                """Signal after the real activity stops scheduling."""
+                clear_resumed()
+                draining.set()
+
+            with patch.object(activity._scheduling_resumed, "clear", side_effect=notify_draining):
+                drain = asyncio.create_task(session.drain())
+                try:
+                    await asyncio.wait_for(draining.wait(), timeout=3)
+                    assert activity.scheduling_paused
+                    assert session.current_agent is confirm
+                finally:
+                    release.set()
+                    await asyncio.wait_for(drain, timeout=3)
+            result = await asyncio.wait_for(run, timeout=3)
+            assert result.final_output is True
+        finally:
+            release.set()
+
+
 async def test_later_explicit_none_replaces_task_output() -> None:
     from livekit.agents import UnexpectedModelBehavior
 

@@ -954,7 +954,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             speech_handle._maybe_run_final_output = result
 
         activity = self._activity
-        if activity and (run_state := activity.session._global_run_state) and not run_state.done():
+        if (
+            activity
+            and activity.session.current_agent is self
+            and (run_state := activity.session._global_run_state)
+            and not run_state.done()
+        ):
             run_state._set_final_output(result)
 
         # if not self.__inline_mode:
