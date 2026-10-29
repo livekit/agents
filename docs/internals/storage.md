@@ -582,7 +582,9 @@ hand, which is why the two are separate.
 
 ## Verification
 
-Run the same storage contract suite against real SQLite and AgentDB. A fake
+Run the same storage contract suite against real SQLite and AgentDB, each
+backend configured through the host's `Storage` namespace, so the A2A door's
+tests run its one construction path. A fake
 AgentDB server injects faults (disconnects, lost acknowledgments, rejections,
 slow responses) to reach every typed error; AgentDB integration tests use a
 Cloud project; local tests need only a temporary directory. The DST fakes the
