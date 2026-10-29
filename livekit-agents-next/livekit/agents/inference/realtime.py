@@ -63,7 +63,7 @@ class RealtimeModel(_RealtimeModel):
                 base_url=base_url or get_default_inference_url(),
                 model=model,
                 voice=voice or None,
-                modalities=modalities or None,
+                modalities=list[str](modalities) if modalities else None,
                 inference_provider=provider,
                 inference_class=inference_class,
                 conn_options=conn_options,

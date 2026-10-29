@@ -200,7 +200,7 @@ class TTS(tts.TTS):
         self._encoding = encoding if is_given(encoding) else "pcm_s16le"
         self._extra = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         self._fallback = [
-            _core.tts_normalize_fallback_str(f) if isinstance(f, str) else dict(f)
+            _core.tts_normalize_fallback_str(f) if isinstance(f, str) else f.copy()
             for f in fallbacks
         ]
         self._conn = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
@@ -217,7 +217,7 @@ class TTS(tts.TTS):
     class Markup(tts.TTS.Markup):
         def _provider_key(self) -> str:
             assert isinstance(self._tts, TTS)
-            return _core.tts_markup_provider_key(self._tts._model)  # type: ignore[no-any-return]
+            return _core.tts_markup_provider_key(self._tts._model)
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:

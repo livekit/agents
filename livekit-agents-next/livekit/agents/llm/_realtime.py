@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from .. import _core
 from .._generated.realtime_options import NativeRealtimeConfig
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import is_given
 from . import realtime as llm_realtime
 from ._realtime_options import realtime_options
 from .tool_context import ToolChoice
@@ -126,10 +127,11 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             NativeRealtimeConfig(
                 dialect=self._dialect,
                 api_key=api_key,
-                base_url=base_url or os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
+                base_url=(base_url if is_given(base_url) else "")
+                or os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
                 model=model,
                 voice=voice,
-                modalities=modalities or None,
+                modalities=list[str](modalities) if modalities else None,
                 azure_deployment=azure_deployment,
                 entra_token=entra_token,
                 azure_defaults=_azure_defaults,
@@ -153,11 +155,11 @@ class RealtimeModel(llm_realtime.RealtimeModel):
 
     @property
     def model(self) -> str:
-        return self._native.model  # type: ignore[no-any-return]
+        return self._native.model
 
     @property
     def provider(self) -> str:
-        return self._native.provider  # type: ignore[no-any-return]
+        return self._native.provider
 
     @property
     def capabilities(self) -> llm_realtime.RealtimeCapabilities:

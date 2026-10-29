@@ -91,7 +91,7 @@ def is_expired(month: int, year: int) -> bool:
 
 def normalize_date_of_birth(year: int, month: int, day: int) -> date:
     """Normalize two-digit birth years and reject invalid or future dates."""
-    return _core.normalize_date_of_birth(year, month, day, date.today())  # type: ignore[no-any-return]
+    return _core.normalize_date_of_birth(year, month, day, date.today())
 
 
 class DtmfEvent(str, Enum):

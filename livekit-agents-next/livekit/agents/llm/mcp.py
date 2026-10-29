@@ -57,7 +57,7 @@ class _Streams:
         from mcp.types import JSONRPCMessage
         from pydantic import TypeAdapter
 
-        parsed = TypeAdapter(JSONRPCMessage).validate_python(message)
+        parsed: JSONRPCMessage = TypeAdapter(JSONRPCMessage).validate_python(message)
         await self._write.send(SessionMessage(parsed))
 
     async def _core_receive(self, _invocation: object) -> dict[str, Any] | None:
@@ -87,7 +87,7 @@ class MCPServer:
 
     @property
     def initialized(self) -> bool:
-        return self._session.connected  # type: ignore[no-any-return]
+        return self._session.connected
 
     async def initialize(self) -> None:
         await self._session.connect_host(

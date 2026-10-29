@@ -275,7 +275,7 @@ class STT(stt.STT):
         self._sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
         self._extra = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         self._fallback = [
-            _core.stt_normalize_fallback_str(f) if isinstance(f, str) else dict(f)
+            _core.stt_normalize_fallback_str(f) if isinstance(f, str) else f.copy()
             for f in fallbacks
         ]
         self._conn = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
