@@ -65,29 +65,24 @@ impl InterruptionPort for InterruptionLeg {
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, LegEvent<OverlapVerdict>> {
         Box::pin(async move {
             let mut stream = self.stream.lock().await;
-            loop {
-                return match stream.recv_event().await {
-                    Some(StreamEvent::Overlap(ev)) => {
-                        LegEvent::Verdict { req: None, verdict: verdict(&ev, self.anchor) }
-                    }
-                    Some(StreamEvent::CorrelatedOverlap { request, event }) => LegEvent::Verdict {
-                        req: Some(request),
-                        verdict: verdict(&event, self.anchor),
-                    },
-                    Some(StreamEvent::CorrelatedError { request, error }) => LegEvent::Error {
-                        req: Some(request),
-                        recoverable: error.recoverable,
-                        err: lk_agents_abi::errors::ProviderError::Local(error.error),
-                    },
-                    Some(StreamEvent::Error(e)) => LegEvent::Error {
-                        req: None,
-                        recoverable: e.recoverable,
-                        err: lk_agents_abi::errors::ProviderError::Local(e.error),
-                    },
-                    // The loop pushes no span (see `sentinel`), so none comes back.
-                    Some(StreamEvent::SpanUpdate { .. }) => continue,
-                    None => LegEvent::Closed,
-                };
+            match stream.recv_event().await {
+                Some(StreamEvent::Overlap(ev)) => {
+                    LegEvent::Verdict { req: None, verdict: verdict(&ev, self.anchor) }
+                }
+                Some(StreamEvent::CorrelatedOverlap { request, event }) => {
+                    LegEvent::Verdict { req: Some(request), verdict: verdict(&event, self.anchor) }
+                }
+                Some(StreamEvent::CorrelatedError { request, error }) => LegEvent::Error {
+                    req: Some(request),
+                    recoverable: error.recoverable,
+                    err: lk_agents_abi::errors::ProviderError::Local(error.error),
+                },
+                Some(StreamEvent::Error(e)) => LegEvent::Error {
+                    req: None,
+                    recoverable: e.recoverable,
+                    err: lk_agents_abi::errors::ProviderError::Local(e.error),
+                },
+                None => LegEvent::Closed,
             }
         })
     }
@@ -101,8 +96,6 @@ fn sentinel(signal: InterruptionSignal, anchor: WallAnchor) -> InputEvent {
             InputEvent::OverlapSpeechStarted(OverlapStart {
                 speech_duration: speech_duration.as_secs_f64(),
                 started_at: anchor.seconds(started_at),
-                // No span: the loop holds none, so no `span_update` is emitted.
-                user_speaking_span: None,
             })
         }
         InterruptionSignal::OverlapEnded { ended_at, agent_ended } => {
@@ -188,7 +181,6 @@ mod tests {
             InputEvent::OverlapSpeechStarted(start) => {
                 assert_eq!(start.started_at, 1_787_000_002.5);
                 assert_eq!(start.speech_duration, 0.3);
-                assert!(start.user_speaking_span.is_none(), "the loop holds no spans");
             }
             other => panic!("expected an overlap start, got {other:?}"),
         }

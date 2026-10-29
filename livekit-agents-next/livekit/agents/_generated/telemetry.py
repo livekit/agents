@@ -73,30 +73,6 @@ class SessionReportInput:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class SpanUpdateWire:
-    """`{"type": "span_update", "span": .., "attrs": {..}}`."""
-
-    span: int
-    """The span, as a `HostRef` id the host resolves."""
-    attrs: SpanUpdateAttrsWire
-    type: Literal["span_update"] = "span_update"
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class SpanUpdateAttrsWire:
-    """The nested `attrs` dict: the five values `_apply_span_update` writes onto the span. A wire twin
-    of `lk_agents_inference::interruption::SpanAttributes`, whose `&'static str` field the
-    generator cannot map.
-    """
-
-    is_interruption: str
-    probability: float
-    total_duration: float
-    prediction_duration: float
-    detection_delay: float
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class LogRecordWire:
     """A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
     of epoch nanos, where the log handler's records carry an `HrTime` pair.

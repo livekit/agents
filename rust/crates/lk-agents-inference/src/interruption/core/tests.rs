@@ -71,11 +71,7 @@ fn verdict(
 
 fn start_overlap(c: &mut InterruptionMachine, speech_duration: f64, at: f64) {
     c.on_input(
-        InputEvent::OverlapSpeechStarted(OverlapStart {
-            speech_duration,
-            started_at: at,
-            user_speaking_span: None,
-        }),
+        InputEvent::OverlapSpeechStarted(OverlapStart { speech_duration, started_at: at }),
         at,
     )
     .unwrap();
@@ -264,13 +260,12 @@ fn a_detected_verdict_closes_the_overlap_so_the_end_sentinel_emits_nothing() {
     c.record_request(ts(1.0), vec![5]);
 
     let out = verdict(&mut c, true, 1.0, 0.03, &[0.9, 0.8, 0.1], 1.15);
-    let RecvOutcome::Detected { event, span_update } = out else { panic!("expected Detected") };
+    let RecvOutcome::Detected(event) = out else { panic!("expected Detected") };
     assert!(event.is_interruption);
     assert_eq!(event.num_requests, 1);
     assert_eq!(event.probability, 0.8_f32 as f64);
     assert!((event.total_duration - 0.15).abs() < 1e-9);
     assert!((event.detection_delay - 0.15).abs() < 1e-9);
-    assert_eq!(span_update, None, "no span was supplied");
 
     assert_eq!(end_overlap(&mut c, 1.2, false, 1.2), None);
 }
@@ -301,10 +296,7 @@ fn interruption_verdict_identity_rejects_previous_overlap_and_unknown_requests()
     assert_eq!(verdict(&mut c, true, 1.0, 0.1, &[0.9, 0.9], 1.3), RecvOutcome::Ignored);
     assert_eq!(verdict(&mut c, true, 99.0, 0.1, &[0.9, 0.9], 1.3), RecvOutcome::Ignored);
     assert_eq!(c.cache.iter().count(), 1, "unknown echoes must not create requests");
-    assert!(matches!(
-        verdict(&mut c, true, 1.2, 0.1, &[0.9, 0.9], 1.4),
-        RecvOutcome::Detected { .. }
-    ));
+    assert!(matches!(verdict(&mut c, true, 1.2, 0.1, &[0.9, 0.9], 1.4), RecvOutcome::Detected(_)));
 }
 
 #[test]
@@ -439,7 +431,7 @@ fn the_registered_overlap_request_survives_verdict_delivery() {
     c.handle(
         InterruptionEvent::Input(InputEvent::OverlapRequest {
             request: ReqId(42),
-            start: OverlapStart { speech_duration: 0.0, started_at: 1.0, user_speaking_span: None },
+            start: OverlapStart { speech_duration: 0.0, started_at: 1.0 },
         }),
         ts(1.0),
         1.0,
@@ -505,39 +497,6 @@ fn pending_inferences_cannot_be_evicted_to_escape_their_deadline() {
     assert!(!c.overlap_started);
 }
 
-// Catches: the span being decorated on every verdict instead of once.
-#[test]
-fn the_user_speech_span_is_handed_back_exactly_once() {
-    use std::sync::Arc;
-    struct Noop;
-    impl lk_agents_abi::RefRegistry for Noop {
-        fn release(&self, _id: u64) {}
-    }
-    let registry: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(Noop);
-
-    let mut c = core();
-    c.on_input(InputEvent::AgentSpeechStarted, 0.0).unwrap();
-    c.on_input(
-        InputEvent::OverlapSpeechStarted(OverlapStart {
-            speech_duration: 0.0,
-            started_at: 1.0,
-            user_speaking_span: Some(HostRef::new(3, &registry)),
-        }),
-        1.0,
-    )
-    .unwrap();
-    c.record_request(ts(1.0), vec![1]);
-
-    let out = verdict(&mut c, true, 1.0, 0.0, &[0.9, 0.7], 1.1);
-    let RecvOutcome::Detected { span_update: Some((span, attrs)), .. } = out else {
-        panic!("expected a span update")
-    };
-    assert_eq!(span.id(), 3);
-    assert_eq!(attrs.is_interruption, "true");
-    assert_eq!(attrs.probability, 0.7_f32 as f64);
-    assert!(c.user_speech_span.is_none(), "the span must be released as it is written");
-}
-
 // Catches: a server `error` frame losing its payload (`body`) or status code.
 #[test]
 fn a_server_error_carries_the_code_as_status_and_the_text_as_body() {
@@ -590,5 +549,4 @@ fn agent_speech_start_re_arms_every_field_that_survives_a_turn() {
     assert_eq!(c.num_requests, 0);
     assert_eq!(c.cache.iter().count(), 0);
     assert_eq!(c.window.len(), 0);
-    assert!(c.user_speech_span.is_none());
 }

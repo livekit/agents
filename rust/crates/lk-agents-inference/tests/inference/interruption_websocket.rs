@@ -61,7 +61,6 @@ fn push_one_overlap(stream: &lk_agents_inference::interruption::InterruptionStre
         .push(InputEvent::OverlapSpeechStarted(OverlapStart {
             speech_duration: 0.2,
             started_at: 1.0,
-            user_speaking_span: None,
         }))
         .unwrap();
     stream.push(InputEvent::Audio(frame(1600))).unwrap();

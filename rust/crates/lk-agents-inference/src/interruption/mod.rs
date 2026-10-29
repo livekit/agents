@@ -17,7 +17,7 @@ pub mod transport;
 pub use audio::{AudioError, AudioFrame, AudioWindow};
 pub use core::{
     InputEvent, InputOutcome, InterruptionEffect, InterruptionEvent, InterruptionMachine,
-    OverlapEnd, OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,
+    OverlapEnd, OverlapStart, RecvOutcome, RequestIdentity, StreamError,
 };
 pub use detector::NativeInterruptionDetector;
 pub use event::{

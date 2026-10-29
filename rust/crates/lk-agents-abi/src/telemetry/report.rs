@@ -241,33 +241,6 @@ pub trait ReportRecords {
     ) -> Option<LogRecordWire>;
 }
 
-// -----------------------------------------------------------------------------------------
-// the interruption detector's span update
-// -----------------------------------------------------------------------------------------
-// `{"type": "span_update", ..}`: five attributes the host writes onto a span it owns.
-
-/// `{"type": "span_update", "span": .., "attrs": {..}}`.
-#[crate::host(record(module = "telemetry", emit, constant(type = "span_update")))]
-#[derive(Debug, Clone)]
-pub struct SpanUpdateWire {
-    /// The span, as a `HostRef` id the host resolves.
-    pub span: u64,
-    pub attrs: SpanUpdateAttrsWire,
-}
-
-/// The nested `attrs` dict: the five values `_apply_span_update` writes onto the span. A wire twin
-/// of `lk_agents_inference::interruption::SpanAttributes`, whose `&'static str` field the
-/// generator cannot map.
-#[crate::host(record(module = "telemetry", emit))]
-#[derive(Debug, Clone)]
-pub struct SpanUpdateAttrsWire {
-    pub is_interruption: String,
-    pub probability: f64,
-    pub total_duration: f64,
-    pub prediction_duration: f64,
-    pub detection_delay: f64,
-}
-
 /// A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
 /// of epoch nanos, where the log handler's records carry an `HrTime` pair.
 #[crate::host(record(module = "telemetry", emit))]

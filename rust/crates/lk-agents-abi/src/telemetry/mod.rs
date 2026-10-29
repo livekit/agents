@@ -9,12 +9,6 @@ pub mod provider;
 pub mod attrs {
     /// Provider correlation ids, for joining against provider logs.
     pub const PROVIDER_REQUEST_IDS: &str = "lk.provider_request_ids";
-
-    pub const IS_INTERRUPTION: &str = "lk.is_interruption";
-    pub const INTERRUPTION_PROBABILITY: &str = "lk.interruption.probability";
-    pub const INTERRUPTION_TOTAL_DURATION: &str = "lk.interruption.total_duration";
-    pub const INTERRUPTION_PREDICTION_DURATION: &str = "lk.interruption.prediction_duration";
-    pub const INTERRUPTION_DETECTION_DELAY: &str = "lk.interruption.detection_delay";
 }
 
 pub mod attributes;

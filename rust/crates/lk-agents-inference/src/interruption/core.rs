@@ -4,9 +4,9 @@
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::{HostRef, Ts};
 use thiserror::Error;
 
 use crate::interruption::audio::{AudioError, AudioFrame, AudioWindow};
@@ -26,8 +26,6 @@ pub struct OverlapStart {
     /// How long the user has already been speaking, per VAD; trims the first window.
     pub speech_duration: f64,
     pub started_at: f64,
-    /// The OTel user-speech span, as an opaque host handle (§1.11), handed back once.
-    pub user_speaking_span: Option<HostRef>,
 }
 
 /// `_OverlapSpeechEndedSentinel` (`inference/interruption.py:242`).
@@ -87,7 +85,6 @@ pub enum InterruptionEvent {
 pub enum InterruptionEffect {
     InterruptionInference { identity: RequestIdentity, samples: Vec<i16> },
     Overlap { request: Option<ReqId>, event: Box<OverlappingSpeechEvent> },
-    SpanUpdate { span: HostRef, attrs: SpanAttributes },
 }
 
 #[derive(Debug)]
@@ -95,33 +92,6 @@ struct Request {
     identity: RequestIdentity,
     deadline: Ts,
     entry: CacheEntry,
-}
-
-/// The five values `_update_user_speech_span` writes (`inference/interruption.py:548`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpanAttributes {
-    /// `str(entry.is_interruption).lower()` -- a string; "none" is reachable.
-    pub is_interruption: &'static str,
-    pub probability: f64,
-    pub total_duration: f64,
-    pub prediction_duration: f64,
-    pub detection_delay: f64,
-}
-
-impl SpanAttributes {
-    fn from_entry(entry: &CacheEntry) -> Self {
-        SpanAttributes {
-            is_interruption: match entry.is_interruption {
-                Some(true) => "true",
-                Some(false) => "false",
-                None => "none",
-            },
-            probability: entry.probability(),
-            total_duration: entry.total_duration(),
-            prediction_duration: entry.prediction_duration(),
-            detection_delay: entry.detection_delay(),
-        }
-    }
 }
 
 /// What a server message means. A verdict arriving after the overlap closed is dropped, not
@@ -132,12 +102,7 @@ pub enum RecvOutcome {
     /// verdict outside an open overlap.
     Ignored,
     /// `bargein_detected` inside an open overlap, which closes it.
-    Detected {
-        /// `Some` only the first time: a second verdict must not re-decorate a span the driver
-        /// may have ended.
-        span_update: Option<(HostRef, SpanAttributes)>,
-        event: Box<OverlappingSpeechEvent>,
-    },
+    Detected(Box<OverlappingSpeechEvent>),
 }
 
 /// An `APIStatusError` raised out of the stream, plus the server's `body` text (which
@@ -175,7 +140,6 @@ pub struct InterruptionMachine {
     /// tests `overlap_started`.
     overlap_started_at: Option<f64>,
     overlap_request: Option<ReqId>,
-    user_speech_span: Option<HostRef>,
     agent_speech_started: bool,
     overlap_started: bool,
     overlap_count: u32,
@@ -204,7 +168,6 @@ impl InterruptionMachine {
             cache: BoundedCache::new(NonZeroUsize::new(CACHE_MAXSIZE).expect("10 != 0")),
             overlap_started_at: None,
             overlap_request: None,
-            user_speech_span: None,
             agent_speech_started: false,
             overlap_started: false,
             overlap_count: 0,
@@ -284,17 +247,10 @@ impl InterruptionMachine {
                     return Ok(Vec::new());
                 }
                 match self.on_server_message(message, now, wall)? {
-                    RecvOutcome::Detected { span_update, event } => {
-                        let mut effects = Vec::new();
-                        if let Some((span, attrs)) = span_update {
-                            effects.push(InterruptionEffect::SpanUpdate { span, attrs });
-                        }
-                        effects.push(InterruptionEffect::Overlap {
-                            request: self.overlap_request,
-                            event,
-                        });
-                        Ok(effects)
-                    }
+                    RecvOutcome::Detected(event) => Ok(vec![InterruptionEffect::Overlap {
+                        request: self.overlap_request,
+                        event,
+                    }]),
                     RecvOutcome::Ignored => Ok(Vec::new()),
                 }
             }
@@ -353,7 +309,6 @@ impl InterruptionMachine {
         self.num_requests = 0;
         self.window.reset();
         self.cache.clear();
-        self.user_speech_span = None;
         self.overlap_request = None;
     }
 
@@ -394,7 +349,6 @@ impl InterruptionMachine {
                 self.overlap += 1;
                 self.overlap_request = None;
                 self.overlap_started_at = Some(start.started_at);
-                self.user_speech_span = start.user_speaking_span;
                 self.overlap_started = true;
                 self.accumulated_samples = 0;
                 self.overlap_count += 1;
@@ -412,7 +366,6 @@ impl InterruptionMachine {
             InputEvent::OverlapSpeechStarted(_) => Ok(None),
             InputEvent::OverlapSpeechEnded(end) => {
                 let outcome = if self.overlap_started && self.overlap_started_at.is_some() {
-                    self.user_speech_span = None;
                     // "The newest request that actually came back". `> 0` because `created_at` is
                     // echoed by the server, so a bogus stamp yields a non-positive RTT.
                     let last = self.cache.pop_if(|request| request.entry.total_duration.is_some());
@@ -531,8 +484,6 @@ impl InterruptionMachine {
                 };
                 let entry = self.apply_verdict(&v, true, started_at, now, wall);
                 let Some(entry) = entry else { return Ok(RecvOutcome::Ignored) };
-                let span_update =
-                    self.user_speech_span.take().map(|s| (s, SpanAttributes::from_entry(&entry)));
                 let mut event = overlapping_speech_from_cache_entry(
                     &entry,
                     true,
@@ -545,7 +496,7 @@ impl InterruptionMachine {
                 event.num_requests = self.take_num_requests();
                 // `overlap_started_at` stays set, as in the reference.
                 self.overlap_started = false;
-                Ok(RecvOutcome::Detected { span_update, event: Box::new(event) })
+                Ok(RecvOutcome::Detected(Box::new(event)))
             }
             ServerMessage::InferenceDone(v) => {
                 let Some(started_at) = self.open_overlap() else {

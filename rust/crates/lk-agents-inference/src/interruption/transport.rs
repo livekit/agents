@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
 use lk_agents_abi::ApiConnectOptions;
+use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{Clock, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::attempts::RequestPolicy;
 use lk_agents_net::task::TokioSpawner;
@@ -21,7 +21,7 @@ use crate::headers::HeaderProvider;
 use crate::interruption::LABEL;
 use crate::interruption::core::{
     InputEvent, InterruptionEffect, InterruptionEvent, InterruptionMachine, RequestIdentity,
-    SpanAttributes, StreamError,
+    StreamError,
 };
 use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent};
 use crate::interruption::options::InterruptionOptions;
@@ -130,15 +130,13 @@ impl AdaptiveInterruptionDetector {
 }
 
 /// What one stream reports to its caller: a verdict, the failure (recoverable or not) that
-/// explains why none came, so the session can hand interruption back to the VAD (I-24), or the verdict
-/// to write on the span the caller pushed (a span is a host object, §1.11).
+/// explains why none came, so the session can hand interruption back to the VAD (I-24).
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Overlap(Box<OverlappingSpeechEvent>),
     CorrelatedOverlap { request: ReqId, event: Box<OverlappingSpeechEvent> },
     Error(Box<InterruptionDetectionError>),
     CorrelatedError { request: ReqId, error: Box<InterruptionDetectionError> },
-    SpanUpdate { span: HostRef, attrs: SpanAttributes },
 }
 
 #[derive(Clone)]
@@ -182,10 +180,6 @@ impl StreamContext {
             }
             InterruptionEffect::Overlap { request, event } => {
                 self.emit_overlap(request, *event);
-                None
-            }
-            InterruptionEffect::SpanUpdate { span, attrs } => {
-                let _ = self.stream_events.send(StreamEvent::SpanUpdate { span, attrs });
                 None
             }
         }
@@ -821,7 +815,6 @@ mod tests {
             .push(InputEvent::OverlapSpeechStarted(OverlapStart {
                 speech_duration: 0.0,
                 started_at: 1.0,
-                user_speaking_span: None,
             }))
             .unwrap();
         stream

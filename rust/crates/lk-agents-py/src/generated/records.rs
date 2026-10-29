@@ -3200,33 +3200,6 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
-    static SPAN_UPDATE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn span_update_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::SpanUpdateWire) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::telemetry::report::SpanUpdateWire { span, attrs } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("span", ::pyo3::IntoPyObjectExt::into_bound_py_any(span, py)?)?;
-            kwargs.set_item("attrs", crate::generated::records::telemetry::span_update_attrs_wire_to_py(py, attrs)?)?;
-            crate::host::construct(SPAN_UPDATE_WIRE.import(py, "livekit.agents._generated.telemetry", "SpanUpdateWire")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
-    static SPAN_UPDATE_ATTRS_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn span_update_attrs_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::SpanUpdateAttrsWire) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::telemetry::report::SpanUpdateAttrsWire { is_interruption, probability, total_duration, prediction_duration, detection_delay } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("is_interruption", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_interruption, py)?)?;
-            kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
-            kwargs.set_item("total_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(total_duration, py)?)?;
-            kwargs.set_item("prediction_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(prediction_duration, py)?)?;
-            kwargs.set_item("detection_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(detection_delay, py)?)?;
-            crate::host::construct(SPAN_UPDATE_ATTRS_WIRE.import(py, "livekit.agents._generated.telemetry", "SpanUpdateAttrsWire")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
     static LOG_RECORD_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
