@@ -33,7 +33,6 @@ use std::sync::Arc;
 pub use lk_agents_voice::agent_session::{SessionApi, SessionStartPlans};
 pub use lk_agents_voice::amd::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
-pub use lk_agents_voice::speech_handle::SpeechDefaultValues;
 pub use lk_agents_voice::workflows::WorkflowRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 

@@ -78,7 +78,6 @@ impl generated::Implementations for Selected {
     type WorkflowChecks = lk_agents_runtime::voice::WorkflowRules;
     type AmdFunctions = lk_agents_runtime::voice::AmdRules;
     type KeytermFunctions = lk_agents_runtime::voice::KeytermRules;
-    type SpeechDefaults = lk_agents_runtime::voice::SpeechDefaultValues;
     type WarmTransfer = lk_agents_runtime::voice::workflows::warm_transfer::WarmTransfer;
     type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;

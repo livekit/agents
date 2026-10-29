@@ -13,6 +13,7 @@ pub mod room_io;
 pub mod rtc;
 pub mod session_effects;
 pub mod session_options;
+pub mod speech;
 pub mod workflows;
 
 pub mod console;

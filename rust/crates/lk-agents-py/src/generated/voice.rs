@@ -666,24 +666,6 @@ pub fn plan_session_start<'py>(py: Python<'py>, job_default: bool, another_sessi
     Ok(crate::generated::records::session_wire::start_plan_to_py(py, out)?)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
-type SpeechDefaultsImpl = <crate::Selected as super::Implementations>::SpeechDefaults;
-
-/// `SpeechHandle.SPEECH_PRIORITY_{LOW,NORMAL,HIGH}`, as `(low, normal, high)`: the
-/// scheduler's own, so a host copy cannot drift and silently reorder.
-#[pyfunction]
-pub fn speech_priorities() -> PyResult<(i32, i32, i32)> {
-    let out = <SpeechDefaultsImpl as ::lk_agents_abi::voice::session_effects::SpeechDefaults>::speech_priorities();
-    Ok(out)
-}
-
-/// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.
-#[pyfunction]
-pub fn default_input_modality() -> PyResult<::std::string::String> {
-    let out = <SpeechDefaultsImpl as ::lk_agents_abi::voice::session_effects::SpeechDefaults>::default_input_modality();
-    Ok(out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
 type WorkflowChecksImpl = <crate::Selected as super::Implementations>::WorkflowChecks;
 

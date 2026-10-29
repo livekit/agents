@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/a2a/metadata.rs",
     "rust/crates/lk-agents-abi/src/worker/endpoint/reset_codes.rs",
+    "rust/crates/lk-agents-abi/src/voice/speech.rs",
     "rust/crates/lk-agents-abi/src/telemetry/attributes.rs",
     "rust/crates/lk-agents-abi/src/voice/events.rs",
     "rust/crates/lk-agents-abi/src/metrics/base.rs",

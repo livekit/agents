@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .. import _core, llm
+from .._generated.speech_defaults import (
+    DEFAULT_INPUT_MODALITY,
+    SPEECH_PRIORITY_HIGH,
+    SPEECH_PRIORITY_LOW,
+    SPEECH_PRIORITY_NORMAL,
+)
 from ..log import logger
 
 
@@ -16,12 +22,12 @@ class InputDetails:
     modality: Literal["text", "audio"]
 
 
-DEFAULT_INPUT_DETAILS = InputDetails(modality=_core.default_input_modality())  # type: ignore[arg-type]
+DEFAULT_INPUT_DETAILS = InputDetails(modality=DEFAULT_INPUT_MODALITY)  # type: ignore[arg-type]
 
 InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
 """Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""
 
-_LOW, _NORMAL, _HIGH = _core.speech_priorities()
+_LOW, _NORMAL, _HIGH = SPEECH_PRIORITY_LOW, SPEECH_PRIORITY_NORMAL, SPEECH_PRIORITY_HIGH
 
 
 class SpeechHandle:

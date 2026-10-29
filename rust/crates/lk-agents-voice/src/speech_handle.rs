@@ -6,7 +6,7 @@ use state::{
 };
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{ChatItem, Modality, Monotone};
+use lk_agents_abi::{ChatItem, Monotone};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -16,20 +16,6 @@ use tokio::sync::watch;
 /// The `extra` key marking a call that detached (`RunContext.update()`): its speech no longer
 /// waits on it.
 pub const TOOL_NON_BLOCKING_EXTRA_KEY: &str = "__livekit_agents_tool_non_blocking";
-/// The scheduler's values, as the host reads them.
-pub struct SpeechDefaultValues;
-
-impl lk_agents_abi::voice::session_effects::SpeechDefaults for SpeechDefaultValues {
-    fn speech_priorities() -> (i32, i32, i32) {
-        use crate::agent_activity::scheduling as s;
-        (s::SPEECH_PRIORITY_LOW, s::SPEECH_PRIORITY_NORMAL, s::SPEECH_PRIORITY_HIGH)
-    }
-
-    fn default_input_modality() -> String {
-        Modality::default().as_str().to_owned()
-    }
-}
-
 type Api = crate::agent_session::Tx;
 
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.

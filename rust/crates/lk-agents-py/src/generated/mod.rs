@@ -136,7 +136,6 @@ pub trait Implementations: 'static {
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
-    type SpeechDefaults: ::lk_agents_abi::voice::session_effects::SpeechDefaults;
     type WorkflowChecks: ::lk_agents_abi::voice::workflows::WorkflowChecks;
     type DtmfResult: ::lk_agents_abi::voice::workflows::dtmf::DtmfResult;
     type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo<Result = Self::DtmfResult>;
@@ -379,8 +378,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_room_sip_dtmf_received, m)?)?;
     m.add_class::<voice::PlayoutLedger>()?;
     m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::speech_priorities, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::default_input_modality, m)?)?;
     m.add_function(wrap_pyfunction!(voice::validate_card_number, m)?)?;
     m.add_function(wrap_pyfunction!(voice::card_expired, m)?)?;
     m.add_function(wrap_pyfunction!(voice::normalize_date_of_birth, m)?)?;
