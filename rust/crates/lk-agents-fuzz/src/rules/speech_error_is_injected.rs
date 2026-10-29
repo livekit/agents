@@ -29,6 +29,7 @@ impl Rule for SpeechErrorIsInjected {
         counterexamples: &[
             failed_without_injection,
             playback_timeout_without_its_own_deadline,
+            playback_timeout_after_a_console_receipt,
             output_refusal_without_its_own_diagnostic,
         ],
         probe: None,
@@ -156,7 +157,7 @@ fn failed_without_injection() -> Recording {
     Authored::new().speech(4, Handle::finished().failed("boom")).done()
 }
 
-fn playback_timeout_record(deadline: bool) -> Recording {
+fn playback_timeout_record(deadline: bool, receipt: bool) -> Recording {
     use lk_agents_abi::{Ts, voice::io::PlaybackSegment};
     use lk_agents_voice::agent_activity::scheduling::SpeechId;
     let segment = PlaybackSegment { attachment: 8, segment: 3 };
@@ -164,6 +165,9 @@ fn playback_timeout_record(deadline: bool) -> Recording {
     if deadline {
         authored = authored
             .journal(Step::Playout(PlayoutStep::FinishDue { speech: SpeechId(4), at: Ts::ZERO }));
+    }
+    if receipt {
+        authored = authored.sink(Sink::ConsoleReceipt);
     }
     authored
         .journal(Step::Playout(PlayoutStep::FinishLost {
@@ -179,11 +183,16 @@ fn playback_timeout_record(deadline: bool) -> Recording {
 }
 
 fn failed_from_its_own_missing_playback() -> Recording {
-    playback_timeout_record(true)
+    playback_timeout_record(true, false)
 }
 
 fn playback_timeout_without_its_own_deadline() -> Recording {
-    playback_timeout_record(false)
+    playback_timeout_record(false, false)
+}
+
+/// The console's CLI acknowledged the flush before the deadline expired: no receipt was lost.
+fn playback_timeout_after_a_console_receipt() -> Recording {
+    playback_timeout_record(true, true)
 }
 
 fn output_refusal_record(traced: bool) -> Recording {
