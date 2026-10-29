@@ -11,7 +11,9 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::generation::TurnAccumulator;
-use lk_agents_voice::generation::playout::{Playout, PlayoutEffect, SinkReport};
+use lk_agents_voice::generation::playout::{
+    Completion, CutEffect, CutEvent, CutReceipt, Playout, PlayoutEffect, SinkReport,
+};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::trace::{PlayoutStep, SinkCall};
 use lk_agents_voice::transcription::Heard;
@@ -19,13 +21,6 @@ use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-
-/// Scheduler hops a cut segment gives the sink to report the cut. Hops, not time: a speech cut at
-/// `Closing` has no clock advancing it.
-const CUT_REPORT_HOPS: usize = 16;
-
-/// How long a cut segment then waits on the clock for a host output's report of the cut.
-const CUT_REPORT_WAIT: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub(crate) enum Next {
@@ -223,19 +218,9 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             };
             playing.played_out(segment, &ev);
             // A synchroniser's words up to the played position, not the words sent.
-            Ok(Heard {
-                text: synchronized(ev.synchronized_transcript, text),
-                position: ev.playback_position,
-                complete: !ev.interrupted && !playing.state.cut_below,
-                frames: playing.state.pushed,
-                played: playing.state.completed.max(ev.playback_position),
-            })
+            Ok(playing.state.heard(text, Completion::Played(ev)))
         }
     }
-}
-
-fn synchronized(heard: Option<String>, text: String) -> String {
-    heard.map(|heard| Visible::of(&heard).text).unwrap_or(text)
 }
 
 /// `false` when interrupted while parked. Every source and every sink goes through here.
@@ -408,13 +393,7 @@ impl Playing<'_> {
     /// pending; this value neither clears the leaf nor credits unreported audio or words.
     fn confirmed_heard(&mut self) -> Heard {
         self.drain_reports();
-        Heard {
-            text: String::new(),
-            position: self.state.played.saturating_sub(self.state.completed),
-            complete: false,
-            frames: self.state.pushed,
-            played: self.state.played,
-        }
+        self.state.heard(String::new(), Completion::Unconfirmed)
     }
 
     fn report_push(&self) {
@@ -551,39 +530,41 @@ impl Playing<'_> {
     /// the sink says it cut the segment (one that had played out before the clear reached it
     /// reports a whole finish); `None` when it said nothing.
     async fn heard_at_cut(&mut self, text: String) -> (Heard, Option<bool>) {
-        let frames = self.state.pushed;
-        if frames == 0 {
-            // Nothing reached the sink, so no position (the tracker's would be another segment's).
-            return (unheard(), Some(true));
-        }
-        let mut report = None;
-        for _ in 0..CUT_REPORT_HOPS {
-            let ev = self.shared.time.timeout(Duration::ZERO, self.out.wait_for_playout()).await;
-            if let Ok(ev) = ev {
-                report = Some(ev);
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        // A host output reports from its own loop, later than the hops: wait for it on the clock,
-        // which runs unless the session is closing.
-        if report.is_none() && !*self.shared.closing.borrow() {
-            report =
-                self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await.ok();
-        }
+        let (mut receipt, mut effect) = CutReceipt::begin(self.state.pushed);
+        let report = loop {
+            let event = match effect {
+                CutEffect::Probe => {
+                    let report = self
+                        .shared
+                        .time
+                        .timeout(Duration::ZERO, self.out.wait_for_playout())
+                        .await
+                        .ok();
+                    CutEvent::Probed(report)
+                }
+                CutEffect::Yield => {
+                    tokio::task::yield_now().await;
+                    CutEvent::Yielded { closing: *self.shared.closing.borrow() }
+                }
+                CutEffect::WaitUntil(at) => {
+                    let left = at.saturating_duration_since(self.shared.time.now());
+                    let report =
+                        self.shared.time.timeout(left, self.out.wait_for_playout()).await.ok();
+                    CutEvent::Waited(report)
+                }
+                CutEffect::Complete(report) => break report,
+                CutEffect::Unheard => return (unheard(), Some(true)),
+            };
+            effect = receipt.handle(event, self.shared.time.now());
+        };
         let Some(ev) = report else {
             let position = self.out.tracker().position();
-            let played = self.state.completed + position;
-            return (Heard { text, position, complete: false, frames, played }, None);
+            return (self.state.heard(text, Completion::CutUnreported { position }), None);
         };
-        // The segments before were counted as they finished; a report that is not the cut is one
-        // of them (nothing was captured since), already counted.
+        // Prior segments are credited by their own receipts before projecting this final cut.
         self.drain_reports();
-        let cut = if ev.interrupted { ev.playback_position } else { Duration::ZERO };
-        let text = synchronized(ev.synchronized_transcript, text);
-        let played = self.state.completed + cut;
-        let heard = Heard { text, position: ev.playback_position, complete: false, frames, played };
-        (heard, Some(ev.interrupted))
+        let interrupted = ev.interrupted;
+        (self.state.heard(text, Completion::Cut(ev)), Some(interrupted))
     }
 
     /// The sink's reports so far, folded without settling the segment (a cut has nothing owed).

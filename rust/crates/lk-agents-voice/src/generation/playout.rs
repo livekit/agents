@@ -181,3 +181,126 @@ impl Playout {
         }
     }
 }
+/// Scheduling turns given to a cut sink before awaiting its transport receipt.
+const CUT_REPORT_HOPS: u8 = 16;
+/// A host loop may deliver the cut receipt after those scheduling turns.
+const CUT_REPORT_WAIT: Duration = Duration::from_secs(1);
+
+/// The answer to one physical probe or wait for a cut segment's receipt.
+pub enum CutEvent {
+    Probed(Option<PlaybackFinished>),
+    Yielded { closing: bool },
+    Waited(Option<PlaybackFinished>),
+}
+
+/// One physical operation requested by the cut receipt policy.
+pub enum CutEffect {
+    Probe,
+    Yield,
+    WaitUntil(Ts),
+    Complete(Option<PlaybackFinished>),
+    Unheard,
+}
+
+#[derive(Clone, Copy)]
+enum CutPhase {
+    Probing,
+    Yielding,
+    Waiting,
+    Done,
+}
+
+/// A cut's bounded opportunity for an asynchronously delivered playback receipt.
+pub struct CutReceipt {
+    phase: CutPhase,
+    probes: u8,
+}
+
+impl CutReceipt {
+    pub fn begin(frames: u64) -> (Self, CutEffect) {
+        if frames == 0 {
+            return (Self { phase: CutPhase::Done, probes: 0 }, CutEffect::Unheard);
+        }
+        (Self { phase: CutPhase::Probing, probes: 0 }, CutEffect::Probe)
+    }
+
+    /// A closing session gives receipts scheduling turns, without advancing its stopped clock.
+    pub fn handle(&mut self, event: CutEvent, now: Ts) -> CutEffect {
+        match (self.phase, event) {
+            (CutPhase::Probing, CutEvent::Probed(Some(report)))
+            | (CutPhase::Waiting, CutEvent::Waited(Some(report))) => {
+                self.phase = CutPhase::Done;
+                CutEffect::Complete(Some(report))
+            }
+            (CutPhase::Probing, CutEvent::Probed(None)) => {
+                self.probes += 1;
+                self.phase = CutPhase::Yielding;
+                CutEffect::Yield
+            }
+            (CutPhase::Yielding, CutEvent::Yielded { closing }) => {
+                if self.probes < CUT_REPORT_HOPS {
+                    self.phase = CutPhase::Probing;
+                    CutEffect::Probe
+                } else if closing {
+                    self.phase = CutPhase::Done;
+                    CutEffect::Complete(None)
+                } else {
+                    self.phase = CutPhase::Waiting;
+                    CutEffect::WaitUntil(now.saturating_add(CUT_REPORT_WAIT))
+                }
+            }
+            (CutPhase::Waiting, CutEvent::Waited(None)) => {
+                self.phase = CutPhase::Done;
+                CutEffect::Complete(None)
+            }
+            _ => panic!("cut receipt outcome does not match its requested operation"),
+        }
+    }
+}
+/// The available receipt at a forwarding's completion boundary.
+pub enum Completion {
+    Played(PlaybackFinished),
+    Cut(PlaybackFinished),
+    CutUnreported { position: Duration },
+    Unconfirmed,
+}
+
+impl Playout {
+    /// Project only confirmed audio, preserving a synchronizer's transcript when it supplied one.
+    pub fn heard(&self, text: String, completion: Completion) -> crate::transcription::Heard {
+        use crate::transcription::{Heard, Visible};
+        match completion {
+            Completion::Played(ev) => Heard {
+                text: ev.synchronized_transcript.map(|t| Visible::of(&t).text).unwrap_or(text),
+                position: ev.playback_position,
+                complete: !ev.interrupted && !self.cut_below,
+                frames: self.pushed,
+                played: self.completed.max(ev.playback_position),
+            },
+            Completion::Cut(ev) => {
+                let cut = if ev.interrupted { ev.playback_position } else { Duration::ZERO };
+                Heard {
+                    text: ev.synchronized_transcript.map(|t| Visible::of(&t).text).unwrap_or(text),
+                    position: ev.playback_position,
+                    complete: false,
+                    frames: self.pushed,
+                    played: self.completed + cut,
+                }
+            }
+            Completion::CutUnreported { position } => Heard {
+                text,
+                position,
+                complete: false,
+                frames: self.pushed,
+                played: self.completed + position,
+            },
+            Completion::Unconfirmed => Heard {
+                text: String::new(),
+                position: self.played.saturating_sub(self.completed),
+                complete: false,
+                frames: self.pushed,
+                played: self.played,
+            },
+        }
+    }
+}
