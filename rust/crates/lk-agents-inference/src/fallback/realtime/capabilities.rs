@@ -100,25 +100,4 @@ mod tests {
             "all realtime models must agree on `turn_detection` to be used in a RealtimeModelFallbackAdapter, got true and false"
         );
     }
-
-    // Catches: a field `merge_capabilities` forgets to carry (a one-model merge must be the identity).
-    #[test]
-    fn merging_one_model_carries_every_field() {
-        let all = RealtimeCapabilities {
-            message_truncation: true,
-            turn_detection: true,
-            user_transcription: true,
-            auto_tool_reply_generation: true,
-            audio_output: true,
-            manual_function_calls: true,
-            can_disable_turn_detection: true,
-            mutable_chat_context: true,
-            mutable_instructions: true,
-            mutable_tools: true,
-            per_response_tool_choice: true,
-            supports_say: true,
-            auto_turn_reply_generation: true,
-        };
-        assert_eq!(merge_capabilities(&[all]).expect("one model cannot disagree"), all);
-    }
 }

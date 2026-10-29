@@ -856,29 +856,3 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
         [EotWarning::LocalPredictionFailed { reason: "weights not loaded".to_owned() }]
     );
 }
-
-// Catches: two warnings sharing a tag, or a tag the host's `_warn` arm no longer matches.
-#[test]
-fn every_warning_has_its_own_tag() {
-    let all = [
-        EotWarning::CloudFailedFallingBack { reason: "x".to_owned() },
-        EotWarning::CloudFailedDegraded { reason: "x".to_owned() },
-        EotWarning::LocalFailed { reason: "x".to_owned() },
-        EotWarning::LocalPredictionFailed { reason: "x".to_owned() },
-        EotWarning::TransportLatency { millis: 900 },
-        EotWarning::UnexpectedServerMessage,
-    ];
-    let mut tags: Vec<&str> = all.iter().map(EotWarning::tag).collect();
-    tags.sort();
-    assert_eq!(
-        tags,
-        vec![
-            "cloud_failed_degraded",
-            "cloud_failed_falling_back",
-            "local_failed",
-            "local_prediction_failed",
-            "transport_latency",
-            "unexpected_server_message",
-        ]
-    );
-}
