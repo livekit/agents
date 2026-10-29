@@ -90,18 +90,6 @@ pub struct Answering {
     pub said: String,
 }
 
-/// `answer_arguments`: the person's words as the tool's first string parameter; `None` for a tool
-/// without one (the model reads the answer and calls the tool itself).
-pub fn answer_arguments(spec: &lk_agents_abi::ToolSpec, said: &str) -> Option<String> {
-    let properties = spec.json_schema.get("properties")?.as_object()?;
-    let (name, _) = properties
-        .iter()
-        .find(|(_, p)| p.get("type").and_then(|t| t.as_str()) == Some("string"))?;
-    let mut arguments = serde_json::Map::new();
-    arguments.insert(name.clone(), serde_json::Value::String(said.to_owned()));
-    Some(serde_json::Value::Object(arguments).to_string())
-}
-
 impl Tools {
     /// `_RunningTasks` as the planner reads it: every hosted call not yet ended, in start order.
     pub(crate) fn running_tool_calls(&self) -> Vec<RunningToolCall> {

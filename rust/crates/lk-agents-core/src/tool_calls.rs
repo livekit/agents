@@ -11,7 +11,7 @@ use crate::llm::tool_arguments;
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome};
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{ChatItem, FunctionCall};
+use lk_agents_abi::{ChatItem, FunctionCall, ToolSpec};
 use serde_json::{Map, Value};
 
 use crate::agent::{self, FINAL_RESULT_TOOL, WRAPPED_RESULT_KEY};
@@ -541,6 +541,57 @@ impl ToolCalls {
     }
 }
 
+/// How a step takes a call the model made, before the tool machine sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// An offered tool: the machine decides the call.
+    Offered,
+    /// A name the request did not offer: answered as unknown, never run.
+    Unoffered,
+    /// The step forbade tools (`tool_choice="none"`): recorded as made, never run.
+    Forbidden { offered: bool },
+}
+
+impl Admission {
+    /// The request offered the tool.
+    pub fn offered(self) -> bool {
+        matches!(self, Admission::Offered | Admission::Forbidden { offered: true })
+    }
+}
+
+/// The model's call as a streaming step takes it: arguments a model template leaked into are
+/// repaired in place (the history keeps the repaired form a provider accepts), and a call of the
+/// tool an `InputRequired(tool=)` claimed (`answering`: the tool and the person's words) takes the
+/// words as its first string parameter.
+pub fn admit(
+    call: &mut FunctionCall,
+    offered: &[ToolSpec],
+    forbidden: bool,
+    answering: Option<(&str, &str)>,
+) -> Admission {
+    let malformed = !call.arguments.trim().is_empty()
+        && serde_json::from_str::<Value>(&call.arguments).is_err();
+    if malformed
+        && let Ok(parsed) = tool_arguments::parse(&call.arguments)
+        && parsed.repair.is_some()
+    {
+        call.arguments = Value::Object(parsed.arguments).to_string();
+    }
+    let spec = offered.iter().find(|t| t.name == call.name);
+    if let (Some((tool, said)), Some(spec)) = (answering, spec)
+        && tool == call.name
+        && let Some(parameter) = crate::agent::first_string_parameter(spec)
+    {
+        let arguments = Map::from_iter([(parameter.to_owned(), Value::from(said))]);
+        call.arguments = Value::Object(arguments).to_string();
+    }
+    match (forbidden, spec) {
+        (true, spec) => Admission::Forbidden { offered: spec.is_some() },
+        (false, Some(_)) => Admission::Offered,
+        (false, None) => Admission::Unoffered,
+    }
+}
+
 /// Why the host did not prepare a call's arguments. Either way the call spends a retry.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrepareFailure {
@@ -658,4 +709,33 @@ fn result_event(item: &FunctionCall, outcome: &ToolOutcome) -> Effect {
         status,
         output: shape.text,
     })
+}
+
+#[cfg(test)]
+mod admit_tests {
+    use super::*;
+
+    fn repaired(raw: &str) -> String {
+        let mut call = FunctionCall {
+            id: "c".into(),
+            call_id: "c".into(),
+            arguments: raw.into(),
+            name: "lookup".into(),
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            extra: Default::default(),
+            group_id: None,
+        };
+        admit(&mut call, &[], false, None);
+        call.arguments
+    }
+
+    // Catches: a repaired call's arguments left malformed in history, or valid ones rewritten.
+    #[test]
+    fn malformed_arguments_are_kept_repaired() {
+        let raw = r#"{"order_id": ["<|\"|\"O_WAAB70<|\"|\"]}"#;
+        assert!(serde_json::from_str::<Value>(&repaired(raw)).is_ok(), "{}", repaired(raw));
+        assert_eq!(repaired(r#"{"label":"human<|im_end|>"#), r#"{"label":"human"}"#);
+        assert_eq!(repaired(r#"{"a": 1}"#), r#"{"a": 1}"#);
+        assert_eq!(repaired(""), "");
+    }
 }

@@ -8,7 +8,7 @@ use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{
     CallId, StepDecision, ToolExecution, ToolGo, ToolOutcome, answer,
 };
-use lk_agents_core::tool_calls::PrepareFailure;
+use lk_agents_core::tool_calls::{Admission, PrepareFailure, admit};
 use std::sync::Arc;
 
 /// Calls go to the runner as they arrive (latency hides behind the generation's tail). **Order is
@@ -45,29 +45,17 @@ impl ToolStep {
         ctx: &ReplyContext,
         mut call: FunctionCall,
     ) {
-        // Malformed arguments the model's template leaked into are repaired once, here, and the
-        // history keeps the repaired form: the next request would otherwise carry invalid JSON
-        // that a provider refuses.
-        if let Some(repaired) = repaired_arguments(&call.arguments) {
-            call.arguments = repaired;
-        }
-        // A reply answering an `InputRequired(tool=)`: that tool takes the person's words, as
-        // they said them, and the history shows the call as it ran.
-        if let Some(answering) = ctx.answering.as_ref().filter(|a| a.tool == call.name)
-            && let Some(spec) = ctx.request.tools.iter().find(|t| t.name == call.name)
-            && let Some(arguments) =
-                lk_agents_voice::tool_executor::answer_arguments(spec, &answering.said)
-        {
-            call.arguments = arguments;
-        }
+        let answering = ctx.answering.as_ref().map(|a| (a.tool.as_str(), a.said.as_str()));
+        let forbidden = ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden);
+        let admission = admit(&mut call, &ctx.request.tools, forbidden, answering);
         // Only offered calls reach the speech; the shared tool machine answers an invented one.
-        let advertised = ctx.request.tools.iter().any(|t| t.name == call.name);
+        let advertised = admission.offered();
         let names = vec![call.name.clone()];
         shared.trace(lk_agents_voice::trace::ToolStep::Calls { speech: handle.id(), names });
         let (speech, step) = (handle.id(), handle.num_steps());
         // `tool_choice="none"` calls are started and dropped: told to the speech and the loop as
         // the model made them.
-        if ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden) {
+        if matches!(admission, Admission::Forbidden { .. }) {
             if advertised {
                 handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
             }
@@ -80,7 +68,8 @@ impl ToolStep {
             return;
         }
         // Offered calls with a runner are hosted: the loop's running set has them.
-        let runner = ctx.providers.toolset.runner.clone().filter(|_| advertised);
+        let hosted = admission == Admission::Offered;
+        let runner = ctx.providers.toolset.runner.clone().filter(|_| hosted);
         // `_tool_execution_started_cb`: the call is stamped with its start (history is ordered by
         // `created_at`, and it was made before the step was authorized), then told; the shared
         // tool machine answers with the call's first move.
@@ -298,30 +287,6 @@ impl HostedCall<'_> {
 
 /// Arguments that are not JSON as written, as canonical JSON once repaired; `None` for valid or
 /// unrepairable ones (the runner reports the latter to the model).
-fn repaired_arguments(raw: &str) -> Option<String> {
-    if raw.trim().is_empty() || serde_json::from_str::<serde_json::Value>(raw).is_ok() {
-        return None;
-    }
-    let parsed = lk_agents_core::llm::tool_arguments::parse(raw).ok()?;
-    parsed.repair.as_ref()?;
-    Some(serde_json::Value::Object(parsed.arguments).to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    // Catches: a repaired call's arguments left malformed in history, or valid ones rewritten.
-    #[test]
-    fn malformed_arguments_are_kept_repaired() {
-        let raw = r#"{"order_id": ["<|\"|\"O_WAAB70<|\"|\"]}"#;
-        let repaired = super::repaired_arguments(raw).expect("repaired");
-        assert!(serde_json::from_str::<serde_json::Value>(&repaired).is_ok(), "{repaired}");
-        let leaked = super::repaired_arguments(r#"{"label":"human<|im_end|>"#).expect("repaired");
-        assert_eq!(leaked, r#"{"label":"human"}"#);
-        assert_eq!(super::repaired_arguments(r#"{"a": 1}"#), None);
-        assert_eq!(super::repaired_arguments(""), None);
-    }
-}
-
 /// `None` when nothing ran. The decision is reported before it is acted on.
 pub(crate) async fn run_tools(
     shared: &Arc<SessionShared>,
