@@ -37,8 +37,6 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn aligned_transcript(&self) -> bool;
     #[host(call)]
-    fn bind_clock(&self, clock: std::sync::Arc<dyn crate::Clock>);
-    #[host(call)]
     fn prewarm(&self, #[host(kw, default = None)] headers: Option<Vec<(String, String)>>);
     #[host(call)]
     fn identified(

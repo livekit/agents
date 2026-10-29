@@ -111,8 +111,7 @@ pub struct TtsClient {
     spawner: Arc<dyn Spawner>,
     /// Prewarms and stream pumps: each ends on its own (a pump once its handles are gone).
     tasks: Arc<TaskSet>,
-    /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
-    clock: Arc<lk_agents_abi::BoundClock>,
+    clock: Arc<dyn Clock>,
     connections: Arc<Mutex<Connections>>,
 }
 
@@ -182,6 +181,7 @@ impl GatewayTts {
         opts: TtsOptions,
         ws: Arc<dyn WsTransport>,
         spawner: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
         speech: SpeechTextProcessors,
     ) -> Self {
         let shared = TtsClient {
@@ -190,7 +190,7 @@ impl GatewayTts {
             ws,
             spawner,
             tasks: Arc::default(),
-            clock: lk_agents_abi::BoundClock::new(),
+            clock,
             connections: Arc::default(),
         };
         GatewayTts {
@@ -214,12 +214,12 @@ impl GatewayTts {
             self.opts.lock().unwrap().clone(),
             self.ws.clone(),
             self.spawner.clone(),
+            self.clock.clone(),
             self.speech,
         );
         let shared = Arc::get_mut(&mut view.shared).expect("a newly constructed view is unshared");
         shared.opts = self.opts.clone();
         shared.connections = self.connections.clone();
-        shared.clock = self.clock.clone();
         view.set_expressive(self.expressive.load(Ordering::SeqCst));
         view.conn_options = self.conn_options;
         view.reporter = reporter;
@@ -238,7 +238,7 @@ impl GatewayTts {
         };
         let session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
         let (ws, clock, connections) =
-            (self.ws.clone(), self.clock.clone() as Arc<dyn Clock>, self.connections.clone());
+            (self.ws.clone(), self.clock.clone(), self.connections.clone());
         let url = format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model);
         let create_frame = wire::session_create(&opts);
         let headers = headers.into_vec();
@@ -260,15 +260,6 @@ impl GatewayTts {
                     .give_back(id, Connection { sender, receiver, session_id, configuration });
             }
         });
-    }
-
-    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
-        self.clock.bind(clock);
-        self
-    }
-
-    pub fn bind_clock(&self, clock: Arc<dyn Clock>) {
-        self.clock.bind(clock);
     }
 
     /// The client as the provider a session holds directly.
@@ -372,7 +363,7 @@ impl GatewayTts {
         let (stop, stopped) = watch::channel(false);
         let (done, settled) = oneshot::channel();
         let (failure, failed) = watch::channel(None);
-        let clock = self.clock.clone() as Arc<dyn Clock>;
+        let clock = self.clock.clone();
         let accepted_at = clock.now();
 
         let headers = gateway_headers(identification, None, None, &opts.api_key, &opts.api_secret)?;

@@ -190,23 +190,6 @@ assert os.waitstatus_to_exitcode(status) == 0
     )
 
 
-async def test_native_tts_accepts_session_clock_and_rejects_foreign_clock() -> None:
-    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
-
-    # an offline session: no room behind it, the clock is still the session's own
-    session = _core.VoiceSession(_core._core_create_room_session(None))
-    client = _core.InferenceTts(
-        "cartesia/sonic-2",
-        base_url="http://unused.invalid",
-        api_key="test",
-        api_secret="test",
-        conn_options=DEFAULT_API_CONNECT_OPTIONS,
-    )
-    client.bind_clock(session.session_clock)
-    with pytest.raises(TypeError):
-        client.bind_clock(object())
-
-
 @pytest.mark.parametrize(
     ("operation", "options", "error", "message"),
     [

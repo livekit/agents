@@ -6,7 +6,6 @@ pub mod audio;
 pub fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
-pub mod bound_clock;
 pub mod bounded_lossy;
 pub mod byte_stream;
 pub mod clock;

@@ -20,12 +20,12 @@ fn opts() -> TtsOptions {
 }
 
 fn tts(ws: Arc<FakeWs>) -> GatewayTts {
-    GatewayTts::new(
-        opts(),
-        ws,
-        Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-        super::speech(),
-    )
+    tts_on(ws, Arc::new(lk_agents_abi::RealClock::new()))
+}
+
+fn tts_on(ws: Arc<FakeWs>, clock: Arc<dyn lk_agents_abi::Clock>) -> GatewayTts {
+    let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+    GatewayTts::new(opts(), ws, spawner, clock, super::speech())
 }
 
 fn map(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
@@ -61,7 +61,7 @@ async fn done_before_the_final_flush_cannot_finish_a_synthesis() {
 async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_clock() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::hanging());
-    let tts = tts(ws.clone()).with_clock(clock.clone());
+    let tts = tts_on(ws.clone(), clock.clone());
     let mut source = tts.synthesize("hi").await.unwrap();
 
     lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
@@ -77,7 +77,7 @@ async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_
 async fn a_gateway_that_takes_the_text_and_never_answers_is_a_retryable_timeout() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let tts = tts(ws.clone()).with_clock(clock.clone());
+    let tts = tts_on(ws.clone(), clock.clone());
     let mut source = tts.synthesize("hi").await.unwrap();
 
     lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
@@ -146,7 +146,7 @@ async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
 async fn frames_carry_the_instant_the_first_sentence_went_out() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let tts = tts(ws.clone()).with_clock(clock.clone());
+    let tts = tts_on(ws.clone(), clock.clone());
     let (sink, mut source) = tts.stream().await.unwrap();
     sink.push("Hello there, this is".to_owned()).unwrap();
     clock.advance(Duration::from_millis(300));
@@ -237,7 +237,7 @@ async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignme
     let mut opts = opts();
     opts.model = "inworld/inworld-tts-2".into();
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let tts = GatewayTts::new(opts, ws.clone(), spawner, super::speech());
+    let tts = GatewayTts::new(opts, ws.clone(), spawner, Arc::new(lk_agents_abi::RealClock::new()), super::speech());
     tts.set_expressive(true);
     let mut source = tts
         .synthesize("say <expr type=\"prosody\" label=\"whisper\">this</expr> now")
@@ -332,7 +332,7 @@ async fn cartesia_words_keep_their_separators_through_a_stream() {
     ]));
     let opts = TtsOptions { extra_kwargs: map(&[("add_timestamps", json!(true))]), ..opts() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let client = GatewayTts::new(opts, ws, spawner, super::speech());
+    let client = GatewayTts::new(opts, ws, spawner, Arc::new(lk_agents_abi::RealClock::new()), super::speech());
     let ident: Headers = [("X-LiveKit-Session-ID".to_owned(), "inference_connection".to_owned())]
         .into_iter()
         .collect();
@@ -389,7 +389,7 @@ async fn partial_audio_then_provider_failure_preserves_audio_and_fails() {
 async fn close_settles_a_pump_while_its_audio_queue_is_full() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    let client = tts(ws.clone()).with_clock(clock.clone());
+    let client = tts_on(ws.clone(), clock.clone());
     let (_sink, source) = client.stream().await.unwrap();
     for _ in 0..AUDIO_QUEUE_CAPACITY + 2 {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
@@ -413,6 +413,7 @@ async fn identified_views_keep_their_expressive_configuration() {
         options,
         ws.clone(),
         Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
+        Arc::new(lk_agents_abi::RealClock::new()),
         super::speech(),
     );
     let expressive = client.identified(Headers::default(), None);

@@ -6,7 +6,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::inference::fallback::TtsFallbackModel;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::llm::inference::InvalidPayload;
-use lk_agents_abi::{ApiConnectOptions, Clock, Tts};
+use lk_agents_abi::{ApiConnectOptions, Tts};
 
 use lk_agents_net::env::ProcessEnv;
 
@@ -48,9 +48,9 @@ impl InferenceTts for GatewayTts {
             opts,
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             (env.spawner)().map_err(InvalidPayload)?,
+            env.clock.clone(),
             env.speech_text,
-        )
-        .with_clock(env.clock.clone()))
+        ))
     }
 
     fn set_expressive(&self, expressive: bool) {
@@ -61,9 +61,6 @@ impl InferenceTts for GatewayTts {
     }
     fn aligned_transcript(&self) -> bool {
         self.aligned_transcript()
-    }
-    fn bind_clock(&self, clock: Arc<dyn Clock>) {
-        self.bind_clock(clock);
     }
     fn prewarm(&self, headers: Option<Vec<(String, String)>>) {
         self.prewarm_identified(headers.map(|h| h.into_iter().collect()));

@@ -55,9 +55,9 @@ fn each_reply_pays_only_the_voice() {
                 opts,
                 Arc::new(gateway),
                 Arc::new(TokioSpawner::current()),
+                Arc::new(SimClock::new()),
                 SpeechTextProcessors::VERBATIM,
-            )
-            .with_clock(Arc::new(SimClock::new()));
+            );
             // The session prewarms its voice as it starts; the greeting comes a moment later.
             voice.prewarm();
             tokio::time::sleep(Duration::from_millis(500)).await;

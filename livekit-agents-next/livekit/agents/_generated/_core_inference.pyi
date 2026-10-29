@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from livekit.agents._core import SessionClock
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 
@@ -193,7 +192,6 @@ class InferenceTts:
     def sample_rate(self) -> int: ...
     @property
     def aligned_transcript(self) -> bool: ...
-    def bind_clock(self, clock: SessionClock) -> None: ...
     def prewarm(self, *, headers: Sequence[tuple[str, str]] | None = None) -> None: ...
     def identified(
         self,

@@ -339,14 +339,6 @@ impl InferenceTts {
         Ok(out)
     }
 
-    #[pyo3(signature = (clock))]
-    fn bind_clock(&self, clock: Bound<'_, PyAny>) -> PyResult<()> {
-        ::lk_agents_abi::python::check_pid()?;
-        let clock = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Clock>(&clock).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("clock", ": expected native livekit.agents._core.SessionClock")))?;
-        <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::bind_clock(&self.0, clock);
-        Ok(())
-    }
-
     #[pyo3(signature = (*, headers = None))]
     fn prewarm(&self, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
