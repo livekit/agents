@@ -903,11 +903,11 @@ impl Resolver<'_> {
                         .ok_or_else(|| format!("{at}: host_type is a dotted path"))?;
                     HostForm::External { module: module.to_owned(), name: name.to_owned() }
                 }
+                // `from_items` reads a dict: only a `TypedDict` model is that dict's type.
+                (None, Some(_)) if from_items && !typed_dict(attrs) => HostForm::Dict,
                 (None, Some(module)) => {
                     HostForm::Model { module, name: name.unwrap_or_else(|| ident.clone()) }
                 }
-                // `from_items` chooses dict conversion, not an erased annotation when a
-                // Python model already declares this record's input shape.
                 (None, None) if from_items => HostForm::Dict,
                 (None, None) => {
                     return Err(format!(
@@ -1184,6 +1184,23 @@ fn binding_words(attrs: &[syn::Attribute]) -> Vec<String> {
         });
     }
     words
+}
+
+/// `#[python(typed_dict)]`: the host model is a `TypedDict`, a plain dict at runtime.
+fn typed_dict(attrs: &[syn::Attribute]) -> bool {
+    let mut found = false;
+    for a in attrs.iter().filter(|a| a.path().is_ident("python")) {
+        let _ = a.parse_nested_meta(|m| {
+            found |= m.path.is_ident("typed_dict");
+            if m.input.peek(syn::Token![=]) {
+                m.value()?.parse::<proc_macro2::TokenTree>()?;
+            } else if m.input.peek(syn::token::Paren) {
+                m.input.parse::<proc_macro2::Group>()?;
+            }
+            Ok(())
+        });
+    }
+    found
 }
 
 /// A record's `#[python(name = "..", module = "..")]`: its host class and generated module.
