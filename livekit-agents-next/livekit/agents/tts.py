@@ -120,7 +120,7 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
 
 
 def strip_all_markup(text: str) -> str:
-    return _core.strip_all_markup(text)  # type: ignore[no-any-return]
+    return _core.strip_all_markup(text)
 
 
 def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
@@ -378,9 +378,9 @@ class StreamAdapterWrapper(SynthesizeStream):
     _tts: StreamAdapter
 
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
         # each sentence is retried by the core's adapter, not the whole stream
-        self._core_attempts.conn = replace(conn_options, max_retry=0)
+        super().__init__(tts=tts, conn_options=replace(conn_options, max_retry=0))
+        self._sentence_conn_options = conn_options
         # fixed for this synthesis: the framework sets it before stream()
         self._expressive = tts._wrapped_tts._expressive
 
@@ -395,7 +395,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         if self._tts._stream_pacer:
             sentences = self._tts._stream_pacer.wrap(sentences, output_emitter)
         _initialize(output_emitter, self._tts, stream=True)
-        native = await _core.tts_adapter_stream(self._tts._wrapped_tts, self._conn_options)
+        native = await _core.tts_adapter_stream(self._tts._wrapped_tts, self._sentence_conn_options)
 
         async def _forward() -> None:
             async for data in self.input:

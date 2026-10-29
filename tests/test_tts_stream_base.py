@@ -173,3 +173,36 @@ async def test_stalled_provider_response_expires_in_the_read_phase() -> None:
         assert failure.value.phase == "read"
     finally:
         await provider.aclose()
+
+
+class _FailedBatch(tts.ChunkedStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        assert isinstance(self._tts, _FailingBatchTTS)
+        self._tts.attempts += 1
+        raise APIConnectionError("failure before any audio")
+
+
+class _FailingBatchTTS(_BatchTTS):
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    ) -> tts.ChunkedStream:
+        return _FailedBatch(tts=self, input_text=text, conn_options=conn_options)
+
+
+# Catches: a StreamAdapter stream retrying as a whole on top of its per-sentence retries.
+async def test_a_stream_adapter_retries_each_sentence_not_the_whole_stream() -> None:
+    provider = _FailingBatchTTS()
+    adapter = tts.StreamAdapter(tts=provider)
+    try:
+        async with asyncio.timeout(5):
+            async with adapter.stream(
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+            ) as stream:
+                stream.push_text("Hello there.")
+                stream.end_input()
+                with pytest.raises(APIConnectionError):
+                    async for _ in stream:
+                        pytest.fail("the provider failed before producing audio")
+        assert provider.attempts == 2
+    finally:
+        await adapter.aclose()
