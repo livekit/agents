@@ -364,10 +364,6 @@ def chat_ctx_merge_plan(
     exclude_instructions: bool = False,
     exclude_config_update: bool = False,
 ) -> list[tuple[int, int]]: ...
-def compute_chat_ctx_diff(
-    old: list[ChatItem],
-    new: list[ChatItem],
-) -> tuple[list[str], list[tuple[str | None, str]], list[tuple[str | None, str]]]: ...
 def api_connect_options_check(
     max_retry: int,
     retry_interval: float,

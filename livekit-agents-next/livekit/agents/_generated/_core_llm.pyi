@@ -23,6 +23,14 @@ from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 from .tool_context import DuplicateMode, DuplicateScope
 
+def compute_chat_ctx_diff(
+    old: Sequence[ChatItem],
+    new: Sequence[ChatItem],
+) -> tuple[list[str], list[tuple[str | None, str]], list[tuple[str | None, str]]]:
+    """The operations turning ``old`` into ``new``, as ``(to_remove, to_create, to_update)``; an
+    update patches the item in place, keeping its server-side position.
+    """
+
 class FixedGate:
     """Opens on output that stands out from a silence the plugin already knows."""
     def __init__(

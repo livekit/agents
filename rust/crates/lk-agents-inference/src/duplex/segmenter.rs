@@ -406,7 +406,7 @@ impl Segmenter {
     pub fn update_chat_ctx(&mut self, chat_ctx: &ChatContext) -> Vec<ChatItem> {
         let mut chat_ctx = chat_ctx.copy(&exclusions());
         chat_ctx.items.retain(|i| i.id() != INSTRUCTIONS_MESSAGE_ID);
-        let diff = lk_agents_abi::compute_chat_ctx_diff(&self.chat_ctx, &chat_ctx);
+        let diff = lk_agents_core::llm::ctx_diff::compute_chat_ctx_diff(&self.chat_ctx, &chat_ctx);
         let edited: Vec<&String> = diff
             .to_remove
             .iter()

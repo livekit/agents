@@ -1,7 +1,7 @@
 //! Bounded preparation of the conversation edit script.
 
 use super::{DiffOps, message_changed};
-use crate::ChatContext;
+use lk_agents_abi::ChatContext;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy)]
@@ -359,7 +359,7 @@ impl RepeatedRows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChatMessage, Role};
+    use lk_agents_abi::{ChatMessage, Role};
 
     #[test]
     fn repeated_id_edits_yield_between_cells_and_preserve_anchors() {

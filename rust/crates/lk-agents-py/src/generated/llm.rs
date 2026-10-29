@@ -10,6 +10,19 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/llm/ctx_diff.rs.
+type ChatContextDiffsImpl = <crate::Selected as super::Implementations>::ChatContextDiffs;
+
+/// The operations turning ``old`` into ``new``, as ``(to_remove, to_create, to_update)``; an
+/// update patches the item in place, keeping its server-side position.
+#[pyfunction]
+#[pyo3(signature = (old, new))]
+pub fn compute_chat_ctx_diff(old: ::std::vec::Vec<::lk_agents_abi::ChatItem>, new: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<(::std::vec::Vec<::std::string::String>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>, ::std::vec::Vec<(::std::option::Option<::std::string::String>, ::std::string::String)>)> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <ChatContextDiffsImpl as ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs>::compute_chat_ctx_diff(old, new);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 type FixedGateImpl = <crate::Selected as super::Implementations>::FixedGate;
 

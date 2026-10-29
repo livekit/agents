@@ -1,7 +1,7 @@
 //! Incremental snapshot, validation and edit preparation for a requested conversation.
 
 use super::{CtxUpdate, RealtimeMachine, Retired, Step};
-use lk_agents_abi::llm::ctx_diff::{ChatContextDiff, DiffOps};
+use lk_agents_core::llm::ctx_diff::{ChatContextDiff, DiffOps};
 use lk_agents_abi::{ChatContext, ChatItem};
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -4,7 +4,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, UNIX_EPOCH};
 
-use lk_agents_abi::{ChatContext, ChatMessage, Role, compute_chat_ctx_diff};
+use lk_agents_abi::{ChatContext, ChatMessage, Role};
+use lk_agents_core::llm::ctx_diff::compute_chat_ctx_diff;
 
 struct CountAllocations;
 static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
