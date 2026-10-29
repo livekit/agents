@@ -47,7 +47,7 @@ _Verdict = Literal["pass", "fail", "maybe"]
 
 @dataclass
 class JudgmentResult:
-    verdict: _Verdict
+    verdict: Literal["pass", "fail", "maybe"]
     """The judgment verdict: 'pass', 'fail', or 'maybe' (uncertain)."""
     reasoning: str
     """Chain-of-thought reasoning for the judgment."""
