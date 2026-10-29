@@ -225,22 +225,20 @@ class _FrameContexts:
 
 
 def _agents(root: Agent[Any, Any]) -> list[Agent[Any, Any]]:
-    agents: dict[str, Agent[Any, Any]] = {}
+    """The agents reachable from ``root``; the core refuses two that share a name."""
+    agents: list[Agent[Any, Any]] = []
     todo = [root]
     while todo:
         agent = todo.pop()
-        previous = agents.get(agent.name)
-        if previous is not None:
-            if previous is not agent:
-                raise ValueError(f"different agent definitions share the name {agent.name!r}")
+        if any(agent is seen for seen in agents):
             continue
-        agents[agent.name] = agent
+        agents.append(agent)
         todo.extend(
             tool.agent
             for tool in llm.ToolContext(agent.tools).function_tools.values()
             if isinstance(tool, _LocalAgentTool)
         )
-    return list(agents.values())
+    return agents
 
 
 __all__ = ["TextSession", "TextSessionRoutingError", "TextSessionState", "TextSessionTurn"]
