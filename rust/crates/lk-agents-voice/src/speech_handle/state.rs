@@ -244,6 +244,10 @@ impl SpeechState {
         Ok(step)
     }
 
+    pub fn interruptible(&self) -> bool {
+        !self.view.interrupted && self.view.allow_interruptions
+    }
+
     pub fn authorized(&self) -> bool {
         self.authorized
     }

@@ -459,7 +459,7 @@ impl SpeechHandle {
 
     /// The user may cut it now: not interrupted already, and interruptions allowed.
     pub fn interruptible(&self) -> bool {
-        !self.interrupted() && self.allow_interruptions()
+        lock(&self.inner).state.interruptible()
     }
 
     /// The `allow_interruptions` setter. Ignores the hold count, so a set during a hold is undone by
