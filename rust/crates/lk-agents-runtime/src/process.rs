@@ -29,7 +29,19 @@ struct Started {
     http: Arc<lk_agents_net::http::GatewayHttp>,
 }
 
-static RUNTIME: Mutex<Option<Started>> = Mutex::new(None);
+/// What the process holds: the runtime once started, and the host's ports handed to it at init.
+struct State {
+    started: Option<Started>,
+    /// The host's frame reader (decision 94), installed once as the host starts. It outlives a
+    /// fork: the host object is the child's too.
+    frames: Option<Arc<dyn FrameReader>>,
+}
+
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None });
+
+fn state() -> std::sync::MutexGuard<'static, State> {
+    PROCESS.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// The runtime's handle, starting it in this process on first use.
 pub fn handle() -> Result<tokio::runtime::Handle, ProcessError> {
@@ -53,7 +65,8 @@ pub fn workers() -> Result<MediaWorkers, ProcessError> {
 
 fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> {
     let pid = std::process::id();
-    let mut slot = RUNTIME.lock().unwrap_or_else(|p| p.into_inner());
+    let mut state = state();
+    let slot = &mut state.started;
     if let Some(started) = slot.as_ref() {
         return if started.pid == pid { Ok(read(started)) } else { Err(ProcessError::Forked) };
     }
@@ -79,9 +92,9 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
 /// inherited from the parent is abandoned, never dropped, since dropping joins worker threads
 /// the child does not have. The next [`handle`] starts a fresh one.
 pub fn reinit() {
-    let mut slot = RUNTIME.lock().unwrap_or_else(|p| p.into_inner());
-    if slot.as_ref().is_some_and(|started| started.pid != std::process::id()) {
-        std::mem::forget(slot.take());
+    let mut state = state();
+    if state.started.as_ref().is_some_and(|started| started.pid != std::process::id()) {
+        std::mem::forget(state.started.take());
     }
 }
 
@@ -130,7 +143,7 @@ impl lk_agents_inference::env::Env for Process {
 
     #[cfg(feature = "media-images")]
     fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-        Arc::new(images())
+        Arc::new(Process::images())
     }
 
     #[cfg(not(feature = "media-images"))]
@@ -149,19 +162,17 @@ impl lk_agents_worker::env::Env for Process {
     }
 }
 
-/// The host's frame reader, handed over as the host starts (decision 94). It outlives a fork:
-/// the host object is the child's too.
-static FRAME_READER: Mutex<Option<Arc<dyn FrameReader>>> = Mutex::new(None);
+impl Process {
+    /// Takes the host's frame reader as the host starts; the first one installed stays.
+    pub fn install_frame_reader(reader: Arc<dyn FrameReader>) {
+        state().frames.get_or_insert(reader);
+    }
 
-pub fn install_frame_reader(reader: Arc<dyn FrameReader>) {
-    *FRAME_READER.lock().unwrap_or_else(|p| p.into_inner()) = Some(reader);
-}
-
-/// Image preparation with the host's frame reader, once the host installed one.
-#[cfg(feature = "media-images")]
-pub fn images() -> lk_agents_media::images::Images {
-    let frames = FRAME_READER.lock().unwrap_or_else(|p| p.into_inner()).clone();
-    lk_agents_media::images::Images::new(frames)
+    /// Image preparation with the host's frame reader, once the host installed one.
+    #[cfg(feature = "media-images")]
+    pub fn images() -> lk_agents_media::images::Images {
+        lk_agents_media::images::Images::new(state().frames.clone())
+    }
 }
 
 /// The voice core's speech text in the native synthesis clients and the judges' transcripts.

@@ -1,5 +1,5 @@
 //! Images prepared for a provider: host frames read through the host's [`FrameReader`]
-//! (decision 94), encoded on an admitted image worker.
+//! (decision 94). Synchronous: the caller runs it on an image worker.
 
 use std::sync::Arc;
 
@@ -8,7 +8,6 @@ use lk_agents_abi::media::images::{FrameReader, ImageEncodeOptions, ImageInput, 
 use lk_agents_abi::{ImageContent, ImageSource};
 
 use super::{MAX_IMAGE_BYTES, prepare};
-use crate::workers::{MediaWorkerClass, MediaWorkers};
 
 /// Image preparation with the host's frame reader, when the process has one.
 #[derive(Clone, Default)]
@@ -21,22 +20,9 @@ impl Images {
         Self { frames }
     }
 
-    /// Prepares `input` on an admitted image worker, keeping the caller's loop serviceable.
-    pub async fn prepare(
-        &self,
-        workers: &MediaWorkers,
-        input: ImageInput,
-        options: ImageEncodeOptions,
-    ) -> Result<PreparedImage, String> {
-        let images = self.clone();
-        workers
-            .try_spawn(MediaWorkerClass::Image, move || images.prepare_now(input, options))
-            .map_err(|e| e.to_string())?
-            .await
-            .map_err(|e| e.to_string())?
-    }
-
-    fn prepare_now(
+    /// Prepares `input` here, a host frame read through the host's reader: CPU work for an
+    /// admitted image worker.
+    pub fn prepare(
         &self,
         input: ImageInput,
         options: ImageEncodeOptions,
@@ -65,7 +51,7 @@ impl ImageResolver for Images {
             .zip(image.inference_height)
             .filter(|(width, height)| *width > 0 && *height > 0);
         let (data_bytes, mime_type, external_url, overridden_mime) = self
-            .prepare_now(
+            .prepare(
                 input,
                 ImageEncodeOptions {
                     format: "JPEG".into(),

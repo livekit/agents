@@ -32,8 +32,9 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
 #[tokio::test]
 async fn oversized_pixels_are_refused_before_buffer_conversion_or_encoding() {
     let workers = lk_agents_media::workers::MediaWorkers::new(Default::default()).unwrap();
-    let result = lk_agents_media::images::Images::default().prepare(
+    let result = lk_agents_runtime::images::prepare_on(
         &workers,
+        lk_agents_media::images::Images::default(),
         ImageInput::Frame(VideoFrame {
             width: 4097,
             height: 4097,

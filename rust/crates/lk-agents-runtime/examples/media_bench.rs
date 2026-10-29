@@ -445,8 +445,9 @@ mod bench {
             for _ in 0..count {
                 let start = Instant::now();
                 let (prepared, cpu, maximum) =
-                    measure_polls(images.prepare(
+                    measure_polls(lk_agents_runtime::images::prepare_on(
                         &workers,
+                        images.clone(),
                         ImageInput::Frame(frame.clone()),
                         options.clone(),
                     ))

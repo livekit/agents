@@ -142,8 +142,9 @@ async fn media_never_block_measurements() {
                         let workers = workers.clone();
                         let data = pixels.clone();
                         tasks.push(async move {
-                            let image = lk_agents_media::images::Images::default().prepare(
+                            let image = lk_agents_runtime::images::prepare_on(
                                 &workers,
+                                lk_agents_media::images::Images::default(),
                                 ImageInput::Frame(VideoFrame {
                                     width,
                                     height,

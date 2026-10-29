@@ -3,15 +3,20 @@
 use std::sync::Arc;
 
 use lk_agents_abi::MediaRef;
-use lk_agents_abi::media::images::{FrameReader, ImageEncodeOptions, ImageError, ImageInput};
+use lk_agents_abi::media::images::{
+    FrameReader, ImageEncodeOptions, ImageError, ImageInput, PreparedImage,
+};
 
-use crate::process::{images, install_frame_reader, workers};
+use lk_agents_media::images::Images;
+use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+
+use crate::process::{Process, workers};
 
 pub struct ImageFunctions;
 
 impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     fn install_frame_reader(reader: Arc<dyn FrameReader>) {
-        install_frame_reader(reader);
+        Process::install_frame_reader(reader);
     }
 
     async fn encode_image(
@@ -54,12 +59,23 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     }
 }
 
-async fn prepare(
+async fn prepare(input: ImageInput, options: ImageEncodeOptions) -> Result<PreparedImage, ImageError> {
+    let workers = workers().map_err(|e| ImageError(e.to_string()))?;
+    prepare_on(&workers, Process::images(), input, options).await.map_err(ImageError)
+}
+
+/// Prepares `input` on an admitted image worker, keeping the caller's loop serviceable.
+pub async fn prepare_on(
+    workers: &MediaWorkers,
+    images: Images,
     input: ImageInput,
     options: ImageEncodeOptions,
-) -> Result<lk_agents_abi::media::images::PreparedImage, ImageError> {
-    let workers = workers().map_err(|e| ImageError(e.to_string()))?;
-    images().prepare(&workers, input, options).await.map_err(ImageError)
+) -> Result<PreparedImage, String> {
+    workers
+        .try_spawn(MediaWorkerClass::Image, move || images.prepare(input, options))
+        .map_err(|e| e.to_string())?
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -67,7 +83,6 @@ mod tests {
     use std::time::Duration;
 
     use lk_agents_abi::utils::video::VideoFrame;
-    use lk_agents_media::images::Images;
 
     use super::*;
 
@@ -89,9 +104,9 @@ mod tests {
             data: vec![127; 1920 * 1080 * 4].into(),
         };
         let workers = workers().unwrap();
-        let images = Images::default();
-        let mut encoding = Box::pin(images.prepare(
+        let mut encoding = Box::pin(prepare_on(
             &workers,
+            Images::default(),
             ImageInput::Frame(frame),
             ImageEncodeOptions { format: "JPEG".into(), ..Default::default() },
         ));
