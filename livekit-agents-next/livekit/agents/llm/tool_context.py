@@ -56,12 +56,12 @@ class Toolset:
     @dataclass
     class ToolCalledEvent:
         ctx: RunContext
-        arguments: dict[str, Any]
+        arguments: dict[str, object]
 
     @dataclass
     class ToolCompletedEvent:
         ctx: RunContext
-        output: Any | Exception | None
+        output: object
 
     def __init__(self, *, id: str, tools: Sequence[Tool | Toolset] | None = None) -> None:
         self._id = id
@@ -161,7 +161,7 @@ class ToolResult:
         return ToolResult("Successfully sent DTMF events: 1", reply_required=False)
     """
 
-    output: Any
+    output: object
     reply_required: bool = field(default=True, kw_only=True)
     verbatim: bool = field(default=False, kw_only=True)
 
@@ -211,7 +211,7 @@ class ModelRetry(Exception):
         return self._message
 
 
-Transition_T = TypeVar("Transition_T")
+Transition_T = TypeVar("Transition_T", covariant=True)
 
 
 @dataclass(frozen=True)
@@ -258,13 +258,13 @@ class Working:
     message: str | None = None
 
 
-Transition = Completed[Any] | Failed | Rejected | InputRequired | Working
+Transition = Completed[object] | Failed | Rejected | InputRequired | Working
 
 
 """What a tool or a hook returns to change the state of the turn or the task."""
 
 
-def is_transition(value: Any) -> TypeGuard[Transition]:
+def is_transition(value: object) -> TypeGuard[Transition]:
     return isinstance(value, (Completed, Failed, Rejected, InputRequired, Working))
 
 
@@ -398,7 +398,7 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     def info(self) -> _InfoT:
         return self._info
 
-    def __get__(self, obj: Any, objtype: type | None = None) -> Self:
+    def __get__(self, obj: object, objtype: type | None = None) -> Self:
         if obj is None:
             return self
 
@@ -543,7 +543,7 @@ def function_tool(
     return deco_raw if raw_schema is not None else deco_func
 
 
-def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]:
+def _wrap_with_confirm_duplicate(func: Callable[..., object]) -> Callable[..., object]:
     """Extend ``func``'s signature with a CONFIRM_DUPLICATE_PARAM kwarg, stripped
     by the wrapper before delegating so direct calls with the original args still work."""
     try:
@@ -557,7 +557,7 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
     new_annotations = {**resolved, CONFIRM_DUPLICATE_PARAM: annotation}
 
     @functools.wraps(func)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+    async def wrapper(*args: object, **kwargs: object) -> object:
         kwargs.pop(CONFIRM_DUPLICATE_PARAM, None)
         result = func(*args, **kwargs)
         if asyncio.iscoroutine(result):
@@ -579,15 +579,15 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
     return wrapper
 
 
-def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
+def is_function_tool(f: object) -> TypeGuard[FunctionTool]:
     return isinstance(f, FunctionTool)
 
 
-def is_raw_function_tool(f: Any) -> TypeGuard[RawFunctionTool]:
+def is_raw_function_tool(f: object) -> TypeGuard[RawFunctionTool]:
     return isinstance(f, RawFunctionTool)
 
 
-def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
+def find_function_tools(cls_or_obj: object) -> list[FunctionTool | RawFunctionTool]:
     """The ``@function_tool`` methods of a class, bound to ``cls_or_obj`` when it is an instance.
 
     Candidates are found on the class, so an instance property that raises outside a binding
@@ -690,7 +690,7 @@ class ToolContext:
     @overload
     def parse_function_tools(
         self, format: Literal["openai"], *, strict: bool = True
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[dict[str, object]]: ...
 
     @overload
     def parse_function_tools(
@@ -699,7 +699,7 @@ class ToolContext:
         *,
         strict: bool = True,
         provider_tool_type: type[ProviderTool] | None = None,
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[dict[str, object]]: ...
 
     @overload
     def parse_function_tools(
@@ -708,23 +708,34 @@ class ToolContext:
         *,
         tool_behavior: _provider_format.TOOL_BEHAVIOR | None = None,
         use_parameters_json_schema: bool = True,
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[dict[str, object]]: ...
 
     @overload
-    def parse_function_tools(self, format: Literal["aws"]) -> list[dict[str, Any]]: ...
+    def parse_function_tools(self, format: Literal["aws"]) -> list[dict[str, object]]: ...
 
     @overload
     def parse_function_tools(
         self, format: Literal["anthropic"], *, strict: bool = True
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[dict[str, object]]: ...
 
     def parse_function_tools(
         self,
         format: Literal["openai", "google", "aws", "anthropic"] | str,
-        **kwargs: Any,
-    ) -> list[dict[str, Any]]:
+        *,
+        strict: bool = True,
+        provider_tool_type: type[ProviderTool] | None = None,
+        tool_behavior: _provider_format.TOOL_BEHAVIOR | None = None,
+        use_parameters_json_schema: bool = True,
+    ) -> list[dict[str, object]]:
         """Parse the function tools to a provider-specific schema."""
-        return _provider_format.to_fnc_ctx(self, format, **kwargs)
+        return _provider_format.to_fnc_ctx(
+            self,
+            format,
+            strict=strict,
+            provider_tool_type=provider_tool_type,
+            tool_behavior=tool_behavior,
+            use_parameters_json_schema=use_parameters_json_schema,
+        )
 
 
 class AsyncToolset(Toolset):
