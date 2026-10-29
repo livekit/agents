@@ -25,8 +25,8 @@ for validation and review.
 | --- | --- | --- |
 | Decision cores | Agent execution, tool/approval/output policy, session lifecycle, scheduling, MCP and A2A task decisions | Synchronous events in, effects out; no I/O, executor, or host objects |
 | Data-plane core | Media transformations, buffering, gates, fan-out and playout accounting | Frames and control data in, transformed data and effects out; no device or network access |
-| Async I/O crates | The shared transport, the host stream adapter and the delegation A2A client (`lk-agents-net`); provider clients with retry, fallback and reconnect execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
-| `lk-agents-runtime` | The I/O layer of voice and text: voice session executor, AgentRun and TextSession drivers, A2A door and MCP session I/O, HostInvoker and the process runtime | Executes core effects, returns correlated events and wires the async I/O crates |
+| Async I/O crates | The shared transport, the host stream adapter, the delegation A2A client and the Cloud session report upload (`lk-agents-net`); provider clients with retry, fallback and reconnect execution, provider-side media execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
+| `lk-agents-runtime` | The I/O layer of voice and text: voice session executor, room I/O, avatar transport and recording ingress, AgentRun and TextSession drivers, A2A door and MCP session I/O, HostInvoker and the process runtime | Executes core effects, returns correlated events and wires the async I/O crates; makes no decisions |
 | `lk-agents-py` | Python module registration, generated conversions and adapters, and HostInvoker's Python entry | The only crate containing pyo3; no framework policy or I/O implementation |
 | Python package | Public API, user callbacks, provider implementations, host SDK objects and process launch/bootstrap | Calls `_core`; host objects are reached through generated proxies and HostInvoker |
 | Build tools | Binding generation and architecture checks | Read export declarations from ABI; no product execution responsibility |
@@ -41,14 +41,14 @@ tools and host RTC objects.
 | Crate | Responsibility |
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data only |
-| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair and deterministic run/event assertions; no voice lifecycle or transport dependency |
+| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; telemetry destination policy, metric admission and loop-stall thresholds (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; speech tokenization, markup and pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
-| `lk-agents-media` | Synchronous decoding, encoding, image conversion, resampling, media filters and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime, and a plain bounded thread pool only where a measured need exists |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls |
-| `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; evaluation judge orchestration |
+| `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime, and a plain bounded thread pool only where a measured need exists |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks, the shared attempt machine and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment contract (`lk_agents_net::env::Env`) |
+| `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization) and the streaming decoder's bounded output queue on the injected media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, CLI and endpoint serving |
-| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard; wires the async I/O crates and re-exports the implementations generated bindings select |
+| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard and media pool instance; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
@@ -92,13 +92,28 @@ The runtime depends on the async I/O crates to wire voice and text sessions:
 providers, storage, the worker server, judges and the delegation client in
 `lk-agents-net`. `lk-agents-py` depends only on the runtime and ABI: it uses ABI for the declared types its generated conversions translate, and the
 runtime re-exports the implementations of declared classes that its generated
-adapters select. The runtime injects what its process lends (the Tokio runtime
-handle, the host's executor and clock, the media worker pool) into the async
-crates' constructors; a declared class the host constructs reads them through a
-type parameter the runtime binds to its process (`GatewayLlm<Process>`), never
-through a dependency on the runtime. Async I/O crates depend on ABI and never on the runtime,
+adapters select. Async I/O crates depend on ABI and never on the runtime,
 `lk-agents-py` or pyo3; they reach host code only through ABI-declared proxies
 and HostInvoker's declared port.
+
+The runtime owns the process-wide Tokio runtime, the fork guard and the media
+pool instance, and injects what its process lends into the async crates'
+constructors as plain values. A declared class the host constructs reads them
+through one environment contract, a type parameter the runtime binds to its
+process, never through a dependency on the runtime:
+
+| Contract | Lends |
+| --- | --- |
+| `lk_agents_net::env::Env` | The shared HTTP pool, the process runtime and the caller's runtime, the `Spawner`, the host `Clock` and the session report admission |
+| `lk_agents_inference::env::Env: net::env::Env` | The media worker pool, image preparation and the assistant-markup projection judges read |
+| `lk_agents_worker::env::Env: net::env::Env` | The worker I/O on the process runtime |
+
+Storage needs nothing beyond net's contract. Each extension adds exactly its own
+crate's needs; no environment is a callback slot for another layer (the A2A
+door is a runtime-implemented declared class with its own constructor).
+`lk_agents_runtime::process::Process` implements every contract;
+`lk_agents_net::env::Standalone` implements net's and inference's for Rust
+callers and tests.
 
 The sans-I/O crates and ABI have no runtime, executor, Tokio, futures,
 async-trait or pyo3 dependency. Async I/O crates use Tokio, process and database
@@ -169,6 +184,50 @@ reconnects and fallback execute in `lk-agents-inference`, and process supervisio
 in `lk-agents-worker`, under the shared request and lifecycle contracts. An
 adapter may sequence I/O and manage its resource lifecycle; it must not make
 conversational or workflow decisions.
+
+The runtime's executors (voice session, room I/O, avatar transport and their
+drains and legs) use no Tokio runtime: no `tokio::spawn`, `tokio::time`,
+`tokio::net`, `Handle` or `Runtime`. They spawn and sleep only through the
+injected `Spawner` and `Clock`, so the [DST](#deterministic-simulation-testing)
+runs the same code on its deterministic scheduler. Tokio's executor-agnostic
+sync primitives (`watch`, `mpsc`, `oneshot`, `Notify`) are allowed, and every
+`select!` is `biased;`: an unbiased select picks a branch at random. A socket
+belongs to a boundary adapter, like the SDK room or the console's TCP port,
+which the DST replaces with a port fake; everything above the port follows the
+executor rules.
+
+### Runtime layout
+
+Every runtime module is I/O; the decisions it executes live in the sans-I/O
+crates.
+
+```text
+lk-agents-runtime/src/
+  lib.rs          module list; re-exports only the implementations lk-agents-py selects
+  process.rs      process Tokio runtime, fork guard, media pool, the `Process` environment
+  host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
+  agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
+  text_session/   TextSession driver over agent_run's execution; the declared runner
+  a2a/            turn: executes TaskMachine steps against storage and the handler;
+                  door/: decodes, admits, calls storage, publishes response streams
+  mcp/            the SDK session, stdio/host/HTTP/SSE transports, the SDK's HTTP client over lk-agents-net
+  voice/          session executor (effects, legs, audio drains, storage, recorder observers)
+    amd.rs              AMD timers, classification stream, tap stream, callee wait
+    background_audio.rs mixer pump, file/stream reads, track publish/unpublish
+    console.rs          the console TCP port adapter
+    remote_session/     host runtime loops and drain, room byte-stream transport
+    workflows/          DTMF publish/collect; warm transfer dialing, room watching, provider HTTP via the host
+  room_io/        RoomIo owner, participant input readers, audio and transcription output, pre-connect receiver
+  avatar/         data-stream audio output, receiver and runner, each implementing its ABI class directly
+  rtc/            room event fan-out and stream ingress admission, room waits, playout ledger lock
+  recording.rs    recorder ingress and its handoff onto the media pool, terminal status
+```
+
+Tokenization, telemetry policy, A2A and MCP decisions, workflow and avatar
+reply rules, recording bounds, codecs, the TTS emitter and image preparation do
+not belong here: they live in voice, core, media or inference. Host video-frame
+reading is a declared host proxy handed to the process at initialization, not
+pyo3 code in the runtime.
 
 ### State-machine composition
 
@@ -396,8 +455,8 @@ instruction functions, output functions and custom nodes use that same runtime
 invocation mechanism. Tool ownership is explicit: session-owned background work
 can outlive a voice turn without being owned by a completed invocation.
 
-Keep recovery at its owning layer: inference cores decide provider retry and
-fallback; shared agent/tool logic turns argument errors and `ModelRetry` into
+Keep recovery at its owning layer: `lk-agents-inference` executes provider retry
+and fallback under the shared attempt policy; shared agent/tool logic turns argument errors and `ModelRetry` into
 model feedback; runtime owns failed launch and cleanup settlement. Both modes
 use those implementations rather than separate retry or exception branches.
 
@@ -577,7 +636,7 @@ validate fake behavior, not just the fake's agreement with its own generator.
 | Avatar transport | Audio segment and acknowledgment state | Runtime owns byte streams; byte-stream id plus output generation identifies the original segment, without a new protocol field |
 | Avatar runner | Publication, generator/receiver progress, clear-buffer and close state | Frames remain opaque; runtime owns generator/receiver/synchronizer calls |
 | Background audio | Clip/loop/fade decisions and mix settings | Pure sample processing and file decoding in media; runtime publishes audio |
-| Recording | Timeline/accounting and flush/finish lifecycle | Runtime captures and writes; media encodes; finalization waits for accepted data and occurs once |
+| Recording | Timeline/accounting and flush/finish lifecycle | Runtime admits captured frames and hands them to the media pool; media owns the recording file (timeline, encoding, ordered writes) and its bounds; finalization waits for accepted data and occurs once |
 | Remote session | Request correlation, cancellation, deadline and drain state | Typed messages over runtime-owned room/TCP transport; late replies cannot settle new requests |
 | AMD | Classification phase and deadline | Runtime invokes the model; classification coordinates with the existing session floor |
 | IVR and keyterms | Their bounded request/pass state | Invoke model/provider operations as effects; replacement or cancellation invalidates stale results |
@@ -954,6 +1013,10 @@ Enforcement must cover:
 - Generated host conversions and proxies in `lk-agents-py`; the HostInvoker
   lifecycle and async bridges in runtime; never in ABI or subject crates.
 - Generated forwarding modules and matching stubs.
+- Runtime executor modules (`voice/`, `room_io/`, `avatar/`, `rtc/`) contain no
+  Tokio spawn, timer, socket or runtime-handle use and no unbiased `select!`
+  ([effect execution](#effect-execution)); boundary adapters hold their sockets
+  behind a port.
 
 Codegen `--check` enforces export placement and generated output, failing with
 the file and item. The dependency check resolves the closure of `lk-agents-abi`,
@@ -998,7 +1061,8 @@ Provider plugins, custom nodes, transforms and I/O use the same Rust contracts
 and generated language adapters. A feature does not implement its own iterator
 pump, cancellation bridge, exception conversion or host-object registry.
 Declarations live in ABI; executable bridges, queues and host handles live in
-`lk-agents-runtime`, and async I/O crates use the same source and sink contracts.
+`lk-agents-runtime`, the host stream adapter lives in `lk-agents-net`, and async
+I/O crates use the same source and sink contracts.
 Cores consume data and effects rather than live streams.
 
 | Primitive | Contract |
@@ -1632,7 +1696,10 @@ observation reaches the host through HostInvoker like every other host call;
 there the host OpenTelemetry SDK turns it into spans, metrics and log records, so applications
 intercept framework telemetry through their own provider, processors and
 exporters alongside their own instrumentation. Runtime owns invocation-context
-propagation. Export follows the host SDK boundary, just like a host provider.
+propagation. Export follows the host SDK boundary, just like a host provider:
+the host's own SDK processors export, and no Rust worker pool runs host export
+callbacks. Destination policy, metric admission and loop-stall thresholds are
+synchronous decisions in `lk_agents_core::telemetry`; the host applies them.
 The LiveKit Cloud session report and recording upload is not user telemetry: it
 is ordinary async Rust in `lk-agents-net`, triggered at session end with its
 own bounded admission.
@@ -1690,7 +1757,7 @@ to both bindings.
 | Layer | Verifies | Dependencies and scheduling |
 | --- | --- | --- |
 | Core unit tests | Individual transitions, validation, effects and negative cases | Synchronous calls with supplied inputs and time |
-| DST | Behavioral invariants across composed machines, failures, cancellation and event orderings | Real sans-I/O crates with fakes for providers, the worker, the storage port (injecting every typed error) and MCP transports, under controlled time/scheduling |
+| DST | Behavioral invariants across composed machines, failures, cancellation and event orderings | Real sans-I/O crates and the runtime's real executors, with fakes only at the SDK and provider ports: providers, the worker, the storage port (injecting every typed error), MCP transports and the room, under controlled time/scheduling |
 | Async I/O and adapter integration | The shared transport, provider clients, worker IPC and supervision, storage (real SQLite and a fake AgentDB server with injected faults), telemetry delivery to the host SDK, serialization, bindings and RTC adapters | Real code against a controlled peer, real processes or the actual service |
 | E2E | Complete user journeys through the deployed system | Real processes, bindings and transport; each test identifies which providers/services are live or scripted |
 
@@ -1740,22 +1807,29 @@ next to its actions; share fixtures rather than copying orchestration. Avoid
 both monolithic runners and many single-use forwarding modules. Each module
 must have a responsibility that a reader can name.
 
+Python tests reach an offline room through the documented session, as
+[programmatic tests](../testing.md#programmatic-tests) do: `session.start(agent)`
+without a job, or `room=None` where a job would supply one. `_core` ships no
+test-only room export. Room-level behavior is tested in Rust over the SDK-port
+fakes in `lk-agents-test-support`.
+
 ## Deterministic simulation testing
 
-The harness owns every core input and fake whose ordering can affect
-behavior. The POS scheduler chooses among enabled core event deliveries and
-fake completions; it does not schedule runtime adapter tasks. Each core
-transition remains synchronous and atomic. Advance virtual time to the next
-arrival or deadline only when no core step is enabled.
+The harness owns every core input, executor task and fake whose ordering can
+affect behavior. The DST runs the runtime's real executors (voice session, room
+I/O, avatar transport, their drains and legs) over faked SDK and provider ports,
+never copies of them: fakes sit only at those ports, and boundary adapters such
+as the SDK room and the console's TCP port are replaced by port fakes. Executors
+spawn and sleep only through the injected `Spawner` and `Clock`
+([effect execution](#effect-execution)), which the DST binds to its own
+deterministic scheduler and virtual clock; every `select!` is `biased;`, so the
+scheduler alone decides which ready work runs. The architecture check enforces
+these rules on the runtime's `voice/`, `room_io/`, `avatar/` and `rtc/` modules
+against a shrink-only baseline.
 
-The DST runs the runtime's real executors (voice, room, avatar) over faked SDK and
-provider ports, never copies of them: fakes sit only at those ports. Executor code
-therefore uses no Tokio runtime (no `tokio::spawn`, `tokio::time`, `tokio::net` or
-`Handle`): it spawns and sleeps only through the injected `Spawner` and `Clock`, so
-the DST's scheduler runs it. Tokio's executor-agnostic sync primitives are allowed,
-and every `select!` is `biased;`. The architecture check counts violations in the
-runtime's `voice/`, `room_io/`, `avatar/` and `rtc/` modules against a shrink-only
-baseline.
+The scheduler chooses among enabled core event deliveries, executor tasks and
+fake completions. Each core transition remains synchronous and atomic. Advance
+virtual time to the next arrival or deadline only when nothing is enabled.
 
 Bound total steps, steps without virtual-time progress and real execution time.
 A real-time watchdog operates independently of the simulation so a
@@ -1769,8 +1843,9 @@ state the assumed progress of external services and scheduling.
 The DST harness supplies a deterministic fake of the ABI host-call contract
 used by `HostInvoker`. It handles host-call effects from the real cores and
 schedules correlated results, progress, stream items, failures, cancellation
-and cleanup outcomes through the simulation scheduler. It does not import the
-runtime implementation or execute Python/Node callbacks.
+and cleanup outcomes through the simulation scheduler. It stands at the
+host-call port beneath the runtime's real executors and never executes
+Python/Node callbacks.
 
 Simulate stalled calls, cancellation refusal, late success, failed launch and
 cleanup deadlines as well as successful execution. Preserve operation/resource
@@ -1788,14 +1863,15 @@ checked at the real boundary.
 ### Scheduling boundaries
 
 Cores receive events and time and retain no spawner or executor. The
-simulation covers `lk-agents-voice`, `lk-agents-core` (with its A2A module)
-and `lk-agents-media` with realistic fakes. Providers, the worker, storage
-(injecting every typed error), evaluation judges, the delegation client
-and MCP transports are fakes in the simulation and are
-tested on their own. Runtime adapters are outside it. They are verified by conformance tests through the real adapters
-with cancellation injected at every await point, stress tests (stalled
-consumers, full queues, close under load), real-peer adapter tests and a
-regression test per bug.
+simulation covers `lk-agents-voice`, `lk-agents-core` (with its A2A module),
+`lk-agents-media` and the runtime's executors with realistic fakes. Providers,
+the worker, storage (injecting every typed error), evaluation judges, the
+delegation client, MCP transports and the SDK room are fakes in the simulation
+and are tested on their own. Boundary adapters at those ports are outside it.
+They are verified by conformance tests through the real adapters with
+cancellation injected at every await point, stress tests (stalled consumers,
+full queues, close under load), real-peer adapter tests and a regression test
+per bug.
 
 Campaigns report which cores and fakes they simulate. Control randomness inside
 fakes as well as the scheduler: supply, seed or record those choices and vary
@@ -1807,7 +1883,9 @@ reproduce the schedule.
 The scheduler uses basic partial-order sampling from
 [Yuan, Yang and Gu, CAV 2018](https://doi.org/10.1007/978-3-319-96142-2_20):
 
-1. Assign a random priority to each pending core step.
+1. Assign a random priority to each pending step: a core event delivery, an
+   executor task woken through the injected `Spawner` or `Clock`, or a fake
+   completion.
 2. Dispatch the highest-priority enabled step, preserving source causality
    and due-wake precedence. A source's next step receives its own random
    priority.
@@ -1822,7 +1900,7 @@ not mutate cores from callbacks.
 
 An arrival-order baseline runs alongside. Campaigns record the policy with each
 seed and compare policies on the known-bug benchmark. Claims about explored
-interleavings apply to core event deliveries, not arbitrary instruction
+interleavings apply to these scheduled steps, not arbitrary instruction
 interleavings in the whole program.
 
 Test the scheduler against small programs with independently known legal
@@ -1849,8 +1927,9 @@ reports omitted coverage and rejects empty runs. Workspace compilation is not
 behavioral coverage of any component; the worker and the other async I/O crates
 run their real-transport, real-process and controlled-peer suites in the gate.
 Its `KNOWN_FINDINGS` baseline may only shrink. Architecture checks reject new
-core spawns, `select!`, executor dependencies and unbounded channels, and ratchet
-existing violations down.
+core spawns, `select!`, executor dependencies and unbounded channels, and
+runtime executor Tokio runtime uses and unbiased selects, and ratchet existing
+violations down.
 
 ### Observations and replay
 
@@ -2007,6 +2086,12 @@ and outcomes, runtime adapter, host entrypoint and tests. Move its eligibility,
 retry, cancellation and deadline decisions into synchronous transitions.
 Moving the same policy loop to another async module does not complete extraction.
 Keep I/O sequencing and independent resource tasks in runtime.
+
+Executors move into the runtime by splitting, never by moving a
+decision-bearing module wholesale. The decisions stay in their subject crate as
+synchronous state machines emitting effects (voice for speech and generation
+policy, core's AgentRun for tool dispatch); the runtime keeps the pumps, node
+calls, timers and output binding that execute them.
 
 Choose slices by dependency and failure risk across voice, inference, worker,
 storage and A2A. Generation can move one leg at a time while preserving the
