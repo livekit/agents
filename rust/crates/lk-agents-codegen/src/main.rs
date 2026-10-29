@@ -128,7 +128,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/llm.rs",
     "rust/crates/lk-agents-abi/src/turn/detector.rs",
     "rust/crates/lk-agents-abi/src/types/retry.rs",
-    "rust/crates/lk-agents-abi/src/telemetry/provider.rs",
     "rust/crates/lk-agents-abi/src/llm/realtime.rs",
     "rust/crates/lk-agents-abi/src/tokenize/language/code.rs",
     "rust/crates/lk-agents-abi/src/media/images.rs",

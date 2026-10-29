@@ -14,6 +14,7 @@ pub mod cores {
     pub use lk_agents_core::telemetry::loop_monitor::{LoopMonitorOptions, LoopMonitorPolicy};
     pub use lk_agents_core::telemetry::metrics::MetricSeries;
     pub use lk_agents_core::telemetry::policy::DestinationPolicy;
+    pub use lk_agents_core::telemetry::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
     pub use lk_agents_core::telemetry::records::MetricsRecords;
     pub use lk_agents_core::telemetry::transport::TraceParents;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};

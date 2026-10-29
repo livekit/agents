@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::TimedString;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::telemetry::provider::{Context, TtsMetricState};
+use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_abi::tts::stream_adapter::{
     SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
@@ -436,7 +436,7 @@ impl AdapterSource {
             match self.tts.synthesize(&text).await {
                 Ok(source) => {
                     self.current = Some(source);
-                    let fold = TtsMetricState::for_host(false);
+                    let fold = TtsMetricState::new(false);
                     self.ledger().call = Some(Call { text, start, fold });
                     return Ok(());
                 }

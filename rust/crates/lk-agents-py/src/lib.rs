@@ -47,6 +47,9 @@ impl generated::Implementations for Selected {
     type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
+    type ProviderMetrics = lk_agents_runtime::cores::ProviderMetrics;
+    type LlmMetricState = lk_agents_runtime::cores::LlmMetricState;
+    type TtsMetricState = lk_agents_runtime::cores::TtsMetricState;
     type TransportFunctions = lk_agents_runtime::net::strings::TransportAlgorithms;
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::media::blingfire::MediaTokenization;

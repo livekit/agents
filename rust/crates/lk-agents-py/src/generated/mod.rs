@@ -76,6 +76,9 @@ pub trait Implementations: 'static {
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
+    type ProviderMetrics: ::lk_agents_abi::telemetry::provider::ProviderMetrics;
+    type LlmMetricState: ::lk_agents_abi::telemetry::provider::LlmMetricState;
+    type TtsMetricState: ::lk_agents_abi::telemetry::provider::TtsMetricState;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
     type MetricSeries: ::lk_agents_abi::telemetry::policy::MetricSeries;
     type SessionReportProjection: ::lk_agents_abi::telemetry::report::projection::SessionReportProjection;
@@ -245,6 +248,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stt::InferenceSttStream>()?;
     m.add_class::<stt::SttStreamAdapter>()?;
     m.add_class::<stt::SttAdapterStream>()?;
+    m.add_function(wrap_pyfunction!(telemetry::stt_batch_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::stt_stream_metrics, m)?)?;
+    m.add_class::<telemetry::LlmMetricState>()?;
+    m.add_class::<telemetry::TtsMetricState>()?;
     m.add_class::<telemetry::_core_TelemetryPolicy>()?;
     m.add_class::<telemetry::_core_MetricSeries>()?;
     m.add_class::<telemetry::_core_SessionReportProjection>()?;

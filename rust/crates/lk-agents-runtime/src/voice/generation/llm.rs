@@ -4,7 +4,7 @@ use super::pipeline_reply::teardown_deadline;
 use super::tools::ToolStep;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::telemetry::provider::Context;
+use lk_agents_core::telemetry::provider::Context;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;

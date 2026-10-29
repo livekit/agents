@@ -318,14 +318,14 @@ fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
 // the backoff before the first token.
 #[test]
 fn time_to_first_token_spans_the_retry() {
-    use lk_agents_abi::telemetry::provider::LlmMetricState;
+    use lk_agents_core::telemetry::provider::LlmMetricState;
 
     let metadata: WireChunk = serde_json::from_value(serde_json::json!({
         "id": "c",
         "choices": [{"delta": {"extra_content": {"livekit": {"inference_tier_billed": "s"}}}}],
     }))
     .unwrap();
-    let mut fold = LlmMetricState::for_host(0.0);
+    let mut fold = LlmMetricState::new(0.0);
     let mut observe = |effects: Vec<LlmRequestEffect>, now: Ts| {
         let secs = now.saturating_duration_since(at(0)).as_secs_f64();
         for effect in effects {

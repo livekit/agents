@@ -598,7 +598,7 @@ async fn classify(
             return;
         }
     };
-    let mut fold = lk_agents_abi::telemetry::provider::LlmMetricState::for_host(started_at);
+    let mut fold = lk_agents_core::telemetry::provider::LlmMetricState::new(started_at);
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
@@ -643,7 +643,7 @@ async fn classify(
         let (id, now) = (llm.id(), time.wall_secs());
         let label = id.label.clone();
         let metadata = Some(id.metadata());
-        let context = lk_agents_abi::telemetry::provider::Context {
+        let context = lk_agents_core::telemetry::provider::Context {
             timestamp: now,
             label,
             cancelled: false,

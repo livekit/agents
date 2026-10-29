@@ -399,17 +399,6 @@ def validate_synthesis(
     duration: float,
     segments: tuple[int, int] | None,
 ) -> str | None: ...
-def stt_batch_metrics(
-    event: Any,
-    start: float,
-    now: float,
-    audio_durations: list[float],
-    host: tuple[float, str, bool, str, str],
-) -> dict[str, Any]: ...
-def stt_stream_metrics(
-    event: Any,
-    host: tuple[float, str, bool, str, str],
-) -> tuple[dict[str, Any] | None, bool]: ...
 def normalize_language(code: str) -> str: ...
 def base_language(code: str) -> str: ...
 def language_region(code: str) -> str | None: ...
@@ -1149,39 +1138,6 @@ class ChatRequest:
     def extra(self) -> dict[str, Any] | None: ...
     @property
     def inference_class(self) -> str | None: ...
-
-
-class LlmMetricState:
-    """`LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`)."""
-
-    def __init__(self, start: float) -> None: ...
-    def observe(self, now: float, chunk: Any) -> bool: ...
-    def finish(
-        self,
-        now: float,
-        failed: bool,
-        host: tuple[float, str, bool, str, str],
-    ) -> dict[str, Any] | None: ...
-
-
-class TtsMetricState:
-    """The TTS streams' metric fold as the host drives it (`_core.TtsMetricState`)."""
-
-    def __init__(self, streamed: bool) -> None: ...
-    def queue_text(self, text: str) -> None: ...
-    def observe(self, now: float, start: float, audio: Any) -> bool: ...
-    def finish(
-        self,
-        now: float,
-        start: float,
-        failed: bool,
-        batch_text: str,
-        input_tokens: int,
-        output_tokens: int,
-        acquire_time: float,
-        connection_reused: bool,
-        host: tuple[float, str, bool, str, str],
-    ) -> dict[str, Any] | None: ...
 
 
 class MarkdownFilter:

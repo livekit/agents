@@ -69,7 +69,6 @@ from ._generated._core_classes import (
     GetSecurityCodeResult as GetSecurityCodeResult,
     JobInfo as JobInfo,
     JobRequest as JobRequest,
-    LlmMetricState as LlmMetricState,
     MarkdownFilter as MarkdownFilter,
     ModelUsageCollector as ModelUsageCollector,
     PlaybackInfo as PlaybackInfo,
@@ -96,7 +95,6 @@ from ._generated._core_classes import (
     TrackPublishOptions as TrackPublishOptions,
     Transcription as Transcription,
     TranscriptSynchronizer as TranscriptSynchronizer,
-    TtsMetricState as TtsMetricState,
     UploadGate as UploadGate,
     VideoFrameRef as VideoFrameRef,
     VoiceSession as VoiceSession,
@@ -149,8 +147,6 @@ from ._generated._core_classes import (
     session_state_option_fields as session_state_option_fields,
     speech_priorities as speech_priorities,
     status_retryable as status_retryable,
-    stt_batch_metrics as stt_batch_metrics,
-    stt_stream_metrics as stt_stream_metrics,
     tool_call_output as tool_call_output,
     validate_card_number as validate_card_number,
     validate_synthesis as validate_synthesis,
@@ -260,7 +256,9 @@ from ._generated._core_stt import (
     SttStreamAdapter as SttStreamAdapter,
 )
 from ._generated._core_telemetry import (
+    LlmMetricState as LlmMetricState,
     LoopMonitor as LoopMonitor,
+    TtsMetricState as TtsMetricState,
     _core_EventRetention as _core_EventRetention,
     _core_format_trace_parent as _core_format_trace_parent,
     _core_loop_monitor_thresholds as _core_loop_monitor_thresholds,
@@ -270,6 +268,8 @@ from ._generated._core_telemetry import (
     _core_SessionReportUpload as _core_SessionReportUpload,
     _core_TelemetryPolicy as _core_TelemetryPolicy,
     _core_trace_parent as _core_trace_parent,
+    stt_batch_metrics as stt_batch_metrics,
+    stt_stream_metrics as stt_stream_metrics,
 )
 from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,

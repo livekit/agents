@@ -6,7 +6,7 @@ use crate::transcription::Visible;
 use crate::transcription::VisibleStream;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::LlmMetrics;
-use lk_agents_abi::telemetry::provider::{Context, LlmMetricState};
+use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
 use lk_agents_abi::{Extra, LlmChunk, Ts};
 
 pub enum WordEffect {
@@ -50,7 +50,7 @@ impl LlmGenerationData {
         Self {
             tps: None,
             started_at,
-            metrics: LlmMetricState::for_host(started_at),
+            metrics: LlmMetricState::new(started_at),
             extra: Extra::new(),
             produced: false,
             called: false,
