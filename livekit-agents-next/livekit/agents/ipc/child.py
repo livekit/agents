@@ -592,10 +592,11 @@ def _write_stack_dump(
 def _mock_room() -> Any:
     MockRoom = create_autospec(rtc.Room, instance=True)
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
-    # autospec leaves attributes as truthy mocks; pin sid/identity to real strings
+    # autospec leaves attributes as truthy mocks; pin sid/identity/kind to real values
     # so they don't leak into places like inference request headers (see _utils.py).
     MockRoom.local_participant.sid = ""
     MockRoom.local_participant.identity = "agent"
+    MockRoom.local_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
     MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)  # type: ignore
     MockRoom.isconnected.return_value = True
     MockRoom.name = "console"
