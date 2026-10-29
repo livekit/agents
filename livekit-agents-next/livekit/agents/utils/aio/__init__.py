@@ -18,6 +18,7 @@ from collections.abc import (
     Generator,
     Iterator,
 )
+from types import TracebackType
 from typing import Any, Generic, Protocol, TypeVar, overload, runtime_checkable
 
 from typing_extensions import AsyncContextManager
@@ -280,7 +281,7 @@ class AsyncAtomicCounter:
 
 
 class Debounced(Generic[T]):
-    def __init__(self, func: Callable[[], Coroutine[Any, Any, T]], delay: float) -> None:
+    def __init__(self, func: Callable[[], Coroutine[object, object, T]], delay: float) -> None:
         self._func = func
         self._delay = delay
         self._task: asyncio.Task[T] | None = None
@@ -313,8 +314,8 @@ class Debounced(Generic[T]):
         return self.run()
 
 
-def debounced(delay: float) -> Callable[[Callable[[], Coroutine[Any, Any, T]]], Debounced[T]]:
-    def decorator(func: Callable[[], Coroutine[Any, Any, T]]) -> Debounced[T]:
+def debounced(delay: float) -> Callable[[Callable[[], Coroutine[object, object, T]]], Debounced[T]]:
+    def decorator(func: Callable[[], Coroutine[object, object, T]]) -> Debounced[T]:
         return Debounced(func, delay)
 
     return decorator
@@ -323,9 +324,9 @@ def debounced(delay: float) -> Callable[[Callable[[], Coroutine[Any, Any, T]]], 
 def hook_slow_callbacks(slow_duration: float) -> None:
     _run = asyncio.events.Handle._run
 
-    def instrumented(self: Any) -> Any:
+    def instrumented(self: asyncio.Handle) -> None:
         start = time.monotonic()
-        val = _run(self)
+        val: None = _run(self)
         dt = time.monotonic() - start
         if dt >= slow_duration:
             logger.warning("Running %s took too long: %.2f seconds", _format_handle(self), dt)
@@ -334,7 +335,7 @@ def hook_slow_callbacks(slow_duration: float) -> None:
     asyncio.events.Handle._run = instrumented  # type: ignore
 
 
-def _finish_fut(fut: asyncio.Future[Any]) -> None:
+def _finish_fut(fut: asyncio.Future[None]) -> None:
     if fut.cancelled():
         return
     fut.set_result(None)
@@ -347,7 +348,7 @@ class Interval:
         self._last_sleep = 0.0
         self._i = 0
         self._handler: asyncio.TimerHandle | None = None
-        self._fut: asyncio.Future[Any] | None = None
+        self._fut: asyncio.Future[None] | None = None
 
     def reset(self) -> None:
         if self._fut and self._handler and not self._handler.cancelled():
@@ -394,7 +395,7 @@ async def tee_peer(
     iterator: AsyncIterator[T],
     buffer: deque[T],
     peers: list[deque[T]],
-    lock: AsyncContextManager[Any],
+    lock: AsyncContextManager[object],
     exception: list[BaseException | None],
 ) -> AsyncGenerator[T, None]:
     # exception is a shared mutable container across all peers. When the upstream
@@ -481,7 +482,12 @@ class Tee(Generic[T]):
     async def __aenter__(self) -> Tee[T]:
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
@@ -550,7 +556,7 @@ class Sleep:
         finally:
             self._handler.cancel()
 
-    def __await__(self) -> Generator[Any, Any, None]:
+    def __await__(self) -> Generator[object, None, None]:
         return self._sleep().__await__()
 
 
@@ -570,7 +576,7 @@ class TaskSet:
         self._closed = False
 
     def create_task(
-        self, coro: Coroutine[Any, Any, _T], name: str | None = None
+        self, coro: Coroutine[object, object, _T], name: str | None = None
     ) -> asyncio.Task[_T]:
         if self._closed:
             raise RuntimeError("TaskSet is closed")
@@ -607,7 +613,7 @@ async def cancel_and_wait(*futures: asyncio.Future[Any]) -> None:
                 fut.exception()
 
 
-def _release_waiter(waiter: asyncio.Future[Any], *_: Any) -> None:
+def _release_waiter(waiter: asyncio.Future[None], *_: object) -> None:
     if not waiter.done():
         waiter.set_result(None)
 
