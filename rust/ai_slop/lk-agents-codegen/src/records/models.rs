@@ -30,6 +30,21 @@ pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
     let (imports, classes) = split_header(legacy);
     let (declared_imports, declared) = split_header(body);
     let imports = crate::imports::merge(imports, declared_imports)?;
+    // The provenance header names both declaration forms and every source file.
+    let declared_sources: String = models
+        .split_once(FUTURE)
+        .map_or("", |(head, _)| head)
+        .lines()
+        .filter(|l| l.starts_with("#     ") && !imports.contains(l))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let imports = imports
+        .replacen(
+            "from the `#[derive(Host)]` declarations in:\n",
+            "from the `#[derive(Host)]` and\n# `#[host(record)]` declarations in:\n",
+            1,
+        )
+        .replacen("#\n# Edit the Rust", &format!("{declared_sources}#\n# Edit the Rust"), 1);
     let imports = imports.trim_end();
     // isort: one blank line between an import statement and the comment, two after a block.
     let gap = match imports.lines().last() {
