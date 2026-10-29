@@ -203,6 +203,52 @@ async fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
     );
 }
 
+// Catches: a `say` whose step reported spoken after the close's hard edge released it read its
+// kind off the scheduler's entry, gone with the release, so its item was committed as a reply's,
+// naming no voice (`items_carry_their_payload`, survey seed 114526; fixed in b1936ecfe).
+#[tokio::test(start_paused = true)]
+async fn a_say_released_before_its_step_reports_keeps_its_source() {
+    use crate::agent::Source;
+    use crate::agent_activity::scheduling::SpeechKind;
+    use crate::agent_activity::speech::SpeechSpec;
+    use crate::agent_session::effects::Effect;
+    use crate::generation::{GenEvent, ReplySource};
+    use lk_agents_abi::{ChatMessage, Role, Ts};
+
+    let mut cores = cores().await;
+    let driver = &mut cores.driver;
+    let mut out = driver.out();
+    let spec = SpeechSpec::new(SpeechKind::Say, ReplySource::Text("One moment.".into()), true);
+    let speech = driver.start_speech(Ts::ZERO, spec, &mut out).id();
+    driver.release_speech(Ts::ZERO, speech, &mut out);
+    let said = ChatMessage::text("said", Role::Assistant, "One moment.", std::time::UNIX_EPOCH);
+    let spoken = GenEvent::StepSpoken {
+        speech,
+        step: 1,
+        interrupted: true,
+        has_tool_output: false,
+        tools_running: false,
+        item: Some(Box::new(said)),
+    };
+    driver.on_generation(Ts::ZERO, spoken, &mut out);
+    let sources: Vec<Source> = driver
+        .settle_step(out)
+        .into_iter()
+        .filter_map(|effect| match effect {
+            Effect::Emit(SessionEvent::ConversationItemAdded { source, .. })
+                if matches!(source, Source::Say { .. } | Source::Reply { .. }) =>
+            {
+                Some(source)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(sources.as_slice(), [Source::Say { speech: s }] if *s == speech),
+        "the say's item lost its source: {sources:?}"
+    );
+}
+
 /// The cores of a session with no provider or leg, on a virtual clock, never run.
 async fn cores() -> SessionCores {
     let time = Timebase::from_virtual(Arc::new(lk_agents_abi::VirtualClock::new()));
