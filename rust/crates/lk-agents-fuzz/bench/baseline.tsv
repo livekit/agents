@@ -10,6 +10,9 @@
 # approval_race, gate_before_hook; and final_ends_pause: with its fix reverted its own regression
 # (final_ends_pause.rs) passes at b07b998f6, the pause now ended on the other paths, so no campaign
 # can find it.
+# host_interrupt_races_end re-measured at 83e1a1fff (same configuration) after its re-cut against
+# option B (decision 116): the end report carries the host's request; it now also fails
+# speech_done_once.
 bug	contract	level	policy	hits	tries
 amd_tap_at_close	provider_streams_closed	seeds	Arrival	0	16384
 amd_tap_at_close	provider_streams_closed	seeds	BasicPos	0	16384
@@ -39,14 +42,23 @@ driver_say_tts	speech_error_is_injected	program	Arrival	512	512
 driver_say_tts	speech_error_is_injected	program	BasicPos	512	512
 driver_say_tts	speech_error_is_injected	program	TaskBridge	512	512
 host_interrupt_races_end	interrupted_handle_is_journalled	seeds	Arrival	0	16384
-host_interrupt_races_end	interrupted_handle_is_journalled	seeds	BasicPos	11	16384
-host_interrupt_races_end	interrupted_handle_is_journalled	seeds	TaskBridge	9	16384
+host_interrupt_races_end	interrupted_handle_is_journalled	seeds	BasicPos	10	16384
+host_interrupt_races_end	interrupted_handle_is_journalled	seeds	TaskBridge	15	16384
 host_interrupt_races_end	interrupted_handle_is_journalled	setup	Arrival	0	1024
 host_interrupt_races_end	interrupted_handle_is_journalled	setup	BasicPos	0	1024
 host_interrupt_races_end	interrupted_handle_is_journalled	setup	TaskBridge	0	1024
 host_interrupt_races_end	interrupted_handle_is_journalled	program	Arrival	0	512
-host_interrupt_races_end	interrupted_handle_is_journalled	program	BasicPos	51	512
-host_interrupt_races_end	interrupted_handle_is_journalled	program	TaskBridge	53	512
+host_interrupt_races_end	interrupted_handle_is_journalled	program	BasicPos	102	512
+host_interrupt_races_end	interrupted_handle_is_journalled	program	TaskBridge	130	512
+host_interrupt_races_end	speech_done_once	seeds	Arrival	0	16384
+host_interrupt_races_end	speech_done_once	seeds	BasicPos	8	16384
+host_interrupt_races_end	speech_done_once	seeds	TaskBridge	14	16384
+host_interrupt_races_end	speech_done_once	setup	Arrival	0	1024
+host_interrupt_races_end	speech_done_once	setup	BasicPos	0	1024
+host_interrupt_races_end	speech_done_once	setup	TaskBridge	0	1024
+host_interrupt_races_end	speech_done_once	program	Arrival	0	512
+host_interrupt_races_end	speech_done_once	program	BasicPos	102	512
+host_interrupt_races_end	speech_done_once	program	TaskBridge	130	512
 mic_at_close	every_resource_released	seeds	Arrival	3	16384
 mic_at_close	every_resource_released	seeds	BasicPos	1	16384
 mic_at_close	every_resource_released	seeds	TaskBridge	2	16384
