@@ -234,11 +234,12 @@ async fn media_never_block_measurements() {
             let mut recordings = Vec::new();
             for index in 0..streams {
                 let path = path.with_extension(format!("{streams}-{index}.ogg"));
-                let recorder = <SessionRecorder as RecorderApi>::new(path.to_string_lossy().into_owned(), 48_000, Some(0.0), 64_000).unwrap();
+                let recorder = <SessionRecorder as RecorderApi>::new(&lk_agents_runtime::process::env(), path.to_string_lossy().into_owned(), 48_000, Some(0.0), 64_000).unwrap();
                 recordings.push((recorder, path));
             }
             if streams == 16 {
                 assert!(<SessionRecorder as RecorderApi>::new(
+                    &lk_agents_runtime::process::env(),
                     path.with_extension("refused.ogg").to_string_lossy().into_owned(),
                     48_000, Some(0.0), 64_000).is_err());
             }

@@ -324,6 +324,7 @@ mod bench {
                 let open_cpu_start = thread_cpu();
                 let path = root.join(format!("record-{count}-{samples}-{index}.ogg"));
                 match <SessionRecorder as RecorderClass>::new(
+                    &lk_agents_runtime::process::env(),
                     path.to_string_lossy().into_owned(),
                     RATE,
                     Some(0.),

@@ -483,7 +483,7 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     ) -> Result<Self, RecordingFailure> {
         #[cfg(feature = "media-ffmpeg")]
         {
-            let workers = (env.workers)().map_err(RecordingFailure::Worker)?;
+            let workers = (env.workers)().map(MediaWorkers::from).map_err(RecordingFailure::Worker)?;
             let runtime = env.caller_runtime().map_err(RecordingFailure::Worker)?;
             Self::start(
                 &workers,
