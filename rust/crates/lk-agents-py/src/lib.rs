@@ -51,7 +51,9 @@ impl generated::Implementations for Selected {
     type AudioDecoder =
         lk_agents_runtime::inference::codecs::StreamDecoder<lk_agents_runtime::process::Process>;
     type StreamBuffer = lk_agents_runtime::media::StreamBuffer;
-    type AudioEmitter = lk_agents_runtime::audio_emitter::AudioEmitter;
+    type AudioEmitter = lk_agents_runtime::inference::tts::emitter::AudioEmitter<
+        lk_agents_runtime::process::Process,
+    >;
     type DataStreamAudioReceiver = lk_agents_runtime::avatar_receiver::DataStreamAudioReceiver;
     type AvatarRunner = lk_agents_runtime::avatar_runner::AvatarRunner;
     type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;

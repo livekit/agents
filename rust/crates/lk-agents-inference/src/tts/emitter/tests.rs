@@ -129,7 +129,7 @@ async fn a_closed_synthesis_stays_closed() {
     assert_eq!(output.real_and_finals(), (0, 0));
 }
 
-#[cfg(feature = "media-ffmpeg")]
+#[cfg(feature = "ffmpeg")]
 fn opus(samples: usize) -> Vec<u8> {
     let mut encoder = lk_agents_media::OggOpusEncoder::new(48_000, 1, 24_000).unwrap();
     let mut encoded = encoder.push(&vec![100; samples]).unwrap();
@@ -139,7 +139,7 @@ fn opus(samples: usize) -> Vec<u8> {
 
 // Catches: a segment ended before its container finished decoding: the final marker went out
 // first and the segment's audio was then refused outside any segment.
-#[cfg(feature = "media-ffmpeg")]
+#[cfg(feature = "ffmpeg")]
 #[tokio::test]
 async fn each_compressed_segment_ends_after_its_decoded_audio() {
     let output = Arc::new(Output::default());
@@ -167,7 +167,7 @@ async fn each_compressed_segment_ends_after_its_decoded_audio() {
 }
 
 // Catches: close returning while a decoder still runs, or audio framed after close.
-#[cfg(feature = "media-ffmpeg")]
+#[cfg(feature = "ffmpeg")]
 #[tokio::test]
 async fn close_settles_a_decoding_segment_and_frames_nothing_after() {
     let workers = MediaWorkers::new(lk_agents_media::workers::MediaWorkerLimits {

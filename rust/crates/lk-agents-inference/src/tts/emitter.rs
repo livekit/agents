@@ -8,6 +8,7 @@
 //! emitter's task, which ends a segment only after the segment's audio is decoded and framed.
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -19,7 +20,8 @@ use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{DecodePlan, Decoder};
 use tokio::sync::{Notify, watch};
 
-use lk_agents_inference::codecs::{self, DecoderInput, decoder_limits};
+use crate::codecs::{self, DecoderInput, decoder_limits};
+use crate::env::{Env, Standalone};
 
 /// What the emitter runs on, lent by the process (decision 88).
 pub struct EmitterEnv {
@@ -28,7 +30,7 @@ pub struct EmitterEnv {
     pub workers: MediaWorkers,
 }
 
-pub struct AudioEmitter(Arc<Inner>);
+pub struct AudioEmitter<E = Standalone>(Arc<Inner>, PhantomData<fn() -> E>);
 
 struct Inner {
     label: String,
@@ -103,22 +105,25 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-impl AudioEmitter {
+impl<E> AudioEmitter<E> {
     pub fn with_env(label: String, output: Arc<dyn EmitterOutput>, env: EmitterEnv) -> Self {
         let mut machine = Machine::new(&label);
         machine.set_dump(dump_default());
-        Self(Arc::new(Inner {
-            label,
-            output,
-            env,
-            machine: Mutex::new(machine),
-            outbox: Mutex::default(),
-            decode: OnceLock::new(),
-            timer: Mutex::new(None),
-            failure: Mutex::new(None),
-            ended: AtomicBool::new(false),
-            closed: AtomicBool::new(false),
-        }))
+        Self(
+            Arc::new(Inner {
+                label,
+                output,
+                env,
+                machine: Mutex::new(machine),
+                outbox: Mutex::default(),
+                decode: OnceLock::new(),
+                timer: Mutex::new(None),
+                failure: Mutex::new(None),
+                ended: AtomicBool::new(false),
+                closed: AtomicBool::new(false),
+            }),
+            PhantomData,
+        )
     }
 }
 
@@ -398,14 +403,12 @@ fn decode_error(error: impl std::fmt::Display) -> EmitterError {
     EmitterError::Decode(error.to_string())
 }
 
-impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
+impl<E: Env> lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter<E> {
     fn new(label: String, dst_ch: Arc<dyn EmitterOutput>) -> Result<Self, EmitterError> {
-        use lk_agents_net::env::Env as _;
-        let unavailable = |error: String| EmitterError::Unavailable(error);
         let env = EmitterEnv {
-            spawner: crate::process::Process::spawner().map_err(unavailable)?,
-            clock: crate::process::Process::clock(),
-            workers: crate::process::workers().map_err(|e| unavailable(e.to_string()))?,
+            spawner: E::spawner().map_err(EmitterError::Unavailable)?,
+            clock: E::clock(),
+            workers: E::workers().map_err(EmitterError::Unavailable)?,
         };
         Ok(Self::with_env(label, dst_ch, env))
     }
@@ -430,11 +433,8 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
                 Decode::Wav(Mutex::new(None))
             }
             DecodePlan::Decode(mime) => {
-                if !cfg!(feature = "media-ffmpeg") {
-                    return Err(EmitterError::UnsupportedMime(format!(
-                        "{mime:?} needs the runtime media-ffmpeg feature to decode"
-                    )));
-                }
+                lk_agents_media::source::check_stream(&mime)
+                    .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?;
                 Decode::Container(Queue {
                     mime,
                     ops: Mutex::default(),
