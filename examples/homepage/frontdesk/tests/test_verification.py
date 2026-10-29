@@ -64,25 +64,35 @@ async def test_birthday_lists_the_charts_to_match_the_name_against(agent, contex
     assert context.userdata.caller is None
 
 
-async def test_a_shared_birthday_lists_only_the_charts_sharing_a_name(
+async def test_a_shared_birthday_lists_only_the_chart_spelled_as_given(
     agent, context, clinic
 ):
     clinic.patients["Tyler Smith"] = date(1988, 3, 14)
     clinic.patients["Taylor Smythe"] = date(1988, 3, 14)
 
     result = json.loads(
+        await agent.look_up_birthday(context, "1988-03-14", "taylor smith")
+    )
+    assert [c["name"] for c in result["charts"]] == ["Taylor Smith"]
+
+    result = json.loads(
         await agent.look_up_birthday(context, "1988-03-14", "Tailor Smith")
     )
+    assert result["charts"] == []
 
-    assert [c["name"] for c in result["charts"]] == ["Taylor Smith", "Tyler Smith"]
 
-
-async def test_a_misheard_surname_still_finds_the_chart(agent, context):
-    result = json.loads(
+async def test_a_corrected_spelling_finds_the_chart_behind_a_misheard_name(
+    agent, context
+):
+    heard = json.loads(
         await agent.look_up_birthday(context, "1992-07-08", "Jordan Leigh")
     )
+    spelled = json.loads(
+        await agent.look_up_birthday(context, "1992-07-08", "Jordan Lee")
+    )
 
-    assert [c["name"] for c in result["charts"]] == ["Jordan Lee"]
+    assert heard["charts"] == []
+    assert [c["name"] for c in spelled["charts"]] == ["Jordan Lee"]
 
 
 async def test_opening_the_matched_chart_verifies_the_caller(agent, context):
@@ -104,9 +114,9 @@ async def test_only_a_chart_on_the_looked_up_birthday_opens(agent, context):
     with pytest.raises(ToolError, match="No chart named"):
         await agent.open_chart(context, "Taylor Smith")
 
-    await agent.look_up_birthday(context, "1988-03-14", "Pat Jones")
+    await agent.look_up_birthday(context, "1992-07-08", "Jordan Smith")
     with pytest.raises(ToolError, match="No chart named"):
-        await agent.open_chart(context, "Taylor Smith")
+        await agent.open_chart(context, "Jordan Lee")
     assert context.userdata.caller is None
 
 

@@ -94,16 +94,18 @@ scenarios:
       PERSONA: Jordan Lee, a patient on file, born July 8, 1992, just checking their appointment.
       If asked for your date of birth, say "July 8th, 1992."
       If your name is spelled back to you as J, O, R, D, A, N, L, E, E, say "Yes, that's me."
+      If it's spelled back any other way, say "No, it's L, E, E."
       If asked to spell your name, spell it letter by letter: J, O, R, D, A, N, then L, E, E.
       OPENING LINE: "Hi, this is Jordan Leigh."
       DO, IN ORDER:
       1. Ask when your next appointment is.
       2. Once Riley has told you when it is, say thanks and hang up. Don't say goodbye before that.
     agent_expectations: >
-      Asks Jordan for their date of birth, finds Jordan Lee's chart from it even though
-      Jordan's name was heard as "Leigh", and spells the name on the chart back for Jordan
-      to confirm. Then tells Jordan about the upcoming annual physical. Does not register a
-      new patient.
+      Asks Jordan for their date of birth and finds Jordan Lee's chart: straight away if the
+      name was heard as Lee, or, if it was heard as "Leigh", by spelling the name back, taking
+      Jordan's correction, and looking it up again with that spelling. Confirms the name on the
+      chart with Jordan, then tells Jordan about the upcoming annual physical. Does not
+      register a new patient.
     tags:
       feature: lookup
     userdata:

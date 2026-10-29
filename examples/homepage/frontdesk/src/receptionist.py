@@ -138,7 +138,7 @@ Never state an appointment, a time, or a booking that the delegated work didn't 
 Before anything can be looked up or booked, find the caller's chart the way a front desk does: date of birth first, then name. Ask for whichever of the two they haven't given, each only once. As soon as you have both, delegate looking them up by that date of birth and the name as you heard it. While that runs you don't know yet whether they have a chart, so never say you're pulling them up or setting them up; "Okay ... one sec" is enough.
 - If it matched their name to a chart, spell that name back the way the delegated work gave it, as a question, like "Okay, Taylor Smith, that's T A Y L O R, S M I T H, right?", and once they say yes, delegate opening their chart. Then tell them the upcoming appointment it returned, what it's for and the day and time, before anything else.
 - If no chart matched but they've said they've been in before, read their whole date of birth back once to check it, and if they correct it, delegate looking them up again with the new date. If that finds nothing either, get them set up.
-- Otherwise, say you'll get them set up, without saying you couldn't find them, then spell their name back the way you'd write it and ask if that's right. If they correct a letter, use their spelling. Only after they say yes, delegate registering them with that spelling.
+- Otherwise, say you'll get them set up, without saying you couldn't find them, then spell their name back the way you'd write it and ask if that's right. If they correct a letter, delegate looking them up again with their spelling; if that finds their chart, go on as if it had matched. Only after they say yes and nothing has matched, delegate registering them with that spelling.
 If you didn't catch all of the date of birth, ask for the whole date again, never just part of it like the last two digits of the year.
 If they ask you to say or spell their name, just do it.
 When you confirm a booking, say the day, date, and time exactly as the delegated work returned them.
@@ -151,11 +151,11 @@ Saying goodbye and delegating ending the call always go together, in the same tu
 You do the record-keeping for {CLINIC_NAME}, {DOCTOR}'s practice, on behalf of the receptionist on the phone.
 {calendar_context(clinic)}
 
-Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth and the name they gave. It lists only the charts with that date of birth that share a first or last name with the one they gave; match the rest of the name by how it sounds, not its exact letters: Leigh is Lee, Shawn is Sean. A different first or last name is not a match.
-- If one matches, report that chart's letters for the receptionist to spell back, and nothing about any other chart. Once the caller says the spelling is right, call open_chart with that chart's name and report their upcoming appointment.
-- If none matches, report only that they're new to the records.
+Find every caller's chart before anything else, the way a front desk does: call look_up_birthday with their date of birth and the name they gave. It lists only the chart with that date of birth and that name, spelled as given, so call it again with any corrected spelling the receptionist passes on.
+- If it lists a chart, report that chart's letters for the receptionist to spell back, and nothing about any other chart. Once the caller says the spelling is right, call open_chart with that chart's name and report their upcoming appointment.
+- If it lists none, report only that no chart matched that spelling.
 No other record can be read or changed until their chart is open or they're registered.
-Call register_new_patient only for a caller who isn't in the records, once they've confirmed the spelling, with the letters they confirmed.
+Call register_new_patient only once the caller has confirmed the spelling and look_up_birthday has found no chart for it, with the letters they confirmed.
 Never reveal a chart that doesn't match the caller's name, or any date of birth on file.
 To find a time, call check_availability for what the caller asked, then report the one or two openings closest to it.
 When the caller has picked a time, book it with book_appointment, or reschedule_appointment for an existing appointment, without asking again.
@@ -168,18 +168,18 @@ Hand back short, plain results the receptionist can say out loud. Only report ti
     async def look_up_birthday(
         self, context: RunContext[CallState], date_of_birth: str, name: str
     ) -> str:
-        """List the charts with the caller's date of birth and their first or last name, to match the rest of the name against. The first step for every caller.
+        """List the chart with the caller's date of birth and name, spelled as given. The first step for every caller, and again with any corrected spelling.
 
         Args:
             date_of_birth: The caller's date of birth, YYYY-MM-DD.
-            name: The caller's full name as they said it.
+            name: The caller's full name as they said it, or as they spelled it.
         """
         born = _date(date_of_birth)
         context.userdata.birthday = born
         context.userdata.charts = [
             chart
             for chart in self._clinic.born_on(born)
-            if _name_parts(chart) & _name_parts(name)
+            if _letters(chart) == _letters(name)
         ]
         return json.dumps(
             {
@@ -467,8 +467,8 @@ def _from_letters(spelled: str) -> str:
     return "".join(out)
 
 
-def _name_parts(name: str) -> set[str]:
-    return {"".join(c for c in part if c.isalpha()).casefold() for part in name.split()}
+def _letters(name: str) -> str:
+    return "".join(c for c in name if c.isalpha()).casefold()
 
 
 def _read_back(name: str) -> str:
