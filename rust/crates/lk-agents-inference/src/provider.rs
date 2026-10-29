@@ -364,6 +364,33 @@ mod tests {
         assert_eq!((error.kind, error.phase), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read)));
     }
 
+    // Catches: a read deadline after delivered output replaying the request (decision 99), which
+    // would repeat text or audio the person already received. Recognition alone may reconnect.
+    #[test]
+    fn a_read_deadline_after_delivered_output_raises_except_for_recognition() {
+        let options =
+            ApiConnectOptions { max_retry: 3, read_timeout: Some(1.0), ..Default::default() };
+        for kind in [RequestKind::Llm, RequestKind::TtsStream, RequestKind::SttStream] {
+            for delivered in [false, true] {
+                let mut operation = ProviderAttempts::new(kind, options.clone(), 0).unwrap();
+                assert_eq!(operation.ready(0), Ok(true));
+                operation.expect_response(0);
+                let error = operation.ready(at(1)).unwrap_err();
+                assert_eq!(error.phase, Some(TimeoutPhase::Read));
+                let expected = if delivered && kind != RequestKind::SttStream {
+                    RetryDecision::Raise
+                } else {
+                    RetryDecision::Retry(0.1)
+                };
+                assert_eq!(
+                    operation.failure(error.into(), delivered, at(1)).unwrap(),
+                    expected,
+                    "{kind:?} delivered={delivered}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn sdk_timeouts_retry_without_creating_a_second_transport_interruption() {
         let options = ApiConnectOptions { max_retry: 1, ..Default::default() };
