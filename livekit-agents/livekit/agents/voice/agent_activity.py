@@ -1747,7 +1747,22 @@ class AgentActivity(RecognitionHooks):
                 "add a TTS model to AgentSession to enable say()"
             )
 
-        if self._rt_turn_detection_enabled and allow_interruptions is False:
+        use_realtime_say = (
+            self._rt_session is not None
+            and not is_given(audio)
+            and not self.tts
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_say
+        )
+        if (
+            self._rt_turn_detection_enabled
+            and allow_interruptions is False
+            and not (
+                use_realtime_say
+                and self._rt_session is not None
+                and self._rt_session.capabilities.supports_uninterruptible_say
+            )
+        ):
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1765,13 +1780,7 @@ class AgentActivity(RecognitionHooks):
         )
         user_metrics = self._take_on_enter_user_metrics()
 
-        if (
-            self._rt_session is not None
-            and not is_given(audio)
-            and not self.tts
-            and isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.supports_say
-        ):
+        if use_realtime_say:
             if not add_to_chat_ctx:
                 logger.warning(
                     "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
@@ -2272,9 +2281,12 @@ class AgentActivity(RecognitionHooks):
             # the server's own speech detection: a barge-in, like the VAD path
             self.interrupt(source="audio_activity")
         except RuntimeError:
-            # only out of sync when the server cancelled its own response, with client-side turn
-            # taking an uninterruptible speech is expected
-            if self._rt_turn_detection_enabled:
+            # Uninterruptible speech is expected with client-side turn taking or a model
+            # that enforces uninterruptible native say() on the server.
+            if self._rt_turn_detection_enabled and not (
+                self._rt_session is not None
+                and self._rt_session.capabilities.supports_uninterruptible_say
+            ):
                 logger.exception(
                     "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
                 )
@@ -4211,7 +4223,12 @@ class AgentActivity(RecognitionHooks):
 
         if text is not None:
             try:
-                generation_ev = await self._rt_session.say(text)
+                if self._rt_session.capabilities.supports_uninterruptible_say:
+                    generation_ev = await self._rt_session.say(
+                        text, allow_interruptions=speech_handle.allow_interruptions
+                    )
+                else:
+                    generation_ev = await self._rt_session.say(text)
             except llm.RealtimeError as e:
                 logger.error("failed to say text: %s", str(e))
                 speech_handle._mark_done(error=e)
