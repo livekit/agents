@@ -9,7 +9,6 @@ import threading
 import warnings
 import weakref
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
 
 from opentelemetry import context as otel_context, metrics as metrics_api, trace as trace_api
 from opentelemetry._logs import get_logger_provider
@@ -266,7 +265,7 @@ class _CloudTelemetry:
         # providers it built (constructed with shutdown_on_exit=False) and every
         # batch processor it attached — appended at each creation site. A
         # provider supplied by the integrator is never in this list.
-        self._exit_targets: list[tuple[str, Callable[[], Any]]] = []
+        self._exit_targets: list[tuple[str, Callable[[], object]]] = []
 
         # traces
         self._trace_provider_attached: trace_sdk.TracerProvider | None = None
@@ -587,7 +586,7 @@ class _CloudTelemetry:
             if job_id not in self._export_jobs:
                 return  # never configured, or already released
 
-            flush_targets: list[tuple[str, Callable[[], Any]]] = []
+            flush_targets: list[tuple[str, Callable[[], object]]] = []
             for processor in self._span_batch_processors:
                 flush_targets.append((f"spans:{id(processor):x}", processor.force_flush))
             if self._log_batch_processor is not None:
