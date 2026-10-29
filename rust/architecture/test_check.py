@@ -393,6 +393,10 @@ class ExecutorContracts(unittest.TestCase):
                     " tokio::select! { biased; x = a => {} } }\n"
                     "#[cfg(test)]\nmod tests { fn t() { tokio::time::sleep(d); } }\n"
                 ),
+                # Code after an out-of-line test module still counts.
+                "rust/crates/lk-agents-runtime/src/rtc/room.rs": (
+                    "#[cfg(test)]\nmod tests;\nfn f() { tokio::spawn(a); }\n"
+                ),
                 "rust/crates/lk-agents-runtime/src/avatar/output.rs": (
                     "use tokio::time::sleep;\nfn f() { Handle::current(); }\n"
                 ),
@@ -413,6 +417,7 @@ class ExecutorContracts(unittest.TestCase):
                     f"{owner}:unbiased-select": 1,
                     f"{avatar}:tokio-time": 1,
                     f"{avatar}:tokio-runtime": 1,
+                    "executor:rust/crates/lk-agents-runtime/src/rtc/room.rs:tokio-spawn": 1,
                 },
             )
 

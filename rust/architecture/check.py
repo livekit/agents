@@ -177,20 +177,35 @@ TOKIO_RUNTIME = {
     "tokio-runtime": re.compile(r"\btokio::runtime\b|\bHandle::(?:current|try_current)\b"),
     "unbiased-select": re.compile(r"\bselect!\s*\{(?!\s*biased\s*;)"),
 }
-TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*mod\b")
+TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*mod\s+\w+\s*([;{])")
+
+
+def without_test_modules(text: str) -> str:
+    """The text without its inline `#[cfg(test)] mod .. { .. }` bodies (brace-matched); an
+    out-of-line `mod ..;` names a test file, which is skipped by name."""
+    kept, at = [], 0
+    while match := TEST_MODULE.search(text, at):
+        kept.append(text[at : match.start()])
+        at = match.end()
+        if match.group(1) == "{":
+            depth = 1
+            while depth and at < len(text):
+                depth += {"{": 1, "}": -1}.get(text[at], 0)
+                at += 1
+    kept.append(text[at:])
+    return "".join(kept)
 
 
 def executor_violations(root: Path, paths: list[str]) -> dict[str, int]:
     """Per executor file and kind, the count of tokio runtime uses and unbiased selects outside
-    its tests (a test file, or what follows the file's first `#[cfg(test)] mod`)."""
+    its tests (a test file or an inline `#[cfg(test)]` module)."""
     violations = {}
     for path in paths:
         if not path.startswith(EXECUTORS) or any(
             part.removesuffix(".rs").endswith("tests") for part in Path(path).parts
         ):
             continue
-        text = (root / path).read_text()
-        text = text[: m.start()] if (m := TEST_MODULE.search(text)) else text
+        text = without_test_modules((root / path).read_text())
         for kind, pattern in TOKIO_RUNTIME.items():
             if count := len(pattern.findall(text)):
                 violations[f"executor:{path}:{kind}"] = count
