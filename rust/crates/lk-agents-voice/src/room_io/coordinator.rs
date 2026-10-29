@@ -192,6 +192,25 @@ impl RoomCoordinator {
         .then_some(self.attachment)
     }
 
+    /// `_on_sip_dtmf_received`: a key the linked participant pressed is activity.
+    pub fn accepts_key_press(&self, participant: &ParticipantIdentity) -> bool {
+        self.linked.as_ref() == Some(participant)
+    }
+
+    /// A chat stream is read only from the attached participant while the room still lists
+    /// it (`listed` is asked only for that participant); the returned attachment is rechecked
+    /// with [`Self::accepts`] once the text is read.
+    pub fn chat_attachment<E>(
+        &self,
+        sender: &ParticipantIdentity,
+        listed: impl FnOnce() -> std::result::Result<bool, E>,
+    ) -> std::result::Result<Option<u64>, E> {
+        match self.attachment(sender) {
+            Some(attachment) if listed()? => Ok(Some(attachment)),
+            _ => Ok(None),
+        }
+    }
+
     pub fn accepts(&self, attachment: u64, participant: &ParticipantIdentity) -> bool {
         self.attachment(participant) == Some(attachment)
     }

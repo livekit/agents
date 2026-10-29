@@ -478,9 +478,8 @@ impl RoomIo {
             | RoomEvent::ParticipantActive { .. }
             | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::SipDtmf { participant: None, .. } => {}
-            // `_on_sip_dtmf_received`: a key the linked participant pressed is activity.
             RoomEvent::SipDtmf { participant: Some(who), .. } => {
-                if self.coordinator.borrow().state().linked.as_ref() == Some(who) {
+                if self.coordinator.borrow().accepts_key_press(who) {
                     self.emit(RoomIoEvent::KeyPressed)?;
                 }
             }
@@ -594,22 +593,18 @@ impl RoomIo {
                 let Some(stream) = stream else {
                     return Ok(());
                 };
-                let attachment = self.coordinator.borrow().attachment(&stream.sender);
-                let accepted =
-                    attachment.is_some() && self.room.participant(&stream.sender)?.is_some();
-                if !accepted || !self.begin_work() {
+                let attachment =
+                    self.coordinator.borrow().chat_attachment(&stream.sender, || {
+                        self.room.participant(&stream.sender).map(|listed| listed.is_some())
+                    })?;
+                let Some(attachment) = attachment.filter(|_| self.begin_work()) else {
                     let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
                     self.record_cleanup(stream.close(deadline).await);
                     continue;
-                }
+                };
                 let owner = self.clone();
                 self.spawn_reserved("room chat reader", async move {
-                    owner
-                        .read_chat_message(
-                            attachment.expect("an accepted sender has an attachment"),
-                            stream,
-                        )
-                        .await;
+                    owner.read_chat_message(attachment, stream).await;
                 });
             }
         }
