@@ -6,6 +6,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::media::pool::{JobClass, MediaPoolError};
+use lk_agents_media::pool::MediaPool;
+use lk_agents_net::env::MediaPoolSource;
 use tokio::sync::mpsc;
 
 use lk_agents_abi::AudioFrame;
@@ -21,7 +24,7 @@ pub const CLIENT_BUFFER_SECONDS: f64 = 1.2;
 pub const CLIENT_BUFFER_SAMPLES: usize =
     (CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE as f64) as usize;
 
-/// The mini model. Blocking; the transport runs it on a blocking thread (`asyncio.to_thread`).
+/// The mini model. Blocking; the transport runs it on the process's media worker pool.
 pub trait LocalEotModel: Send + Sync + 'static {
     /// End-of-turn probability for `pcm`, 16 kHz mono. `Err` is the model raising; scored 0.0.
     fn predict(&self, pcm: &[i16]) -> Result<f64, String>;
@@ -67,6 +70,7 @@ type Job = (EotRequestId, Vec<i16>);
 
 pub struct LocalTransport {
     model: std::sync::Arc<dyn LocalEotModel>,
+    media_pool: MediaPoolSource,
     sink: std::sync::Arc<dyn PredictionListener>,
     buf: Mutex<AudioRingBuffer>,
     /// `None` once the input has ended, which is what lets [`run`](EotTransport::run) return.
@@ -78,14 +82,32 @@ impl LocalTransport {
     pub fn new(
         model: std::sync::Arc<dyn LocalEotModel>,
         sink: std::sync::Arc<dyn PredictionListener>,
+        media_pool: MediaPoolSource,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         LocalTransport {
             model,
+            media_pool,
             sink,
             buf: Mutex::new(AudioRingBuffer::new(CLIENT_BUFFER_SAMPLES)),
             tx: Mutex::new(Some(tx)),
             rx: Mutex::new(Some(rx)),
+        }
+    }
+}
+
+impl LocalTransport {
+    /// A slot on the media pool, waiting for one while the pool is full.
+    async fn admit(&self) -> Result<(MediaPool, lk_agents_media::pool::MediaPermit), MediaPoolError> {
+        let pool = MediaPool::from((self.media_pool)().map_err(MediaPoolError::Unavailable)?);
+        loop {
+            match pool.try_admit(JobClass::EotModel) {
+                Ok(permit) => return Ok((pool, permit)),
+                Err(MediaPoolError::Exhausted(_)) => {
+                    pool.wait_for_capacity(JobClass::EotModel).await
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 }
@@ -128,22 +150,21 @@ impl EotTransport for LocalTransport {
         while let Some((request_id, pcm)) = rx.recv().await {
             let model = self.model.clone();
             let started = Instant::now();
-            // `asyncio.to_thread(self._eot.predict, ...)`: CPU-bound, off the driver's task.
-            let result = tokio::task::spawn_blocking(move || model.predict(&pcm)).await;
+            // CPU-bound, on an admitted media worker; a full pool delays the prediction.
+            let result = match self.admit().await {
+                Ok((pool, permit)) => pool
+                    .spawn_admitted(permit, move || model.predict(&pcm))
+                    .await
+                    .unwrap_or_else(|panicked| Err(panicked.to_string())),
+                Err(error) => Err(error.to_string()),
+            };
             let inference_duration = started.elapsed().as_secs_f64();
 
             // Any failure (panic included) scores 0.0 (`transports.py:421`): "no end of turn".
-            let probability = match result {
-                Ok(Ok(probability)) => probability,
-                Ok(Err(reason)) => {
-                    self.sink.warn(EotWarning::LocalPredictionFailed { reason });
-                    0.0
-                }
-                Err(join) => {
-                    self.sink.warn(EotWarning::LocalPredictionFailed { reason: join.to_string() });
-                    0.0
-                }
-            };
+            let probability = result.unwrap_or_else(|reason| {
+                self.sink.warn(EotWarning::LocalPredictionFailed { reason });
+                0.0
+            });
 
             self.sink.resolve(
                 request_id.as_str(),

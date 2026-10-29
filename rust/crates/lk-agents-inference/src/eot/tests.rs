@@ -813,6 +813,7 @@ async fn the_local_transport_scores_the_audio_it_was_holding_when_the_request_wa
     let transport = Arc::new(LocalTransport::new(
         Arc::new(RecordingModel { seen: seen.clone(), answer: Ok(0.9) }),
         sink.clone() as Arc<dyn PredictionListener>,
+        test_pool,
     ));
     assert_eq!(transport.session_id(), None, "there is no connection to name");
 
@@ -850,6 +851,7 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
             answer: Err("weights not loaded".to_owned()),
         }),
         sink.clone() as Arc<dyn PredictionListener>,
+        test_pool,
     );
     transport.run_inference(&id("turn_request_1"));
     transport.end_input();
@@ -860,4 +862,49 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
         sink.warnings.lock().unwrap().as_slice(),
         [EotWarning::LocalPredictionFailed { reason: "weights not loaded".to_owned() }]
     );
+}
+
+fn test_pool() -> Result<Arc<dyn lk_agents_abi::media::pool::MediaExecutor>, String> {
+    lk_agents_media::pool::MediaPool::new(Default::default())
+        .map(|pool| pool.executor())
+        .map_err(|error| error.to_string())
+}
+
+static SHARED_POOL: std::sync::OnceLock<lk_agents_media::pool::MediaPool> =
+    std::sync::OnceLock::new();
+
+fn shared_pool() -> Result<Arc<dyn lk_agents_abi::media::pool::MediaExecutor>, String> {
+    Ok(SHARED_POOL
+        .get_or_init(|| lk_agents_media::pool::MediaPool::new(Default::default()).unwrap())
+        .executor())
+}
+
+// Catches: a local prediction bypassing the bounded media pool (raw spawn_blocking).
+#[tokio::test]
+async fn a_local_prediction_waits_for_a_media_pool_slot() {
+    let pool = lk_agents_media::pool::MediaPool::from(shared_pool().unwrap());
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let occupant = pool
+        .try_spawn(lk_agents_abi::media::pool::JobClass::EotModel, move || {
+            let _ = held.recv();
+        })
+        .unwrap();
+    let sink = Arc::new(RecordingSink::default());
+    let transport = Arc::new(LocalTransport::new(
+        Arc::new(RecordingModel { seen: Arc::new(Mutex::new(Vec::new())), answer: Ok(0.9) }),
+        sink.clone() as Arc<dyn PredictionListener>,
+        shared_pool,
+    ));
+    transport.run_inference(&id("turn_request_1"));
+    transport.end_input();
+    let running = tokio::spawn({
+        let transport = transport.clone();
+        async move { transport.run().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(sink.resolves.lock().unwrap().is_empty(), "predicted while the pool was full");
+    release.send(()).unwrap();
+    occupant.await.unwrap();
+    within("the local transport", running).await.unwrap().unwrap();
+    assert_eq!(sink.resolves.lock().unwrap()[0].1.probability, 0.9);
 }

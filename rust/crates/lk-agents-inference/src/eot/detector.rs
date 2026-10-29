@@ -53,6 +53,7 @@ impl AudioEot {
         let thresholds = Arc::clone(&self.thresholds);
         let local_model = Arc::clone(&self.local_model);
         let clock = self.env.clock.clone();
+        let media_pool = self.env.media_pool;
         Arc::new(move |model| {
             if model == TurnDetectorModel::V1 {
                 let (cloud, clock) = (cloud.clone(), clock.clone());
@@ -69,7 +70,9 @@ impl AudioEot {
                     .map(|model| Arc::new(HostModel(model)) as Arc<dyn LocalEotModel>),
             };
             MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| match local {
-                Ok(model) => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
+                Ok(model) => {
+                    Arc::new(LocalTransport::new(model, sink, media_pool)) as Arc<dyn EotTransport>
+                }
                 Err(e) => Arc::new(FailedTransport(e.to_string())) as Arc<dyn EotTransport>,
             })
         })

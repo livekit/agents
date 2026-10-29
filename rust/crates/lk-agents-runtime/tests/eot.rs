@@ -91,7 +91,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                 if model == TurnDetectorModel::V1 {
                     Arc::new(CloudFailure(trigger.clone())) as Arc<dyn EotTransport>
                 } else {
-                    Arc::new(LocalTransport::new(local_model.clone(), sink))
+                    Arc::new(LocalTransport::new(local_model.clone(), sink, process::env().media_pool))
                         as Arc<dyn EotTransport>
                 }
             })
@@ -217,7 +217,8 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
         let model = Arc::clone(&model) as Arc<dyn LocalEotModel>;
         MountedTransport::mount(m.as_str(), Arc::clone(&shared), move |sink| match m {
             TurnDetectorModel::V1 => Arc::new(DyingTransport) as Arc<dyn EotTransport>,
-            _ => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
+            _ => Arc::new(LocalTransport::new(model, sink, process::env().media_pool))
+                as Arc<dyn EotTransport>,
         })
     });
     let spawner = lk_agents_net::task::TokioSpawner::current();
@@ -273,7 +274,11 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
         let make: TransportFactory = Arc::new(move |model| {
             constructed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             MountedTransport::mount(model.as_str(), shared.clone(), |sink| {
-                Arc::new(LocalTransport::new(Arc::new(Model(Arc::default())), sink))
+                Arc::new(LocalTransport::new(
+                    Arc::new(Model(Arc::default())),
+                    sink,
+                    process::env().media_pool,
+                ))
             })
         });
         let stream = EotStream::open(
