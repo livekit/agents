@@ -196,14 +196,14 @@ def without_test_modules(text: str) -> str:
 
 def executor_violations(root: Path, paths: list[str]) -> dict[str, int]:
     """Per executor file and kind, the count of tokio runtime uses and unbiased selects outside
-    its tests (a test file or an inline `#[cfg(test)]` module)."""
+    comments, strings and its tests (a test file or an inline `#[cfg(test)]` module)."""
     violations = {}
     for path in paths:
         if not path.startswith(EXECUTORS) or any(
             part.removesuffix(".rs").endswith("tests") for part in Path(path).parts
         ):
             continue
-        text = without_test_modules((root / path).read_text())
+        text = without_test_modules(NOT_CODE.sub(blank, (root / path).read_text()))
         for kind, pattern in TOKIO_RUNTIME.items():
             if count := len(pattern.findall(text)):
                 violations[f"executor:{path}:{kind}"] = count

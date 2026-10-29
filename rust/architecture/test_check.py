@@ -385,7 +385,7 @@ class HostCallContracts(unittest.TestCase):
 class ExecutorContracts(unittest.TestCase):
     """Decision 92: the DST's scheduler runs the runtime executors."""
 
-    def test_tokio_runtime_use_and_unbiased_selects_are_counted_outside_tests(self):
+    def test_tokio_runtime_use_and_unbiased_selects_are_counted_outside_tests_and_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             files = {
@@ -406,6 +406,11 @@ class ExecutorContracts(unittest.TestCase):
                 "rust/crates/lk-agents-runtime/src/avatar/runner.rs": (
                     "fn f() { tokio::spawn(a); tokio::select! { x = a => {} };"
                     " tokio::select! { biased; x = a => {} } }\n"
+                ),
+                # Comments, doc comments and strings name `tokio::spawn` without using it.
+                "rust/crates/lk-agents-runtime/src/voice/reply.rs": (
+                    "/// Spawned through the injected Spawner, never `tokio::spawn`.\n"
+                    "fn f() { // not tokio::time\n let s = \"tokio::spawn\"; /* select! { x } */ }\n"
                 ),
                 # Outside the executors: the process runtime owns the Tokio runtime.
                 "rust/crates/lk-agents-runtime/src/process.rs": "fn f() { tokio::spawn(a); }\n",
