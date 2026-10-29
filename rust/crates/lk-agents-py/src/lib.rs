@@ -164,6 +164,9 @@ impl generated::Implementations for Selected {
     >;
     type InferenceVad =
         lk_agents_runtime::inference::vad::NativeVad<lk_agents_runtime::process::Process>;
+    type InferenceEot =
+        lk_agents_runtime::inference::eot::NativeEot<lk_agents_runtime::process::Process>;
+    type EotStream = lk_agents_runtime::inference::eot::DetectorStream;
     type InferenceStt =
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;

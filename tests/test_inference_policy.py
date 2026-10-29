@@ -324,7 +324,7 @@ async def test_eot_resolves_connection_policy_before_opening_the_gateway(explici
         )
         try:
             prediction = await asyncio.wait_for(source.predict(), timeout=2)
-            assert prediction["end_of_turn_probability"] == 1.0
+            assert prediction.end_of_turn_probability == 1.0
             assert connections == int(explicit)
         finally:
             await source.aclose()

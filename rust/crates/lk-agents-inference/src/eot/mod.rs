@@ -8,11 +8,10 @@
 
 mod cloud;
 mod connector;
+mod detector;
 mod eot;
 mod local;
 pub mod options;
-#[cfg(feature = "python")]
-mod python;
 mod session;
 /// The channel sink and the mounted-transport shell a binding's `run()`/`recv_event()` drive.
 mod shell;
@@ -31,6 +30,7 @@ pub use cloud::{
     WebSocketSink, WebSocketStream,
 };
 pub use connector::TungsteniteEotConnector;
+pub use detector::{DetectorStream, NativeEot};
 pub use eot::{
     CancelReason, DEFAULT_PREDICTION_TIMEOUT, DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning,
     MIN_SILENCE_DURATION,

@@ -4,7 +4,7 @@
 /// One end-of-turn prediction. Optional timing and backchannel data depend on the detector.
 ///
 /// Read from the generated prediction record returned by a host detector's `_core_predict()`.
-#[crate::host(record(module = "turn_events", extract))]
+#[crate::host(record(module = "turn_events", emit, extract))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EotPrediction {
     /// How likely the user has finished their turn, `[0, 1]`.

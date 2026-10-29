@@ -92,6 +92,8 @@ pub trait Implementations: 'static {
     type StreamAdapterFunctions: ::lk_agents_abi::StreamAdapterFunctions<Stream = Self::FallbackTtsStream>;
     type InferenceTtsStream: ::lk_agents_abi::tts::streams::InferenceTtsStream;
     type FallbackTtsStream: ::lk_agents_abi::tts::streams::FallbackTtsStream;
+    type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
+    type EotStream: ::lk_agents_abi::turn::inference::EotStream;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
@@ -268,6 +270,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tts::tts_adapter_stream, m)?)?;
     m.add_class::<tts::InferenceTtsStream>()?;
     m.add_class::<tts::FallbackTtsStream>()?;
+    m.add_class::<turn::InferenceEot>()?;
+    m.add_class::<turn::EotStream>()?;
     m.add_class::<types::_core_ProviderAttempts>()?;
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;

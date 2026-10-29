@@ -1,0 +1,138 @@
+//! `inference.TurnDetector`'s native engine: the threshold table and the streams it opens, cloud
+//! with a fallback to the local mini model. The mini model is native when the build links one,
+//! else the host's.
+
+use std::sync::Arc;
+
+use crate::errors::{HostError, ProviderError};
+use crate::metrics::base::EotInferenceMetrics;
+use crate::tokenize::language::{LanguageCode, ThresholdOverride, TurnDetectorModel};
+use crate::{ApiConnectOptions, AudioFrame, EotPrediction};
+
+/// The host's mini model factory (`livekit.local_inference.EOT`), called when a stream mounts the
+/// mini model. Never called when the model is native.
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+pub trait EotModels: Send + Sync {
+    #[host(call, name = "__call__")]
+    fn create(&self) -> Result<Arc<dyn EotModel>, HostError>;
+}
+
+/// One host mini model, called from a blocking thread.
+#[crate::host(proxy(host = "livekit.local_inference.EOT"))]
+pub trait EotModel: Send + Sync {
+    /// The end-of-turn probability of 16 kHz mono samples.
+    #[host(call)]
+    fn predict(&self, pcm: Vec<i16>) -> Result<f64, HostError>;
+}
+
+/// Hears each prediction's metrics (`TurnDetector.emit("metrics_collected", ..)`).
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+pub trait EotMetricsObserver: Send + Sync {
+    #[host(call, name = "__call__")]
+    fn collected(&self, metrics: EotInferenceMetrics) -> Result<(), HostError>;
+}
+
+/// The detector behind `inference.TurnDetector`: the user's threshold overrides over the model's
+/// defaults, shared by every stream it opens, so a stream's cloud-to-local fallback rescales the
+/// table the detector answers from.
+#[crate::host(class(name = "InferenceEot"))]
+pub trait InferenceEot: Send + Sync + Sized + 'static {
+    #[host(class(name = "EotStream"))]
+    type Stream;
+
+    /// `turn-detector-v1` connects to the gateway at `base_url`; `local_fallback` lets it degrade
+    /// to the mini model, which `local_model` builds when the build links none.
+    #[host(new)]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        model: TurnDetectorModel,
+        overrides: Option<ThresholdOverride>,
+        backchannel_overrides: Option<ThresholdOverride>,
+        #[host(kw)] local_fallback: bool,
+        base_url: String,
+        api_key: String,
+        api_secret: String,
+        sample_rate: u32,
+        local_model: Arc<dyn EotModels>,
+        #[host(default = None)] on_metrics: Option<Arc<dyn EotMetricsObserver>>,
+    ) -> Self;
+
+    /// The active model, which a stream's fallback changes.
+    #[host(getter)]
+    fn model(&self) -> TurnDetectorModel;
+
+    /// `None` is `NOT_GIVEN`.
+    #[host(getter)]
+    fn overrides(&self) -> Option<ThresholdOverride>;
+
+    #[host(getter)]
+    fn backchannel_overrides(&self) -> Option<ThresholdOverride>;
+
+    /// `language=None` scores as English, not the global default.
+    #[host(call)]
+    fn lookup(&self, #[host(default = None)] language: Option<LanguageCode>) -> Option<f64>;
+
+    /// `None` disables backchannel detection; a `0.0` threshold also means off.
+    #[host(call)]
+    fn lookup_backchannel(
+        &self,
+        #[host(default = None)] language: Option<LanguageCode>,
+    ) -> Option<f64>;
+
+    #[host(call)]
+    fn supports(&self, #[host(default = None)] language: Option<LanguageCode>) -> bool;
+
+    #[host(call)]
+    fn update_overrides(&self, #[host(default = None)] overrides: Option<ThresholdOverride>);
+
+    #[host(call)]
+    fn update_backchannel_overrides(
+        &self,
+        #[host(default = None)] overrides: Option<ThresholdOverride>,
+    );
+
+    /// One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
+    /// each gateway connection.
+    #[host(call)]
+    fn stream(
+        &self,
+        headers: Vec<(String, String)>,
+        conn_options: ApiConnectOptions,
+    ) -> Result<Self::Stream, ProviderError>;
+}
+
+/// `TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
+/// session's own detector when handed to it.
+#[crate::host(class(name = "EotStream", native = crate::EotDetector))]
+pub trait EotStream: Send + Sync + Sized + 'static {
+    /// The active model, which changes under the caller after a fallback.
+    #[host(getter)]
+    fn model(&self) -> TurnDetectorModel;
+
+    #[host(getter)]
+    fn is_fallback(&self) -> bool;
+
+    /// True once the cloud transport is gone with no local model to replace it.
+    #[host(getter)]
+    fn is_degraded(&self) -> bool;
+
+    /// The prediction over the audio so far; supersedes any in flight.
+    #[host(await)]
+    async fn predict(&self) -> Result<EotPrediction, ProviderError>;
+
+    #[host(call)]
+    fn cancel_inference(&self, #[host(kw, default = false)] timed_out: bool);
+
+    /// A segment boundary, not a close.
+    #[host(call)]
+    fn flush(&self, #[host(default = None)] reason: Option<String>);
+
+    #[host(call)]
+    fn push_audio(&self, frame: AudioFrame);
+
+    #[host(call)]
+    fn end_input(&self);
+
+    #[host(await)]
+    async fn aclose(&self);
+}

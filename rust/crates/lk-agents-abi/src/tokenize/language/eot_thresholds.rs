@@ -43,6 +43,7 @@ pub enum ThresholdError {
     UnusableDefaults,
 }
 
+#[crate::host(record(module = "turn_events", emit, extract))]
 #[crate::host(wire_strs(msg = format!(
     "unknown turn detector model {s:?}: expected turn-detector-v1 or turn-detector-v1-mini"
 )))]
@@ -56,8 +57,10 @@ pub enum TurnDetectorModel {
     V1Mini,
 }
 
-/// `None` is `NOT_GIVEN`. `All` replaces the per-language map, `PerLanguage` merges over it.
+/// One threshold for every language, or thresholds per language merged over the defaults.
+// `None` (no override) is `NOT_GIVEN`.
 #[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(module = "turn_events", emit, extract, transparent))]
 pub enum ThresholdOverride {
     All(f64),
     PerLanguage(BTreeMap<String, f64>),

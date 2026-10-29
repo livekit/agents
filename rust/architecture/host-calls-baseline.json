@@ -22,7 +22,6 @@
   "host-call:rust/crates/lk-agents-abi/src/utils/video.rs",
   "host-call:rust/crates/lk-agents-abi/src/worker/job.rs",
   "host-call:rust/crates/lk-agents-inference/src/duplex/python.rs",
-  "host-call:rust/crates/lk-agents-inference/src/eot/python.rs",
   "host-call:rust/crates/lk-agents-inference/src/interruption/python.rs",
   "host-call:rust/crates/lk-agents-inference/src/python.rs",
   "host-call:rust/crates/lk-agents-py/src/nodes.rs",

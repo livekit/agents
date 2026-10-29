@@ -4,6 +4,7 @@
 use lk_agents_abi::inference::fallback::{SttFallbackModel, TtsFallbackModel};
 use lk_agents_abi::inference::{InferenceModels, InvalidOption, VadResolution};
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
+use lk_agents_abi::tokenize::language::TurnDetectorModel;
 use lk_agents_abi::{SttCapabilities, TtsCapabilities};
 use serde_json::{Map, Value};
 
@@ -143,8 +144,8 @@ impl InferenceModels for Models {
         key: String,
         secret: String,
         local_fallback: bool,
-    ) -> Result<(String, bool, Vec<String>), InvalidOption> {
-        crate::eot::options::select_wire(
+    ) -> Result<(TurnDetectorModel, bool, Vec<String>), InvalidOption> {
+        crate::eot::options::select(
             version.as_deref(),
             hosted,
             dev,
@@ -153,7 +154,6 @@ impl InferenceModels for Models {
             &secret,
             local_fallback,
         )
-        .map(|(model, cloud, warnings)| (model.to_owned(), cloud, warnings))
         .map_err(InvalidOption)
     }
 

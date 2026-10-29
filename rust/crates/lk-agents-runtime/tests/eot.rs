@@ -229,7 +229,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
     })
     .await
     .expect("the stream fell back to local inference");
-    assert_eq!(stream.model(), "turn-detector-v1-mini");
+    assert_eq!(stream.model(), TurnDetectorModel::V1Mini);
 
     stream.push_audio(lk_agents_abi::AudioFrame::new(vec![0; 3200], 16_000, 1, 1600));
     let answer =

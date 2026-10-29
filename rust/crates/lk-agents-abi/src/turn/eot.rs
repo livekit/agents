@@ -1,9 +1,7 @@
 //! End-of-turn actions and transport events. Session decisions live in
 //! `lk_agents_inference::eot::EotSession`; Python values use the declared record classes.
 
-use lk_agents_host_derive::Host;
-
-use crate::{EotInferenceMetrics, EotPrediction};
+use crate::EotPrediction;
 
 /// The caller mints it, so cancelling a superseded request is a no-op rather than a teardown of the
 /// live one.
@@ -95,33 +93,3 @@ pub struct PredictionEvent {
     pub backchannel_probability: Option<f64>,
 }
 
-/// `{"type": "metrics", + `EOTInferenceMetrics`' six fields, with `metadata` spread flat}`.
-// Flat because the host splats it. `total_duration` and `detection_delay` come from different
-// clocks.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "metrics")]
-pub struct MetricsEvent {
-    pub timestamp: f64,
-    pub total_duration: f64,
-    pub detection_delay: f64,
-    pub prediction_duration: f64,
-    pub num_requests: u32,
-    pub model_name: Option<String>,
-    pub model_provider: Option<String>,
-}
-
-impl MetricsEvent {
-    /// Without metadata both keys are written as `None`, not omitted.
-    pub fn of(metrics: &EotInferenceMetrics) -> Self {
-        let metadata = metrics.metadata.as_ref();
-        MetricsEvent {
-            timestamp: metrics.timestamp,
-            total_duration: metrics.total_duration,
-            detection_delay: metrics.detection_delay,
-            prediction_duration: metrics.prediction_duration,
-            num_requests: metrics.num_requests,
-            model_name: metadata.and_then(|m| m.model_name.clone()),
-            model_provider: metadata.and_then(|m| m.model_provider.clone()),
-        }
-    }
-}

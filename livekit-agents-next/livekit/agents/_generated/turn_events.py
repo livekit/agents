@@ -2,11 +2,19 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
+#     rust/crates/lk-agents-abi/src/tokenize/language/eot_thresholds.rs
 #     rust/crates/lk-agents-abi/src/turn/events.rs
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, TypeAlias
+
+TurnDetectorModel: TypeAlias = Literal["turn-detector-v1", "turn-detector-v1-mini"]
+
+
+ThresholdOverride: TypeAlias = float | dict[str, float]
+"""One threshold for every language, or thresholds per language merged over the defaults."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

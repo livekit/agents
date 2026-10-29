@@ -9,8 +9,6 @@ from ._core_handwritten import (
     AdaptiveNoiseGate as AdaptiveNoiseGate,
     AgentNodes as AgentNodes,
     DuplexRealtimeModel as DuplexRealtimeModel,
-    EotStream as EotStream,
-    EotThresholdOptions as EotThresholdOptions,
     FixedGate as FixedGate,
     InterruptionDetector as InterruptionDetector,
     InterruptionDetectorStream as InterruptionDetectorStream,
@@ -334,6 +332,10 @@ from ._generated._core_tts import (
     supported_nonverbals as supported_nonverbals,
     to_xml as to_xml,
     tts_adapter_stream as tts_adapter_stream,
+)
+from ._generated._core_turn import (
+    EotStream as EotStream,
+    InferenceEot as InferenceEot,
 )
 from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,

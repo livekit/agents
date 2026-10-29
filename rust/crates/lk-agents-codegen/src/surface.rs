@@ -20,8 +20,6 @@ const HANDWRITTEN: &[&str] = &[
     "AdaptiveNoiseGate",
     "AgentNodes",
     "DuplexRealtimeModel",
-    "EotStream",
-    "EotThresholdOptions",
     "FixedGate",
     "InterruptionDetector",
     "InterruptionDetectorStream",

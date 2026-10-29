@@ -568,7 +568,7 @@ pub trait InferenceModels {
         key: String,
         secret: String,
         local_fallback: bool,
-    ) -> Result<(String, bool, Vec<String>), InvalidOption>;
+    ) -> Result<(crate::tokenize::language::TurnDetectorModel, bool, Vec<String>), InvalidOption>;
 
     /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
     #[host(function)]

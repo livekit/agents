@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::EotInferenceMetrics;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::turn::eot::{MetricsEvent, PredictionEvent};
+use lk_agents_abi::turn::eot::PredictionEvent;
 use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::tokenize::language::{ThresholdError, ThresholdOptions};
 use tokio::sync::mpsc;
@@ -22,7 +22,7 @@ pub const PROVIDER: &str = "livekit";
 /// One thing a transport reported, on its way to the host's `_apply` chain.
 pub enum SinkEvent {
     Prediction(PredictionEvent),
-    Metrics(Box<MetricsEvent>),
+    Metrics(Box<EotInferenceMetrics>),
     Warn(EotWarning),
     /// The transport has stopped reporting. Posted through the channel so it arrives after every
     /// queued event.
@@ -67,7 +67,7 @@ impl PredictionSink for ChannelSink {
     }
 
     fn metrics(&self, metrics: EotInferenceMetrics) {
-        let _ = self.events.send(SinkEvent::Metrics(Box::new(MetricsEvent::of(&metrics))));
+        let _ = self.events.send(SinkEvent::Metrics(Box::new(metrics)));
     }
 
     fn warn(&self, warning: EotWarning) {

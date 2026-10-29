@@ -1,7 +1,9 @@
 //! Constructor selection, shared by every host. Ambient environment is supplied as data.
 
+use lk_agents_abi::tokenize::language::TurnDetectorModel;
+
 /// The turn detector a host constructs: `(model, cloud, warnings)`.
-pub fn select_wire(
+pub fn select(
     version: Option<&str>,
     hosted: bool,
     dev: bool,
@@ -9,7 +11,7 @@ pub fn select_wire(
     key: &str,
     secret: &str,
     local_fallback: bool,
-) -> Result<(&'static str, bool, Vec<String>), String> {
+) -> Result<(TurnDetectorModel, bool, Vec<String>), String> {
     let mut cloud = version.map_or(hosted || dev, |v| v == "v1");
     let mut warnings = vec![];
     if cloud {
@@ -33,10 +35,11 @@ pub fn select_wire(
             cloud = false;
         }
     }
-    let model = if cloud { "turn-detector-v1" } else { "turn-detector-v1-mini" };
+    let model = if cloud { TurnDetectorModel::V1 } else { TurnDetectorModel::V1Mini };
     if !local_fallback && !cloud {
         warnings.push(format!(
-            "local_fallback=False has no effect on the {model} model, which runs locally by design"
+            "local_fallback=False has no effect on the {} model, which runs locally by design",
+            model.as_str()
         ));
     }
     Ok((model, cloud, warnings))
@@ -47,13 +50,13 @@ mod tests {
     use super::*;
     #[test]
     fn explicit_cloud_requires_credentials_but_auto_degrades() {
-        assert!(select_wire(Some("v1"), false, false, "url", "", "secret", true).is_err());
-        let (model, cloud, warnings) = select_wire(None, true, false, "url", "", "secret", true).unwrap();
+        assert!(select(Some("v1"), false, false, "url", "", "secret", true).is_err());
+        let (model, cloud, warnings) = select(None, true, false, "url", "", "secret", true).unwrap();
         assert!(!cloud);
-        assert_eq!(model, "turn-detector-v1-mini");
+        assert_eq!(model, TurnDetectorModel::V1Mini);
         assert_eq!(warnings.len(), 1);
-        assert!(select_wire(None, false, true, "url", "key", "secret", true).unwrap().1);
-        assert!(!select_wire(Some("v1-mini"), true, true, "url", "key", "secret", true).unwrap().1);
-        assert_eq!(select_wire(None, false, false, "", "", "", false).unwrap().2.len(), 1);
+        assert!(select(None, false, true, "url", "key", "secret", true).unwrap().1);
+        assert!(!select(Some("v1-mini"), true, true, "url", "key", "secret", true).unwrap().1);
+        assert_eq!(select(None, false, false, "", "", "", false).unwrap().2.len(), 1);
     }
 }

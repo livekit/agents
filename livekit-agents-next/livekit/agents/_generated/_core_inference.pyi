@@ -17,6 +17,7 @@ from .inference_tts import FallbackModel
 from .realtime import RealtimeCapabilities
 from .stt import STTCapabilities
 from .tts import TTSCapabilities
+from .turn_events import TurnDetectorModel
 
 def inference_resolve_api_key(explicit: str | None = None) -> str:
     """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
@@ -104,7 +105,7 @@ def eot_select(
     key: str,
     secret: str,
     local_fallback: bool,
-) -> tuple[str, bool, list[str]]:
+) -> tuple[TurnDetectorModel, bool, list[str]]:
     """The turn detector a host constructs: `(model, cloud, warnings)`."""
 
 def stt_resolve_vad_for_model(model: str | None = None, *, has_vad: bool = False) -> str:

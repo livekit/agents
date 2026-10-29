@@ -2627,6 +2627,44 @@ pub mod tool_report {
 pub mod turn_events {
     use pyo3::prelude::*;
 
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/language/eot_thresholds.rs.
+
+    pub fn turn_detector_model_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tokenize::language::TurnDetectorModel> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "turn-detector-v1" => Ok(::lk_agents_abi::tokenize::language::TurnDetectorModel::V1),
+                "turn-detector-v1-mini" => Ok(::lk_agents_abi::tokenize::language::TurnDetectorModel::V1Mini),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("TurnDetectorModel: {other:?} is not one of 'turn-detector-v1', 'turn-detector-v1-mini'"))),
+            }
+    }
+
+    pub fn turn_detector_model_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::tokenize::language::TurnDetectorModel) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::tokenize::language::TurnDetectorModel::V1 => "turn-detector-v1",
+                ::lk_agents_abi::tokenize::language::TurnDetectorModel::V1Mini => "turn-detector-v1-mini",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/language/eot_thresholds.rs.
+
+    pub fn threshold_override_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tokenize::language::ThresholdOverride> {
+        if (obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())) {
+            return Ok(::lk_agents_abi::tokenize::language::ThresholdOverride::All(::lk_agents_abi::python::number_from_py::<f64>(obj, "ThresholdOverride.All")?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::tokenize::language::ThresholdOverride::PerLanguage(obj.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, ::lk_agents_abi::python::number_from_py::<f64>(item, "ThresholdOverride.PerLanguage")?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()?));
+        }
+        Err(super::not_a(obj, "ThresholdOverride"))
+    }
+
+    pub fn threshold_override_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::tokenize::language::ThresholdOverride) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::tokenize::language::ThresholdOverride::All(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            ::lk_agents_abi::tokenize::language::ThresholdOverride::PerLanguage(x) => { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() },
+        })
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/turn/events.rs.
     static EOT_PREDICTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
@@ -2643,6 +2681,17 @@ pub mod turn_events {
                 inference_duration: ::lk_agents_abi::python::attr_with(obj, "EotPrediction", "inference_duration", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "EotPrediction.inference_duration")).map(Some) })?,
                 backchannel_probability: ::lk_agents_abi::python::attr_with(obj, "EotPrediction", "backchannel_probability", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "EotPrediction.backchannel_probability")).map(Some) })?,
             })
+    }
+
+    pub fn eot_prediction_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::EotPrediction) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::EotPrediction { end_of_turn_probability, last_speaking_time, detection_delay, inference_duration, backchannel_probability } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("end_of_turn_probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_of_turn_probability, py)?)?;
+            kwargs.set_item("last_speaking_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(last_speaking_time, py)?)?;
+            kwargs.set_item("detection_delay", match detection_delay { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("inference_duration", match inference_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("backchannel_probability", match backchannel_probability { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(EOT_PREDICTION.import(py, "livekit.agents._generated.turn_events", "EotPrediction")?.as_any(), (), Some(&kwargs))
     }
 }
 

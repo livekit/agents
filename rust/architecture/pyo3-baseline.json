@@ -63,7 +63,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/job.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/worker.rs",
   "pyo3-file:rust/crates/lk-agents-inference/src/duplex/python.rs",
-  "pyo3-file:rust/crates/lk-agents-inference/src/eot/python.rs",
   "pyo3-file:rust/crates/lk-agents-inference/src/interruption/python.rs",
   "pyo3-file:rust/crates/lk-agents-inference/src/python.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/images.rs",

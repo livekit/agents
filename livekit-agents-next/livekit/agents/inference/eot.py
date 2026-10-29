@@ -10,8 +10,14 @@ from livekit import rtc
 from .. import _core, utils
 from .._generated.language import LanguageCode
 from ..log import logger
-from ..metrics import EOTInferenceMetrics, Metadata
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..metrics import EOTInferenceMetrics
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGiven,
+    NotGivenOr,
+)
 from ..utils import is_given
 from ._utils import get_default_inference_url, get_inference_headers
 
@@ -27,10 +33,16 @@ DEFAULT_PREDICTION_TIMEOUT = 1.0
 Overrides = float | dict[LanguageCode | str, float]
 
 
-def _overrides(value: NotGivenOr[Overrides]) -> Any:
-    if not is_given(value):
+def _overrides(value: NotGivenOr[Overrides]) -> float | dict[str, float] | None:
+    if isinstance(value, NotGiven):
         return None
     return {str(k): v for k, v in value.items()} if isinstance(value, dict) else value
+
+
+def _local_model() -> Any:
+    from livekit.local_inference import EOT
+
+    return EOT()
 
 
 class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
@@ -83,17 +95,26 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         )
         for warning in warnings:
             logger.warning(warning)
-        self._thresholds = _core.EotThresholdOptions(
-            model, _overrides(unlikely_threshold), _overrides(backchannel_threshold)
-        )
         self._sample_rate = sample_rate
         self._local_fallback = local_fallback
+        self._detector = _core.InferenceEot(
+            model,
+            _overrides(unlikely_threshold),
+            _overrides(backchannel_threshold),
+            local_fallback=local_fallback,
+            base_url=self._base_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+            sample_rate=sample_rate,
+            local_model=_local_model,
+            on_metrics=self._emit_metrics,
+        )
         self._conn_options = conn_options
         self._warn_overrides()
 
     @property
     def model(self) -> TurnDetectorModels:
-        return self._thresholds.model  # type: ignore[no-any-return]
+        return self._detector.model
 
     @property
     def provider(self) -> str:
@@ -107,16 +128,16 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             "sample_rate": self._sample_rate,
             "local_fallback": self._local_fallback,
         }
-        if (overrides := self._thresholds.overrides) is not None:
+        if (overrides := self._detector.overrides) is not None:
             options["threshold_overrides"] = overrides
-        if (overrides := self._thresholds.backchannel_overrides) is not None:
+        if (overrides := self._detector.backchannel_overrides) is not None:
             options["backchannel_threshold_overrides"] = overrides
         return options
 
     def _warn_overrides(self) -> None:
         for name, value in (
-            ("unlikely_threshold", self._thresholds.overrides),
-            ("backchannel_threshold", self._thresholds.backchannel_overrides),
+            ("unlikely_threshold", self._detector.overrides),
+            ("backchannel_threshold", self._detector.backchannel_overrides),
         ):
             if value is not None:
                 logger.warning(
@@ -133,43 +154,28 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         backchannel_threshold: NotGivenOr[Overrides] = NOT_GIVEN,
     ) -> None:
         if is_given(unlikely_threshold):
-            self._thresholds.update_overrides(_overrides(unlikely_threshold))
+            self._detector.update_overrides(_overrides(unlikely_threshold))
         if is_given(backchannel_threshold):
-            self._thresholds.update_backchannel_overrides(_overrides(backchannel_threshold))
+            self._detector.update_backchannel_overrides(_overrides(backchannel_threshold))
         self._warn_overrides()
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        return self._thresholds.lookup(language)  # type: ignore[no-any-return]
+        return self._detector.lookup(language)
 
     async def backchannel_threshold(self, language: LanguageCode | None) -> float | None:
-        return self._thresholds.lookup_backchannel(language)  # type: ignore[no-any-return]
+        return self._detector.lookup_backchannel(language)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
-        return self._thresholds.supports(language)  # type: ignore[no-any-return]
+        return self._detector.supports(language)
 
     def stream(self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN) -> _core.EotStream:
         resolved = _core._core_resolve_api_connect_options(
             self._conn_options, conn_options if is_given(conn_options) else None
         )
-        return _core.EotStream(
-            self.model,
-            self._thresholds,
-            local_fallback=self._local_fallback,
-            base_url=self._base_url,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
-            headers=lambda: list(get_inference_headers().items()),
-            sample_rate=self._sample_rate,
-            conn_options=resolved,
-            on_metrics=self._emit_metrics,
-        )
+        return self._detector.stream(list(get_inference_headers().items()), resolved)
 
-    def _emit_metrics(self, ev: dict[str, Any]) -> None:
-        metadata = Metadata(
-            model_name=ev.pop("model_name"), model_provider=ev.pop("model_provider")
-        )
-        ev.pop("type", None)
-        self.emit("metrics_collected", EOTInferenceMetrics(**ev, metadata=metadata))
+    def _emit_metrics(self, ev: dict[str, object]) -> None:
+        self.emit("metrics_collected", EOTInferenceMetrics.model_validate(ev))
 
 
 TurnDetectorStream = _core.EotStream

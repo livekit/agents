@@ -7,12 +7,11 @@ use std::collections::HashMap;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::tokenize::language::TurnDetectorModel;
-use lk_agents_abi::turn::eot::MetricsEvent;
 use lk_agents_abi::utils::resample::{Quality, Resampler};
 use lk_agents_abi::utils::workers::{WorkerClass, WorkerError, try_spawn};
-use lk_agents_abi::{AudioFrame, EotPrediction, ProviderId};
+use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
@@ -24,7 +23,7 @@ use crate::eot::{
 pub type TransportFactory = Arc<dyn Fn(TurnDetectorModel) -> Arc<TransportShell> + Send + Sync>;
 
 /// `self._detector.emit("metrics_collected", ...)`.
-pub type MetricsCallback = Arc<dyn Fn(MetricsEvent) + Send + Sync>;
+pub type MetricsCallback = Arc<dyn Fn(EotInferenceMetrics) + Send + Sync>;
 
 const LOG: &str = "livekit.agents";
 
@@ -140,8 +139,17 @@ impl EotStream {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub fn model(&self) -> &'static str {
-        self.lock().session.model().as_str()
+    pub fn model(&self) -> TurnDetectorModel {
+        self.lock().session.model()
+    }
+
+    pub fn id(&self) -> ProviderId {
+        ProviderId { model: self.model().as_str().into(), ..self.id.clone() }
+    }
+
+    /// What a prediction is judged against, as it is now.
+    pub fn thresholds(&self) -> lk_agents_abi::tokenize::language::ThresholdOptions {
+        self.lock().session.thresholds()
     }
 
     pub fn is_fallback(&self) -> bool {
@@ -476,43 +484,5 @@ impl EotStream {
                 }
             }
         }
-    }
-}
-
-impl lk_agents_abi::EotDetector for EotStream {
-    fn id(&self) -> ProviderId {
-        ProviderId { model: self.model().into(), ..self.id.clone() }
-    }
-
-    fn push_audio(&self, frame: AudioFrame) {
-        EotStream::push_audio(self, frame);
-    }
-
-    fn cancel(&self, timed_out: bool) {
-        self.cancel_inference(timed_out);
-    }
-
-    fn flush(&self, _reason: &str) {
-        EotStream::flush(self);
-    }
-
-    fn thresholds(&self) -> Option<lk_agents_abi::tokenize::language::ThresholdOptions> {
-        Some(self.lock().session.thresholds())
-    }
-
-    fn predict(
-        &self,
-        _timeout: Option<std::time::Duration>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
-        Box::pin(async move {
-            self.predict().await.map_err(|_| ApiError::new("turn detector stream closed").into())
-        })
-    }
-
-    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            EotStream::aclose(self);
-            self.wait_closed().await;
-        })
     }
 }

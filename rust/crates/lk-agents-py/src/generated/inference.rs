@@ -202,9 +202,9 @@ pub fn llm_unsupported_params(model: ::std::string::String, has_tools: bool, rea
 /// The turn detector a host constructs: `(model, cloud, warnings)`.
 #[pyfunction]
 #[pyo3(signature = (version, hosted, dev, url, key, secret, local_fallback))]
-pub fn eot_select(version: ::std::option::Option<::std::string::String>, hosted: bool, dev: bool, url: ::std::string::String, key: ::std::string::String, secret: ::std::string::String, local_fallback: bool) -> PyResult<(::std::string::String, bool, ::std::vec::Vec<::std::string::String>)> {
+pub fn eot_select<'py>(py: Python<'py>, version: ::std::option::Option<::std::string::String>, hosted: bool, dev: bool, url: ::std::string::String, key: ::std::string::String, secret: ::std::string::String, local_fallback: bool) -> PyResult<Bound<'py, PyAny>> {
     let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::eot_select(version, hosted, dev, url, key, secret, local_fallback).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
+    Ok({ let (x0, x1, x2,) = out; ::pyo3::types::PyTuple::new(py, [crate::generated::records::turn_events::turn_detector_model_to_py(py, x0)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?, ::pyo3::types::PyList::new(py, x2.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any()])?.into_any() })
 }
 
 /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
