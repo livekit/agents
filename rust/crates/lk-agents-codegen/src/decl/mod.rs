@@ -35,6 +35,9 @@ pub struct RecordDecl {
     pub name: String,
     /// The generated Python module (`agent_run`: `_generated/agent_run.py`).
     pub module: String,
+    /// The public module its classes report as `__module__` (`record(.., path = "..")`, else the
+    /// file's `file(path = "..")` for a record of the file's module): `repr`, `pickle` and the docs read it.
+    pub path: Option<String>,
     /// The ABI subject: the generated Rust module it is written into.
     pub family: String,
     pub source: String,

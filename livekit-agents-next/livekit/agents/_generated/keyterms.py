@@ -33,6 +33,9 @@ class ResolvedKeytermDetection:
     tool_name: str
 
 
+ResolvedKeytermDetection.__module__ = "livekit.agents.voice.agent_session"
+
+
 class KeytermDetectionOptions(TypedDict, total=False):
     """Configuration for automatic keyterm detection.
 

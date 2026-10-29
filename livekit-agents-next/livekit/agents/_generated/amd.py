@@ -65,6 +65,9 @@ class AmdConstants(TypedDict):
     max_extension_secs: float
 
 
+AMDCategory.__module__ = "livekit.agents.voice.amd"
+
+
 # --- the user's tuning, as the host takes it --------------------------------------------------
 
 class DetectionOptions(TypedDict, total=False):

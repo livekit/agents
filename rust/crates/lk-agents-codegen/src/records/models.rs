@@ -175,6 +175,7 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
                 ));
             }
         }
+        body.push_str(&public_paths(&records));
         let typing = typing.render(&[]);
         if !typing.is_empty() {
             runtime.add("typing", "TYPE_CHECKING");
@@ -185,6 +186,9 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         for s in sources {
             text.push_str(&format!("#     {s}\n"));
         }
+        text.push_str(
+            "#\n# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a\n# non-empty diff, so a hand edit here is reverted rather than merged.\n",
+        );
         text.push_str("\nfrom __future__ import annotations\n\n");
         text.push_str(&runtime.render(&[]));
         if !typing.is_empty() {
@@ -205,6 +209,29 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         out.push(dispatch(r, decls)?);
     }
     Ok(out)
+}
+
+/// `X.__module__ = "<path>"` for each class of a record with a public module, after every class:
+/// `repr`, `pickle` and the docs report the import path users write, not `_generated.*`. An alias
+/// (`Literal`, union) has no settable `__module__`.
+fn public_paths(records: &[&RecordDecl]) -> String {
+    let mut lines = Vec::new();
+    for r in records {
+        let Some(path) = &r.path else { continue };
+        let classes: Vec<&str> = match &r.body {
+            RecordBody::Struct(_) => vec![&r.name],
+            RecordBody::Variants(vs) if !r.transparent => {
+                vs.iter().map(|v| v.name.as_str()).collect()
+            }
+            RecordBody::Literals(_) if r.enumeration => vec![&r.name],
+            _ => Vec::new(),
+        };
+        lines.extend(classes.into_iter().map(|c| format!("{c}.__module__ = {path:?}\n")));
+    }
+    match lines.is_empty() {
+        true => String::new(),
+        false => format!("\n\n{}", lines.concat()),
+    }
 }
 
 /// `_generated/<dispatch>.py`: a dispatched record's routed members, keyed by model class.
@@ -482,7 +509,10 @@ fn model(
                 s.push('\n');
             }
             for (rust, host, doc) in values {
-                s.push_str(&format!("    {} = {host:?}\n", crate::decl::resolve::snake(rust).to_uppercase()));
+                s.push_str(&format!(
+                    "    {} = {host:?}\n",
+                    crate::decl::resolve::snake(rust).to_uppercase()
+                ));
                 s.push_str(&docstring(doc, "    "));
             }
             s

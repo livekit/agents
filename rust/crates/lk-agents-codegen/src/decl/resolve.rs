@@ -1203,11 +1203,20 @@ fn python_target(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>, b
 
 /// The `#[host(file(module = ".."))]` default of the records in a file.
 fn file_module(items: &[syn::Item]) -> Option<String> {
+    file_text(items, "module")
+}
+
+/// The `#[host(file(path = ".."))]` default public module of the records in a file.
+fn file_path(items: &[syn::Item]) -> Option<String> {
+    file_text(items, "path")
+}
+
+fn file_text(items: &[syn::Item], key: &str) -> Option<String> {
     items.iter().find_map(|i| {
         let syn::Item::Const(c) = i else { return None };
         let entries = voc::read(&c.attrs).ok()?;
         let file = voc::find(&entries, "file")?;
-        voc::text("", &file.nested, "module").ok().flatten()
+        voc::text("", &file.nested, key).ok().flatten()
     })
 }
 

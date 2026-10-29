@@ -83,7 +83,10 @@ fn a_declaration_key_that_cannot_be_honoured_is_refused_by_name() {
         (opts("dataclass, total = \"False\""), &["dataclass", "total"][..]),
         (opts("typed_dict, total = \"false\""), &["not a Python bool", "\"false\""]),
         (opts("typed_dict, typed_dict_from = \"typing_extension\""), &["typing_extension"]),
-        (opts("pydantic, tag = \"type\", tag_value = \"h\", tag_after = \"nope\""), &["tag_after", "nope"]),
+        (
+            opts("pydantic, tag = \"type\", tag_value = \"h\", tag_after = \"nope\""),
+            &["tag_after", "nope"],
+        ),
         (opts("typed_dict, order = \"a\""), &["leaves out `b`"]),
         (opts("typed_dict, order = \"a, b, a\""), &["twice"]),
         (opts("typed_dict, order = \"a, b, c\""), &["`c`"]),
@@ -846,7 +849,7 @@ fn an_enum_record_crosses_as_its_str_enum_members() {
     let decls = crate::decl::tests::read(
         r#"
         /// Why a session closed.
-        #[crate::host(record(module = "session", extract, emit, enum))]
+        #[crate::host(record(module = "session", path = "livekit.agents.session", extract, emit, enum))]
         pub enum CloseReason {
             Error,
             /// The job ended.
@@ -860,7 +863,8 @@ fn an_enum_record_crosses_as_its_str_enum_members() {
     let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
     assert!(
         session.contains("from enum import Enum, unique\n")
-            && session.contains("@unique\nclass CloseReason(str, Enum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job-shutdown\"\n    \"\"\"The job ended.\"\"\"\n"),
+            && session.contains("@unique\nclass CloseReason(str, Enum):\n    \"\"\"Why a session closed.\"\"\"\n\n    ERROR = \"error\"\n    JOB_SHUTDOWN = \"job-shutdown\"\n    \"\"\"The job ended.\"\"\"\n")
+            && session.contains("\nCloseReason.__module__ = \"livekit.agents.session\"\n"),
         "{session}"
     );
     let shell = crate::records::conversions(&decls).expect("emits").text;

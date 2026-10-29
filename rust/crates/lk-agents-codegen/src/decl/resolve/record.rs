@@ -124,10 +124,19 @@ impl Resolver<'_> {
                 return Err(format!("{at}: duplicate record member `{}`", member.name));
             }
         }
+        // The file's public path covers the records of the file's own module only.
+        let path = match voc::text(at, &record.nested, "path")? {
+            Some(path) => Some(path),
+            None if super::file_module(&module.items).as_ref() == Some(&py_module) => {
+                super::file_path(&module.items)
+            }
+            None => None,
+        };
         Ok(RecordDecl {
             rust: k.extern_path(self.module, index).map_err(|e| format!("{at}: {e}"))?,
             name,
             module: py_module,
+            path,
             family: module.path.first().cloned().ok_or_else(|| {
                 format!("{at}: a record is declared in a subject module, not the crate root")
             })?,
@@ -344,6 +353,7 @@ pub(super) fn record_target(
         &record.nested,
         &[
             "module",
+            "path",
             "name",
             "extract",
             "emit",

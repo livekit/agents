@@ -5,6 +5,9 @@
 #     rust/crates/lk-agents-abi/src/agent.rs
 #     rust/crates/lk-agents-abi/src/agent/assertions.rs
 #     rust/crates/lk-agents-abi/src/agent/run.rs
+#
+# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
+# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 

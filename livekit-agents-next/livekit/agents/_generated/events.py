@@ -3,6 +3,9 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
+#
+# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
+# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -166,3 +169,17 @@ class CloseReason(str, Enum):
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
     TASK_COMPLETED = "task_completed"
+
+
+UserStateChangedEvent.__module__ = "livekit.agents.voice.events"
+AgentStateChangedEvent.__module__ = "livekit.agents.voice.events"
+UserInputTranscribedEvent.__module__ = "livekit.agents.voice.events"
+UserTranscriptionTimeoutEvent.__module__ = "livekit.agents.voice.events"
+EotPredictionEvent.__module__ = "livekit.agents.voice.events"
+_AgentBackchannelOpportunityEvent.__module__ = "livekit.agents.voice.events"
+AgentFalseInterruptionEvent.__module__ = "livekit.agents.voice.events"
+ToolCallUpdated.__module__ = "livekit.agents.voice.events"
+ToolCallEnded.__module__ = "livekit.agents.voice.events"
+ToolReplyUpdated.__module__ = "livekit.agents.voice.events"
+UserTurnExceededEvent.__module__ = "livekit.agents.voice.events"
+CloseReason.__module__ = "livekit.agents.voice.events"
