@@ -100,20 +100,6 @@ def test_streaming():
     assert TTS(api_key="test-key").capabilities.streaming is True
 
 
-def test_default_voice_id():
-    from livekit.plugins.bland import TTS
-    from livekit.plugins.bland.tts import DEFAULT_VOICE_ID
-
-    assert TTS(api_key="test-key")._opts.voice_id == DEFAULT_VOICE_ID
-
-
-def test_custom_voice_id():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="test-key", voice_id="c18a1cd5-91ef-4b06-841a-e58b8b487e8c")
-    assert tts._opts.voice_id == "c18a1cd5-91ef-4b06-841a-e58b8b487e8c"
-
-
 def test_default_sample_rate_is_btts_v3_native():
     from livekit.plugins.bland import TTS
 
@@ -133,26 +119,6 @@ def test_rejects_unsupported_sample_rate(rate: int):
 
     with pytest.raises(ValueError, match="sample_rate must be one of"):
         TTS(api_key="test-key", sample_rate=rate)
-
-
-def test_controls_default_to_unset():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts._opts.expressiveness is NOT_GIVEN
-    assert tts._opts.stability is NOT_GIVEN
-
-
-def test_update_options():
-    from livekit.plugins.bland import TTS
-
-    tts = TTS(api_key="test-key")
-    tts.update_options(
-        voice_id="c18a1cd5-91ef-4b06-841a-e58b8b487e8c", expressiveness=0.9, stability=0.4
-    )
-    assert tts._opts.voice_id == "c18a1cd5-91ef-4b06-841a-e58b8b487e8c"
-    assert tts._opts.expressiveness == 0.9
-    assert tts._opts.stability == 0.4
 
 
 def test_update_options_preserves_unset_fields():

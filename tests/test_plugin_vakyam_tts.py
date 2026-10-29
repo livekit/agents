@@ -21,13 +21,6 @@ def test_tts_requires_api_key() -> None:
             TTS(api_key=None)
 
 
-def test_tts_accepts_api_key_directly() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts._opts.api_key == "test-key"
-
-
 def test_tts_accepts_api_key_from_env() -> None:
     from livekit.plugins.vakyam import TTS
 

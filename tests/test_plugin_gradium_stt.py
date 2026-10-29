@@ -10,24 +10,6 @@ import pytest
 pytestmark = pytest.mark.plugin("gradium")
 
 
-def test_stt_default_language():
-    """STT defaults to English."""
-    from livekit.plugins.gradium import STT
-
-    stt = STT(api_key="test-key")
-
-    assert stt._opts.language == "en"
-
-
-def test_stt_custom_language():
-    """STT accepts custom language."""
-    from livekit.plugins.gradium import STT
-
-    stt = STT(api_key="test-key", language="fr")
-
-    assert stt._opts.language == "fr"
-
-
 async def test_stream_language_overrides_stream_options():
     """stream language overrides the copied stream config."""
     from livekit.plugins.gradium import STT

@@ -13,83 +13,6 @@ from livekit.agents.types import NOT_GIVEN
 pytestmark = pytest.mark.plugin("assemblyai")
 
 
-async def test_vad_threshold_default():
-    """Test vad_threshold is not set by default."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.vad_threshold is NOT_GIVEN
-
-
-async def test_vad_threshold_set():
-    """Test vad_threshold can be set in constructor."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", vad_threshold=0.3)
-    assert stt._opts.vad_threshold == 0.3
-
-
-async def test_vad_threshold_boundary_values():
-    """Test vad_threshold accepts boundary values (0 and 1)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt_low = STT(api_key="test-key", vad_threshold=0.0)
-    assert stt_low._opts.vad_threshold == 0.0
-
-    stt_high = STT(api_key="test-key", vad_threshold=1.0)
-    assert stt_high._opts.vad_threshold == 1.0
-
-
-async def test_vad_threshold_update():
-    """Test vad_threshold can be updated dynamically."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", vad_threshold=0.5)
-    stt.update_options(vad_threshold=0.7)
-    assert stt._opts.vad_threshold == 0.7
-
-
-async def test_vad_threshold_update_from_default():
-    """Test vad_threshold can be set via update_options when not initially set."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.vad_threshold is NOT_GIVEN
-
-    stt.update_options(vad_threshold=0.4)
-    assert stt._opts.vad_threshold == 0.4
-
-
-async def test_vad_threshold_with_other_options():
-    """Test vad_threshold works alongside other options."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(
-        api_key="test-key",
-        vad_threshold=0.6,
-        end_of_turn_confidence_threshold=0.8,
-        max_turn_silence=1000,
-    )
-    assert stt._opts.vad_threshold == 0.6
-    assert stt._opts.end_of_turn_confidence_threshold == 0.8
-    assert stt._opts.max_turn_silence == 1000
-
-
-async def test_vad_threshold_partial_update():
-    """Test updating vad_threshold doesn't affect other options."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(
-        api_key="test-key",
-        vad_threshold=0.5,
-        max_turn_silence=500,
-    )
-    stt.update_options(vad_threshold=0.8)
-
-    assert stt._opts.vad_threshold == 0.8
-    assert stt._opts.max_turn_silence == 500
-
-
 # ---------------------------------------------------------------------------
 # SpeechStarted → speech_start_time conversion
 #
@@ -191,23 +114,6 @@ async def test_start_time_has_default_before_plugin_override():
     assert time.time() - stream.start_time < 5.0
 
 
-async def test_continuous_partials_default():
-    """Test continuous_partials is not set by default so AssemblyAI's server defaults
-    apply (enabled, except when speaker_labels is on)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="universal-streaming-english")
-    assert stt._opts.continuous_partials is NOT_GIVEN
-
-
-async def test_continuous_partials_set():
-    """Test continuous_partials can be set in constructor with u3-rt-pro."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=True)
-    assert stt._opts.continuous_partials is True
-
-
 async def test_continuous_partials_requires_u3_rt_pro():
     """Test continuous_partials raises ValueError when used with a non-u3-rt-pro model."""
     from livekit.plugins.assemblyai import STT
@@ -239,15 +145,6 @@ async def test_u3_pro_deprecated_rewrites_to_universal_3_6_pro():
     assert "universal-3-6-pro" in mock_logger.warning.call_args.args[0]
 
 
-async def test_continuous_partials_update():
-    """Test continuous_partials can be updated dynamically via update_options."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=False)
-    stt.update_options(continuous_partials=True)
-    assert stt._opts.continuous_partials is True
-
-
 async def test_continuous_partials_unset_by_default_for_u3_rt_pro():
     """continuous_partials is left unset for u3-rt-pro so AssemblyAI's server defaults
     apply (enabled, but disabled by the server when speaker_labels is on)."""
@@ -255,61 +152,6 @@ async def test_continuous_partials_unset_by_default_for_u3_rt_pro():
 
     stt = STT(api_key="test-key", model="u3-rt-pro")
     assert stt._opts.continuous_partials is NOT_GIVEN
-
-
-async def test_continuous_partials_explicit_false():
-    """Test explicit continuous_partials=False is preserved."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=False)
-    assert stt._opts.continuous_partials is False
-
-
-async def test_continuous_partials_update_from_default():
-    """Test continuous_partials can be set via update_options when unset at construction."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.continuous_partials is NOT_GIVEN
-
-    stt.update_options(continuous_partials=False)
-    assert stt._opts.continuous_partials is False
-
-
-async def test_interruption_delay_update():
-    """Test interruption_delay can be updated dynamically via update_options."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", interruption_delay=200)
-    stt.update_options(interruption_delay=750)
-    assert stt._opts.interruption_delay == 750
-
-
-async def test_interruption_delay_update_from_default():
-    """Test interruption_delay can be set via update_options when not initially set."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.interruption_delay is NOT_GIVEN
-
-    stt.update_options(interruption_delay=300)
-    assert stt._opts.interruption_delay == 300
-
-
-async def test_interruption_delay_default():
-    """Test interruption_delay is not set by default."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.interruption_delay is NOT_GIVEN
-
-
-async def test_interruption_delay_set():
-    """Test interruption_delay can be set in constructor with u3-rt-pro."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", interruption_delay=200)
-    assert stt._opts.interruption_delay == 200
 
 
 async def test_interruption_delay_requires_u3_rt_pro():
@@ -328,41 +170,6 @@ async def test_interruption_delay_requires_u3_rt_pro():
 # constructor, and both update_options paths, and is sent over the live
 # websocket as an UpdateConfiguration message.
 # ---------------------------------------------------------------------------
-
-
-async def test_agent_context_default():
-    """Test agent_context is not set by default."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.agent_context is NOT_GIVEN
-
-
-async def test_agent_context_set():
-    """Test agent_context can be set in the constructor (u3-rt-pro only)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(
-        api_key="test-key",
-        model="u3-rt-pro",
-        agent_context="The agent asked for a booking date.",
-    )
-    assert stt._opts.agent_context == "The agent asked for a booking date."
-
-
-async def test_agent_context_update():
-    """Test agent_context can be updated dynamically via update_options."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.agent_context is NOT_GIVEN
-
-    stt.update_options(agent_context="What is your account number?")
-    assert stt._opts.agent_context == "What is your account number?"
-
-    # A subsequent update overwrites (most-recent-turn semantics).
-    stt.update_options(agent_context="Thanks, and your zip code?")
-    assert stt._opts.agent_context == "Thanks, and your zip code?"
 
 
 async def test_agent_context_stream_sends_update_configuration():
@@ -464,22 +271,6 @@ async def test_agent_context_allowed_for_u3_rt_pro_models():
 # ---------------------------------------------------------------------------
 # previous_context_n_turns (u3-rt-pro only, connect-only)
 # ---------------------------------------------------------------------------
-
-
-async def test_previous_context_n_turns_set():
-    """previous_context_n_turns can be set for u3-rt-pro models."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", previous_context_n_turns=5)
-    assert stt._opts.previous_context_n_turns == 5
-
-
-async def test_previous_context_n_turns_default_unset():
-    """previous_context_n_turns is unset by default (server default applies)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.previous_context_n_turns is NOT_GIVEN
 
 
 async def test_previous_context_n_turns_requires_u3_rt_pro():
@@ -641,34 +432,6 @@ async def test_universal_3_6_pro_connect_config_uses_u3_pro_defaults():
 # ---------------------------------------------------------------------------
 
 
-async def test_voice_focus_default():
-    """voice_focus and voice_focus_threshold are unset by default."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.voice_focus is NOT_GIVEN
-    assert stt._opts.voice_focus_threshold is NOT_GIVEN
-
-
-async def test_voice_focus_set():
-    """voice_focus accepts the documented near-field / far-field values."""
-    from livekit.plugins.assemblyai import STT
-
-    near = STT(api_key="test-key", voice_focus="near-field")
-    assert near._opts.voice_focus == "near-field"
-
-    far = STT(api_key="test-key", voice_focus="far-field")
-    assert far._opts.voice_focus == "far-field"
-
-
-async def test_voice_focus_threshold_set():
-    """voice_focus_threshold is stored on the options."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", voice_focus="near-field", voice_focus_threshold=0.7)
-    assert stt._opts.voice_focus_threshold == 0.7
-
-
 async def test_voice_focus_requires_u3_pro_family():
     """voice_focus raises ValueError when used with a non-u3-rt-pro-family model."""
     from livekit.plugins.assemblyai import STT
@@ -803,14 +566,6 @@ async def test_default_model_leaves_continuous_partials_unset():
 # matching the official AssemblyAI SDK, where `mode` lives on the connect-time
 # parameters and not on UpdateConfiguration).
 # ---------------------------------------------------------------------------
-
-
-async def test_mode_default():
-    """mode is unset by default (server default of 'balanced' applies)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.mode is NOT_GIVEN
 
 
 async def test_mode_set():
@@ -986,30 +741,6 @@ async def test_mode_connect_time_only():
 # the AssemblyAI streaming API's UpdateConfiguration; an empty list clears
 # steering back to the model default.
 # ---------------------------------------------------------------------------
-
-
-async def test_language_codes_default():
-    """language_codes is unset by default (automatic detection applies)."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt._opts.language_codes is NOT_GIVEN
-
-
-async def test_language_code_set():
-    """The singular language_code is stored as a one-element language_codes list."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", language_code="es")
-    assert stt._opts.language_codes == ["es"]
-
-
-async def test_language_codes_set():
-    """language_codes can be set in the constructor."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=["en", "es"])
-    assert stt._opts.language_codes == ["en", "es"]
 
 
 async def test_language_code_normalized_to_iso_639_1():

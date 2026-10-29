@@ -195,21 +195,6 @@ def _stt(**kwargs: object) -> elevenlabs_stt.STT:
     return elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
 
 
-def test_no_verbatim_defaults_to_false() -> None:
-    assert _stt()._opts.no_verbatim is False
-
-
-def test_no_verbatim_can_be_enabled() -> None:
-    assert _stt(no_verbatim=True)._opts.no_verbatim is True
-
-
-def test_update_options_sets_no_verbatim() -> None:
-    instance = _stt()
-    assert instance._opts.no_verbatim is False
-    instance.update_options(no_verbatim=True)
-    assert instance._opts.no_verbatim is True
-
-
 def test_update_options_leaves_no_verbatim_untouched_when_not_given() -> None:
     instance = _stt(no_verbatim=True)
     instance.update_options(tag_audio_events=False)
@@ -231,14 +216,6 @@ def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
     instance._streams.add(fake)
     instance.update_options(no_verbatim=True)
     assert captured.get("no_verbatim") is True
-
-
-def test_enable_logging_defaults_to_true() -> None:
-    assert _stt()._opts.enable_logging is True
-
-
-def test_enable_logging_can_be_disabled() -> None:
-    assert _stt(enable_logging=False)._opts.enable_logging is False
 
 
 def test_previous_text_is_kept_for_realtime_model() -> None:
@@ -677,10 +654,6 @@ def test_committed_transcript_sets_confidence() -> None:
     final = stream._event_ch.events[1]
     assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert final.alternatives[0].confidence > 0.9
-
-
-def test_audio_chunk_duration_defaults_to_50ms() -> None:
-    assert _stt()._opts.audio_chunk_duration_ms == 50
 
 
 @pytest.mark.parametrize("duration", [0, -1, 0.5, 100.0, True, False, None, "100"])

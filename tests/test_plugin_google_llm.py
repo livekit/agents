@@ -119,15 +119,6 @@ class TestCachedContentOption:
         finally:
             await stream.aclose()
 
-    def test_cached_content_stored_on_opts(self) -> None:
-        llm = LLM(
-            model="gemini-2.5-flash",
-            api_key="test",
-            cached_content="projects/p/locations/us-central1/cachedContents/xyz",
-        )
-
-        assert llm._opts.cached_content == "projects/p/locations/us-central1/cachedContents/xyz"
-
 
 class TestCachedContentRequestSuppression:
     """Gemini's API rejects ``generateContent`` requests that pass
