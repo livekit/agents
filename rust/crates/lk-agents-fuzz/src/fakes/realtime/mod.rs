@@ -70,6 +70,9 @@ const PROVIDER: &str = "LiveKit Inference Realtime";
 /// errors are stamped on the model's own clock (`RealClock` from its construction).
 const MODEL_BUILT_BEFORE: Duration = Duration::from_secs(3_600);
 
+/// How long a fallback adapter takes to close the failed model's session and open the next one.
+const SWAP_MS: u64 = 50;
+
 /// The samples an audio delta carries.
 const DELTA_SAMPLES: usize = (server::DELTA_MS * SAMPLE_RATE as u64 / 1000) as usize;
 
@@ -245,6 +248,8 @@ struct State {
     opens_at: Option<Ts>,
     /// The connection dropped; commands wait for its return.
     down: bool,
+    /// A fallback setup's model failed: the next opening is the swap to a fresh one.
+    swapping: bool,
     /// When the client gives up connecting, or reconnecting, and the error it reports.
     gives_up: Option<(Ts, ApiError)>,
     /// The session ended: no event comes after the queued ones.
@@ -275,6 +280,7 @@ impl State {
             server: Server::new(0, String::new()),
             opens_at: Some(opens_at),
             down: false,
+            swapping: false,
             gives_up,
             over: false,
             commands: VecDeque::new(),
@@ -400,7 +406,15 @@ impl Socket {
                     return Some(Some(gives_up_at.map_or(at, |g| g.min(at))));
                 }
                 st.opens_at = None;
-                st.events.push_back(self.connection_metrics(self.setup.connect));
+                if std::mem::take(&mut st.swapping) {
+                    st.connections += 1;
+                    st.server = self.new_server(st.connections);
+                    st.desired.clear();
+                    st.commands.clear();
+                    st.events.push_back(Event::SessionSwapped { regenerate: true });
+                } else {
+                    st.events.push_back(self.connection_metrics(self.setup.connect));
+                }
             }
             if st.down {
                 return Some(gives_up_at);
@@ -445,14 +459,12 @@ impl Socket {
         self.hang_up(st);
         st.close_generation(audio);
         if self.setup.fallback {
-            // The other model is healthy: it connects at once.
-            (st.opens_at, st.down, st.gives_up) = (None, false, None);
-            st.connections += 1;
-            st.server = self.new_server(st.connections);
-            st.desired.clear();
+            // The error is told first; the healthy model is up once the old session closed and
+            // the new one opened, and what the old one was sent meanwhile is dropped.
+            let opens_at = server::later(self.now(), SWAP_MS);
+            (st.opens_at, st.down, st.gives_up, st.swapping) = (Some(opens_at), false, None, true);
             st.asked.clear();
             st.cancelled.clear();
-            st.events.push_back(Event::SessionSwapped { regenerate: true });
             return;
         }
         for req_id in std::mem::take(&mut st.asked) {
