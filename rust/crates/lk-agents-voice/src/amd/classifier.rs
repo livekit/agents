@@ -173,9 +173,12 @@ pub enum In {
 
 // --- effects ---
 
-/// The classification request; the driver cancels the in-flight one first.
+/// The classification request, always after a [`Effect::CancelClassification`]: a concurrent
+/// run would answer from a prefix of the greeting. A superseded run's answer still counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifyRequest {
+    /// Numbers this machine's requests from 1; the answer names it.
+    pub id: u64,
     /// The accumulated transcript, space-joined and left-trimmed.
     pub transcript: String,
     /// Whether `postpone_termination` is offered. `false` once [`MAX_EXTENSIONS`] are spent.
@@ -256,6 +259,8 @@ pub struct Core {
     verdict: Option<AmdPrediction>,
     transcript: String,
     extension_count: u32,
+    /// The last [`ClassifyRequest::id`].
+    requests: u64,
     input_open: bool,
     /// Whether this machine holds the session's authorization (resumed exactly once).
     held: bool,
@@ -294,6 +299,7 @@ impl Amd {
             verdict: None,
             transcript: String::new(),
             extension_count: 0,
+            requests: 0,
             input_open: true,
             held: false,
             detection_armed: false,
@@ -636,7 +642,10 @@ impl Core {
     }
 
     fn request_classification(&mut self, out: &mut Out) {
+        self.requests += 1;
+        out.push(Effect::CancelClassification);
         out.push(Effect::RequestClassification(ClassifyRequest {
+            id: self.requests,
             transcript: self.transcript.clone(),
             allow_postpone: self.extension_count < MAX_EXTENSIONS,
         }));

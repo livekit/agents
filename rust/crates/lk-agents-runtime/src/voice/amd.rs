@@ -136,7 +136,6 @@ pub struct AmdSystem {
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     machine: Option<Amd>,
     timers: TimerSet<AmdTimer>,
-    requests: u64,
     prompt: String,
     llm: Arc<dyn Llm>,
     tools_host: Option<HostRef>,
@@ -191,7 +190,6 @@ impl AmdSystem {
             tx,
             machine: Some(machine),
             timers: TimerSet::new(),
-            requests: 0,
             prompt: setup.prompt,
             llm: setup.llm,
             tools_host: setup.tools_host,
@@ -361,12 +359,9 @@ impl AmdSystem {
         }
     }
 
-    /// One classification with `tool_choice="required"`. Debounce by cancel: a concurrent run
-    /// would answer from a prefix of the greeting.
+    /// One classification with `tool_choice="required"`.
     fn request_classification(&mut self, req: ClassifyRequest) {
-        self.cancel_classification();
-        self.requests += 1;
-        let n = self.requests;
+        let n = req.id;
         self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorName::Amd, req: n }));
         let request = classification_request(
             &self.prompt,
