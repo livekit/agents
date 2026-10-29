@@ -30,17 +30,23 @@ pub struct TurnContext {
     pub host_context: Option<crate::HostRef>,
 }
 
+/// A conversation tool's pending call, the one an `InputRequired` came from.
 #[crate::host(record(module = "storage_turn", extract))]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PendingCall {
     pub name: String,
     pub call_id: String,
+    /// The tool that takes the answer, when the `InputRequired` named one.
     #[host(default = None)]
     pub answer_tool: Option<String>,
 }
 
+/// A journal event the handler recorded (docs/internals/storage.md#journal):
+/// `tool_execution_updated` for a call's start, its progress and its end.
 #[crate::host(record(module = "storage_turn", extract))]
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HostEvent {
     pub r#type: String,
     pub payload: Value,

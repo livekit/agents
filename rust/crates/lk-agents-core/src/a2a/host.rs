@@ -4,7 +4,7 @@
 use lk_agents_abi::a2a::turn as host;
 use lk_agents_abi::storage::StorageError;
 
-use crate::a2a::{HandlerOutput, HostEvent, Message, PendingCall, TurnContext, TurnResult};
+use crate::a2a::{HandlerOutput, Message, TurnContext, TurnResult};
 
 impl From<Message> for host::Message {
     fn from(message: Message) -> Self {
@@ -75,19 +75,11 @@ impl TryFrom<host::HandlerOutput> for HandlerOutput {
             app_writes: output.app_writes,
             usage: output.usage,
             input_required: output.input_required,
-            pending_call: output.pending_call.map(|p| PendingCall {
-                name: p.name,
-                call_id: p.call_id,
-                answer_tool: p.answer_tool,
-            }),
+            pending_call: output.pending_call,
             interrupted: output.interrupted,
             metadata: output.metadata,
             error: output.error,
-            events: output
-                .events
-                .into_iter()
-                .map(|e| HostEvent { r#type: e.r#type, payload: e.payload })
-                .collect(),
+            events: output.events,
         })
     }
 }
@@ -118,19 +110,11 @@ impl From<HandlerOutput> for host::HandlerOutput {
             app_writes: output.app_writes,
             usage: output.usage,
             input_required: output.input_required,
-            pending_call: output.pending_call.map(|p| host::PendingCall {
-                name: p.name,
-                call_id: p.call_id,
-                answer_tool: p.answer_tool,
-            }),
+            pending_call: output.pending_call,
             interrupted: output.interrupted,
             metadata: output.metadata,
             error: output.error,
-            events: output
-                .events
-                .into_iter()
-                .map(|e| host::HostEvent { r#type: e.r#type, payload: e.payload })
-                .collect(),
+            events: output.events,
         }
     }
 }

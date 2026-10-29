@@ -34,13 +34,20 @@ class TurnContext:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class PendingCall:
+    """A conversation tool's pending call, the one an `InputRequired` came from."""
+
     name: str
     call_id: str
     answer_tool: str | None = None
+    """The tool that takes the answer, when the `InputRequired` named one."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class HostEvent:
+    """A journal event the handler recorded (docs/internals/storage.md#journal):
+    `tool_execution_updated` for a call's start, its progress and its end.
+    """
+
     type: str
     payload: object
 

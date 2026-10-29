@@ -40,7 +40,7 @@ pub use outcome::*;
 pub use policy::*;
 
 pub use lk_agents_abi::a2a::options::{Policy, TurnOptions};
-pub use lk_agents_abi::a2a::turn::{TurnEvent, TurnHost, Verdict};
+pub use lk_agents_abi::a2a::turn::{HostEvent, PendingCall, TurnEvent, TurnHost, Verdict};
 
 /// One incoming A2A message, as the handler sees it in `ctx.messages`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -209,27 +209,6 @@ pub struct TurnContext {
     /// The tool the message is handed to before the model runs: an `InputRequired(tool=)` of
     /// the last turn named it, and this message is its answer.
     pub answer_tool: Option<String>,
-}
-
-/// A conversation tool's pending call, the one an `InputRequired` came from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-
-pub struct PendingCall {
-    pub name: String,
-    pub call_id: String,
-    /// The tool that takes the answer, when the `InputRequired` named one.
-    #[serde(default)]
-    pub answer_tool: Option<String>,
-}
-
-/// A journal event the handler recorded (docs/internals/storage.md#journal): `tool_execution_updated` for a
-/// call's start, its progress and its end.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-
-pub struct HostEvent {
-    #[serde(rename = "type")]
-    pub r#type: String,
-    pub payload: Value,
 }
 
 /// What the turn reads from the handler's results: the `RunResult` fields and the context's
