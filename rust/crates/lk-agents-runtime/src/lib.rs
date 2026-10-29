@@ -44,6 +44,21 @@ pub use lk_agents_net as net;
 /// Thread storage over AgentDB and local SQLite, wired the same way.
 pub use lk_agents_storage as storage;
 
+/// Lets the executor's other tasks run before continuing: one `Pending` that wakes itself.
+/// Unlike `tokio::task::yield_now`, it assumes no Tokio runtime, so a deterministic scheduler
+/// runs it as it is.
+pub(crate) async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if std::mem::replace(&mut yielded, true) {
+            return std::task::Poll::Ready(());
+        }
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await
+}
+
 pub mod a2a;
 pub mod agent_run;
 pub mod host;
