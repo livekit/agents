@@ -78,29 +78,24 @@ impl WorkerOptions {
         mut read_env: impl FnMut(&str) -> Option<String>,
         cpu_count: impl FnOnce() -> f32,
     ) -> (WorkerConfig, crate::RuntimeConfig, crate::TransportConfig) {
-        let mut env = |name: &str| read_env(name).filter(|value| !value.is_empty());
-        let ws_url = self.ws_url.or_else(|| env("LIVEKIT_URL")).unwrap_or_default();
+        let identity = Identity {
+            ws_url: self.ws_url,
+            api_key: self.api_key,
+            api_secret: self.api_secret,
+            worker_token: self.worker_token,
+            agent_name: self.agent_name,
+            deployment: self.deployment,
+        }
+        .resolve(&mut read_env);
         let worker_url = self
             .worker_url
-            .or_else(|| env("LIVEKIT_WORKER_URL"))
+            .or_else(|| read_env("LIVEKIT_WORKER_URL"))
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| ws_url.clone());
-        let api_key = self.api_key.or_else(|| env("LIVEKIT_API_KEY")).unwrap_or_default();
-        let api_secret = self.api_secret.or_else(|| env("LIVEKIT_API_SECRET")).unwrap_or_default();
-        let worker_token = self
-            .worker_token
-            .or_else(|| env("LIVEKIT_WORKER_TOKEN"))
-            .filter(|value| !value.is_empty());
-        let agent_name = env("LIVEKIT_AGENT_NAME_OVERRIDE")
-            .or(self.agent_name)
-            .or_else(|| env("LIVEKIT_AGENT_NAME"))
-            .unwrap_or_default();
-        let deployment =
-            self.deployment.or_else(|| env("LIVEKIT_AGENT_DEPLOYMENT")).unwrap_or_default();
+            .unwrap_or_else(|| identity.ws_url.clone());
         let worker = WorkerConfig {
-            ws_url: ws_url.clone(),
-            agent_name,
-            deployment,
+            ws_url: identity.ws_url,
+            agent_name: identity.agent_name,
+            deployment: identity.deployment,
             version: self.version,
             permissions: self.permissions,
             endpoints: self.endpoints,
@@ -116,14 +111,48 @@ impl WorkerOptions {
         };
         let connection = crate::RuntimeConfig {
             server_url: worker_url,
-            api_key,
-            api_secret,
-            worker_token,
+            api_key: identity.api_key,
+            api_secret: identity.api_secret,
+            worker_token: Some(identity.worker_token).filter(|token| !token.is_empty()),
             headers: self.headers,
             max_retry: self.max_retry,
             connection_timeout: self.connection_timeout,
         };
         (worker, connection, self.transport)
+    }
+}
+
+/// The worker's address, credentials and name, completed from the environment by both
+/// configuration paths. A `None` field reads its variable (an empty variable counts as unset);
+/// `Some("")` keeps it empty. `LIVEKIT_AGENT_NAME_OVERRIDE` wins over `agent_name`, which wins
+/// over `LIVEKIT_AGENT_NAME`.
+#[derive(Default)]
+pub(crate) struct Identity<T = Option<String>> {
+    pub ws_url: T,
+    pub api_key: T,
+    pub api_secret: T,
+    pub worker_token: T,
+    pub agent_name: T,
+    pub deployment: T,
+}
+
+impl Identity {
+    pub(crate) fn resolve(
+        self,
+        read_env: &mut impl FnMut(&str) -> Option<String>,
+    ) -> Identity<String> {
+        let mut env = |name: &str| read_env(name).filter(|value| !value.is_empty());
+        let agent_name = env("LIVEKIT_AGENT_NAME_OVERRIDE").or(self.agent_name);
+        let mut or_env =
+            |given: Option<String>, name: &str| given.or_else(|| env(name)).unwrap_or_default();
+        Identity {
+            ws_url: or_env(self.ws_url, "LIVEKIT_URL"),
+            api_key: or_env(self.api_key, "LIVEKIT_API_KEY"),
+            api_secret: or_env(self.api_secret, "LIVEKIT_API_SECRET"),
+            worker_token: or_env(self.worker_token, "LIVEKIT_WORKER_TOKEN"),
+            agent_name: or_env(agent_name, "LIVEKIT_AGENT_NAME"),
+            deployment: or_env(self.deployment, "LIVEKIT_AGENT_DEPLOYMENT"),
+        }
     }
 }
 

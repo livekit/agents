@@ -3,6 +3,7 @@
 
 use livekit_protocol as proto;
 
+use crate::config::Identity;
 use crate::{EnvOption, WorkerPermissions};
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
@@ -193,25 +194,25 @@ impl ServerSettings {
         Ok(())
     }
 
-    /// The environment read where `__init__` reads it: an empty URL or credential falls back to
-    /// its variable, `LIVEKIT_AGENT_NAME_OVERRIDE` wins over `agent_name`, which wins over
-    /// `LIVEKIT_AGENT_NAME`; the worker token and the deployment are only the environment's.
-    pub fn with_env(mut self, read_env: impl Fn(&str) -> Option<String>) -> Self {
-        let env = |name: &str| read_env(name).filter(|v| !v.is_empty());
-        let or_env = |value: &mut String, name: &str| {
-            if value.is_empty() {
-                *value = env(name).unwrap_or_default();
-            }
-        };
-        or_env(&mut self.ws_url, "LIVEKIT_URL");
-        or_env(&mut self.api_key, "LIVEKIT_API_KEY");
-        or_env(&mut self.api_secret, "LIVEKIT_API_SECRET");
-        self.worker_token = env("LIVEKIT_WORKER_TOKEN").unwrap_or_default();
-        self.deployment = env("LIVEKIT_AGENT_DEPLOYMENT").unwrap_or_default();
-        if let Some(name) = env("LIVEKIT_AGENT_NAME_OVERRIDE") {
-            self.agent_name = name;
+    /// The environment read where `__init__` reads it, by [`Identity::resolve`]: an empty URL,
+    /// credential or name is unset; the worker token and the deployment are only the
+    /// environment's.
+    pub fn with_env(mut self, mut read_env: impl FnMut(&str) -> Option<String>) -> Self {
+        let given = |value: String| Some(value).filter(|v| !v.is_empty());
+        let identity = Identity {
+            ws_url: given(self.ws_url),
+            api_key: given(self.api_key),
+            api_secret: given(self.api_secret),
+            agent_name: given(self.agent_name),
+            ..Identity::default()
         }
-        or_env(&mut self.agent_name, "LIVEKIT_AGENT_NAME");
+        .resolve(&mut read_env);
+        self.ws_url = identity.ws_url;
+        self.api_key = identity.api_key;
+        self.api_secret = identity.api_secret;
+        self.worker_token = identity.worker_token;
+        self.agent_name = identity.agent_name;
+        self.deployment = identity.deployment;
         self
     }
 
