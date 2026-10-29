@@ -41,11 +41,11 @@ tools and host RTC objects.
 | Crate | Responsibility |
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data only |
-| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; telemetry destination policy, metric admission and loop-stall thresholds (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
+| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; telemetry destination policy and metric admission (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; speech tokenization, markup and pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime, and a plain bounded thread pool only where a measured need exists |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks, the shared attempt machine and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment contract (`lk_agents_net::env::Env`) |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks, the shared attempt machine and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the worker I/O admission it lends |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization) and the streaming decoder's bounded output queue on the injected media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, CLI and endpoint serving |
 | `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard and media pool instance; wires the async I/O crates and re-exports the implementations generated bindings select |
@@ -96,23 +96,27 @@ adapters select. Async I/O crates depend on ABI and never on the runtime,
 and HostInvoker's declared port.
 
 The runtime owns the process-wide Tokio runtime, the fork guard and the media
-pool instance, and injects what its process lends into the async crates'
-constructors as plain values. A declared class the host constructs reads them
-through one environment contract, a type parameter the runtime binds to its
-process, never through a dependency on the runtime:
+pool instance, and lends them as one value, `lk_agents_net::env::ProcessEnv`
+(decision 100), never through a dependency on the runtime. It is a plain struct:
 
-| Contract | Lends |
+| Field | Lends |
 | --- | --- |
-| `lk_agents_net::env::Env` | The shared HTTP pool, the process runtime and the caller's runtime, the `Spawner`, the host `Clock` and the session report admission |
-| `lk_agents_inference::env::Env: net::env::Env` | The media worker pool, image preparation and the assistant-markup projection judges read |
-| `lk_agents_worker::env::Env: net::env::Env` | The worker I/O on the process runtime |
+| `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
+| `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
+| `http`, `report_admission` | The shared HTTP pool and the session report admission |
+| `workers` | The media worker pool, as the ABI-declared `MediaPool` handle (`lk_agents_media::workers::MediaWorkers` is its typed face) |
+| `worker_io` | The worker I/O on the process runtime |
+| `images`, `strip_assistant_markup`, `speech_text` | Image preparation and the voice core's text algorithms providers and judges apply |
 
-Storage needs nothing beyond net's contract. Each extension adds exactly its own
-crate's needs; no environment is a callback slot for another layer (the A2A
-door is a runtime-implemented declared class with its own constructor).
-`lk_agents_runtime::process::Process` implements every contract;
-`lk_agents_net::env::Standalone` implements net's and inference's for Rust
-callers and tests.
+A declared class that needs the process declares `#[host(env)] type Env;` and
+takes `env: &Self::Env` in its constructor or function; the generated binding
+passes the runtime's value (`lk_agents_runtime::process::env()`), hidden from the
+host's signature. Internal constructors take the handles they need; there is no
+`Env` type parameter. Runtime-bound handles are read on use, so constructing a
+class starts nothing. Rust callers and tests build their own value
+(`ProcessEnv::current_runtime()`, with fakes as needed). No field is a callback
+slot for another layer (the A2A door is a runtime-implemented declared class
+with its own constructor).
 
 The sans-I/O crates and ABI have no runtime, executor, Tokio, futures,
 async-trait or pyo3 dependency. Async I/O crates use Tokio, process and database
@@ -203,7 +207,7 @@ crates.
 ```text
 lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
-  process.rs      process Tokio runtime, fork guard, media pool, the `Process` environment
+  process.rs      process Tokio runtime, fork guard, media pool, the `ProcessEnv` it lends
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
   agent_run/      AgentRun driver: runs effects (host calls, model streams); the declared AgentRunner
   text_session/   TextSession driver over agent_run's execution; the declared runner
@@ -1700,7 +1704,7 @@ intercept framework telemetry through their own provider, processors and
 exporters alongside their own instrumentation. Runtime owns invocation-context
 propagation. Export follows the host SDK boundary, just like a host provider:
 the host's own SDK processors export, and no Rust worker pool runs host export
-callbacks. Destination policy, metric admission and loop-stall thresholds are
+callbacks. Destination policy and metric admission are
 synchronous decisions in `lk_agents_core::telemetry`; the host applies them.
 The LiveKit Cloud session report and recording upload is not user telemetry: it
 is ordinary async Rust in `lk-agents-net`, triggered at session end with its

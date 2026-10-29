@@ -184,7 +184,7 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
 ├── lk-agents-storage   # Async I/O: AgentDB and SQLite, fencing, leases, typed errors
 ├── lk-agents-media     # Codecs, TTS framing, images, recording files, resampling; no async runtime
-├── lk-agents-net       # Async I/O: transport, token signing, host stream adapter, A2A client, Env
+├── lk-agents-net       # Async I/O: transport, token signing, host stream adapter, A2A client, ProcessEnv
 ├── lk-agents-inference # Async I/O: provider clients, retry/fallback/reconnect, TTS emitter, judges
 ├── lk-agents-worker    # Async I/O: registration, jobs, IPC, process pool and supervision
 ├── lk-agents-runtime   # The I/O layer of voice and text: executors, room I/O, drivers, HostInvoker
@@ -258,11 +258,10 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Rust has no telemetry exporter: observations are recorded synchronously and reach the host's
   OpenTelemetry SDK through HostInvoker. The LiveKit Cloud session report and recording upload
   is not user telemetry; it is async Rust in `lk-agents-net`.
-- The runtime owns the process Tokio runtime, fork guard and media pool and injects them as
-  plain values. Host-constructed classes read them through one environment contract,
-  `lk_agents_net::env::Env`, extended per crate with exactly that crate's needs
-  (`inference::env::Env`, `worker::env::Env`) and bound to the runtime's `Process`; no
-  environment is a callback slot for another layer.
+- The runtime owns the process Tokio runtime, fork guard and media pool and lends them as one
+  `lk_agents_net::env::ProcessEnv` value (decision 100): a declared class declares
+  `#[host(env)] type Env;` and the generated binding passes the runtime's value to it; no `Env`
+  type parameters, and no field is a callback slot for another layer.
 - Runtime executor modules (`voice/`, `room_io/`, `avatar/`, `rtc/`) use no Tokio runtime
   (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`, `Runtime`): they spawn and sleep only
   through the injected `Spawner` and `Clock`, so the DST runs them on its deterministic
