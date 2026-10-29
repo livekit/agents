@@ -119,6 +119,15 @@ impl Control {
             _ => true,
         }
     }
+
+    /// Whether the case holds something back here that the driver waits on. A synthesis stream
+    /// produces on its own unless the case held it.
+    pub(crate) fn held(&self) -> bool {
+        match self {
+            Control::Tts(synthesis) => synthesis.held(),
+            _ => true,
+        }
+    }
 }
 
 /// One thing the fakes did, stamped at the moment it happened and sent to the harness.

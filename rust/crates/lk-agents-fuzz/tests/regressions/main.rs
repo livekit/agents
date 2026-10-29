@@ -69,6 +69,7 @@ mod realtime_transcript_forwarded;
 mod realtime_waiter_journalled;
 mod recogniser_failed_speaking;
 mod refused_speech_announced;
+mod release_only_held_synthesis;
 mod replaced_inputs;
 mod replaced_output_detached;
 mod replaced_output_mid_step;

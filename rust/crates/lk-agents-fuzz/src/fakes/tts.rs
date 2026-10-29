@@ -163,6 +163,11 @@ impl Synthesis {
     pub(super) fn open(&self) -> bool {
         self.state.lock().unwrap().sender.is_some()
     }
+
+    /// Whether the case holds the stream back: only then does it owe a release.
+    pub(super) fn held(&self) -> bool {
+        self.state.lock().unwrap().held
+    }
 }
 
 struct Output {
