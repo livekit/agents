@@ -1,6 +1,7 @@
 //! The process-wide Tokio runtime, started on first use and never at import: `fork()` copies only
 //! the calling thread, so a runtime inherited across a fork has no workers. The runtime remembers
-//! the process that started it and refuses to serve another. The host's clock is read here too.
+//! the process that started it and refuses to serve another. The host's ports (its time and frame
+//! reader) are installed here once.
 
 use std::sync::{Arc, Mutex};
 
@@ -30,14 +31,24 @@ struct Started {
 }
 
 /// What the process holds: the runtime once started, and the host's ports handed to it at init.
+/// The ports outlive a fork: the host objects are the child's too.
 struct State {
     started: Option<Started>,
-    /// The host's frame reader (decision 94), installed once as the host starts. It outlives a
-    /// fork: the host object is the child's too.
+    /// The host's frame reader (decision 94), installed once as the host starts.
     frames: Option<Arc<dyn FrameReader>>,
+    /// The host's time, installed once as the host loads.
+    time: Option<Arc<dyn HostTime>>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None });
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, time: None });
+
+/// The host's clock and executor (decision 88). Each read resolves the caller's: a host whose
+/// running loop is on virtual time answers with that loop's.
+pub trait HostTime: Send + Sync {
+    fn clock(&self) -> Arc<dyn Clock>;
+    /// The running loop's executor when it has its own, else `None`: the process runtime's.
+    fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>>;
+}
 
 fn state() -> std::sync::MutexGuard<'static, State> {
     PROCESS.lock().unwrap_or_else(|p| p.into_inner())
@@ -98,15 +109,26 @@ pub fn reinit() {
     }
 }
 
-/// The host loop's clock (virtual in a virtual-time test), else the real one.
-#[cfg(feature = "python")]
-pub fn host_clock() -> Arc<dyn Clock> {
-    <Arc<dyn Clock> as lk_agents_abi::python::Ambient>::ambient()
+fn host_time() -> Option<Arc<dyn HostTime>> {
+    state().time.clone()
 }
 
-#[cfg(not(feature = "python"))]
+/// The host loop's clock (virtual in a virtual-time test), else the real one.
 pub fn host_clock() -> Arc<dyn Clock> {
-    Arc::new(lk_agents_abi::RealClock::new())
+    match host_time() {
+        Some(time) => time.clock(),
+        None => Arc::new(lk_agents_abi::RealClock::new()),
+    }
+}
+
+/// The host loop's executor (on virtual time in a virtual-time test), else the process runtime's.
+pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
+    match host_time().and_then(|time| time.spawner()) {
+        Some(spawner) => Ok(spawner),
+        None => Ok(Arc::new(lk_agents_abi::TokioSpawner::new(
+            handle().map_err(|error| error.to_string())?,
+        ))),
+    }
 }
 
 /// The process services selected by host-constructed clients through the shared environment.
@@ -122,9 +144,8 @@ impl lk_agents_net::env::Env for Process {
         handle().map_err(|error| error.to_string())
     }
 
-    #[cfg(feature = "python")]
     fn spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
-        Ok(<Arc<dyn lk_agents_abi::Spawner> as lk_agents_abi::python::Ambient>::ambient())
+        host_spawner()
     }
 
     fn clock() -> Arc<dyn Clock> {
@@ -166,6 +187,11 @@ impl Process {
     /// Takes the host's frame reader as the host starts; the first one installed stays.
     pub fn install_frame_reader(reader: Arc<dyn FrameReader>) {
         state().frames.get_or_insert(reader);
+    }
+
+    /// Takes the host's time as the host loads; the first one installed stays.
+    pub fn install_host_time(time: Arc<dyn HostTime>) {
+        state().time.get_or_insert(time);
     }
 
     /// Image preparation with the host's frame reader, once the host installed one.

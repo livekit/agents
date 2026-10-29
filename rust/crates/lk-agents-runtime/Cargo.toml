@@ -52,15 +52,8 @@ default = ["media-resample"]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
 media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images"]
-# The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
-# It also gives the cores the features the extension links them with (decision 67: the extension
-# reaches them through the runtime).
-python = [
-    "media-images",
-    "lk-agents-abi/python",
-    "lk-agents-inference/native-audio",
-    "lk-agents-voice/python",
-    "lk-agents-voice/native-audio",
-    "lk-agents-media/blingfire",
-]
-
+media-blingfire = ["lk-agents-media/blingfire"]
+native-audio = ["lk-agents-inference/native-audio", "lk-agents-voice/native-audio"]
+# The voice family's in-place `_core` expansions, until they are declared; only `lk-agents-py`
+# enables it (decision 67: the extension reaches the cores through the runtime).
+voice-python = ["lk-agents-voice/python"]

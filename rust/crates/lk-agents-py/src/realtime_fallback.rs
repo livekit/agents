@@ -6,8 +6,8 @@ use std::sync::Arc;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
-use lk_agents_abi::python::{Ambient, native};
-use lk_agents_abi::{HostRef, Realtime, RealtimeSession, Spawner, WallAnchor};
+use lk_agents_abi::python::native;
+use lk_agents_abi::{HostRef, Realtime, RealtimeSession, WallAnchor};
 use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
 use lk_agents_runtime::inference::realtime::native::fallback::{
     RealtimeChild, RealtimeFallbackModel,
@@ -31,7 +31,7 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
                     match native::<dyn Realtime>(&model) {
                         Some(native) => Ok(RealtimeChild::Native(native)),
                         None => crate::generated::llm::HostRealtimeProxy::from_host(&model)
-                            .map(|host| RealtimeChild::Host(host, <Arc<dyn Spawner>>::ambient())),
+                            .and_then(|host| Ok(RealtimeChild::Host(host, crate::host::host_spawner()?))),
                     }
                 })
                 .collect::<PyResult<Vec<_>>>()?;

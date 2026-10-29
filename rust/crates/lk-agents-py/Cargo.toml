@@ -23,10 +23,16 @@ log.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi", features = ["python"] }
 # The runtime implements the declared classes the generated adapters (`src/generated/`) call; the
 # subject cores are reached through it (decision 67), their registrations linked by it.
-# `media-resample`/`python` give the extension's media set; `ffmpeg` is this crate's feature below,
+# The features name the extension's media and audio set; `ffmpeg` is this crate's feature below,
 # enabled by maturin from pyproject.toml: a dependency feature unifies across the workspace, and it
 # made every workspace test build compile ffmpeg (897 s of a 15 min cold build, 2026-09-06).
-lk-agents-runtime = { path = "../lk-agents-runtime", features = ["python", "media-resample"] }
+lk-agents-runtime = { path = "../lk-agents-runtime", features = [
+    "media-resample",
+    "media-images",
+    "media-blingfire",
+    "native-audio",
+    "voice-python",
+] }
 
 # The avatar sink implements an async-trait ABI contract.
 async-trait.workspace = true

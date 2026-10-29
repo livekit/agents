@@ -32,9 +32,7 @@ pub mod cores {
 
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it
 // links that names them.
-#[cfg(feature = "python")]
 extern crate lk_agents_media as _;
-#[cfg(feature = "python")]
 extern crate lk_agents_voice as _;
 
 /// The provider clients, judges and detectors, wired to this process by [`process::Process`]

@@ -346,12 +346,33 @@ fn loop_clock(py: Python<'_>) -> Option<Arc<dyn lk_agents_abi::Clock>> {
 
 /// The running loop's executor on virtual time, else the process runtime's.
 fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
-    match Python::try_attach(loop_time::LoopRuntime::current).flatten() {
-        Some(rt) => rt.spawner(),
-        None => Arc::new(lk_agents_abi::TokioSpawner::new(
-            process_handle().expect("the process runtime"),
-        )),
+    loop_spawner().unwrap_or_else(|| {
+        Arc::new(lk_agents_abi::TokioSpawner::new(process_handle().expect("the process runtime")))
+    })
+}
+
+fn loop_spawner() -> Option<Arc<dyn lk_agents_abi::Spawner>> {
+    Python::try_attach(loop_time::LoopRuntime::current).flatten().map(|rt| rt.spawner())
+}
+
+/// The host's time as the runtime reads it (decision 88), installed by `#[pymodule]`.
+pub struct HostTime;
+
+impl lk_agents_runtime::process::HostTime for HostTime {
+    /// The scope a proxy call opened, else the running loop's on virtual time, else the wall
+    /// clock: the in-place expansions' ambient clock.
+    fn clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
+        <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient()
     }
+
+    fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>> {
+        loop_spawner()
+    }
+}
+
+/// The host's executor; a forked child's refusal raises.
+pub fn host_spawner() -> PyResult<Arc<dyn lk_agents_abi::Spawner>> {
+    lk_agents_runtime::process::host_spawner().map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 
 lk_agents_abi::python::inventory::submit! {

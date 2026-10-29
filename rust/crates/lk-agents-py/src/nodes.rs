@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::python::{
-    Ambient, Convert, HostProxy, HostSource, ItemSink, ItemStream, NodeCallState, NodeCalls,
+    Convert, HostProxy, HostSource, ItemSink, ItemStream, NodeCallState, NodeCalls,
     captured, check_pid, item_stream, pyo3_async_runtimes,
 };
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, IoError, TextOutput};
@@ -78,8 +78,8 @@ impl PyAgentNodes {
     fn new(py: Python<'_>, context: Py<PyAny>, host: Py<PyAny>) -> PyResult<Self> {
         check_pid()?;
         let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?;
-        let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
-        let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
+        let clock = lk_agents_runtime::process::host_clock();
+        let spawner = crate::host::host_spawner()?;
         Ok(PyAgentNodes { inner: Arc::new(AgentNodes { context, host, locals, clock, spawner }) })
     }
 }
@@ -657,7 +657,7 @@ fn caller_input<T: Send + 'static>(
     convert: Convert<T>,
 ) -> PyResult<HostSource<T>> {
     let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?;
-    let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
+    let clock = lk_agents_runtime::process::host_clock();
     Ok(HostSource::returned(input, locals, convert, clock))
 }
 
@@ -733,7 +733,7 @@ fn tts_node(
 ) -> PyResult<Py<ItemStream>> {
     check_pid()?;
     let options = self::conn_options(conn_options)?;
-    let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
+    let clock = lk_agents_runtime::process::host_clock();
     let tts = <dyn Tts as HostProxy>::from_host(tts)?;
     let tts = tts.with_conn_options(&options).unwrap_or(tts);
     let tts = lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter::adapted_for::<
@@ -743,7 +743,7 @@ fn tts_node(
     let (output, frames) = item_stream(py, audio_frame)?;
     let calls = node_calls_var(py)?.call_method1("get", (py.None(),))?;
     let calls = calls.cast::<NodeCallsCell>().ok().map(|cell| Arc::clone(&cell.get().0));
-    let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
+    let spawner = crate::host::host_spawner()?;
     spawner.spawn_unboxed(async move {
         pump(tts.stream().await, input, output, clock, calls).await;
     });
@@ -763,7 +763,7 @@ fn stt_node(
 ) -> PyResult<Py<ItemStream>> {
     check_pid()?;
     let options = self::conn_options(conn_options)?;
-    let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
+    let clock = lk_agents_runtime::process::host_clock();
     let stt = <dyn Stt as HostProxy>::from_host(stt)?;
     let vad = vad.map(|v| <dyn lk_agents_abi::Vad as HostProxy>::from_host(v)).transpose()?;
     let stt = stt.with_conn_options(&options).unwrap_or(stt);
@@ -775,7 +775,7 @@ fn stt_node(
     let input =
         caller_input(py, audio, Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)))?;
     let (output, events) = item_stream(py, speech_event)?;
-    let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
+    let spawner = crate::host::host_spawner()?;
     spawner.spawn_unboxed(async move {
         let label = stt.label();
         let opened = stt.stream(None, None).await.and_then(|opened| {
