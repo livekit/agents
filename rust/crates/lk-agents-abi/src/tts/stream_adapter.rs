@@ -32,11 +32,16 @@ pub type TextProcessorFactory =
 /// `tts.StreamAdapter`'s pre-split host entry; runtime supplies the speech algorithms.
 #[crate::host(functions)]
 pub trait StreamAdapterFunctions {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "FallbackTtsStream"))]
     type Stream;
 
     #[host(function)]
     async fn tts_adapter_stream(
+        env: &Self::Env,
         provider: Arc<dyn Tts>,
         conn_options: crate::ApiConnectOptions,
     ) -> Result<Self::Stream, ProviderError>;

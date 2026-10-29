@@ -95,7 +95,7 @@ pub(super) async fn run(
     conn: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
-    workers: crate::env::WorkerPool,
+    workers: lk_agents_net::env::WorkerPool,
     generation: u64,
     receipts: mpsc::Sender<ResponseSent>,
 ) -> Result<(), ApiError> {

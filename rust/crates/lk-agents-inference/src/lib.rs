@@ -5,7 +5,6 @@
 pub use lk_agents_abi as abi;
 
 // What the hosting process lends every client (decision 88).
-pub mod env;
 // Conversation judges: model calls run concurrently on one conversation (decision 79).
 pub mod evals;
 

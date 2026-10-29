@@ -1,7 +1,6 @@
 //! [`StreamAdapter`] (`stt/stream_adapter.py`): a recognize-only STT as a streaming one. The VAD
 //! cuts the audio into utterances, each recognized on its own once it ends.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
@@ -10,24 +9,23 @@ use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, Clock, Closed, ProviderId, SpeechEvent, SpeechEventType,
     StreamSource, Stt, SttCapabilities, SttSink, SttSource, Ts, Vad, VadEventType, VadSource,
 };
-use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 
 /// `E` is the hosting process a host-built adapter reads its clock from.
-pub struct StreamAdapter<E: Env = Standalone> {
+pub struct StreamAdapter {
     stt: Arc<dyn Stt>,
     vad: Arc<dyn Vad>,
     /// What an utterance's `speech_end_time` is read off.
     clock: Arc<dyn Clock>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> Clone for StreamAdapter<E> {
+impl Clone for StreamAdapter {
     fn clone(&self) -> Self {
         StreamAdapter::new(Arc::clone(&self.stt), Arc::clone(&self.vad), Arc::clone(&self.clock))
     }
 }
 
-impl<E: Env> StreamAdapter<E> {
+impl StreamAdapter {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         let stt = conn_options
             .and_then(|conn| self.stt.with_conn_options(&conn))
@@ -36,7 +34,7 @@ impl<E: Env> StreamAdapter<E> {
     }
 
     pub fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>, clock: Arc<dyn Clock>) -> Self {
-        StreamAdapter { stt, vad, clock, env: PhantomData }
+        StreamAdapter { stt, vad, clock }
     }
 }
 
@@ -50,7 +48,7 @@ impl StreamAdapter {
     ) -> Arc<dyn Stt> {
         match vad {
             Some(vad) if !stt.capabilities().streaming => {
-                Arc::new(StreamAdapter::<Standalone>::new(stt, vad, clock))
+                Arc::new(StreamAdapter::new(stt, vad, clock))
             }
             _ => stt,
         }
@@ -58,12 +56,13 @@ impl StreamAdapter {
 }
 
 /// `_core.SttStreamAdapter`: the generated adapter calls this.
-impl<E: Env> lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter<E> {
+impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
     type Audio = SttSink;
     type Events = SttSource;
+    type Env = ProcessEnv;
 
-    fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self {
-        StreamAdapter::new(stt, vad, E::clock())
+    fn new(env: &ProcessEnv, stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self {
+        StreamAdapter::new(stt, vad, env.clock.clone())
     }
 
     async fn recognize(
@@ -87,7 +86,7 @@ impl<E: Env> lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdap
     }
 }
 
-impl<E: Env> Stt for StreamAdapter<E> {
+impl Stt for StreamAdapter {
     fn label(&self) -> String {
         format!("StreamAdapter[{}]", self.stt.label())
     }

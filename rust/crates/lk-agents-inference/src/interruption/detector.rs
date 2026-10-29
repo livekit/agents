@@ -1,7 +1,6 @@
 //! `_core.InterruptionDetector`: the detector as the host constructs it, natively the session's
 //! [`InterruptionSource`].
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::inference::InvalidOption;
@@ -10,19 +9,19 @@ use lk_agents_abi::{ApiConnectOptions, WallAnchor};
 use lk_agents_net::credentials::resolve_credential;
 
 use super::{AdaptiveInterruptionDetector, ConnectionConfig, InterruptionLeg, InterruptionOptions};
-use crate::env::{Env, Standalone};
 use crate::headers::default_inference_url_from_env;
+use lk_agents_net::env::ProcessEnv;
 
-/// `E` is the hosting process whose clock the streams time against.
-pub struct NativeInterruptionDetector<E: Env = Standalone> {
+/// The detector the session reads, its streams timed against the host's clock.
+pub struct NativeInterruptionDetector {
     detector: AdaptiveInterruptionDetector,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> lk_agents_abi::turn::inference::InterruptionDetector
-    for NativeInterruptionDetector<E>
-{
+impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruptionDetector {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         threshold: Option<f64>,
         min_interruption_duration: f64,
         max_audio_duration: f64,
@@ -37,10 +36,10 @@ impl<E: Env> lk_agents_abi::turn::inference::InterruptionDetector
     ) -> Result<Self, InvalidOption> {
         // `base_url if base_url else ...`: an empty argument falls through to the environment.
         let given = |v: Option<String>| v.filter(|v| !v.is_empty());
-        let env = |name: &str| std::env::var(name).ok();
+        let var = |name: &str| std::env::var(name).ok();
         let credential = |explicit, inference: &str, livekit: &str| {
             given(explicit).unwrap_or_else(|| {
-                resolve_credential(None, env(inference).as_deref(), env(livekit).as_deref())
+                resolve_credential(None, var(inference).as_deref(), var(livekit).as_deref())
             })
         };
         let opts = InterruptionOptions::new(
@@ -60,8 +59,9 @@ impl<E: Env> lk_agents_abi::turn::inference::InterruptionDetector
         let config =
             ConnectionConfig { conn_options, token_ttl_secs, ..ConnectionConfig::default() };
         // The session reads each stream's own events; nothing drains the detector's channel.
-        let (detector, _events) = AdaptiveInterruptionDetector::new(opts, config, E::clock());
-        Ok(NativeInterruptionDetector { detector, env: PhantomData })
+        let (detector, _events) =
+            AdaptiveInterruptionDetector::new(opts, config, env.clock.clone());
+        Ok(NativeInterruptionDetector { detector })
     }
 
     fn update_options(&self, threshold: Option<f64>, min_interruption_duration: Option<f64>) {
@@ -69,7 +69,7 @@ impl<E: Env> lk_agents_abi::turn::inference::InterruptionDetector
     }
 }
 
-impl<E: Env> InterruptionSource for NativeInterruptionDetector<E> {
+impl InterruptionSource for NativeInterruptionDetector {
     fn open(&self, anchor: WallAnchor) -> Arc<dyn InterruptionPort> {
         InterruptionLeg::open(&self.detector, anchor)
     }

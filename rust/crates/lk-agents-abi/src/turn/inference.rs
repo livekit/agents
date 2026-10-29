@@ -38,6 +38,10 @@ pub trait EotMetricsObserver: Send + Sync {
 /// table the detector answers from.
 #[crate::host(class(name = "InferenceEot"))]
 pub trait InferenceEot: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "EotStream"))]
     type Stream;
 
@@ -46,6 +50,7 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         model: TurnDetectorModel,
         overrides: Option<ThresholdOverride>,
         backchannel_overrides: Option<ThresholdOverride>,
@@ -145,10 +150,15 @@ pub trait EotStream: Send + Sync + Sized + 'static {
     native = crate::turn::interruption::InterruptionSource
 ))]
 pub trait InterruptionDetector: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// Empty `base_url`, `api_key` or `api_secret` fall back to the environment.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         #[host(kw, default = None)] threshold: Option<f64>,
         #[host(default = 0.05)] min_interruption_duration: f64,
         #[host(default = 3.0)] max_audio_duration: f64,

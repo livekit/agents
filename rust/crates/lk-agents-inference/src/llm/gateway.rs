@@ -4,7 +4,6 @@
 //! they were made, and are applied in that order with every deadline due before them.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -29,7 +28,7 @@ use tokio::sync::mpsc;
 use crate::llm::parse::WireChunk;
 use futures_util::StreamExt;
 use lk_agents_net::attempts::AttemptFailure;
-use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
@@ -41,7 +40,7 @@ static NEXT_LLM: AtomicU64 = AtomicU64::new(1);
 
 /// One `inference.LLM` and its views per job identity: the options are shared, each view stamps
 /// its own job's headers on its requests.
-pub struct GatewayLlm<E: Env = Standalone> {
+pub struct GatewayLlm {
     opts: Arc<Mutex<LlmOptions>>,
     http: Arc<GatewayHttp>,
     runtime: tokio::runtime::Handle,
@@ -52,10 +51,9 @@ pub struct GatewayLlm<E: Env = Standalone> {
     /// The host provider whose `error` events report the attempts this view retries.
     reporter: Option<Arc<dyn Llm>>,
     prewarm: Mutex<Option<OwnedTask>>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> GatewayLlm<E> {
+impl GatewayLlm {
     pub fn new(
         opts: LlmOptions,
         http: Arc<GatewayHttp>,
@@ -72,7 +70,6 @@ impl<E: Env> GatewayLlm<E> {
             requests: Arc::new(AtomicU64::new(1)),
             reporter: None,
             prewarm: Mutex::new(None),
-            env: PhantomData,
         }
     }
 
@@ -88,7 +85,6 @@ impl<E: Env> GatewayLlm<E> {
             requests: self.requests.clone(),
             reporter,
             prewarm: Mutex::new(None),
-            env: PhantomData,
         }
     }
 
@@ -145,10 +141,12 @@ impl<E: Env> GatewayLlm<E> {
 }
 
 /// `_core.InferenceLlm`: the generated adapter calls this.
-impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
+impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
     type Chunks = LlmChunks;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         model: String,
         provider: Option<String>,
         base_url: String,
@@ -158,8 +156,8 @@ impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
         extra_kwargs: Option<Extra>,
     ) -> Result<Self, ApiError> {
         let unavailable = |e: String| ApiError::new(e).with_retryable(false);
-        let runtime = E::runtime().map_err(unavailable)?;
-        let http = E::http().map_err(unavailable)?;
+        let runtime = (env.runtime)().map_err(unavailable)?;
+        let http = (env.http)().map_err(unavailable)?;
         let opts = LlmOptions {
             model,
             base_url,
@@ -169,7 +167,7 @@ impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
             inference_class,
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
-        Ok(GatewayLlm::new(opts, http, runtime, E::clock()))
+        Ok(GatewayLlm::new(opts, http, runtime, env.clock.clone()))
     }
 
     fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Llm>>) -> Self {
@@ -227,7 +225,7 @@ impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
     }
 }
 
-impl<E: Env> Llm for GatewayLlm<E> {
+impl Llm for GatewayLlm {
     fn failed(&self, error: ProviderError, recoverable: bool) {
         if let Some(reporter) = &self.reporter {
             reporter.failed(error, recoverable);

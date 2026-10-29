@@ -6,7 +6,7 @@ async fn fallback_stt_resolves_each_operation_for_batch_and_stream() {
     let (calls, mut seen) = mpsc::channel(16);
     let (clock, spawner, observer) = parts();
     let fallback: Arc<dyn Stt> = Arc::new(
-        FallbackStt::<Standalone>::new(
+        FallbackStt::new(
             vec![Arc::new(PolicyProvider { conn: policy(99.0), calls, streaming: true })],
             ChainPolicy {
                 attempt_timeout: None,

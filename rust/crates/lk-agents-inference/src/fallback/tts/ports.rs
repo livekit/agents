@@ -7,15 +7,17 @@ use lk_agents_abi::llm::fallback::{self as port, ChainObserver};
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{ApiConnectOptions, Tts, TtsCapabilities};
 
-use crate::tts::TtsHost;
 use crate::tts::stream::TtsStream;
+use lk_agents_net::env::ProcessEnv;
 
 use super::{FallbackTts, TokenLog};
 
-impl<P: TtsHost> port::FallbackTts for FallbackTts<P> {
+impl port::FallbackTts for FallbackTts {
     type Stream = TtsStream;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         ttss: Vec<Arc<dyn Tts>>,
         max_retry_per_tts: u32,
         sample_rate: Option<u32>,
@@ -26,8 +28,9 @@ impl<P: TtsHost> port::FallbackTts for FallbackTts<P> {
             max_retry_per_tts,
             sample_rate,
             on_availability,
-            P::clock(),
-            P::spawner().map_err(InvalidPayload)?,
+            env.clock.clone(),
+            (env.spawner)().map_err(InvalidPayload)?,
+            env.speech_text,
         )
         .map_err(|error| InvalidPayload(error.to_string()))
     }

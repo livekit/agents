@@ -14,6 +14,7 @@ use lk_agents_abi::{
 };
 
 use super::FallbackLlm;
+use lk_agents_net::env::ProcessEnv;
 
 struct Provider(Arc<AtomicBool>);
 
@@ -69,11 +70,20 @@ impl StreamSource<LlmChunk> for Response {
 
 #[tokio::test]
 async fn declared_fallback_keeps_native_dispatch_and_cancels_its_open_stream() {
-    let empty = <FallbackLlm as DeclaredFallback>::new(vec![], 5.0, 0, 0.5, false, None);
+    let empty = <FallbackLlm as DeclaredFallback>::new(
+        &ProcessEnv::current_runtime(),
+        vec![],
+        5.0,
+        0,
+        0.5,
+        false,
+        None,
+    );
     assert!(empty.is_err());
 
     let closed = Arc::new(AtomicBool::new(false));
     let fallback = <FallbackLlm as DeclaredFallback>::new(
+        &ProcessEnv::current_runtime(),
         vec![Arc::new(Provider(closed.clone()))],
         5.0,
         0,

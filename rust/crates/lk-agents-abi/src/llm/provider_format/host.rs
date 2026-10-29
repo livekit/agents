@@ -8,8 +8,13 @@ use std::collections::BTreeMap;
 
 #[crate::host(functions(pid = false))]
 pub trait LlmAlgorithms {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(function, pid = true, name = "to_provider_format")]
     async fn prepare_provider_format(
+        env: &Self::Env,
         format: String,
         items: Vec<ChatItem>,
         #[host(kw, default = None)] images: Option<BTreeMap<String, SerializedImage>>,

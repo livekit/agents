@@ -1,8 +1,6 @@
 //! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
 
-use crate::env::{Env, Standalone};
 use crate::realtime::native::queue::{self, Delivery, EventReceiver};
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -41,17 +39,16 @@ pub trait DuplexHostSession: Send + Sync {
 
 /// `DuplexRealtimeAdapter`'s engine: the session's realtime model; `E` is the hosting process
 /// whose runtime and clock its sessions run on.
-pub struct NativeDuplexModel<E: Env = Standalone> {
+pub struct NativeDuplexModel {
     host: Arc<dyn DuplexHost>,
     label: String,
     caps: RealtimeCapabilities,
     audio_timeout: Duration,
     clock: Arc<dyn Clock>,
     anchor: WallAnchor,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> NativeDuplexModel<E> {
+impl NativeDuplexModel {
     pub fn new(host: Arc<dyn DuplexHost>, audio_timeout: Duration, clock: Arc<dyn Clock>) -> Self {
         let anchor = WallAnchor::of(&*clock);
         NativeDuplexModel {
@@ -61,12 +58,11 @@ impl<E: Env> NativeDuplexModel<E> {
             audio_timeout,
             clock,
             anchor,
-            env: PhantomData,
         }
     }
 }
 
-impl<E: Env> Realtime for NativeDuplexModel<E> {
+impl Realtime for NativeDuplexModel {
     fn label(&self) -> String {
         self.label.clone()
     }

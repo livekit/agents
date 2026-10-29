@@ -6,12 +6,11 @@ use std::time::Duration;
 use lk_agents_abi::RealClock;
 use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::llm::realtime::GenerationDone;
-use lk_agents_inference::env::Env;
-use lk_agents_inference::env::Standalone;
 use lk_agents_inference::realtime::native::{
     AudioDelta, Event, GenerationCreated, NativeRealtime, OPENAI,
 };
 use lk_agents_inference::testkit::NoImages;
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::websocket::TungsteniteTransport;
 
 #[tokio::test]
@@ -29,7 +28,7 @@ async fn a_real_session_accepts_our_opening_update_and_answers() {
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(NoImages),
-        <Standalone as Env>::workers,
+        ProcessEnv::current_runtime().workers,
     )
     .session(false)
     .await;

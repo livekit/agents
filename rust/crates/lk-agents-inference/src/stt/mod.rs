@@ -25,11 +25,10 @@ use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
@@ -77,28 +76,26 @@ impl Default for SttOptions {
 /// One gateway STT client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job). `E` is the
 /// hosting process a host-constructed client takes its executor and clock from.
-pub struct NativeStt<E: Env = Standalone> {
+pub struct NativeStt {
     shared: Arc<SttShared>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
     /// The host provider this view serves: its `error` event is each failure the core reports.
     reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> Clone for NativeStt<E> {
+impl Clone for NativeStt {
     fn clone(&self) -> Self {
         NativeStt {
             shared: Arc::clone(&self.shared),
             identity: Arc::clone(&self.identity),
             conn_options: self.conn_options,
             reporter: self.reporter.clone(),
-            env: PhantomData,
         }
     }
 }
 
-impl<E: Env> std::ops::Deref for NativeStt<E> {
+impl std::ops::Deref for NativeStt {
     type Target = SttShared;
 
     fn deref(&self) -> &SttShared {
@@ -122,7 +119,7 @@ pub struct SttShared {
     live: Mutex<Vec<Weak<StreamControl>>>,
 }
 
-impl<E: Env> NativeStt<E> {
+impl NativeStt {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
@@ -146,7 +143,6 @@ impl<E: Env> NativeStt<E> {
             identity: Arc::default(),
             conn_options: None,
             reporter: None,
-            env: PhantomData,
         }
     }
 
@@ -163,7 +159,6 @@ impl<E: Env> NativeStt<E> {
             identity: Arc::default(),
             conn_options: self.conn_options,
             reporter,
-            env: PhantomData,
         };
         view.identity.bind(headers);
         view
@@ -402,11 +397,13 @@ impl<E: Env> NativeStt<E> {
 }
 
 /// `_core.InferenceStt`: the generated adapter calls this.
-impl<E: Env> lk_agents_abi::stt::inference::InferenceStt for NativeStt<E> {
+impl lk_agents_abi::stt::inference::InferenceStt for NativeStt {
     type Audio = SttSinkHandle;
     type Events = SttSourceHandle;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         model: Option<String>,
         language: Option<String>,
         encoding: String,
@@ -419,7 +416,7 @@ impl<E: Env> lk_agents_abi::stt::inference::InferenceStt for NativeStt<E> {
         conn_options: ApiConnectOptions,
         vad: Option<Arc<dyn crate::abi::Vad>>,
     ) -> Result<Self, ApiError> {
-        let spawner = E::spawner().map_err(|e| ApiError::new(e).with_retryable(false))?;
+        let spawner = (env.spawner)().map_err(|e| ApiError::new(e).with_retryable(false))?;
         // Not `parse_model_into`: the host already parsed `provider/model:language`; a second
         // parse would strip a legitimate `:` from the model name.
         let opts = SttOptions {
@@ -436,7 +433,7 @@ impl<E: Env> lk_agents_abi::stt::inference::InferenceStt for NativeStt<E> {
         };
         let stt =
             NativeStt::new(opts, Arc::new(lk_agents_net::websocket::TungsteniteTransport), spawner)
-                .with_clock(E::clock());
+                .with_clock(env.clock.clone());
         stt.set_vad(vad);
         Ok(stt)
     }
@@ -477,7 +474,7 @@ impl<E: Env> lk_agents_abi::stt::inference::InferenceStt for NativeStt<E> {
     }
 }
 
-impl<E: Env> Stt for NativeStt<E> {
+impl Stt for NativeStt {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

@@ -27,11 +27,16 @@ pub trait ChainObserver: Send + Sync {
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
 #[crate::host(class(name = "FallbackLlm", native = crate::Llm))]
 pub trait FallbackLlm: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
     type Chunks: crate::StreamSource<crate::LlmChunk> + 'static;
 
     #[host(new)]
     fn new(
+        env: &Self::Env,
         llms: Vec<std::sync::Arc<dyn crate::Llm>>,
         #[host(kw, default = 5.0)] attempt_timeout: f64,
         #[host(default = 0)] max_retry_per_llm: u32,
@@ -62,10 +67,15 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[crate::host(class(name = "FallbackTts", native = crate::Tts))]
 pub trait FallbackTts: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "FallbackTtsStream"))]
     type Stream;
     #[host(new)]
     fn new(
+        env: &Self::Env,
         ttss: Vec<std::sync::Arc<dyn crate::Tts>>,
         #[host(kw, default = 2)] max_retry_per_tts: u32,
         #[host(default = None)] sample_rate: Option<u32>,

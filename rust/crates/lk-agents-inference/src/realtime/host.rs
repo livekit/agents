@@ -2,7 +2,6 @@
 //! a reply is requested once the updates sent before it applied, and each generation is drained in
 //! its own task.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
@@ -12,28 +11,28 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::{Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
-use crate::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 
 /// The plugin session opens only when the driver calls `session()`; asked again, it is the same.
-/// `E` lends the class constructor its clock and spawner (decision 89).
-pub struct HostRealtimeModel<E = Standalone> {
+pub struct HostRealtimeModel {
     host: Arc<dyn HostRealtime>,
     label: String,
     caps: RealtimeCapabilities,
     anchor: lk_agents_abi::WallAnchor,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
     session: tokio::sync::Mutex<Option<Arc<HostRealtimeLeg>>>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> lk_agents_abi::llm::realtime::HostRealtimeModel for HostRealtimeModel<E> {
-    fn new(model: Arc<dyn HostRealtime>) -> Result<Self, HostError> {
-        let spawner = E::spawner().map_err(HostError::new)?;
-        Ok(Self::new(model, WallAnchor::of(&*E::clock()), spawner))
+impl lk_agents_abi::llm::realtime::HostRealtimeModel for HostRealtimeModel {
+    type Env = ProcessEnv;
+
+    fn new(env: &ProcessEnv, model: Arc<dyn HostRealtime>) -> Result<Self, HostError> {
+        let spawner = (env.spawner)().map_err(HostError::new)?;
+        Ok(Self::new(model, WallAnchor::of(&*env.clock), spawner))
     }
 }
 
-impl<E> HostRealtimeModel<E> {
+impl HostRealtimeModel {
     pub fn new(
         host: Arc<dyn HostRealtime>,
         anchor: lk_agents_abi::WallAnchor,
@@ -46,12 +45,11 @@ impl<E> HostRealtimeModel<E> {
             anchor,
             spawner,
             session: Default::default(),
-            env: PhantomData,
         }
     }
 }
 
-impl<E: Send + 'static> Realtime for HostRealtimeModel<E> {
+impl Realtime for HostRealtimeModel {
     fn instance_id(&self) -> Option<usize> {
         self.host.instance_id()
     }

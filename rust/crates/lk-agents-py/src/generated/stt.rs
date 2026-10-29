@@ -41,9 +41,10 @@ impl FallbackStt {
     #[pyo3(signature = (stts, *, attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0, on_availability = None))]
     fn new(stts: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_stt_new_attempt_timeout)] attempt_timeout: f64, #[pyo3(from_py_with = _extract_fallback_stt_new_max_retry_per_stt)] max_retry_per_stt: u32, #[pyo3(from_py_with = _extract_fallback_stt_new_retry_interval)] retry_interval: f64, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackStt> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let stts = stts.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::stt::SttProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
         let on_availability = on_availability.map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v)).transpose()?;
-        let out = <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(stts, attempt_timeout, max_retry_per_stt, retry_interval, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(&env, stts, attempt_timeout, max_retry_per_stt, retry_interval, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(FallbackStt(::std::sync::Arc::new(out)))
     }
 
@@ -172,10 +173,11 @@ impl InferenceStt {
     #[pyo3(signature = (*, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback = None, conn_options, vad = None))]
     fn new(model: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, encoding: ::std::string::String, #[pyo3(from_py_with = _extract_inference_stt_new_sample_rate)] sample_rate: u32, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, extra_kwargs: Bound<'_, PyAny>, fallback: Option<Bound<'_, PyAny>>, conn_options: ::lk_agents_abi::ApiConnectOptions, vad: Option<Bound<'_, PyAny>>) -> PyResult<InferenceStt> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let extra_kwargs = match ::lk_agents_abi::python::value_from_py(&extra_kwargs, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }?;
         let fallback = fallback.map(|v| v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| items.iter().map(|item| { if !item.is_instance_of::<::pyo3::types::PyDict>() { return Err(::pyo3::exceptions::PyValueError::new_err("each fallback entry must be a dict")); } crate::generated::records::inference_stt::fallback_model_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let vad = vad.map(|v| crate::generated::vad::VadProxy::from_host(&v)).transpose()?;
-        let out = <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::new(model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback, conn_options, vad).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <InferenceSttImpl as ::lk_agents_abi::stt::inference::InferenceStt>::new(&env, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback, conn_options, vad).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InferenceStt(::std::sync::Arc::new(out)))
     }
 
@@ -312,9 +314,10 @@ impl SttStreamAdapter {
     #[pyo3(signature = (stt, vad))]
     fn new(stt: Bound<'_, PyAny>, vad: Bound<'_, PyAny>) -> PyResult<SttStreamAdapter> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let stt = crate::generated::stt::SttProxy::from_host(&stt)?;
         let vad = crate::generated::vad::VadProxy::from_host(&vad)?;
-        let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::new(stt, vad);
+        let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::new(&env, stt, vad);
         Ok(SttStreamAdapter(::std::sync::Arc::new(out)))
     }
 

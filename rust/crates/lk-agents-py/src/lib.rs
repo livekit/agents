@@ -62,12 +62,9 @@ impl generated::Implementations for Selected {
     type TtsMetricState = lk_agents_runtime::cores::TtsMetricState;
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::media::blingfire::MediaTokenization;
-    type AudioDecoder =
-        lk_agents_runtime::inference::codecs::StreamDecoder<lk_agents_runtime::process::Process>;
+    type AudioDecoder = lk_agents_runtime::inference::codecs::StreamDecoder;
     type StreamBuffer = lk_agents_runtime::media::StreamBuffer;
-    type AudioEmitter = lk_agents_runtime::inference::tts::emitter::AudioEmitter<
-        lk_agents_runtime::process::Process,
-    >;
+    type AudioEmitter = lk_agents_runtime::inference::tts::emitter::AudioEmitter;
     type DataStreamAudioReceiver = lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
     type AvatarRunner = lk_agents_runtime::avatar::runner::AvatarRunner;
     type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;
@@ -82,15 +79,11 @@ impl generated::Implementations for Selected {
     type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;
     type TtsTokenLog = lk_agents_runtime::inference::fallback::TokenLog;
-    type FallbackTts =
-        lk_agents_runtime::inference::fallback::FallbackTts<lk_agents_runtime::process::Process>;
-    type InferenceTts =
-        lk_agents_runtime::inference::tts::NativeTts<lk_agents_runtime::process::Process>;
+    type FallbackTts = lk_agents_runtime::inference::fallback::FallbackTts;
+    type InferenceTts = lk_agents_runtime::inference::tts::NativeTts;
     type FallbackTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
     type InferenceTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
-    type StreamAdapterFunctions = lk_agents_runtime::inference::tts::adapter::AdapterStreams<
-        lk_agents_runtime::process::Process,
-    >;
+    type StreamAdapterFunctions = lk_agents_runtime::inference::tts::adapter::AdapterStreams;
     type TokenizeFunctions = lk_agents_runtime::cores::SpeechTokenizer;
     type HostTokenization = lk_agents_runtime::cores::HostTokenizer;
     type WordTokenizer = lk_agents_runtime::cores::BasicWordTokenizer;
@@ -108,20 +101,14 @@ impl generated::Implementations for Selected {
     type AudioByteStream = lk_agents_runtime::media::AudioByteStream;
     type ExpFilter = lk_agents_runtime::media::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::media::filters::MovingAverage;
-    type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<
-        lk_agents_runtime::process::Process,
-    >;
+    type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms;
     type ProviderAttempts = lk_agents_runtime::inference::provider::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
-    type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime<
-        lk_agents_runtime::process::Process,
-    >;
+    type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
-    type HostRealtimeModel = lk_agents_runtime::inference::realtime::host::HostRealtimeModel<
-        lk_agents_runtime::process::Process,
-    >;
+    type HostRealtimeModel = lk_agents_runtime::inference::realtime::host::HostRealtimeModel;
     type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient;
     type Reply = lk_agents_runtime::net::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
@@ -130,8 +117,7 @@ impl generated::Implementations for Selected {
     type ContextActivation = lk_agents_runtime::storage::context::store::ContextStore;
     type AppTransaction = lk_agents_runtime::storage::context::transaction::Transaction;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
-    type JudgeRunner =
-        lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;
+    type JudgeRunner = lk_agents_runtime::inference::evals::Judges;
     type Evaluations = lk_agents_runtime::inference::evals::Rules;
     type Credentials = lk_agents_runtime::net::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::net::a2a_auth::Credentials;
@@ -165,22 +151,13 @@ impl generated::Implementations for Selected {
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;
     type DataStreamAudioOutput = crate::avatar_output::DataStreamAudioOutput;
-    type InferenceAvatar = lk_agents_runtime::inference::avatar::gateway::GatewayAvatar<
-        lk_agents_runtime::process::Process,
-    >;
-    type FallbackLlm =
-        lk_agents_runtime::inference::fallback::FallbackLlm<lk_agents_runtime::process::Process>;
-    type InferenceLlm =
-        lk_agents_runtime::inference::llm::gateway::GatewayLlm<lk_agents_runtime::process::Process>;
-    type FallbackStt =
-        lk_agents_runtime::inference::fallback::FallbackStt<lk_agents_runtime::process::Process>;
-    type SttStreamAdapter = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter<
-        lk_agents_runtime::process::Process,
-    >;
-    type InferenceVad =
-        lk_agents_runtime::inference::vad::NativeVad<lk_agents_runtime::process::Process>;
-    type InferenceEot =
-        lk_agents_runtime::inference::eot::NativeEot<lk_agents_runtime::process::Process>;
+    type InferenceAvatar = lk_agents_runtime::inference::avatar::gateway::GatewayAvatar;
+    type FallbackLlm = lk_agents_runtime::inference::fallback::FallbackLlm;
+    type InferenceLlm = lk_agents_runtime::inference::llm::gateway::GatewayLlm;
+    type FallbackStt = lk_agents_runtime::inference::fallback::FallbackStt;
+    type SttStreamAdapter = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;
+    type InferenceVad = lk_agents_runtime::inference::vad::NativeVad;
+    type InferenceEot = lk_agents_runtime::inference::eot::NativeEot;
     type EotStream = lk_agents_runtime::inference::eot::DetectorStream;
     type FixedGate = lk_agents_runtime::inference::duplex::GateClass<
         lk_agents_runtime::inference::duplex::FixedGate,
@@ -188,15 +165,10 @@ impl generated::Implementations for Selected {
     type AdaptiveNoiseGate = lk_agents_runtime::inference::duplex::GateClass<
         lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
     >;
-    type DuplexRealtimeModel = lk_agents_runtime::inference::duplex::NativeDuplexModel<
-        lk_agents_runtime::process::Process,
-    >;
+    type DuplexRealtimeModel = lk_agents_runtime::inference::duplex::NativeDuplexModel;
     type InterruptionDetector =
-        lk_agents_runtime::inference::interruption::NativeInterruptionDetector<
-            lk_agents_runtime::process::Process,
-        >;
-    type InferenceStt =
-        lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
+        lk_agents_runtime::inference::interruption::NativeInterruptionDetector;
+    type InferenceStt = lk_agents_runtime::inference::stt::NativeStt;
     type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_runtime::inference::llm::parse::CompletionWire;
     type Storage = lk_agents_runtime::storage::host::HostStorage;

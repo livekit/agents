@@ -178,9 +178,14 @@ pub trait DuplexSession: Send + Sync {
 /// `DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it.
 #[crate::host(class(name = "DuplexRealtimeModel", native = crate::Realtime))]
 pub trait DuplexRealtimeModel: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// `audio_timeout`: how long to wait for the next frame before the output counts as finished.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         host: Arc<dyn DuplexHost>,
         #[host(kw, default = 0.8)] audio_timeout: f64,
     ) -> Result<Self, HostError>;

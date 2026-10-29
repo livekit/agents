@@ -7,7 +7,6 @@
 //! core owes nothing, so a session created after its caller left is still terminated.
 
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -25,7 +24,7 @@ use lk_agents_net::attempts::RequestPolicy;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
-use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
@@ -64,16 +63,15 @@ enum Input {
 }
 
 /// `_core.InferenceAvatar`.
-pub struct GatewayAvatar<E: Env = Standalone> {
+pub struct GatewayAvatar {
     opts: Arc<AvatarOptions>,
     view: Arc<Mutex<View>>,
     /// One message per host call, so the queue is bounded by the calls in flight.
     inputs: mpsc::UnboundedSender<Input>,
     callers: AtomicU64,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> GatewayAvatar<E> {
+impl GatewayAvatar {
     pub fn new(
         opts: AvatarOptions,
         credentials: (String, String),
@@ -108,7 +106,7 @@ impl<E: Env> GatewayAvatar<E> {
         };
         // Self-owned: see the module docs.
         runtime.spawn(driver.run(rx, observed));
-        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1), env: PhantomData }
+        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1) }
     }
 
     pub fn provider(&self) -> &str {
@@ -154,8 +152,11 @@ impl Drop for CancelOnDrop<'_> {
     }
 }
 
-impl<E: Env> InferenceAvatar for GatewayAvatar<E> {
+impl InferenceAvatar for GatewayAvatar {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         model: String,
         avatar_identity: Option<String>,
         avatar_name: Option<String>,
@@ -176,10 +177,17 @@ impl<E: Env> InferenceAvatar for GatewayAvatar<E> {
             extra_kwargs.unwrap_or_default(),
             base_url,
         )?;
-        let runtime = E::runtime().map_err(unavailable)?;
-        let http = E::http().map_err(unavailable)?;
+        let runtime = (env.runtime)().map_err(unavailable)?;
+        let http = (env.http)().map_err(unavailable)?;
         let policy = RequestPolicy::from_options(&conn_options);
-        Ok(GatewayAvatar::new(opts, (api_key, api_secret), policy, http, &runtime, E::clock()))
+        Ok(GatewayAvatar::new(
+            opts,
+            (api_key, api_secret),
+            policy,
+            http,
+            &runtime,
+            env.clock.clone(),
+        ))
     }
 
     fn provider(&self) -> String {

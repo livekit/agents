@@ -71,8 +71,9 @@ impl InferenceVad {
     #[pyo3(signature = (model_factory, *, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
     fn new(model_factory: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_inference_vad_new_min_speech_duration)] min_speech_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_prefix_padding_duration)] prefix_padding_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_max_buffered_speech)] max_buffered_speech: f64, #[pyo3(from_py_with = _extract_inference_vad_new_activation_threshold)] activation_threshold: f64, #[pyo3(from_py_with = _extract_inference_vad_new_deactivation_threshold)] deactivation_threshold: f64) -> PyResult<InferenceVad> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let model_factory = crate::generated::vad::VadModelsProxy::from_host(&model_factory)?;
-        let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(model_factory, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold);
+        let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(&env, model_factory, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold);
         Ok(InferenceVad(::std::sync::Arc::new(out)))
     }
 

@@ -31,7 +31,7 @@ impl DuplexHostSession for SilentHost {
 }
 
 async fn session(clock: Arc<VirtualClock>) -> Arc<dyn RealtimeSession> {
-    NativeDuplexModel::<Standalone>::new(Arc::new(SilentHost), crate::duplex::AUDIO_TIMEOUT, clock)
+    NativeDuplexModel::new(Arc::new(SilentHost), crate::duplex::AUDIO_TIMEOUT, clock)
         .session(false)
         .await
         .unwrap()
@@ -134,7 +134,7 @@ impl DuplexHostSession for EndingSession {
 
 #[tokio::test]
 async fn duplex_host_eof_delivers_unclaimed_final_text_before_stream_end() {
-    let session = NativeDuplexModel::<Standalone>::new(
+    let session = NativeDuplexModel::new(
         Arc::new(EndingHost),
         crate::duplex::AUDIO_TIMEOUT,
         Arc::new(VirtualClock::new()),

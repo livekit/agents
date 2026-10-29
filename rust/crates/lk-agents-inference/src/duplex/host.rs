@@ -20,7 +20,7 @@ use super::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment,
 };
-use crate::env::Env;
+use lk_agents_net::env::ProcessEnv;
 
 // ------------------------------------------------------------------------------------ gates
 
@@ -325,14 +325,20 @@ impl DuplexHostSession for HostSession {
 
 // ------------------------------------------------------------------------------------ the model
 
-impl<E: Env> abi::DuplexRealtimeModel for NativeDuplexModel<E> {
-    fn new(host: Arc<dyn abi::DuplexHost>, audio_timeout: f64) -> Result<Self, HostError> {
+impl abi::DuplexRealtimeModel for NativeDuplexModel {
+    type Env = ProcessEnv;
+
+    fn new(
+        env: &ProcessEnv,
+        host: Arc<dyn abi::DuplexHost>,
+        audio_timeout: f64,
+    ) -> Result<Self, HostError> {
         let label = host.label()?;
         let caps = host.capabilities()?;
-        let spawner = E::spawner().map_err(HostError::new)?;
+        let spawner = (env.spawner)().map_err(HostError::new)?;
         let host = Arc::new(HostModel { host, label, caps, spawner });
         let timeout = Duration::from_secs_f64(audio_timeout.max(0.0));
-        Ok(NativeDuplexModel::new(host, timeout, E::clock()))
+        Ok(NativeDuplexModel::new(host, timeout, env.clock.clone()))
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

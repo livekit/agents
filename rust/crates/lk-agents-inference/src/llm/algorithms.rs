@@ -9,14 +9,16 @@ use lk_agents_abi::{ChatItem, Role};
 use lk_agents_core::llm::{provider_format, schema, tool_arguments};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 
-use crate::env::Env;
+use lk_agents_net::env::ProcessEnv;
 
-pub struct LlmAlgorithms<E: Env = crate::env::Standalone>(PhantomData<fn() -> E>);
+pub struct LlmAlgorithms;
 
-impl<E: Env> lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms<E> {
+impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms {
+    type Env = ProcessEnv;
+
     async fn prepare_provider_format(
+        env: &ProcessEnv,
         format: String,
         items: Vec<ChatItem>,
         images: Option<BTreeMap<String, SerializedImage>>,
@@ -24,7 +26,7 @@ impl<E: Env> lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlg
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
     ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
-        E::workers()
+        (env.workers)()
             .map_err(LlmAlgorithmError)?
             .try_spawn(lk_agents_media::workers::MediaWorkerClass::Formatting, move || {
                 provider_format::host::to_provider_format(
@@ -160,7 +162,7 @@ mod tests {
         let keys: &'static Keys = Box::leak(Box::new(Keys(Default::default())));
         log::set_logger(keys).unwrap();
         log::set_max_level(log::LevelFilter::Warn);
-        <LlmAlgorithms>::parse_function_arguments("{'x':1}").unwrap();
+        LlmAlgorithms::parse_function_arguments("{'x':1}").unwrap();
         let seen = keys.0.lock().unwrap().clone();
         let get = |k: &str| seen.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
         assert_eq!(get("lk.pii.raw_arguments"), Some("{'x':1}"));

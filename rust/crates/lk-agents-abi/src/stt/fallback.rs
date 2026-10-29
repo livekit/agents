@@ -12,6 +12,10 @@ use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt, SttCapabilities};
 /// `stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[crate::host(class(name = "FallbackStt", native = Stt))]
 pub trait FallbackStt: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(sink(item = AudioFrame, class = "FallbackRecognizeStream"))]
     type Audio: StreamSink<AudioFrame> + 'static;
     #[host(source(item = SpeechEvent, class = "FallbackRecognizeStream"))]
@@ -21,6 +25,7 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         stts: Vec<Arc<dyn Stt>>,
         #[host(kw, default = 10.0)] attempt_timeout: f64,
         #[host(default = 1)] max_retry_per_stt: u32,

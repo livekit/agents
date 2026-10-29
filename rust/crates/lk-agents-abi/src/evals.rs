@@ -88,8 +88,17 @@ pub trait EvaluationHost: Send + Sync {
 /// judge tools (`judge_tool_schemas`).
 #[crate::host(class(name = "_core_JudgeRunner"))]
 pub trait JudgeRunner: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new(llm: Option<Arc<dyn Llm>>, tools: HostRef, host: Arc<dyn EvaluationHost>) -> Self;
+    fn new(
+        env: &Self::Env,
+        llm: Option<Arc<dyn Llm>>,
+        tools: HostRef,
+        host: Arc<dyn EvaluationHost>,
+    ) -> Self;
 
     /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
     /// outcomes in judge order. An unknown built-in judge is refused before any runs.

@@ -1,23 +1,25 @@
 //! `tts.StreamAdapter`'s pre-split host entry: the host ran its own tokenizer and pacer, so each
 //! push is one sentence, converted to the provider's markup and synthesized within the budget.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SentenceSplitter, StreamAdapterFunctions};
 use lk_agents_abi::{ApiConnectOptions, Tts};
 
-use super::TtsHost;
+use lk_agents_net::env::ProcessEnv;
+
 use super::sentence_adapter::StreamAdapter;
 use super::stream::TtsStream;
 
-pub struct AdapterStreams<E>(PhantomData<fn() -> E>);
+pub struct AdapterStreams;
 
-impl<E: TtsHost> StreamAdapterFunctions for AdapterStreams<E> {
+impl StreamAdapterFunctions for AdapterStreams {
     type Stream = TtsStream;
+    type Env = ProcessEnv;
 
     async fn tts_adapter_stream(
+        env: &ProcessEnv,
         provider: Arc<dyn Tts>,
         conn_options: ApiConnectOptions,
     ) -> Result<Self::Stream, ProviderError> {
@@ -28,8 +30,8 @@ impl<E: TtsHost> StreamAdapterFunctions for AdapterStreams<E> {
         let (sink, source) = StreamAdapter::new(
             provider,
             Arc::new(|_| Box::new(PreSplit)),
-            Arc::new(|provider| E::markup(provider)),
-            E::clock(),
+            Arc::new(env.speech_text.markup),
+            env.clock.clone(),
         )
         .with_budget(conn_options)
         .stream()

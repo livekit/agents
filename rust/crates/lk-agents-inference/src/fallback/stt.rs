@@ -15,10 +15,9 @@ use lk_agents_abi::{
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use std::marker::PhantomData;
 
 use lk_agents_abi::llm::inference::InvalidPayload;
-use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 use tokio::sync::mpsc;
 
 use crate::fallback::ChainPolicy;
@@ -356,27 +355,25 @@ pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
 }
 
 /// `E` is the hosting process a host-built chain takes its executor and clock from.
-pub struct FallbackStt<E: Env = Standalone> {
+pub struct FallbackStt {
     chain: Arc<FallbackChain<SttBackend>>,
     spawner: Arc<dyn Spawner>,
     capabilities: SttCapabilities,
     caller_conn: ApiConnectOptions,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> Clone for FallbackStt<E> {
+impl Clone for FallbackStt {
     fn clone(&self) -> Self {
         FallbackStt {
             chain: Arc::clone(&self.chain),
             spawner: Arc::clone(&self.spawner),
             capabilities: self.capabilities,
             caller_conn: self.caller_conn,
-            env: PhantomData,
         }
     }
 }
 
-impl<E: Env> FallbackStt<E> {
+impl FallbackStt {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { caller_conn: conn_options.unwrap_or(self.caller_conn), ..self.clone() }
     }
@@ -407,7 +404,6 @@ impl<E: Env> FallbackStt<E> {
             spawner,
             capabilities,
             caller_conn: crate::fallback::caller_default(),
-            env: PhantomData,
         })
     }
 
@@ -426,11 +422,13 @@ impl<E: Env> FallbackStt<E> {
 }
 
 /// `stt.FallbackAdapter`'s engine as the host builds it: the generated adapter calls this.
-impl<E: Env> lk_agents_abi::stt::fallback::FallbackStt for FallbackStt<E> {
+impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
     type Audio = SttSink;
     type Events = SttSource;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         stts: Vec<Arc<dyn Stt>>,
         attempt_timeout: f64,
         max_retry_per_stt: u32,
@@ -444,8 +442,14 @@ impl<E: Env> lk_agents_abi::stt::fallback::FallbackStt for FallbackStt<E> {
             ..ChainPolicy::stt_defaults()
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackStt::new(stts, policy, E::clock(), E::spawner().map_err(InvalidPayload)?, observer)
-            .map_err(|error| InvalidPayload(error.to_string()))
+        FallbackStt::new(
+            stts,
+            policy,
+            env.clock.clone(),
+            (env.spawner)().map_err(InvalidPayload)?,
+            observer,
+        )
+        .map_err(|error| InvalidPayload(error.to_string()))
     }
 
     fn active_index(&self) -> usize {
@@ -481,7 +485,7 @@ impl<E: Env> lk_agents_abi::stt::fallback::FallbackStt for FallbackStt<E> {
     }
 }
 
-impl<E: Env> Stt for FallbackStt<E> {
+impl Stt for FallbackStt {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

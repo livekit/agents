@@ -106,8 +106,9 @@ impl AudioEmitter {
     #[pyo3(signature = (*, label, dst_ch))]
     fn new(label: ::std::string::String, dst_ch: Bound<'_, PyAny>) -> PyResult<AudioEmitter> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let dst_ch = crate::generated::media::EmitterOutputProxy::from_host(&dst_ch)?;
-        let out = <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::new(label, dst_ch).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::new(&env, label, dst_ch).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AudioEmitter(::std::sync::Arc::new(out)))
     }
 
@@ -242,7 +243,8 @@ impl AudioDecoder {
     #[pyo3(signature = (mime, *, sample_rate = Some(48000), num_channels = 1))]
     fn new(mime: ::std::string::String, #[pyo3(from_py_with = _extract_audio_decoder_new_sample_rate)] sample_rate: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_audio_decoder_new_num_channels)] num_channels: u16) -> PyResult<AudioDecoder> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::new(mime, sample_rate, num_channels).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <AudioDecoderImpl as ::lk_agents_abi::media::codecs::AudioDecoder>::new(&env, mime, sample_rate, num_channels).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AudioDecoder(::std::sync::Arc::new(out)))
     }
 

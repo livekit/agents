@@ -1,6 +1,5 @@
 //! The driver: the only file in this crate that awaits anything; no decision is made here.
 
-use std::marker::PhantomData;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -13,12 +12,12 @@ use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::env::{Env, Standalone, WorkerPool};
 use crate::headers::BoundIdentity;
 use crate::realtime::dialect::{Dialect, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 use crate::realtime::native::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
+use lk_agents_net::env::WorkerPool;
 
 /// How a connection authenticates.
 pub enum Auth {
@@ -100,7 +99,7 @@ impl Connect {
 
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
 /// `E` is the process a host-constructed model runs in (decision 88).
-pub struct NativeRealtime<E: Env = Standalone> {
+pub struct NativeRealtime {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.
     opts: std::sync::Mutex<SessionOptions>,
@@ -118,10 +117,9 @@ pub struct NativeRealtime<E: Env = Standalone> {
     label: Option<String>,
     /// `self._sessions`: the live sessions an `update_options` reaches.
     sessions: std::sync::Mutex<Vec<Weak<super::queue::Ingress>>>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> NativeRealtime<E> {
+impl NativeRealtime {
     pub fn new(
         dialect: Dialect,
         api_key: impl Into<String>,
@@ -146,7 +144,6 @@ impl<E: Env> NativeRealtime<E> {
             turn_detection_given: false,
             label: None,
             sessions: std::sync::Mutex::new(Vec::new()),
-            env: PhantomData,
         }
     }
 
@@ -230,7 +227,7 @@ pub(crate) enum Cmd {
     Close,
 }
 
-impl<E: Env> NativeRealtime<E> {
+impl NativeRealtime {
     /// `provider`: `urlparse(base_url).netloc`.
     pub fn provider(&self) -> String {
         let url = &self.connect.base_url;
@@ -877,7 +874,7 @@ enum Outcome {
 // The `lk-agents-abi` seam
 // =============================================================================================
 
-impl<E: Env> lk_agents_abi::Realtime for NativeRealtime<E> {
+impl lk_agents_abi::Realtime for NativeRealtime {
     fn label(&self) -> String {
         NativeRealtime::label(self)
     }

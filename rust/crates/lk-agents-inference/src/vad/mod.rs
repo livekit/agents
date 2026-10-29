@@ -12,10 +12,9 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::vad::inference::VadModels;
 use lk_agents_abi::{ProviderId, Vad, VadCapabilities, VadEvent, VadSink, VadSource};
 use machine::{VadOptions, VadOutput};
-use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 
 /// The Silero model behind `livekit.local_inference`; `predict` also returns how long it took.
 pub trait VadModel: Send {
@@ -29,23 +28,17 @@ pub trait VadModelFactory: Send + Sync {
     fn create(&self) -> Box<dyn VadModel>;
 }
 
-/// `E` is the hosting process whose media workers run the model and whose runtime the stream
-/// tasks run on.
-pub struct NativeVad<E: Env = Standalone> {
+/// `env` lends the media workers that run the model and the runtime the stream tasks run on.
+pub struct NativeVad {
     /// Watched by every running stream: `update_options` reaches them before their next frame.
     opts: tokio::sync::watch::Sender<VadOptions>,
     models: Arc<dyn VadModelFactory>,
-    clock: Arc<dyn lk_agents_abi::Clock>,
-    env: PhantomData<fn() -> E>,
+    env: ProcessEnv,
 }
 
-impl<E: Env> NativeVad<E> {
-    pub fn new(
-        opts: VadOptions,
-        models: Arc<dyn VadModelFactory>,
-        clock: Arc<dyn lk_agents_abi::Clock>,
-    ) -> Self {
-        NativeVad { opts: tokio::sync::watch::Sender::new(opts), models, clock, env: PhantomData }
+impl NativeVad {
+    pub fn new(opts: VadOptions, models: Arc<dyn VadModelFactory>, env: &ProcessEnv) -> Self {
+        NativeVad { opts: tokio::sync::watch::Sender::new(opts), models, env: env.clone() }
     }
 
     /// The pair for callers that need the audio and lag alongside the VAD event.
@@ -53,12 +46,12 @@ impl<E: Env> NativeVad<E> {
         let unavailable = |error: String| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
-        let workers = E::workers().map_err(unavailable)?;
-        let runtime = E::caller_runtime().map_err(unavailable)?;
+        let workers = (self.env.workers)().map_err(unavailable)?;
+        let runtime = self.env.caller_runtime().map_err(unavailable)?;
         let (sink, source) = stream::open(
             self.opts.subscribe(),
             self.models.clone(),
-            self.clock.clone(),
+            self.env.clock.clone(),
             workers,
             runtime,
         )?;
@@ -68,11 +61,13 @@ impl<E: Env> NativeVad<E> {
 
 /// `_core.InferenceVad`: the generated adapter calls this. `model_factory()` builds one host
 /// model per stream (each needs its own recurrent state); never called when the model is native.
-impl<E: Env> lk_agents_abi::vad::inference::InferenceVad for NativeVad<E> {
+impl lk_agents_abi::vad::inference::InferenceVad for NativeVad {
     type Audio = VadSinkHandle;
     type Events = VadEventSource;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         model_factory: Arc<dyn VadModels>,
         min_speech_duration: f64,
         min_silence_duration: f64,
@@ -90,7 +85,7 @@ impl<E: Env> lk_agents_abi::vad::inference::InferenceVad for NativeVad<E> {
             deactivation_threshold,
         };
         let host = Arc::new(HostModels(model_factory));
-        NativeVad::new(opts, crate::local_models::vad_factory_or(host), E::clock())
+        NativeVad::new(opts, crate::local_models::vad_factory_or(host), env)
     }
 
     fn update_options(
@@ -161,7 +156,7 @@ impl VadModel for HostModel {
     }
 }
 
-impl<E: Env> Vad for NativeVad<E> {
+impl Vad for NativeVad {
     fn label(&self) -> String {
         "livekit.agents.inference.vad.VAD".into()
     }

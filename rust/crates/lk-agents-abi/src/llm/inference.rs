@@ -11,6 +11,10 @@ use crate::{ApiConnectOptions, ChatItem, Extra, LlmChunk};
 /// (`identified`); each view's requests carry its own job's identification.
 #[crate::host(class(name = "InferenceLlm", native = Llm))]
 pub trait InferenceLlm: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// One completion's chunks, pulled by the host.
     #[host(source(item = LlmChunk, class = "InferenceLlmChunks"))]
     type Chunks: StreamSource<LlmChunk> + 'static;
@@ -19,6 +23,7 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         model: String,
         #[host(kw, default = None)] provider: Option<String>,
         base_url: String,

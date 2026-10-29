@@ -2,7 +2,6 @@
 //! `chat()` returns at once and the chain runs as a task feeding an `mpsc`
 //! (`FallbackLLMStream._run`), so its failure surfaces on the first `next()`.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,7 +21,7 @@ use crate::fallback::chain::{
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
-use lk_agents_net::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,
@@ -79,13 +78,12 @@ impl Backend for LlmBackend {
 }
 
 /// `E` is the process a host-constructed chain runs in (decision 88).
-pub struct FallbackLlm<E: Env = Standalone> {
+pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
     spawner: Arc<dyn Spawner>,
-    env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> FallbackLlm<E> {
+impl FallbackLlm {
     pub fn new(
         llms: Vec<Arc<dyn Llm>>,
         policy: ChainPolicy,
@@ -96,7 +94,7 @@ impl<E: Env> FallbackLlm<E> {
         let entries =
             llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)?;
-        Ok(FallbackLlm { chain: Arc::new(chain), spawner, env: PhantomData })
+        Ok(FallbackLlm { chain: Arc::new(chain), spawner })
     }
 
     pub fn chain(&self) -> &Arc<FallbackChain<LlmBackend>> {
@@ -116,13 +114,15 @@ impl<E: Env> FallbackLlm<E> {
 
 /// `llm.FallbackAdapter`'s engine as the host builds it. The public class stays Python (users
 /// construct, subclass and call it standalone); its `chat()` opens the chain over its own objects.
-impl<E: Env> lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm<E> {
+impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
     type Chunks = FallbackLlmChunks;
+    type Env = ProcessEnv;
 
     /// `llms` in order; the keywords are `FallbackAdapter.__init__`'s. Each entry is bound to
     /// `max_retry = 0`, distinct from the chain's `max_retry_per_llm`: the chain is the retry loop,
     /// and a plugin's own would multiply it (N×M attempts).
     fn new(
+        env: &ProcessEnv,
         llms: Vec<Arc<dyn Llm>>,
         attempt_timeout: f64,
         max_retry_per_llm: u32,
@@ -137,8 +137,14 @@ impl<E: Env> lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm<E> {
             sticky,
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackLlm::new(llms, policy, E::clock(), E::spawner().map_err(InvalidPayload)?, observer)
-            .map_err(|error| InvalidPayload(error.to_string()))
+        FallbackLlm::new(
+            llms,
+            policy,
+            env.clock.clone(),
+            (env.spawner)().map_err(InvalidPayload)?,
+            observer,
+        )
+        .map_err(|error| InvalidPayload(error.to_string()))
     }
 
     /// Which entry most recently served, as a position in the host's list (the reference's
@@ -195,7 +201,7 @@ impl StreamSource<LlmChunk> for FallbackLlmChunks {
     }
 }
 
-impl<E: Env> Llm for FallbackLlm<E> {
+impl Llm for FallbackLlm {
     fn label(&self) -> String {
         "llm.FallbackAdapter".into()
     }

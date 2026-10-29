@@ -7,10 +7,15 @@ use crate::{ApiConnectOptions, Tts};
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
 #[crate::host(class(name = "InferenceTts", native = Tts))]
 pub trait InferenceTts: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "InferenceTtsStream"))]
     type Stream;
     #[host(new)]
     fn new(
+        env: &Self::Env,
         model: String,
         #[host(kw)] base_url: String,
         api_key: String,

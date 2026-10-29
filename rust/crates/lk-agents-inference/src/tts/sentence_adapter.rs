@@ -11,7 +11,7 @@ use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::{
     SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
-use lk_agents_abi::tts::text::TtsTextProcessorFactory;
+use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::tts::tts::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
@@ -78,16 +78,17 @@ impl StreamAdapter {
         Arc::new(StreamAdapter::new(tts, splitter, text_processor, clock).with_budget(budget))
     }
 
-    /// [`adapted`](Self::adapted) with `E`'s sentence splitting and provider markup: a voice
+    /// [`adapted`](Self::adapted) with `speech`'s sentence splitting and provider markup: a voice
     /// session's TTS leg.
-    pub fn adapted_for<E: TtsTextProcessorFactory>(
+    pub fn adapted_for(
         tts: Arc<dyn Tts>,
+        speech: SpeechTextProcessors,
         clock: Arc<dyn Clock>,
         budget: lk_agents_abi::ApiConnectOptions,
     ) -> Arc<dyn Tts> {
         let splitter: SplitterFactory =
-            Arc::new(|expressive| E::sentence_splitter(None, expressive));
-        Self::adapted(tts, splitter, Arc::new(E::markup), clock, budget)
+            Arc::new(move |expressive| (speech.sentence_splitter)(None, expressive));
+        Self::adapted(tts, splitter, Arc::new(speech.markup), clock, budget)
     }
 }
 

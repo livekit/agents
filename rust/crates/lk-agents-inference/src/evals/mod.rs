@@ -9,7 +9,6 @@ pub mod transcript;
 #[cfg(test)]
 mod tests;
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -28,7 +27,7 @@ use lk_agents_abi::{
 
 use prompts::BuiltIn;
 
-use crate::env::Env;
+use lk_agents_net::env::ProcessEnv;
 
 /// A judgment is one long completion over a whole transcript.
 const JUDGE_CONN_OPTIONS: ApiConnectOptions =
@@ -38,13 +37,13 @@ const JUDGE_CONN_OPTIONS: ApiConnectOptions =
 const INFERENCE_CLASS: &str = "low";
 
 /// The judges of evaluations on one model, and the host that runs the application's.
-pub struct Judges<E: Env> {
+pub struct Judges {
     llm: Option<Arc<dyn Llm>>,
     /// The host's live judge tools, offered to a model the host implements.
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
-    env: PhantomData<fn() -> E>,
+    strip_assistant_markup: fn(&str) -> String,
 }
 
 enum Judge {
@@ -52,9 +51,22 @@ enum Judge {
     Host { name: String, evaluator: HostRef },
 }
 
-impl<E: Env> JudgeRunner for Judges<E> {
-    fn new(llm: Option<Arc<dyn Llm>>, tools: HostRef, host: Arc<dyn EvaluationHost>) -> Self {
-        Judges { llm, tools, host, clock: E::clock(), env: PhantomData }
+impl JudgeRunner for Judges {
+    type Env = ProcessEnv;
+
+    fn new(
+        env: &ProcessEnv,
+        llm: Option<Arc<dyn Llm>>,
+        tools: HostRef,
+        host: Arc<dyn EvaluationHost>,
+    ) -> Self {
+        Judges {
+            llm,
+            tools,
+            host,
+            clock: env.clock.clone(),
+            strip_assistant_markup: env.strip_assistant_markup,
+        }
     }
 
     async fn evaluate(
@@ -110,7 +122,7 @@ impl<E: Env> JudgeRunner for Judges<E> {
     }
 }
 
-impl<E: Env> Judges<E> {
+impl Judges {
     async fn judge(
         &self,
         judge: &Judge,
@@ -147,7 +159,7 @@ impl<E: Env> Judges<E> {
                 judge.name
             )
         })?;
-        let prompt = judge.prompt(chat_ctx, reference, E::strip_assistant_markup);
+        let prompt = judge.prompt(chat_ctx, reference, self.strip_assistant_markup);
         let (arguments, _) = self
             .call(
                 llm,

@@ -95,11 +95,14 @@ impl SessionExecutor for Executor {
     }
 
     fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
-        Arc::new(
-            lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for::<
-                crate::process::Process,
-            >,
-        )
+        Arc::new(|tts, clock, budget| {
+            lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
+                tts,
+                lk_agents_voice::tts::processing::SpeechText::PROCESSORS,
+                clock,
+                budget,
+            )
+        })
     }
 
     fn open_legs<'a>(

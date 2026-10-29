@@ -14,6 +14,8 @@ doctest = false
 
 [dependencies]
 lk-agents-abi = { path = "../lk-agents-abi" }
+# The media worker pool `ProcessEnv` lends inference (decision 100).
+lk-agents-media = { path = "../lk-agents-media" }
 # Ephemeral transport and worker operation identifiers.
 rand = "0.9"
 livekit-token.workspace = true

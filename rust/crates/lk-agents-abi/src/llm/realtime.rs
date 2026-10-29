@@ -787,8 +787,15 @@ pub trait HostRealtimeSession: Send + Sync {
 /// is the same when asked again.
 #[crate::host(class(name = "HostRealtimeModel", native = crate::llm::realtime::Realtime))]
 pub trait HostRealtimeModel: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new(model: std::sync::Arc<dyn HostRealtime>) -> Result<Self, crate::errors::HostError>;
+    fn new(
+        env: &Self::Env,
+        model: std::sync::Arc<dyn HostRealtime>,
+    ) -> Result<Self, crate::errors::HostError>;
 }
 
 /// The host's exception as the failure a reply request reports: its message and its `code`.

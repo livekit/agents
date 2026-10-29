@@ -230,9 +230,10 @@ type StreamAdapterFunctionsImpl = <crate::Selected as super::Implementations>::S
 #[pyo3(signature = (provider, conn_options))]
 pub fn tts_adapter_stream<'py>(py: Python<'py>, provider: Bound<'_, PyAny>, conn_options: ::lk_agents_abi::ApiConnectOptions) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
+    let env = crate::process::env();
     let provider = crate::generated::tts::TtsProxy::from_host(&provider)?;
     crate::host::future_into_py(py, async move {
-        let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(&env, provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::FallbackTtsStream(::std::sync::Arc::new(out)), py))
     })
 }

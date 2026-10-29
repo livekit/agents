@@ -2,7 +2,6 @@
 //! streams it opens. One table is shared by the detector and all its streams, so a stream's
 //! cloud-to-local fallback rescales what the detector answers.
 
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -16,10 +15,10 @@ use super::{
     CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,
     EotTransport, LocalEotModel, LocalTransport, MetricsCallback, TransportFactory, TransportShell,
 };
-use crate::env::{Env, Standalone};
+use lk_agents_net::env::ProcessEnv;
 
-/// `E` is the hosting process whose runtime the streams run on.
-pub struct NativeEot<E: Env = Standalone> {
+/// `env` lends the runtime the streams run on.
+pub struct NativeEot {
     thresholds: Arc<Mutex<ThresholdOptions>>,
     local_fallback: bool,
     base_url: String,
@@ -28,10 +27,10 @@ pub struct NativeEot<E: Env = Standalone> {
     sample_rate: u32,
     local_model: Arc<dyn EotModels>,
     on_metrics: Option<MetricsCallback>,
-    env: PhantomData<fn() -> E>,
+    env: ProcessEnv,
 }
 
-impl<E: Env> NativeEot<E> {
+impl NativeEot {
     fn table(&self) -> MutexGuard<'_, ThresholdOptions> {
         self.thresholds.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -52,7 +51,7 @@ impl<E: Env> NativeEot<E> {
         };
         let thresholds = Arc::clone(&self.thresholds);
         let local_model = Arc::clone(&self.local_model);
-        let clock = E::clock();
+        let clock = self.env.clock.clone();
         Arc::new(move |model| {
             if model == TurnDetectorModel::V1 {
                 let (cloud, clock) = (cloud.clone(), clock.clone());
@@ -76,10 +75,12 @@ impl<E: Env> NativeEot<E> {
     }
 }
 
-impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
+impl lk_agents_abi::turn::inference::InferenceEot for NativeEot {
     type Stream = DetectorStream;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         model: TurnDetectorModel,
         overrides: Option<ThresholdOverride>,
         backchannel_overrides: Option<ThresholdOverride>,
@@ -111,7 +112,7 @@ impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
             sample_rate,
             local_model,
             on_metrics,
-            env: PhantomData,
+            env: env.clone(),
         }
     }
 
@@ -152,7 +153,7 @@ impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
         headers: Vec<(String, String)>,
         conn_options: ApiConnectOptions,
     ) -> Result<DetectorStream, ProviderError> {
-        let spawner = E::spawner().map_err(|error| {
+        let spawner = (self.env.spawner)().map_err(|error| {
             ProviderError::Local(ApiError::new(format!("turn detector unavailable: {error}")))
         })?;
         let model = self.table().model();
@@ -163,7 +164,7 @@ impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
             session,
             self.sample_rate,
             make,
-            E::workers,
+            self.env.workers,
             on_metrics,
             spawner.as_ref(),
         ))

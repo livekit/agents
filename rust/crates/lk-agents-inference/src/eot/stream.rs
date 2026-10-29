@@ -13,11 +13,11 @@ use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerError};
 use tokio::sync::{oneshot, watch};
 
-use crate::env::WorkerPool;
 use crate::eot::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
     EotWarning, SinkEvent, TransportPrediction, TransportShell,
 };
+use lk_agents_net::env::WorkerPool;
 
 /// Mounts the transport for a model: the gateway for `turn-detector-v1`, the mini model otherwise.
 pub type TransportFactory = Arc<dyn Fn(TurnDetectorModel) -> Arc<TransportShell> + Send + Sync>;

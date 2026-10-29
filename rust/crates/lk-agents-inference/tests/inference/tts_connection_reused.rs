@@ -12,13 +12,8 @@ use std::{
 };
 
 use base64::Engine;
-use lk_agents_abi::{
-    SimClock, TimedString, TokioSpawner, Tts,
-    tts::{
-        stream_adapter::{SentenceSplitter, SentenceTextProcessor},
-        text::{TranscriptProcessor, TtsTextProcessorFactory},
-    },
-};
+use lk_agents_abi::tts::text::SpeechTextProcessors;
+use lk_agents_abi::{SimClock, TokioSpawner, Tts};
 use lk_agents_inference::tts::{NativeTts, TtsOptions};
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_test_support::corpus;
@@ -55,10 +50,11 @@ fn each_reply_pays_only_the_voice() {
                 api_secret: "s".into(),
                 ..Default::default()
             };
-            let voice = NativeTts::<WholeText>::new(
+            let voice = NativeTts::new(
                 opts,
                 Arc::new(gateway),
                 Arc::new(TokioSpawner::current()),
+                SpeechTextProcessors::VERBATIM,
             )
             .with_clock(Arc::new(SimClock::new()));
             // The session prewarms its voice as it starts; the greeting comes a moment later.
@@ -183,42 +179,5 @@ struct Receiver(mpsc::UnboundedReceiver<WsMessage>);
 impl WsReceiver for Receiver {
     async fn recv(&mut self) -> Result<WsMessage, TransportError> {
         Ok(self.0.recv().await.unwrap_or(WsMessage::Closed))
-    }
-}
-
-/// Speech text as one sentence per push and no markup: what is under test is the connection, not
-/// the text's segmentation.
-#[derive(Clone)]
-struct WholeText;
-
-impl TtsTextProcessorFactory for WholeText {
-    fn sentence_splitter(_: Option<&str>, _: bool) -> Box<dyn SentenceSplitter> {
-        Box::new(WholeText)
-    }
-
-    fn markup(_: &str) -> Option<Box<dyn SentenceTextProcessor>> {
-        None
-    }
-
-    fn transcript(_: bool) -> Box<dyn TranscriptProcessor> {
-        Box::new(WholeText)
-    }
-}
-
-impl SentenceSplitter for WholeText {
-    fn push(&mut self, text: &str) -> Vec<String> {
-        vec![text.to_owned()]
-    }
-
-    fn flush(&mut self) -> Vec<String> {
-        Vec::new()
-    }
-}
-
-impl TranscriptProcessor for WholeText {
-    fn push_alignment(&mut self, _: String, _: Vec<TimedString>) {}
-
-    fn take_audio_transcript(&mut self, _: &str, _: bool) -> Vec<TimedString> {
-        Vec::new()
     }
 }

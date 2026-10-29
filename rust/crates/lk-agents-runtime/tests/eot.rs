@@ -8,9 +8,8 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as _;
 
-use lk_agents_inference::env::Env as _;
 use lk_agents_inference::eot::*;
-use lk_agents_runtime::process::{self, Process};
+use lk_agents_runtime::process;
 
 struct CloudFailure(Arc<tokio::sync::Notify>);
 
@@ -101,7 +100,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             session,
             16_000,
             make,
-            Process::workers,
+            process::env().workers,
             None,
             &lk_agents_abi::TokioSpawner::current(),
         );
@@ -222,7 +221,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
         })
     });
     let spawner = lk_agents_abi::TokioSpawner::current();
-    let stream = EotStream::open(session, 16_000, make, Process::workers, None, &spawner);
+    let stream = EotStream::open(session, 16_000, make, process::env().workers, None, &spawner);
     tokio::time::timeout(Duration::from_secs(5), async {
         while !stream.is_fallback() {
             tokio::task::yield_now().await;
@@ -281,7 +280,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
             session,
             16_000,
             make,
-            Process::workers,
+            process::env().workers,
             None,
             &lk_agents_abi::TokioSpawner::current(),
         );

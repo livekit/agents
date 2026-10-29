@@ -25,8 +25,7 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
     use lk_agents_inference::abi::Tts;
     use lk_agents_inference::tts::TtsOptions;
     use lk_agents_net::websocket::TungsteniteTransport;
-    type NativeTts =
-        lk_agents_runtime::inference::tts::NativeTts<lk_agents_runtime::process::Process>;
+    use lk_agents_runtime::inference::tts::NativeTts;
 
     let Some((api_key, api_secret, base_url)) = credentials() else {
         eprintln!("skipped: no inference credentials in the environment");
@@ -43,6 +42,7 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
         },
         Arc::new(TungsteniteTransport),
         Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current())),
+        lk_agents_runtime::process::env().speech_text,
     );
 
     let mut source = tts.synthesize("Hello from Rust.").await.expect("the socket opened");

@@ -14,7 +14,6 @@ mod ports;
 mod pump;
 pub mod sentence_adapter;
 pub mod stream;
-pub use ports::TtsHost;
 pub mod wire;
 
 use crate::abi::{
@@ -29,7 +28,7 @@ use lk_agents_net::transport::{
 use futures_util::future::{Either, select};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
-use lk_agents_abi::tts::text::{TranscriptProcessor, TtsTextProcessorFactory};
+use lk_agents_abi::tts::text::{SpeechTextProcessors, TranscriptProcessor};
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_abi::{Spawner, SpawnerExt};
@@ -86,8 +85,8 @@ impl Default for TtsOptions {
 /// One gateway TTS client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job).
 #[derive(Clone)]
-pub struct NativeTts<P: TtsTextProcessorFactory> {
-    speech: std::marker::PhantomData<P>,
+pub struct NativeTts {
+    speech: SpeechTextProcessors,
     shared: Arc<TtsShared>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
@@ -95,7 +94,7 @@ pub struct NativeTts<P: TtsTextProcessorFactory> {
     reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
 }
 
-impl<P: TtsTextProcessorFactory> std::ops::Deref for NativeTts<P> {
+impl std::ops::Deref for NativeTts {
     type Target = TtsShared;
 
     fn deref(&self) -> &TtsShared {
@@ -171,12 +170,17 @@ fn pool_secs(clock: &dyn Clock) -> f64 {
     clock.now().as_nanos() as f64 / 1e9
 }
 
-impl<P: TtsTextProcessorFactory> NativeTts<P> {
+impl NativeTts {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
 
-    pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(
+        opts: TtsOptions,
+        ws: Arc<dyn WsTransport>,
+        spawner: Arc<dyn Spawner>,
+        speech: SpeechTextProcessors,
+    ) -> Self {
         let shared = TtsShared {
             opts: Arc::new(Mutex::new(opts)),
             expressive: AtomicBool::new(false),
@@ -186,7 +190,7 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
             connections: Arc::default(),
         };
         NativeTts {
-            speech: std::marker::PhantomData,
+            speech,
             shared: Arc::new(shared),
             identity: Arc::default(),
             conn_options: None,
@@ -206,6 +210,7 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
             self.opts.lock().unwrap().clone(),
             self.ws.clone(),
             self.spawner.clone(),
+            self.speech,
         );
         let shared = Arc::get_mut(&mut view.shared).expect("a newly constructed view is unshared");
         shared.opts = self.opts.clone();
@@ -278,7 +283,7 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
 }
 
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
-impl<P: TtsTextProcessorFactory> NativeTts<P> {
+impl NativeTts {
     /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
     /// bracket cues from the alignment.
     pub fn set_expressive(&self, expressive: bool) {
@@ -384,14 +389,14 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
             sample_rate: opts.sample_rate,
             opts,
             provider,
-            transcript: P::transcript(expressive),
+            transcript: (self.speech.transcript)(expressive),
             text_rx,
             audio_tx,
         };
         let prep = TextPrep {
             pending_bytes: 0,
-            markup: P::markup(wire::markup_provider_key(&pump.opts.model)),
-            sentences: P::sentence_splitter(Some(&pump.provider), expressive),
+            markup: (self.speech.markup)(wire::markup_provider_key(&pump.opts.model)),
+            sentences: (self.speech.sentence_splitter)(Some(&pump.provider), expressive),
         };
         self.spawner.spawn_unboxed(pump.run());
 
@@ -409,7 +414,7 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
     }
 }
 
-impl<P: TtsTextProcessorFactory> Tts for NativeTts<P> {
+impl Tts for NativeTts {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

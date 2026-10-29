@@ -11,8 +11,13 @@ pub struct CodecFailure(pub String);
 /// the decoder, and decoded frames are awaited.
 #[crate::host(class(name = "AudioDecoder"))]
 pub trait AudioDecoder: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         mime: String,
         #[host(kw, default = 48000)] sample_rate: Option<u32>,
         #[host(default = 1)] num_channels: u16,

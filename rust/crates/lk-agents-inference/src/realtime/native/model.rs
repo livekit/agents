@@ -13,9 +13,9 @@ use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, NativeRealtime};
 use super::wire::Azure;
-use crate::env::Env;
 use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
+use lk_agents_net::env::ProcessEnv;
 
 fn json_option(value: Option<RealtimeJsonOption>) -> Maybe<Option<Value>> {
     match value {
@@ -52,8 +52,13 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl<E: Env> NativeRealtimeModel for NativeRealtime<E> {
-    fn new(config: NativeRealtimeConfig) -> Result<Self, RealtimeConfigurationError> {
+impl NativeRealtimeModel for NativeRealtime {
+    type Env = ProcessEnv;
+
+    fn new(
+        env: &ProcessEnv,
+        config: NativeRealtimeConfig,
+    ) -> Result<Self, RealtimeConfigurationError> {
         let dialect = match config.dialect {
             Some(name) => name.parse().map_err(|e: crate::realtime::dialect::UnknownDialect| {
                 RealtimeConfigurationError::Invalid(e.to_string())
@@ -124,15 +129,16 @@ impl<E: Env> NativeRealtimeModel for NativeRealtime<E> {
             auth,
             conn: config.conn_options,
         };
-        let runtime = E::runtime().map_err(|error| ApiError::new(error).with_retryable(false))?;
+        let runtime =
+            (env.runtime)().map_err(|error| ApiError::new(error).with_retryable(false))?;
         let mut native = NativeRealtime::new(
             dialect,
             "",
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_abi::RealClock::default()),
-            E::images(),
-            E::workers,
+            env.images.clone(),
+            env.workers,
         )
         .with_options(opts, turn_detection_given)
         .with_connect(connect);

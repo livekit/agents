@@ -24,9 +24,10 @@ impl _core_JudgeRunner {
     #[pyo3(signature = (llm, tools, host))]
     fn new(llm: Option<Bound<'_, PyAny>>, tools: ::lk_agents_abi::HostRef, host: Bound<'_, PyAny>) -> PyResult<_core_JudgeRunner> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let llm = llm.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let host = crate::generated::evals::EvaluationHostProxy::from_host(&host)?;
-        let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(llm, tools, host);
+        let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::new(&env, llm, tools, host);
         Ok(_core_JudgeRunner(::std::sync::Arc::new(out)))
     }
 

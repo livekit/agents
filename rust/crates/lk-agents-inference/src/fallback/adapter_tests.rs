@@ -20,7 +20,6 @@ use tokio::sync::mpsc;
 use crate::fallback::ChainPolicy;
 use crate::fallback::llm::FallbackLlm;
 use crate::fallback::stt::{FallbackStt, SttChainError};
-use lk_agents_net::env::Standalone;
 
 use crate::testkit::fallback::{NO_DEADLINE, boom, parts, until, within};
 
@@ -398,7 +397,7 @@ async fn a_wrapped_stt_never_runs_an_independent_retry_loop() {
     let (clock, spawner, obs) = parts();
     let entries = vec![fake("p", true), fake("b", false)];
 
-    let fb = FallbackStt::<Standalone>::new(
+    let fb = FallbackStt::new(
         entries,
         ChainPolicy {
             max_retry_per_backend: 0,
@@ -775,7 +774,7 @@ async fn the_stt_adapter_advertises_the_merged_capabilities_and_refuses_a_batch_
     assert!(fb.capabilities().interim_results, "both entries have them, so the chain does");
 
     let (clock, spawner, obs) = parts();
-    let err = FallbackStt::<Standalone>::new(
+    let err = FallbackStt::new(
         vec![
             DuplexStt::new("good", 0) as Arc<dyn Stt>,
             DuplexStt::batch_only("whisper") as Arc<dyn Stt>,

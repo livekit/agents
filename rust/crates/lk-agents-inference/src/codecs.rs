@@ -4,7 +4,6 @@
 //! lent by [`Env`](crate::env::Env) (decision 88).
 
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
@@ -16,7 +15,7 @@ use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, 
 use lk_agents_media::{AudioFormat, CodecError, StreamBuffer};
 use tokio::sync::Notify;
 
-use crate::env::Env;
+use lk_agents_net::env::ProcessEnv;
 
 /// Streamed bytes the native decoder has not read yet; a push beyond it is refused, not queued.
 const MAX_PENDING_INPUT: usize = 8 * 1024 * 1024;
@@ -381,28 +380,30 @@ impl DecoderInput {
 
 /// `_core.AudioDecoder`, the native half of `utils.codecs.AudioStreamDecoder`: input is queued
 /// without waiting, frames are awaited, and EOF never blocks the host loop.
-pub struct StreamDecoder<E> {
+pub struct StreamDecoder {
     input: DecoderInput,
     output: tokio::sync::Mutex<AudioDecoder>,
-    env: PhantomData<fn() -> E>,
 }
 
 fn failure(error: impl std::fmt::Display) -> CodecFailure {
     CodecFailure(error.to_string())
 }
 
-impl<E: Env> lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder<E> {
+impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         mime: String,
         sample_rate: Option<u32>,
         num_channels: u16,
     ) -> Result<Self, CodecFailure> {
-        let workers = E::workers().map_err(failure)?;
+        let workers = (env.workers)().map_err(failure)?;
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
         let (output, input) =
             AudioDecoder::open_stream(&workers, &mime, sample_rate, num_channels, limits)
                 .map_err(failure)?;
-        Ok(Self { input, output: tokio::sync::Mutex::new(output), env: PhantomData })
+        Ok(Self { input, output: tokio::sync::Mutex::new(output) })
     }
 
     fn push(&self, data: &[u8]) -> Result<(), CodecFailure> {

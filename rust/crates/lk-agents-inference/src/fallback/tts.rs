@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
-use lk_agents_abi::tts::text::TtsTextProcessorFactory;
+use lk_agents_abi::tts::text::SpeechTextProcessors;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
@@ -209,12 +209,16 @@ impl TtsBackend {
         &self.inner
     }
 
-    pub fn new<P: TtsTextProcessorFactory>(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
+    pub fn new(
+        tts: &Arc<dyn Tts>,
+        clock: Arc<dyn Clock>,
+        speech: SpeechTextProcessors,
+    ) -> Arc<Self> {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
-            splitter: Arc::new(|expressive| P::sentence_splitter(None, expressive)),
-            text_processor: Arc::new(P::markup),
+            splitter: Arc::new(move |expressive| (speech.sentence_splitter)(None, expressive)),
+            text_processor: Arc::new(speech.markup),
             clock,
         })
     }
@@ -326,9 +330,7 @@ pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
 }
 
 #[derive(Clone)]
-pub struct FallbackTts<P: TtsTextProcessorFactory> {
-    // P also selects the declared host resource's stream type and constructor services.
-    speech: std::marker::PhantomData<P>,
+pub struct FallbackTts {
     chain: Arc<FallbackChain<TtsBackend>>,
     spawner: Arc<dyn Spawner>,
     capabilities: TtsCapabilities,
@@ -339,7 +341,7 @@ pub struct FallbackTts<P: TtsTextProcessorFactory> {
     caller_conn: ApiConnectOptions,
 }
 
-impl<P: TtsTextProcessorFactory> FallbackTts<P> {
+impl FallbackTts {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { caller_conn: conn_options.unwrap_or(self.caller_conn), ..self.clone() }
     }
@@ -351,11 +353,12 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
+        speech: SpeechTextProcessors,
     ) -> Result<Self, TtsChainError> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
-            ttss.iter().map(|t| TtsBackend::new::<P>(t, Arc::clone(&clock))).collect();
+            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock), speech)).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
         let Some(&num_channels) = channels.first() else { return Err(TtsChainError::NoBackends) };
         if channels.iter().any(|c| *c != num_channels) {
@@ -366,7 +369,6 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
         let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)
             .map_err(|NoBackends| TtsChainError::NoBackends)?;
         Ok(FallbackTts {
-            speech: std::marker::PhantomData,
             chain: Arc::new(chain),
             spawner,
             capabilities,
@@ -547,7 +549,7 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
 }
 
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
-impl<P: TtsTextProcessorFactory> FallbackTts<P> {
+impl FallbackTts {
     /// `ttss` in order. `sample_rate = None` takes the maximum of the entries' rates and upsamples
     /// the rest, as the reference does.
     pub fn for_host(
@@ -557,11 +559,12 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
         on_availability: Option<Arc<dyn ChainObserver>>,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
+        speech: SpeechTextProcessors,
     ) -> Result<Self, TtsChainError> {
         let policy =
             ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackTts::new(ttss, sample_rate, policy, clock, spawner, observer)
+        FallbackTts::new(ttss, sample_rate, policy, clock, spawner, observer, speech)
     }
 
     /// The chain as the provider the session holds (a native `_core.FallbackTts` is not proxied).
@@ -614,7 +617,7 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
     }
 }
 
-impl<P: TtsTextProcessorFactory> Tts for FallbackTts<P> {
+impl Tts for FallbackTts {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

@@ -13,6 +13,10 @@ use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 /// `stt.StreamAdapter`'s engine as the host builds it; the public class stays Python.
 #[crate::host(class(name = "SttStreamAdapter", native = Stt))]
 pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(sink(item = AudioFrame, class = "SttAdapterStream"))]
     type Audio: StreamSink<AudioFrame> + 'static;
     #[host(source(item = SpeechEvent, class = "SttAdapterStream"))]
@@ -20,7 +24,7 @@ pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
 
     /// The wrapped STT and VAD; each stream binds its own recognition policy.
     #[host(new)]
-    fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self;
+    fn new(env: &Self::Env, stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self;
 
     /// `_recognize_impl`: the wrapped STT's batch path.
     #[host(await)]

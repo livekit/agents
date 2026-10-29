@@ -34,7 +34,8 @@ GRAPH = {
     # inference -> core: chat formatting, strict tool schemas and JSON repair.
     "lk-agents-inference": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", "lk-agents-net"},
     # net -> core: the delegation A2A client executes core::a2a decisions.
-    "lk-agents-net": {"lk-agents-abi", "lk-agents-core"},
+    # net -> media: ProcessEnv lends the media worker pool (decision 100; pending owner approval).
+    "lk-agents-net": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
     "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
     # The DST runs the runtime's real executors over faked ports (decision 92); providers and the

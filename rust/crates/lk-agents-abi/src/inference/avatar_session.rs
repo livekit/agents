@@ -39,11 +39,16 @@ impl From<ApiError> for AvatarError {
 /// created under one operation identity, held until `aclose()` terminates it.
 #[crate::host(class(name = "InferenceAvatar"))]
 pub trait InferenceAvatar: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// `model` is `"provider"` or `"provider/<avatar_id>"`. The identity defaults to
     /// `"<provider>-inference-avatar"`, the name to the identity. Starts nothing.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         model: String,
         #[host(kw, default = None)] avatar_identity: Option<String>,
         #[host(default = None)] avatar_name: Option<String>,

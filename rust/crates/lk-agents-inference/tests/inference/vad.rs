@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 use std::time::Duration;
 
-use lk_agents_abi::{AudioFrame, RealClock, StreamSink, StreamSource, VadEventType};
-use lk_agents_inference::env::Standalone;
+use lk_agents_abi::{AudioFrame, StreamSink, StreamSource, VadEventType};
 use lk_agents_inference::vad::machine::VadOptions;
 use lk_agents_inference::vad::{NativeVad, VadModel, VadModelFactory};
+use lk_agents_net::env::ProcessEnv;
 
 struct Model {
     calls: Arc<Mutex<Vec<(&'static str, ThreadId)>>>,
@@ -39,10 +39,10 @@ impl VadModelFactory for SlowFactory {
 async fn model_construction_prediction_and_reset_leave_the_runtime_thread_free() {
     let caller = std::thread::current().id();
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let vad = NativeVad::<Standalone>::new(
+    let vad = NativeVad::new(
         VadOptions::default(),
         Arc::new(SlowFactory(calls.clone())),
-        Arc::new(RealClock::new()),
+        &ProcessEnv::current_runtime(),
     );
     let (sink, mut source) = vad.stream_native().unwrap();
     sink.push(AudioFrame::new(vec![0; 1024], 16_000, 1, 512)).unwrap();
@@ -102,10 +102,10 @@ impl VadModelFactory for EnergyFactory {
 // machine's start and end of speech.
 #[tokio::test]
 async fn as_the_sessions_vad_it_reports_speech() {
-    let vad: Arc<dyn lk_agents_abi::Vad> = Arc::new(NativeVad::<Standalone>::new(
+    let vad: Arc<dyn lk_agents_abi::Vad> = Arc::new(NativeVad::new(
         VadOptions::default(),
         Arc::new(EnergyFactory),
-        Arc::new(RealClock::new()),
+        &ProcessEnv::current_runtime(),
     ));
     assert_eq!(vad.capabilities().update_interval, 0.032);
     let (sink, mut source) = vad.stream().await.unwrap();
@@ -132,11 +132,8 @@ async fn as_the_sessions_vad_it_reports_speech() {
 // (the reference's `end_input` closes the input channel and the stream finishes).
 #[tokio::test]
 async fn end_input_ends_the_stream_after_what_was_pushed() {
-    let vad = NativeVad::<Standalone>::new(
-        VadOptions::default(),
-        Arc::new(Factory),
-        Arc::new(RealClock::new()),
-    );
+    let vad =
+        NativeVad::new(VadOptions::default(), Arc::new(Factory), &ProcessEnv::current_runtime());
     let (sink, mut source) = vad.stream_native().unwrap();
     let frame = AudioFrame {
         data: vec![0u8; 320 * 2].into(),
@@ -201,11 +198,8 @@ async fn closing_a_pending_model_reports_incomplete_cleanup_and_retires_queued_a
         release: blocked,
         settled: Some(settled),
     })));
-    let vad = NativeVad::<Standalone>::new(
-        VadOptions::default(),
-        Arc::new(factory),
-        Arc::new(RealClock::new()),
-    );
+    let vad =
+        NativeVad::new(VadOptions::default(), Arc::new(factory), &ProcessEnv::current_runtime());
     let (sink, source) = vad.stream_native().unwrap();
     let frame = AudioFrame::new(vec![0; 1024], 16_000, 1, 512);
     sink.push(frame.clone()).unwrap();
@@ -222,11 +216,8 @@ async fn closing_a_pending_model_reports_incomplete_cleanup_and_retires_queued_a
 
 #[tokio::test]
 async fn a_mismatched_frame_does_not_end_the_stream_or_discard_following_valid_audio() {
-    let vad = NativeVad::<Standalone>::new(
-        VadOptions::default(),
-        Arc::new(Factory),
-        Arc::new(RealClock::new()),
-    );
+    let vad =
+        NativeVad::new(VadOptions::default(), Arc::new(Factory), &ProcessEnv::current_runtime());
     let (sink, mut source) = vad.stream_native().unwrap();
     sink.push(AudioFrame::new(vec![0; 1024], 16_000, 1, 512)).unwrap();
     sink.push(AudioFrame::new(vec![0; 1024], 8_000, 1, 512)).unwrap();
@@ -241,11 +232,8 @@ async fn a_mismatched_frame_does_not_end_the_stream_or_discard_following_valid_a
 
 #[tokio::test]
 async fn one_second_of_48khz_stereo_is_accepted_without_doubling_the_vad_timeline() {
-    let vad = NativeVad::<Standalone>::new(
-        VadOptions::default(),
-        Arc::new(Factory),
-        Arc::new(RealClock::new()),
-    );
+    let vad =
+        NativeVad::new(VadOptions::default(), Arc::new(Factory), &ProcessEnv::current_runtime());
     let (sink, mut source) = vad.stream_native().unwrap();
     sink.push(AudioFrame::new(vec![0; 192_000], 48_000, 2, 48_000)).unwrap();
     sink.end_input();
@@ -262,11 +250,8 @@ async fn one_second_of_48khz_stereo_is_accepted_without_doubling_the_vad_timelin
 
 #[tokio::test]
 async fn oversized_frames_are_refused_without_ending_the_vad_stream() {
-    let vad = NativeVad::<Standalone>::new(
-        VadOptions::default(),
-        Arc::new(Factory),
-        Arc::new(RealClock::new()),
-    );
+    let vad =
+        NativeVad::new(VadOptions::default(), Arc::new(Factory), &ProcessEnv::current_runtime());
     let (sink, mut source) = vad.stream_native().unwrap();
     let error = sink.push(AudioFrame::new(vec![0; 192_002], 48_000, 2, 48_000)).unwrap_err();
     assert!(error.to_string().contains("192000-byte limit"));
@@ -293,10 +278,10 @@ async fn saturated_vad_input_refuses_new_audio_and_still_accepts_close() {
             release: blocked,
             settled: Some(settled),
         })));
-        let vad = NativeVad::<Standalone>::new(
+        let vad = NativeVad::new(
             VadOptions::default(),
             Arc::new(factory),
-            Arc::new(RealClock::new()),
+            &ProcessEnv::current_runtime(),
         );
         let (sink, source) = vad.stream_native().unwrap();
         sink.push(AudioFrame::new(vec![0; 1024], 16_000, 1, 512)).unwrap();

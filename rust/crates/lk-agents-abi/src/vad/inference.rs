@@ -30,6 +30,10 @@ pub trait VadModel: Send + Sync {
 /// The Silero VAD behind `inference.VAD`.
 #[crate::host(class(name = "InferenceVad", native = crate::vad::vad::Vad))]
 pub trait InferenceVad: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(sink(item = AudioFrame, class = "InferenceVadStream"))]
     type Audio: StreamSink<AudioFrame> + 'static;
     #[host(source(item = VadEvent, class = "InferenceVadStream"))]
@@ -38,6 +42,7 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         model_factory: Arc<dyn VadModels>,
         #[host(kw)] min_speech_duration: f64,
         min_silence_duration: f64,

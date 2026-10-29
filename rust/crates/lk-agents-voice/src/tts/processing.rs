@@ -1,7 +1,7 @@
 //! The speech transforms supplied to native provider clients and sentence adapters.
 
 use lk_agents_abi::tts::stream_adapter::{SentenceSplitter, SentenceTextProcessor};
-use lk_agents_abi::tts::text::{TranscriptProcessor, TtsTextProcessorFactory};
+use lk_agents_abi::tts::text::{SpeechTextProcessors, TranscriptProcessor};
 
 use crate::tokenize::blingfire::{SentenceBuffer, SentenceBufferOptions};
 
@@ -11,8 +11,18 @@ use super::transcript::AudioTranscriptNormalizer;
 #[derive(Clone)]
 pub struct SpeechText;
 
-impl TtsTextProcessorFactory for SpeechText {
-    fn sentence_splitter(provider: Option<&str>, expressive: bool) -> Box<dyn SentenceSplitter> {
+impl SpeechText {
+    /// What the runtime lends native synthesis clients and sentence adapters.
+    pub const PROCESSORS: SpeechTextProcessors = SpeechTextProcessors {
+        sentence_splitter: Self::sentence_splitter,
+        markup: Self::markup,
+        transcript: Self::transcript,
+    };
+
+    pub fn sentence_splitter(
+        provider: Option<&str>,
+        expressive: bool,
+    ) -> Box<dyn SentenceSplitter> {
         let opts = match provider {
             Some(provider) => {
                 let (max_token_len, min_token_len, xml_aware) =
@@ -33,11 +43,11 @@ impl TtsTextProcessorFactory for SpeechText {
         Box::new(SentenceBuffer::with_options(opts))
     }
 
-    fn markup(provider: &str) -> Option<Box<dyn SentenceTextProcessor>> {
+    pub fn markup(provider: &str) -> Option<Box<dyn SentenceTextProcessor>> {
         text_processor(provider)
     }
 
-    fn transcript(expressive: bool) -> Box<dyn TranscriptProcessor> {
+    pub fn transcript(expressive: bool) -> Box<dyn TranscriptProcessor> {
         Box::new(AudioTranscriptNormalizer::new(expressive))
     }
 }

@@ -35,9 +35,16 @@ pub trait EmitterOutput: Send + Sync {
 
 #[crate::host(class(name = "AudioEmitter", module = "livekit.agents.tts", subclass))]
 pub trait AudioEmitter: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
-    fn new(#[host(kw)] label: String, dst_ch: Arc<dyn EmitterOutput>)
-    -> Result<Self, EmitterError>;
+    fn new(
+        env: &Self::Env,
+        #[host(kw)] label: String,
+        dst_ch: Arc<dyn EmitterOutput>,
+    ) -> Result<Self, EmitterError>;
     #[host(call)]
     fn initialize(
         &self,

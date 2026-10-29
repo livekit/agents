@@ -6,21 +6,19 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::inference::fallback::TtsFallbackModel;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::llm::inference::InvalidPayload;
-use lk_agents_abi::tts::text::TtsTextProcessorFactory;
 use lk_agents_abi::{ApiConnectOptions, Clock, Tts};
+
+use lk_agents_net::env::ProcessEnv;
 
 use super::stream::TtsStream;
 use super::{NativeTts, TtsOptions};
 
-/// What a host-constructed synthesis runs on: the process's services and its speech text.
-pub trait TtsHost: TtsTextProcessorFactory + lk_agents_net::env::Env {}
-
-impl<E: TtsTextProcessorFactory + lk_agents_net::env::Env> TtsHost for E {}
-
-impl<P: TtsHost> InferenceTts for NativeTts<P> {
+impl InferenceTts for NativeTts {
     type Stream = TtsStream;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         model: String,
         base_url: String,
         api_key: String,
@@ -49,9 +47,10 @@ impl<P: TtsHost> InferenceTts for NativeTts<P> {
         Ok(NativeTts::new(
             opts,
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
-            P::spawner().map_err(InvalidPayload)?,
+            (env.spawner)().map_err(InvalidPayload)?,
+            env.speech_text,
         )
-        .with_clock(P::clock()))
+        .with_clock(env.clock.clone()))
     }
 
     fn set_expressive(&self, expressive: bool) {

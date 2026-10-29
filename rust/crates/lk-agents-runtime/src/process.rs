@@ -144,7 +144,22 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
                 .map_err(|error| error.to_string())
         },
         worker_io: || worker_io().map_err(|error| error.to_string()),
+        workers: || workers().map_err(|error| error.to_string()),
+        images: images(),
+        strip_assistant_markup: lk_agents_voice::tts::markup::strip_expr_markup,
+        speech_text: SpeechText::PROCESSORS,
     }
+}
+
+/// Image preparation with the host's frame reader, once the host installed one.
+#[cfg(feature = "media-images")]
+fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+    Arc::new(Process::images())
+}
+
+#[cfg(not(feature = "media-images"))]
+fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+    Arc::new(lk_agents_net::env::NoImagePreparation)
 }
 
 /// The process services selected by host-constructed clients through the shared environment.
@@ -173,26 +188,6 @@ impl lk_agents_net::env::Env for Process {
     }
 }
 
-impl lk_agents_inference::env::Env for Process {
-    fn workers() -> Result<MediaWorkers, String> {
-        workers().map_err(|error| error.to_string())
-    }
-
-    #[cfg(feature = "media-images")]
-    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-        Arc::new(Process::images())
-    }
-
-    #[cfg(not(feature = "media-images"))]
-    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-        <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
-    }
-
-    fn strip_assistant_markup(text: &str) -> String {
-        lk_agents_voice::tts::markup::strip_expr_markup(text)
-    }
-}
-
 impl Process {
     /// Takes the host's frame reader as the host starts; the first one installed stays.
     pub fn install_frame_reader(reader: Arc<dyn FrameReader>) {
@@ -208,21 +203,5 @@ impl Process {
     #[cfg(feature = "media-images")]
     pub fn images() -> lk_agents_media::images::Images {
         lk_agents_media::images::Images::new(state().frames.clone())
-    }
-}
-
-/// The voice core's speech text in the native synthesis clients and the judges' transcripts.
-impl lk_agents_abi::tts::text::TtsTextProcessorFactory for Process {
-    fn sentence_splitter(
-        provider: Option<&str>,
-        expressive: bool,
-    ) -> Box<dyn lk_agents_abi::SentenceSplitter> {
-        SpeechText::sentence_splitter(provider, expressive)
-    }
-    fn markup(provider: &str) -> Option<Box<dyn lk_agents_abi::SentenceTextProcessor>> {
-        SpeechText::markup(provider)
-    }
-    fn transcript(expressive: bool) -> Box<dyn lk_agents_abi::tts::text::TranscriptProcessor> {
-        SpeechText::transcript(expressive)
     }
 }

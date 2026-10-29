@@ -11,7 +11,7 @@ use lk_agents_abi::{
 use tokio::sync::Barrier;
 
 use super::*;
-use crate::env::Standalone;
+use lk_agents_net::env::ProcessEnv;
 
 const T0: SystemTime = SystemTime::UNIX_EPOCH;
 
@@ -172,19 +172,19 @@ impl EvaluationHost for Host {
     }
 }
 
-fn judges(
-    arguments: Option<&'static str>,
-    requests: usize,
-    host: Host,
-) -> (Judges<Standalone>, Arc<Verdicts>) {
+fn judges(arguments: Option<&'static str>, requests: usize, host: Host) -> (Judges, Arc<Verdicts>) {
     let llm = Arc::new(Verdicts {
         arguments,
         barrier: Barrier::new(requests),
         prompts: Mutex::default(),
     });
     let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
-    let runner =
-        Judges::<Standalone>::new(Some(llm.clone()), HostRef::new(0, &registry), Arc::new(host));
+    let runner = Judges::new(
+        &ProcessEnv::current_runtime(),
+        Some(llm.clone()),
+        HostRef::new(0, &registry),
+        Arc::new(host),
+    );
     (runner, llm)
 }
 

@@ -15,6 +15,10 @@ use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt};
 /// every view (`identified`); each view's connections carry its own job's identification.
 #[crate::host(class(name = "InferenceStt", native = Stt))]
 pub trait InferenceStt: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(sink(item = AudioFrame, class = "InferenceSttStream"))]
     type Audio: InferenceSttAudio + 'static;
     #[host(source(item = SpeechEvent, class = "InferenceSttStream"))]
@@ -25,6 +29,7 @@ pub trait InferenceStt: Send + Sync + Sized + 'static {
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        env: &Self::Env,
         #[host(kw)] model: Option<String>,
         language: Option<String>,
         encoding: String,
