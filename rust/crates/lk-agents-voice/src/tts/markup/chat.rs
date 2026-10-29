@@ -51,12 +51,12 @@ pub trait ChatMessageExt {
 impl ChatMessageExt for ChatMessage {
     fn text_content(&self) -> Option<String> {
         self.raw_text_content().map(|text| {
-            if self.role == Role::Assistant { super::strip_expr_markup(&text) } else { text }
+            if self.role == Role::Assistant { super::split_expr_markup(&text).0 } else { text }
         })
     }
 }
 
 pub fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String> {
     let text = lk_agents_abi::chat_message_raw_text_content(parts)?;
-    Some(if assistant { super::strip_expr_markup(&text) } else { text })
+    Some(if assistant { super::split_expr_markup(&text).0 } else { text })
 }
