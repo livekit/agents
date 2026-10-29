@@ -105,6 +105,10 @@ def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
     return NOT_GIVEN
 
 
+def _supports_context_update(model: str, use_vertexai: bool) -> bool:
+    return bool(use_vertexai and "3.8" in model)
+
+
 def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
     """Warn when a known model may not be available on the selected API."""
     if use_vertexai and model in KNOWN_GEMINI_API_MODELS and model not in KNOWN_VERTEXAI_MODELS:
@@ -193,6 +197,7 @@ class _RealtimeOptions:
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    labels: NotGivenOr[dict[str, str]] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
 
 
@@ -270,6 +275,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        labels: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -311,6 +317,7 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
                 thinking_level is not supported by gemini-3.8-live on the Gemini API.
+            labels (dict[str, str], optional): Custom labels to attach to the Vertex AI request. Defaults to None.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
@@ -353,7 +360,7 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
                 mutable_chat_context=True,
                 mutable_instructions=True,
-                mutable_tools=False,
+                mutable_tools=_supports_context_update(model, use_vertexai),
                 per_response_tool_choice=False,
             )
         )
@@ -436,6 +443,7 @@ class RealtimeModel(llm.RealtimeModel):
             media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            labels=labels,
             credentials=credentials,
         )
 
@@ -557,6 +565,9 @@ class RealtimeSession(llm.RealtimeSession):
         # not carry an id, since the server never issued it. kept for the session's lifetime: a
         # resumption can replay a response long after it was first queued
         self._synthetic_call_ids: set[str] = set()
+        # a mid-session context_update changed instructions/tools since the last handle
+        self._context_changed_since_handle = False
+        self._pending_context_updates = 0
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -601,6 +612,7 @@ class RealtimeSession(llm.RealtimeSession):
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
+        self._pending_context_updates = 0
 
     def update_options(
         self,
@@ -661,8 +673,19 @@ class RealtimeSession(llm.RealtimeSession):
                     self._mark_restart_needed()
                     return
 
-            if not self._realtime_model.capabilities.mutable_instructions:
-                return
+                if not self._realtime_model.capabilities.mutable_instructions:
+                    return
+
+                if _supports_context_update(self._opts.model, self._opts.vertexai):
+                    logger.debug("Updating instructions mid-session via context_update")
+                    self._context_changed_since_handle = True
+                    self._pending_context_updates += 1
+                    self._send_client_event(
+                        types.LiveClientContextUpdate(
+                            system_instruction=types.Content(parts=[types.Part(text=instructions)])
+                        )
+                    )
+                    return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
             logger.debug("Updating instructions mid-session")
@@ -788,7 +811,28 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = tool_ctx
-        self._mark_restart_needed()
+        if not self._realtime_model.capabilities.mutable_tools:
+            self._mark_restart_needed()
+            return
+
+        async with self._session_lock:
+            if not self._active_session:
+                self._mark_restart_needed()
+                return
+
+            tools_config, _ = create_tools_config(
+                self._tools,
+                tool_behavior=self._opts.tool_behavior,
+                use_parameters_json_schema=False,
+            )
+            logger.debug("Updating tools mid-session via context_update")
+            self._context_changed_since_handle = True
+            self._pending_context_updates += 1
+            self._send_client_event(
+                types.LiveClientContextUpdate(
+                    tools=types.LiveClientContextUpdateTools(tools=tools_config)
+                )
+            )
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -985,6 +1029,14 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            self._pending_context_updates = 0
+            if self._context_changed_since_handle:
+                # a resumed session would keep the instructions/tools from before the
+                # context_update, so start fresh. cleared only now, after the old receive
+                # task can no longer store a handle
+                self._context_changed_since_handle = False
+                self._session_resumption_handle = None
+                self._resumption_chat_ctx = None
             session = None
             try:
                 config = self._build_connect_config()
@@ -1154,6 +1206,14 @@ class RealtimeSession(llm.RealtimeSession):
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
                         await session.send_realtime_input(activity_end=msg.activity_end)
+                elif isinstance(msg, types.LiveClientContextUpdate):
+                    try:
+                        await session.send_context_update(
+                            system_instruction=msg.system_instruction,
+                            tools=msg.tools.tools if msg.tools is not None else None,
+                        )
+                    finally:
+                        self._pending_context_updates = max(0, self._pending_context_updates - 1)
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
@@ -1165,6 +1225,7 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientContent,
                         types.LiveClientToolResponse,
                         types.LiveClientRealtimeInput,
+                        types.LiveClientContextUpdate,
                     ),
                 ):
                     if not isinstance(msg, types.LiveClientRealtimeInput) or not (
@@ -1241,10 +1302,13 @@ class RealtimeSession(llm.RealtimeSession):
                         if (
                             response.session_resumption_update.resumable
                             and response.session_resumption_update.new_handle
+                            and self._pending_context_updates == 0
+                            and not self._session_should_close.is_set()
                         ):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
                             )
+                            self._context_changed_since_handle = False
                             self._resumption_chat_ctx = llm.ChatContext(
                                 [
                                     item
@@ -1335,6 +1399,8 @@ class RealtimeSession(llm.RealtimeSession):
             conf.realtime_input_config = self._opts.realtime_input_config
         if is_given(self._opts.context_window_compression):
             conf.context_window_compression = self._opts.context_window_compression
+        if is_given(self._opts.labels):
+            conf.labels = self._opts.labels
 
         return conf
 
