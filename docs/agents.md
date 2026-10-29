@@ -27,6 +27,7 @@ scheduler = Agent[SchedulingContext](
 | `llm` | The reasoning model |
 | `tools` | Tools and toolsets |
 | `output_type` | Final output contract; required for an agent exposed as a tool, including output functions |
+| `retries` | Retry budgets: an `int` for both, or `AgentRetries`; see [retries](#retries) |
 
 `Agent[SchedulingContext]` and `RunContext[SchedulingContext]` carry the
 application context type. Tools read application data and services through
@@ -98,6 +99,7 @@ result = await scheduler.run(
     message_history=history,             # the conversation so far; omit for a fresh one
     context=context,                     # typed application data and dependencies
     usage=None,                          # a RunUsage to add this run's usage to
+    retries=None,                        # this run's retry budgets; see "Retries"
 )
 result.status                            # "completed" or "input_required"
 # After narrowing on status:
@@ -245,6 +247,39 @@ async def cites_real_jobs(ctx: RunContext, output: Claim) -> Claim:
 
 For multi-turn conversations with typed final results, see
 [text-session.md](text-session.md).
+
+## Retries
+
+Retries follow pydantic-ai. The model gets a budget of consecutive retries
+before the run fails with `UnexpectedModelBehavior`:
+
+| Budget | Consumed by | Reset by |
+| --- | --- | --- |
+| `tools` | each tool on its own: arguments that fail validation, `ModelRetry` from the tool | a call of that tool that did not ask for a retry |
+| `output` | a final output that fails validation, `ModelRetry` from an output validator or output function | an accepted output |
+
+```python
+from livekit.agents import Agent, AgentRetries
+
+fnol = Agent(instructions="...", llm=MODEL, output_type=Claim, retries=2)
+fnol = Agent(instructions="...", llm=MODEL, output_type=Claim,
+             retries=AgentRetries(tools=3, output=1))
+
+@fnol.tool(retries=5)                  # this tool's own budget
+async def lookup_policy(ctx: RunContext, number: str) -> Policy: ...
+
+result = await fnol.run(message, retries={"output": 3})   # this run only
+```
+
+`retries=` takes an `int`, which sets both budgets, or an `AgentRetries`
+dict `{"tools": int, "output": int}`. On `Agent(...)` each budget defaults
+to `1`. The same `retries=` on a run entrypoint (`agent.run`,
+`agent.run_stream`, `session.run`, `session.run_stream`, and
+`VoiceSession.run`) overrides the agent's budgets for that run; a key it
+omits keeps the agent's value. In a `TextSession` turn it applies to every
+agent of the session. `retries=` on a tool (`@agent.tool`, `@function_tool`,
+`MCPToolOptions`) replaces the `tools` budget for that tool. A budget of `0`
+fails on the first retry. There is no separate `output_retries=`.
 
 ## Authoritative completion and approval
 

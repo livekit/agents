@@ -37,7 +37,8 @@ async with VoiceSession(llm=test_model) as session:
 ```
 
 `VoiceSession.run()` returns a `VoiceRunResult` with the event assertions used
-here. `agent` and `test_model` are test fixtures that produce the expected
+here. Its `retries=` overrides the current agent's retry budgets for that run, as
+on `agent.run()` ([retries](agents.md#retries)). `agent` and `test_model` are test fixtures that produce the expected
 exchange. Argument assertions check the supplied keys; assert exact business
 state separately when extra fields or effects matter. `next_event` advances
 through the observed sequence. `contains_function_call` and

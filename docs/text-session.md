@@ -129,6 +129,10 @@ Read `turn.result.status` to handle the outcome. Save `turn.state` and
 changed application fields before accepting the next turn, including
 turns whose status is `"input_required"`.
 
+`session.run(..., retries=)` overrides the retry budgets of every agent of the
+session for that turn, as `agent.run(retries=)` does for one agent; see
+[retries](agents.md#retries).
+
 Only the active backend frame receives unaddressed input. Its parent remains
 inactive while the child owns the backend conversation. When invoked remotely
 by a frontend, this backend returns progress, questions, and results through
@@ -136,7 +140,7 @@ its endpoint; the caller's `VoiceSession` independently owns their presentation.
 
 ## Streaming a backend invocation
 
-`session.run_stream(...)` accepts the same input, state, and context as `run()`.
+`session.run_stream(...)` accepts the same input, state, context, and retries as `run()`.
 It is an async context manager with `stream_text`, `stream_events`, and
 `result`. The settled value remains the session envelope: `turn.result`
 and `turn.state`. Individual child events identify their agent, invocation,

@@ -37,6 +37,28 @@ a module-level agent. `@function_tool` declares a reusable tool function;
 - Reads per-run data from `ctx.context`, never from module
   globals that change.
 
+### Retries
+
+Arguments that fail validation and `ModelRetry` from the body send the model
+back to correct the call, as in pydantic-ai. Each tool counts its own
+consecutive retries against the agent's `retries["tools"]` budget (default
+`1`); `retries=` on the tool replaces that budget for it. A run whose tool
+goes over its budget fails with `UnexpectedModelBehavior`.
+
+```python
+@scheduler.tool(retries=3)
+async def find_slot(ctx: RunContext[PatientContext], day: str) -> str:
+    """Find an open slot on a day."""
+    slots = await ctx.context.clinic.slots(day)
+    if not slots:
+        raise ModelRetry(f"No slots on {day}; ask for another day or try the next weekday.")
+    return slots[0].label
+```
+
+`@agent.tool(retries=)`, `@function_tool(retries=)` (also on a toolset's
+methods) and `MCPToolOptions(retries=)` take the same budget. See
+[agent retries](agents.md#retries) for the run-level budgets.
+
 ## Agents as tools
 
 Tools can delegate to another agent directly, through a backend `TextSession`,
@@ -178,7 +200,7 @@ parent conversation while returning only its accepted result.
 | `ToolResult(output, reply_required=False)` | the output is recorded; the call asks for no reply |
 | `ToolResult(text, verbatim=True)` | the person gets the text exactly as written; the model reads that it was delivered and continues, or the turn ends there with `reply_required=False`; see [human input](#human-input) |
 | raise `ToolError(message)` | the model reads the message as an error output and continues |
-| raise `ModelRetry(reason)` | the model reads the reason and calls again; the same in `agent.run()` and on a call |
+| raise `ModelRetry(reason)` | the model reads the reason and calls again, within the tool's [retry budget](#retries); the same in `agent.run()` and on a call |
 | raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with no output |
 | any other exception | logged; the model reads "An internal error occurred" |
 | `InputRequired(question)` | the turn waits for the person; see [human input](#human-input) |
