@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::media::images::FrameReader;
-use lk_agents_media::workers::{MediaWorkerError, MediaWorkerLimits, MediaWorkers};
+use lk_agents_media::workers::{MediaWorkerLimits, MediaWorkers};
 use lk_agents_voice::tts::processing::SpeechText;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -188,16 +188,5 @@ impl lk_agents_abi::tts::text::TtsTextProcessorFactory for Process {
     }
     fn transcript(expressive: bool) -> Box<dyn lk_agents_abi::tts::text::TranscriptProcessor> {
         SpeechText::transcript(expressive)
-    }
-}
-
-lk_agents_abi::inventory::submit! {
-    lk_agents_abi::utils::workers::WorkerService {
-        try_spawn: |class, job| {
-            let workers = workers()
-                .map_err(|error| MediaWorkerError::Unavailable(error.to_string()))?;
-            let receipt = workers.try_spawn(class, job)?;
-            Ok(Box::pin(async move { receipt.await.map_err(|error| error.to_string()) }))
-        },
     }
 }

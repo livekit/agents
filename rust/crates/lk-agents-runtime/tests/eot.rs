@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 
+use lk_agents_inference::env::Env as _;
 use lk_agents_inference::eot::*;
-use lk_agents_runtime::process;
+use lk_agents_runtime::process::{self, Process};
 
 struct CloudFailure(Arc<tokio::sync::Notify>);
 
@@ -95,8 +96,14 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                 }
             })
         });
-        let stream =
-            EotStream::open(session, 16_000, make, None, &lk_agents_abi::TokioSpawner::current());
+        let stream = EotStream::open(
+            session,
+            16_000,
+            make,
+            Process::workers,
+            None,
+            &lk_agents_abi::TokioSpawner::current(),
+        );
         let abandoned = stream.predict();
         let mut queued = None;
         with_host_lock(|| {
@@ -214,7 +221,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
         })
     });
     let spawner = lk_agents_abi::TokioSpawner::current();
-    let stream = EotStream::open(session, 16_000, make, None, &spawner);
+    let stream = EotStream::open(session, 16_000, make, Process::workers, None, &spawner);
     tokio::time::timeout(Duration::from_secs(5), async {
         while !stream.is_fallback() {
             tokio::task::yield_now().await;
@@ -251,11 +258,12 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
 
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
-        use lk_agents_abi::utils::workers::{WorkerClass, try_spawn};
+        use lk_agents_runtime::media::workers::MediaWorkerClass;
 
-        let _workers = process::workers().unwrap();
+        let workers = process::workers().unwrap();
         let (release, waiting) = std::sync::mpsc::channel();
-        let blocker = try_spawn(WorkerClass::EotModel, Box::new(move || waiting.recv().unwrap()))
+        let blocker = workers
+            .try_spawn(MediaWorkerClass::EotModel, move || waiting.recv().unwrap())
             .expect("reserve the one model-construction slot");
         let shared =
             Arc::new(Mutex::new(ThresholdOptions::new(TurnDetectorModel::V1Mini, None, None)));
@@ -268,8 +276,14 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
                 Arc::new(LocalTransport::new(Arc::new(Model(Arc::default())), sink))
             })
         });
-        let stream =
-            EotStream::open(session, 16_000, make, None, &lk_agents_abi::TokioSpawner::current());
+        let stream = EotStream::open(
+            session,
+            16_000,
+            make,
+            Process::workers,
+            None,
+            &lk_agents_abi::TokioSpawner::current(),
+        );
         let first = tokio::time::timeout(Duration::from_secs(1), stream.predict())
             .await
             .expect("refusal settles the pending prediction")

@@ -163,6 +163,7 @@ impl<E: Env> lk_agents_abi::turn::inference::InferenceEot for NativeEot<E> {
             session,
             self.sample_rate,
             make,
+            E::workers,
             on_metrics,
             spawner.as_ref(),
         )))

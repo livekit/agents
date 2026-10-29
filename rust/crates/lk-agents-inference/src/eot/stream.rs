@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::tokenize::language::TurnDetectorModel;
 use lk_agents_abi::utils::resample::{Quality, Resampler};
-use lk_agents_abi::utils::workers::{WorkerClass, WorkerError, try_spawn};
 use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
+use lk_agents_media::workers::{MediaWorkerClass, MediaWorkerError};
 use tokio::sync::{oneshot, watch};
 
+use crate::env::WorkerPool;
 use crate::eot::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
     EotWarning, SinkEvent, TransportPrediction, TransportShell,
@@ -74,6 +75,8 @@ pub struct EotStream {
     inner: Mutex<Inner>,
     rate: u32,
     make: TransportFactory,
+    /// Where the local model is constructed.
+    workers: WorkerPool,
     on_metrics: Option<MetricsCallback>,
     /// A swap or prediction wakes a driver whose local construction was refused.
     swaps: watch::Sender<u64>,
@@ -87,6 +90,7 @@ impl EotStream {
         session: EotSession,
         rate: u32,
         make: TransportFactory,
+        workers: WorkerPool,
         on_metrics: Option<MetricsCallback>,
         spawner: &dyn lk_agents_abi::Spawner,
     ) -> Arc<Self> {
@@ -110,6 +114,7 @@ impl EotStream {
             }),
             rate,
             make,
+            workers,
             on_metrics,
             swaps: watch::channel(0).0,
             settled: watch::channel(false).0,
@@ -370,17 +375,18 @@ impl EotStream {
             let Some(shell) = shell else {
                 let make = self.make.clone();
                 let (send, receive) = oneshot::channel();
-                let replacement = match try_spawn(
-                    WorkerClass::EotModel,
-                    Box::new(move || {
-                        let _ = send.send(make(model));
-                    }),
-                ) {
+                let admitted =
+                    (self.workers)().map_err(MediaWorkerError::Unavailable).and_then(|workers| {
+                        workers.try_spawn(MediaWorkerClass::EotModel, move || {
+                            let _ = send.send(make(model));
+                        })
+                    });
+                let replacement = match admitted {
                     Ok(worker) => match worker.await {
                         Ok(()) => receive.await.map_err(|error| error.to_string()),
-                        Err(error) => Err(error),
+                        Err(error) => Err(error.to_string()),
                     },
-                    Err(error @ WorkerError::Exhausted(_)) => {
+                    Err(error @ MediaWorkerError::Exhausted(_)) => {
                         let warnings = {
                             let mut inner = self.lock();
                             if inner.session.is_closed() {
