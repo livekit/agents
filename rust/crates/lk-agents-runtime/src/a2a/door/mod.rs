@@ -13,6 +13,7 @@ use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage::{StorageError, StorageNamespace};
+use lk_agents_abi::unix_now_ms;
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
@@ -20,7 +21,6 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::schema::TaskRow;
-use lk_agents_abi::unix_now_ms;
 use lk_agents_storage::{Storage, Thread, shortuuid};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -39,70 +39,18 @@ pub struct Door {
     tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
     budget: Arc<StdMutex<EndpointBudget>>,
-    /// The namespace's A2A work, which counts this door's operations too.
-    owner: Arc<TaskSet>,
-}
-
-/// Where a door's storage comes from: an open backend, or a host namespace opening its own on
-/// first use.
-enum Store {
-    Open(Arc<dyn Storage>),
-    Namespace(Arc<Namespace>),
 }
 
 struct Inner {
-    storage: Store,
+    /// The host's namespace, whose backend opens on first use.
+    namespace: Arc<Namespace>,
     lane: String,
     holder: String,
     host: Arc<dyn TurnHost>,
     options: lk_agents_core::a2a::TurnOptions,
+    /// The namespace's A2A work, which counts this door's operations too.
     owner: Arc<TaskSet>,
     clock: Arc<dyn lk_agents_abi::Clock>,
-}
-
-impl Door {
-    /// A door over an open backend, on the caller's runtime.
-    pub fn new(
-        storage: Arc<dyn Storage>,
-        config: DoorConfig,
-        host: Arc<dyn TurnHost>,
-        owner: Arc<TaskSet>,
-        clock: Arc<dyn lk_agents_abi::Clock>,
-    ) -> Result<Self, StorageError> {
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
-        Self::over(Store::Open(storage), config, host, owner, runtime, clock)
-    }
-
-    fn over(
-        storage: Store,
-        config: DoorConfig,
-        host: Arc<dyn TurnHost>,
-        owner: Arc<TaskSet>,
-        runtime: tokio::runtime::Handle,
-        clock: Arc<dyn lk_agents_abi::Clock>,
-    ) -> Result<Self, StorageError> {
-        lk_agents_core::a2a::card::agent_card(config.endpoint)
-            .map_err(|e| StorageError::Invalid(e.to_string()))?;
-        if config.lane.is_empty() {
-            return Err(StorageError::Invalid("an A2A door requires a lane".into()));
-        }
-        Ok(Self {
-            inner: Arc::new(Inner {
-                storage,
-                lane: config.lane,
-                holder: config.holder,
-                host,
-                options: config.options,
-                owner: owner.clone(),
-                clock,
-            }),
-            tasks: Arc::default(),
-            runtime,
-            budget: Arc::new(StdMutex::new(EndpointBudget::new(EndpointLimits::default()))),
-            owner,
-        })
-    }
 }
 
 impl A2ADoor for Door {
@@ -116,14 +64,31 @@ impl A2ADoor for Door {
         host: Arc<dyn TurnHost>,
     ) -> Result<Self, StorageError> {
         let storage: Arc<dyn Any + Send + Sync> = storage;
-        let storage = storage.downcast::<Namespace>().map_err(|_| {
+        let namespace = storage.downcast::<Namespace>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
         let runtime = env
             .caller_runtime()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
-        let owner = storage.a2a_tasks();
-        Self::over(Store::Namespace(storage), config, host, owner, runtime, env.clock.clone())
+        lk_agents_core::a2a::card::agent_card(config.endpoint)
+            .map_err(|e| StorageError::Invalid(e.to_string()))?;
+        if config.lane.is_empty() {
+            return Err(StorageError::Invalid("an A2A door requires a lane".into()));
+        }
+        Ok(Self {
+            inner: Arc::new(Inner {
+                owner: namespace.a2a_tasks(),
+                namespace,
+                lane: config.lane,
+                holder: config.holder,
+                host,
+                options: config.options,
+                clock: env.clock.clone(),
+            }),
+            tasks: Arc::default(),
+            runtime,
+            budget: Arc::new(StdMutex::new(EndpointBudget::new(EndpointLimits::default()))),
+        })
     }
 
     fn max_payload_bytes(&self) -> usize {
@@ -171,7 +136,7 @@ impl A2ADoor for Door {
         };
         let inner = self.inner.clone();
         let observer = cancel.clone();
-        let ownership = self.owner.track("a2a operation");
+        let ownership = self.inner.owner.track("a2a operation");
         let spawner = TokioSpawner::new(self.runtime.clone());
         self.tasks.spawn(&spawner, "a2a operation", async move {
             let _ownership = ownership;
@@ -243,10 +208,7 @@ impl Drop for Response {
 
 impl Inner {
     async fn storage(&self) -> Result<Arc<dyn Storage>, StorageError> {
-        match &self.storage {
-            Store::Open(storage) => Ok(storage.clone()),
-            Store::Namespace(namespace) => namespace.shared_storage().await,
-        }
+        self.namespace.shared_storage().await
     }
 
     async fn thread(
@@ -255,9 +217,10 @@ impl Inner {
         id: &str,
         operation: AuthOperation,
     ) -> Result<Thread, DoorError> {
-        let info = self.storage().await?.get_thread(id).await?;
+        let storage = self.storage().await?;
+        let info = storage.get_thread(id).await?;
         authorize(principal, operation, id, Some(&info.scope))?;
-        Ok(self.storage().await?.open(id, &self.holder).await?)
+        Ok(storage.open(id, &self.holder).await?)
     }
 
     async fn execute(
@@ -409,19 +372,16 @@ impl Inner {
             continuing,
             streaming.then_some(sender.clone()),
         ));
-        let turn = Turn::new(
-            thread.clone(),
-            &self.lane,
-            self.host.clone(),
-            self.clock.clone(),
-            self.options.clone(),
-        )
-        .with_stream(created.clone())
-        .with_owner(self.owner.clone())
-        .with_publisher(publisher.clone());
-        let turn = match host_context {
-            Some(context) => turn.with_context(context),
-            None => turn,
+        let turn = Turn {
+            thread: thread.clone(),
+            lane: self.lane.clone(),
+            host: self.host.clone(),
+            clock: self.clock.clone(),
+            opts: self.options.clone(),
+            stream: Some(created.clone()),
+            publisher: Some(publisher.clone()),
+            host_context,
+            resolvers: self.owner.clone(),
         };
         let result = turn.run_message(message, None).await;
         thread.close().await;

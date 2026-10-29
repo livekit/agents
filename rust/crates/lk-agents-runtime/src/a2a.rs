@@ -56,6 +56,7 @@ pub struct Turn {
     /// The turn's clock: the machine's waits and the bound on closing the host stream.
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
+    /// The response stream, independent of task identity, recorded with submission.
     stream: Option<StreamInfo>,
     /// Its response stream, which watches the turn from outside.
     publisher: Option<Arc<door::stream::Publisher>>,
@@ -85,25 +86,9 @@ impl Turn {
         }
     }
 
-    pub(crate) fn with_publisher(mut self, publisher: Arc<door::stream::Publisher>) -> Self {
-        self.publisher = Some(publisher);
-        self
-    }
-
-    pub fn with_owner(mut self, owner: Arc<TaskSet>) -> Self {
-        self.resolvers = owner;
-        self
-    }
-
     /// Each invocation supplies its own host execution context; the endpoint proxy is shared.
     pub fn with_context(mut self, context: lk_agents_abi::HostRef) -> Self {
         self.host_context = Some(context);
-        self
-    }
-
-    /// The response stream is independent of task identity and is recorded with submission.
-    pub fn with_stream(mut self, stream: StreamInfo) -> Self {
-        self.stream = Some(stream);
         self
     }
 

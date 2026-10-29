@@ -13,10 +13,13 @@ use std::time::Duration;
 use livekit_protocol::agent::agent_thread::CreateRequest;
 
 use crate::StorageError;
-use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter};
+use lk_agents_abi::storage::Storage as _;
+use lk_agents_net::env::ProcessEnv;
+
 use crate::engine::{LeaseTiming, SchemaCell};
+use crate::namespace::Namespace;
 use crate::sql::{BatchResult, Row, Statement};
-use crate::sqlite::{FileConnection, SqliteStorage};
+use crate::sqlite::FileConnection;
 use crate::{SqliteConnection, Storage, Thread, shortuuid};
 
 #[derive(Debug, Clone, Copy)]
@@ -33,15 +36,17 @@ pub struct Fixture {
     pub dir: Option<PathBuf>,
 }
 
-/// A backend with no thread yet, removed (with its directory) at `close`.
+/// A backend with no thread yet, as the host's `Storage` namespace configures it, removed (with
+/// its directory) at `close`.
 pub struct Store {
+    pub namespace: Arc<Namespace>,
     pub storage: Arc<dyn Storage>,
     pub dir: Option<PathBuf>,
 }
 
 impl Store {
     pub async fn close(self) {
-        self.storage.close().await;
+        self.namespace.aclose().await;
         if let Some(dir) = self.dir {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -50,33 +55,28 @@ impl Store {
 
 impl Backend {
     pub async fn store(self, lease: LeaseTiming) -> Store {
-        match self {
+        let env = ProcessEnv::current_runtime();
+        let (ttl, renew) =
+            (Some(lease.ttl.as_secs_f64()), Some(lease.renew_interval.as_secs_f64()));
+        let (namespace, dir) = match self {
             Backend::Sqlite => {
                 let dir = std::env::temp_dir().join(shortuuid("lk-agents-storage-"));
-                let storage = Arc::new(SqliteStorage::open(&dir, lease).await.unwrap());
-                Store { storage, dir: Some(dir) }
+                let directory = Some(dir.display().to_string());
+                (Namespace::new(&env, directory, None, None, None, ttl, renew), Some(dir))
             }
             Backend::AgentDb => {
-                let env = |name: &str| {
-                    std::env::var(name).unwrap_or_else(|_| panic!("the AgentDB cases need {name}"))
+                let var = |name: &str| {
+                    let value = std::env::var(name);
+                    Some(value.unwrap_or_else(|_| panic!("the AgentDB cases need {name}")))
                 };
-                let mut opts = AgentDbOptions::new(&env("LIVEKIT_URL"));
-                opts.lease = lease;
-                let minter =
-                    TokenMinter::new(env("LIVEKIT_API_KEY"), env("LIVEKIT_API_SECRET")).unwrap();
-                Store {
-                    storage: Arc::new(
-                        AgentDbStorage::new(
-                            opts,
-                            minter,
-                            &lk_agents_net::env::ProcessEnv::current_runtime(),
-                        )
-                        .unwrap(),
-                    ),
-                    dir: None,
-                }
+                let (url, key, secret) =
+                    (var("LIVEKIT_URL"), var("LIVEKIT_API_KEY"), var("LIVEKIT_API_SECRET"));
+                (Namespace::new(&env, None, url, key, secret, ttl, renew), None)
             }
-        }
+        };
+        let namespace = Arc::new(namespace.unwrap());
+        let storage = namespace.shared_storage().await.unwrap();
+        Store { namespace, storage, dir }
     }
 
     /// A fresh thread; `lease` overrides the default lease timing.
@@ -85,7 +85,7 @@ impl Backend {
             Some((ttl, interval)) => LeaseTiming::new(ttl, interval).unwrap(),
             None => LeaseTiming::default(),
         };
-        let Store { storage, dir } = self.store(lease).await;
+        let Store { storage, dir, .. } = self.store(lease).await;
         let thread = storage.create_thread(CreateRequest::default()).await.unwrap();
         Fixture { storage, thread_id: thread.thread_id, lease, dir }
     }
