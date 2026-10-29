@@ -12,7 +12,7 @@ use lk_agents_abi::{Clock, ImageContent, Spawner};
 
 use crate::http::GatewayHttp;
 use crate::session_report::ReportAdmission;
-use crate::worker_io::WorkerIo;
+use crate::blocking_io::BlockingIo;
 
 /// The media worker pool, read at use so a fork is checked before dispatching work.
 pub type MediaPoolSource = fn() -> Result<Arc<dyn MediaExecutor>, String>;
@@ -33,8 +33,8 @@ pub struct ProcessEnv {
     pub http: fn() -> Result<Arc<GatewayHttp>, String>,
     /// The process's session report admission.
     pub report_admission: fn() -> Result<ReportAdmission, String>,
-    /// The process's worker I/O, on the runtime the worker's tasks and sockets run on.
-    pub worker_io: fn() -> Result<WorkerIo, String>,
+    /// The process's blocking I/O, on the runtime the worker's tasks and sockets run on.
+    pub blocking_io: fn() -> Result<BlockingIo, String>,
     /// The process's media worker pool.
     pub media_pool: MediaPoolSource,
     /// How a request's images are prepared for a provider.
@@ -69,7 +69,7 @@ impl ProcessEnv {
                     LazyLock::new(ReportAdmission::default);
                 Ok(ADMISSION.clone())
             },
-            worker_io: || WorkerIo::new(runtime()?, 4).map_err(|error| error.to_string()),
+            blocking_io: || BlockingIo::new(runtime()?, 4).map_err(|error| error.to_string()),
             media_pool: || Err("no media worker pool in this process".into()),
             images: Arc::new(NoImagePreparation),
             strip_assistant_markup: str::to_owned,

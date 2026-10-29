@@ -20,7 +20,7 @@ use tokio::sync::{oneshot, watch};
 
 use super::{Extra, ExtraValue, IpcClient, Level, ToParent, extra_fields, secs};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::worker_io::WorkerIo;
+use lk_agents_net::blocking_io::BlockingIo;
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -71,7 +71,7 @@ struct Inner {
     host: OnceLock<(Arc<dyn JobHost>, CallContext)>,
     /// The parent the job process reports its end to (none for a job run outside one).
     parent: OnceLock<Arc<IpcClient>>,
-    io: WorkerIo,
+    io: BlockingIo,
     fake: bool,
     session_end_timeout: f64,
     /// The name of the door's `on_session_end`, when it has one.
@@ -355,7 +355,7 @@ impl WorkerJobRun for JobRun {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
                 parent: OnceLock::new(),
-                io: (env.worker_io)().map_err(WorkerError::Failed)?,
+                io: (env.blocking_io)().map_err(WorkerError::Failed)?,
                 fake: fake_job,
                 session_end_timeout,
                 session_end,

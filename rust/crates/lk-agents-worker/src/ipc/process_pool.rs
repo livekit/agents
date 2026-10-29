@@ -13,7 +13,7 @@ use super::owner::{ProcessOwner, queue_diagnostic};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::{Level, ProcSupervisor, secs};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::worker_io::WorkerIo;
+use lk_agents_net::blocking_io::BlockingIo;
 
 /// One executor and, once started, its native supervisor.
 #[derive(Clone)]
@@ -126,7 +126,7 @@ impl Executors for HostExecutors {
 
 pub struct ProcessPool {
     pool: ProcPool,
-    io: WorkerIo,
+    io: BlockingIo,
 }
 
 impl WorkerProcPool for ProcessPool {
@@ -148,7 +148,7 @@ impl WorkerProcPool for ProcessPool {
         let executors = HostExecutors { host, context };
         Ok(Self {
             pool: ProcPool::new(Arc::new(executors), opts),
-            io: (env.worker_io)().map_err(WorkerError::Failed)?,
+            io: (env.blocking_io)().map_err(WorkerError::Failed)?,
         })
     }
 

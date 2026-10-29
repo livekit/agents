@@ -100,7 +100,7 @@ impl ProcSupervisor {
         stream: S,
         host: H,
         opts: SupervisorOptions,
-        workers: lk_agents_net::worker_io::WorkerIo,
+        blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> Self {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (messages_tx, messages) = mpsc::channel(QUEUE);
@@ -134,7 +134,7 @@ impl ProcSupervisor {
             state: Supervision::new(opts, Duration::ZERO),
             origin: Instant::now(),
             host: Arc::new(host),
-            workers,
+            blocking_io,
             writes,
             init: None,
             job: None,
@@ -247,7 +247,7 @@ struct Driver {
     state: Supervision,
     origin: Instant,
     host: Arc<dyn ProcHost>,
-    workers: lk_agents_net::worker_io::WorkerIo,
+    blocking_io: lk_agents_net::blocking_io::BlockingIo,
     writes: mpsc::Sender<(u64, ToChild)>,
     init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
     job: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
@@ -255,7 +255,7 @@ struct Driver {
     status: watch::Sender<Status>,
 }
 
-type Sampling = Option<lk_agents_net::worker_io::WorkerIoTask<Result<(f64, String), MemoryError>>>;
+type Sampling = Option<lk_agents_net::blocking_io::BlockingIoTask<Result<(f64, String), MemoryError>>>;
 
 impl Driver {
     #[allow(clippy::too_many_arguments)]
@@ -452,7 +452,7 @@ impl Driver {
                 Effect::SampleMemory => {
                     let host = self.host.clone();
                     // Try admission before creating any task; a saturated sampler retries at its next cadence.
-                    match self.workers.try_spawn(move || host.sample_memory()) {
+                    match self.blocking_io.try_spawn(move || host.sample_memory()) {
                         Ok(receipt) => *sampling = Some(receipt),
                         Err(_) => queue.extend(self.state.handle(
                             Instant::now().duration_since(self.origin),

@@ -66,7 +66,7 @@ async fn finish_with_failed_ping(
     let host = Arc::new(FakeHost::default());
     host.alive.store(true, Ordering::SeqCst);
     let sup =
-        ProcSupervisor::new(stream, host.clone(), opts(), crate::test_support::native_workers());
+        ProcSupervisor::new(stream, host.clone(), opts(), crate::test_support::blocking_io());
     let init = waits(&sup).await;
     assert!(matches!(recv(&mut child).await, ToChild::Hello(_)));
     write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();

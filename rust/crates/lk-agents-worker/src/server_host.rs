@@ -26,7 +26,7 @@ use crate::{
     TransportConfig, WorkerCommand, WorkerHost, protocol,
 };
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::worker_io::WorkerIo;
+use lk_agents_net::blocking_io::BlockingIo;
 
 pub struct Configuration {
     settings: Arc<Mutex<ServerSettings>>,
@@ -253,7 +253,7 @@ pub struct AgentRuntime {
     running: Arc<AtomicBool>,
     runtime: server::ServerRuntime,
     mounted: Mounted,
-    io: WorkerIo,
+    io: BlockingIo,
 }
 
 impl AgentRuntime {
@@ -274,7 +274,7 @@ impl ServerRuntime for AgentRuntime {
         let config = config
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
-        let io = (env.worker_io)().map_err(WorkerError::Failed)?;
+        let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
         let host = HostedServer::new(host);
         let mounted = host.mounted.clone();
         Ok(Self {

@@ -22,7 +22,7 @@ use super::{
     ProcHost, ProcSupervisor, SupervisorOptions, extra_fields, secs,
 };
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::worker_io::WorkerIo;
+use lk_agents_net::blocking_io::BlockingIo;
 
 pub struct ProcessOwner {
     launch: watch::Sender<ProcessLaunch>,
@@ -32,7 +32,7 @@ pub struct ProcessOwner {
     host: Mutex<Option<Arc<dyn ProcessHost>>>,
     /// What the executor's steps run in: the constructor's caller.
     context: CallContext,
-    io: WorkerIo,
+    io: BlockingIo,
     /// The child's health timeout, from the supervision's ping settings.
     health_timeout_ms: Option<u64>,
     /// Whether the process initialized, once that settled (answered, failed, timed out, killed).
@@ -79,7 +79,7 @@ impl WorkerProcSupervisor for ProcessOwner {
     ) -> Result<Self, WorkerError> {
         // Thread runners and direct supervisors need diagnostics before any OS launch.
         crate::diagnostics::initialize().map_err(WorkerError::Failed)?;
-        let io = (env.worker_io)().map_err(WorkerError::Failed)?;
+        let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
         let opts = SupervisorOptions {
             pid,
             initialize_timeout,

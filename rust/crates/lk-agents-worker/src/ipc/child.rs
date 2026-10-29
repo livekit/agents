@@ -12,11 +12,11 @@ use tokio::sync::watch;
 use super::job_run::JobRun;
 use super::{IpcClient, PROTOCOL_VERSION, ToChild, ToParent};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::worker_io::WorkerIo;
+use lk_agents_net::blocking_io::BlockingIo;
 
 pub struct ChildChannel {
     client: Arc<IpcClient>,
-    io: WorkerIo,
+    io: BlockingIo,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
     /// The job the parent started, once it did.
@@ -93,7 +93,7 @@ impl WorkerIpcClient for ChildChannel {
         initialize: Arc<dyn ChildInitialize>,
         process: bool,
     ) -> Result<Self, WorkerError> {
-        let io = (env.worker_io)().map_err(WorkerError::Failed)?;
+        let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
         let runtime = io.runtime_handle();
         let socket = {
             let _runtime = runtime.enter();

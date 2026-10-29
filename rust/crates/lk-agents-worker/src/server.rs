@@ -158,7 +158,7 @@ type Outcome = watch::Sender<Option<Result<(), String>>>;
 #[derive(Clone)]
 pub struct ServerRuntime {
     host: HostedServer,
-    workers: Option<lk_agents_net::worker_io::WorkerIo>,
+    blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
     control: watch::Sender<Control>,
     receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
     snapshot: watch::Sender<ServerSnapshot>,
@@ -171,11 +171,11 @@ pub struct ServerRuntime {
 }
 
 impl ServerRuntime {
-    pub fn new(host: HostedServer, workers: Option<lk_agents_net::worker_io::WorkerIo>) -> Self {
+    pub fn new(host: HostedServer, blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
-            workers,
+            blocking_io,
             control,
             receiver: Arc::new(Mutex::new(Some(receiver))),
             snapshot: watch::channel(ServerSnapshot {
@@ -458,9 +458,9 @@ impl ServerRuntime {
         let host = self.host.configured(start.has_rtc, start.has_load_fnc && !settings.cloud());
         let configured = settings.prometheus_multiproc_dir.clone();
         let discover_cpus = settings.num_idle_processes.is_none();
-        let workers = match &self.workers {
-            Some(workers) => workers.clone(),
-            None => lk_agents_net::worker_io::WorkerIo::new(tokio::runtime::Handle::current(), 4)
+        let blocking_io = match &self.blocking_io {
+            Some(blocking_io) => blocking_io.clone(),
+            None => lk_agents_net::blocking_io::BlockingIo::new(tokio::runtime::Handle::current(), 4)
                 .map_err(|error| error.to_string())?,
         };
         let admission_deadline =
@@ -468,9 +468,9 @@ impl ServerRuntime {
                 .map_err(|_| "initialization timeout must be finite and nonnegative")?;
         let prepare = async {
             loop {
-                match workers.try_admit() {
+                match blocking_io.try_admit() {
                     Ok(permit) => {
-                        break Ok(workers.spawn_admitted(permit, move || {
+                        break Ok(blocking_io.spawn_admitted(permit, move || {
                             crate::diagnostics::initialize()?;
                             Ok((
                                 prepare_prometheus_dir(configured.as_deref()),
@@ -478,7 +478,7 @@ impl ServerRuntime {
                             ))
                         }));
                     }
-                    Err(lk_agents_net::worker_io::WorkerIoError::Exhausted) => {
+                    Err(lk_agents_net::blocking_io::BlockingIoError::Exhausted) => {
                         tokio::time::sleep(crate::ipc::pool::REFILL_INTERVAL).await;
                     }
                     Err(error) => break Err(error.to_string()),
@@ -543,7 +543,7 @@ impl ServerRuntime {
                 }
             };
             let (mut worker, handle) =
-                Worker::new(config, connection, transport, host.clone(), workers.clone());
+                Worker::new(config, connection, transport, host.clone(), blocking_io.clone());
             resources.worker = Some(handle.clone());
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();
@@ -660,7 +660,7 @@ async fn pending_worker(
 #[derive(Default)]
 struct Resources {
     setup: Option<
-        lk_agents_net::worker_io::WorkerIoTask<Result<(Option<String>, Option<f32>), String>>,
+        lk_agents_net::blocking_io::BlockingIoTask<Result<(Option<String>, Option<f32>), String>>,
     >,
     worker: Option<WorkerHandle>,
     connection: Option<OwnedTask<Result<(), String>>>,

@@ -97,7 +97,7 @@ fn options() -> ServerStart {
 #[tokio::test]
 async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
     let host = Host::new();
-    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::blocking_io()));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -127,7 +127,7 @@ async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
 async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::blocking_io()));
     let mut start = options();
     start.unregistered = false;
     start.settings.ws_url = "ws://127.0.0.1:1".into();
@@ -149,7 +149,7 @@ async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
     let mut host = Host::new();
     host.fail_start = true;
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::blocking_io()));
     assert_eq!(runtime.run(options()).await, Err("pool warmup timed out".into()));
     assert_eq!(runtime.close().await, Ok(()));
     assert_eq!(runtime.close().await, Ok(()));
@@ -162,7 +162,7 @@ async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() 
     let mut host = Host::new();
     host.fail_close = true;
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::blocking_io()));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -175,7 +175,7 @@ async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() 
 #[tokio::test]
 async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
     let host = Host::new();
-    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::native_workers()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(crate::test_support::blocking_io()));
     let mut start = options();
     start.settings.shutdown_process_timeout = 0.02;
     let run = runtime.run(start);
@@ -199,14 +199,14 @@ async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
 }
 #[tokio::test(start_paused = true)]
 async fn server_startup_waits_for_sampling_capacity() {
-    let workers = crate::test_support::native_workers();
+    let blocking_io = crate::test_support::blocking_io();
     let mut held = Vec::new();
     for _ in 0..4 {
-        held.push(workers.try_admit().unwrap());
+        held.push(blocking_io.try_admit().unwrap());
     }
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(workers.clone()));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io.clone()));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -223,11 +223,11 @@ async fn server_startup_waits_for_sampling_capacity() {
 
 #[tokio::test(start_paused = true)]
 async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
-    let workers = crate::test_support::native_workers();
-    let held: Vec<_> = (0..4).map(|_| workers.try_admit().unwrap()).collect();
+    let blocking_io = crate::test_support::blocking_io();
+    let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit().unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(workers));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io));
     let run = runtime.run(options());
     tokio::pin!(run);
     assert!(futures_util::poll!(&mut run).is_pending());
@@ -241,11 +241,11 @@ async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
 
 #[tokio::test(start_paused = true)]
 async fn server_setup_capacity_timeout_keeps_close_successful() {
-    let workers = crate::test_support::native_workers();
-    let held: Vec<_> = (0..4).map(|_| workers.try_admit().unwrap()).collect();
+    let blocking_io = crate::test_support::blocking_io();
+    let held: Vec<_> = (0..4).map(|_| blocking_io.try_admit().unwrap()).collect();
     let host = Host::new();
     host.release_close.add_permits(1);
-    let runtime = ServerRuntime::new(hosted(&host), Some(workers));
+    let runtime = ServerRuntime::new(hosted(&host), Some(blocking_io));
     let mut start = options();
     start.settings.initialize_process_timeout = 0.01;
     assert_eq!(runtime.run(start).await, Err("server setup capacity wait timed out".into()));

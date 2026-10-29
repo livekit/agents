@@ -154,7 +154,7 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     cfg: RuntimeConfig,
     state: WorkerState,
     host: Arc<P>,
-    pub(super) workers: lk_agents_net::worker_io::WorkerIo,
+    pub(super) blocking_io: lk_agents_net::blocking_io::BlockingIo,
     clock: C,
     default_load: DefaultLoadCalc,
     cpu: Option<CpuMonitor>,
@@ -482,7 +482,7 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
         connection: RuntimeConfig,
         transport: crate::TransportConfig,
         host: P,
-        workers: lk_agents_net::worker_io::WorkerIo,
+        blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> (Self, WorkerHandle) {
         Self::with_components(
             transport.build(),
@@ -490,7 +490,7 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
             WorkerState::new(config),
             host,
             RealClock::new(),
-            workers,
+            blocking_io,
         )
     }
 }
@@ -503,7 +503,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         state: WorkerState,
         host: P,
         clock: C,
-        workers: lk_agents_net::worker_io::WorkerIo,
+        blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> (Self, WorkerHandle) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
@@ -521,7 +521,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 cfg,
                 state: state.with_wall(WallAnchor::of(&clock)),
                 host: Arc::new(host),
-                workers,
+                blocking_io,
                 clock,
                 default_load: DefaultLoadCalc::new(),
                 cpu: None,
@@ -783,8 +783,8 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 self.feed(WorkerStateInput::LoadSampled(load), outbox);
             }
             Completion::Load(None) => {
-                let workers = self.workers.clone();
-                let permit = match workers.try_admit() {
+                let blocking_io = self.blocking_io.clone();
+                let permit = match blocking_io.try_admit() {
                     Ok(permit) => permit,
                     Err(error) => {
                         self.load_pending = false;
@@ -797,7 +797,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                     }
                 };
                 let cpu = self.cpu.take();
-                let sample = workers.spawn_admitted(permit, move || {
+                let sample = blocking_io.spawn_admitted(permit, move || {
                     let mut cpu = cpu.unwrap_or_default();
                     let sample = cpu.cpu_percent();
                     (cpu, sample)

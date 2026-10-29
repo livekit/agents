@@ -178,7 +178,7 @@ fn conn_with(
         m,
         host,
         FrozenClock,
-        crate::test_support::native_workers(),
+        crate::test_support::blocking_io(),
     );
     (c, wire, h)
 }
@@ -512,7 +512,7 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
             dropped: dropped.clone(),
         },
         TestClock(tokio::time::Instant::now()),
-        crate::test_support::native_workers(),
+        crate::test_support::blocking_io(),
     );
     RuntimeRig {
         runtime,
@@ -711,7 +711,7 @@ async fn closing_cancels_an_unfinished_dial() {
         WorkerState::new(WorkerConfig::default()),
         LoadHost::default(),
         TestClock(tokio::time::Instant::now()),
-        crate::test_support::native_workers(),
+        crate::test_support::blocking_io(),
     );
     let h = handle.clone();
     let driver = async { runtime.run().await };
@@ -834,10 +834,10 @@ async fn worker_command_saturation_control() {
 #[tokio::test(start_paused = true)]
 async fn worker_sampler_off_loop() {
     let (mut worker, _, handle) = conn(vec![Step::Serves(vec![register_message("ready")])], 0);
-    let workers = worker.workers.clone();
+    let blocking_io = worker.blocking_io.clone();
     let mut permits = Vec::new();
     for _ in 0..4 {
-        permits.push(workers.try_admit().unwrap());
+        permits.push(blocking_io.try_admit().unwrap());
     }
     let run = worker.run();
     tokio::pin!(run);

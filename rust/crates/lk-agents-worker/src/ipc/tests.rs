@@ -196,7 +196,7 @@ fn setup(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, DuplexStrea
     let host = Arc::new(FakeHost::default());
     host.alive.store(true, Ordering::SeqCst);
     (
-        ProcSupervisor::new(parent, host.clone(), opts, crate::test_support::native_workers()),
+        ProcSupervisor::new(parent, host.clone(), opts, crate::test_support::blocking_io()),
         host,
         child,
     )
@@ -525,7 +525,7 @@ async fn kill_sends_sigusr1_then_kills() {
         parent,
         host.clone(),
         SupervisorOptions { pid, ..opts() },
-        crate::test_support::native_workers(),
+        crate::test_support::blocking_io(),
     );
     let start = std::time::Instant::now();
     sup.kill().await;
@@ -627,7 +627,7 @@ async fn supervisor_blocked_writer() {
         parent,
         host.clone(),
         SupervisorOptions { ping_timeout: 1.0, ..opts() },
-        crate::test_support::native_workers(),
+        crate::test_support::blocking_io(),
     );
     let initialize = waits(&sup).await;
     assert!(matches!(read::<ToChild, _>(&mut child).await.unwrap(), ToChild::Hello(_)));
