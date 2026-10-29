@@ -187,7 +187,7 @@ fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
     assert!(matches!(commit, Operation::Commit { answer_task: Some(_), .. }));
     let resolve =
         operation(at(&mut m, Duration::ZERO, Err(StorageError::Uncertain("lost".into()))));
-    assert!(matches!(resolve, Operation::ResolveLater { task_id } if task_id == "receipt"));
+    assert!(matches!(resolve, Operation::ResolveLater { task_id, .. } if task_id == "receipt"));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     // the database is still unreachable: the task as this worker left it, still working
     let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));

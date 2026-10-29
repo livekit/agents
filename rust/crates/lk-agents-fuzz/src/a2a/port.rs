@@ -21,9 +21,7 @@ use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
-use lk_agents_abi::storage::thread::REASON_STORAGE_UNAVAILABLE;
 use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskRow, TaskWrite, merge_write};
-use lk_agents_core::a2a::failed_message;
 use lk_agents_core::a2a::task::{Completion, HandlerEvent, Operation};
 
 use super::handler::Handler;
@@ -600,7 +598,7 @@ impl Port {
                 }
                 Completion::Done
             }
-            Operation::ResolveLater { task_id } => {
+            Operation::ResolveLater { task_id, failed } => {
                 // the resolver finds the run by its id: applied, nothing to do; not applied while
                 // its token still holds the lane, sent again; else rejected, and the message's
                 // task fails storage-unavailable (`fail_orphan`: only while `working`)
@@ -610,9 +608,7 @@ impl Port {
                         let (keep_lease, drained_id) = open.sent;
                         self.apply(worker, &open, keep_lease, drained_id, now);
                     } else {
-                        let id = format!("msg_fail_{task_id}");
-                        let message = failed_message(task_id, REASON_STORAGE_UNAVAILABLE, id);
-                        self.fail_working(task_id, message, now);
+                        self.fail_working(task_id, failed.clone(), now);
                     }
                 }
                 self.release(worker);

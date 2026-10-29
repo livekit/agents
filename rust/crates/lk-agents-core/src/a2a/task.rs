@@ -116,10 +116,11 @@ pub enum Operation {
         outcome: RunOutcome,
         reason: String,
     },
-    /// Hands the open run, whose commit is unresolved, to a background resolver that fails
-    /// `task_id` `storage-unavailable` on an authoritative rejection.
+    /// Hands the open run, whose commit is unresolved, to a background resolver: when it finds
+    /// the commit rejected ([`rejected_commit`]), `task_id` fails with the `failed` status message.
     ResolveLater {
         task_id: String,
+        failed: a2a::Message,
     },
     /// Commits the open run with nothing of its own, when one is open.
     CloseRun,
@@ -623,6 +624,13 @@ impl TaskMachine {
         }
     }
 
+    fn resolve_later(&mut self) -> Operation {
+        self.phase = Phase::Resolve;
+        let task_id = self.task_id.clone();
+        let failed = failed_message(&task_id, REASON_STORAGE_UNAVAILABLE, self.mint("msg"));
+        Operation::ResolveLater { task_id, failed }
+    }
+
     /// Fails `task_id` `reason` unless it already ended; `then` follows.
     fn fail_task(&mut self, task_id: String, reason: &'static str, then: Phase) -> Operation {
         self.phase = Phase::Failing;
@@ -993,10 +1001,7 @@ impl TaskMachine {
                 let answer = Answer::row(self.answering(), None, reason);
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
             }
-            (Phase::DrainCommit, StorageError::Uncertain(_)) => {
-                self.phase = Phase::Resolve;
-                Operation::ResolveLater { task_id: self.task_id.clone() }
-            }
+            (Phase::DrainCommit, StorageError::Uncertain(_)) => self.resolve_later(),
             (Phase::DrainCommit, _) => {
                 let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
                 self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
@@ -1005,8 +1010,7 @@ impl TaskMachine {
                 // a lost acknowledgment is not a failure: the message's task stays as it is while
                 // the resolver finds the run (decision 39); once applied, it names its answer
                 self.answer = None;
-                self.phase = Phase::Resolve;
-                Operation::ResolveLater { task_id: self.task_id.clone() }
+                self.resolve_later()
             }
             (Phase::Commit, _) => {
                 // a rejected save fails the message's own task; its staged changes are absent,
@@ -1019,6 +1023,12 @@ impl TaskMachine {
         };
         Ok(Some(operation))
     }
+}
+
+/// Whether a resolver found an unresolved commit rejected: the lane moved past its run, whose
+/// task fails `storage-unavailable`. Any other error leaves the outcome unknown.
+pub fn rejected_commit(error: &StorageError) -> bool {
+    matches!(error, StorageError::VersionConflict { .. })
 }
 
 /// Whether a turn answered the row: it ended, or it asks a question.

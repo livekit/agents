@@ -14,15 +14,15 @@ use tokio_util::task::TaskTracker;
 use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
 use lk_agents_core::a2a::task::{
-    Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine,
+    Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine, rejected_commit,
 };
 use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
-    Verdict, caller_history_of, failed_message, host_error, resolve_policy,
+    Verdict, caller_history_of, host_error, resolve_policy,
 };
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Receive, ReceiveInput};
-use lk_agents_storage::run::{ItemRow, REASON_STORAGE_UNAVAILABLE, TaskRow};
+use lk_agents_storage::run::{ItemRow, TaskRow};
 
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 
@@ -69,10 +69,6 @@ pub struct Turn {
     host_context: Option<lk_agents_abi::HostRef>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: TaskTracker,
-}
-
-fn failed(task_id: &str, reason: &str) -> a2a::Message {
-    failed_message(task_id, reason, shortuuid("msg_"))
 }
 
 impl Turn {
@@ -372,12 +368,12 @@ impl Turn {
                 }
                 Completion::Done
             }
-            Operation::ResolveLater { task_id } => {
+            Operation::ResolveLater { task_id, failed } => {
                 let run = call
                     .run
                     .take()
                     .ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))?;
-                self.resolve_later(call.lane.clone(), run, task_id);
+                self.resolve_later(call.lane.clone(), run, task_id, failed);
                 Completion::Done
             }
             Operation::CloseRun => {
@@ -407,13 +403,12 @@ impl Turn {
         })
     }
 
-    /// Hands a run whose commit stayed uncertain to a background resolver: an authoritative
-    /// rejection fails its task `storage-unavailable`; a commit found committed needs nothing.
-    fn resolve_later(&self, lane: Lane, run: Run, answer: String) {
+    /// Hands a run whose commit stayed uncertain to a background resolver, which fails its task
+    /// with `failed` when the commit was rejected.
+    fn resolve_later(&self, lane: Lane, run: Run, answer: String, failed: a2a::Message) {
         self.resolvers.spawn(async move {
             match run.resolve_later().await {
-                Some(Err(StorageError::VersionConflict { .. })) => {
-                    let failed = failed(&answer, REASON_STORAGE_UNAVAILABLE);
+                Some(Err(e)) if rejected_commit(&e) => {
                     if let Err(e) = lane.db().fail_orphan(&answer, &failed).await {
                         log::warn!(target: "livekit.agents", taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
                     }
