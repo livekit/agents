@@ -52,8 +52,9 @@ from ._utils import (
 )
 from .llm import LLMModels, supports_prompt_cache_breakpoints
 
-# the gateway closes a socket 60 minutes after the upgrade; recycle before that
-_GATEWAY_WS_MAX_SESSION = 55 * 60
+# the gateway closes a socket 60 minutes after the upgrade (WSConnectionMaxLifetime) and the
+# pool checks age only at get(), so leave room for a turn to finish before that
+_GATEWAY_WS_MAX_SESSION = 50 * 60
 
 # status and retryability per gateway.error code; agent-gateway's GatewayErrCode* constants
 _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
@@ -110,9 +111,10 @@ class LLM(llm.LLM):
     With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled sockets, so
     ``inference_class`` and the other upgrade headers are fixed per connection.
 
-    Each read waits ``conn_options.timeout`` for the next event. The gateway sends keepalives
-    while a model reasons silently, and fails the turn itself (a retryable timeout) when the
-    upstream goes quiet for too long.
+    Each read waits ``conn_options.timeout`` for the next event. REST streams get gateway
+    keepalives while a model reasons silently; over WebSocket they are rolling out behind a
+    gateway flag, so until then raise ``conn_options.timeout`` for models that reason silently
+    for longer than it.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
