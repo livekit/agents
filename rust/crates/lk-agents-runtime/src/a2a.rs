@@ -25,7 +25,7 @@ use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Receive, ReceiveInput};
 use lk_agents_storage::run::ItemRow;
 
-use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
+use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, shortuuid};
 
 /// The handler's turn: its checkpoint verdicts in, its events out.
 type Handler = (Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>);
@@ -137,7 +137,7 @@ impl Turn {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
         let caller_history = caller_history_of(&message)?;
         let epoch = tokio::time::Instant::now();
-        let wall = now_secs();
+        let wall = lk_agents_abi::unix_now();
         let msg = Message::from_a2a(&message, wall, None)?;
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut machine = TaskMachine::new(

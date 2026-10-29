@@ -80,14 +80,7 @@ pub trait Storage: Send + Sync {
 
 pub use lk_agents_net::strings::shortuuid;
 
-/// Wall time, Unix seconds.
-pub fn now_secs() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
-}
-
 /// Wall time, Unix milliseconds: what journal events are stamped with.
 pub fn now_ms() -> i64 {
-    (now_secs() * 1000.0) as i64
+    (lk_agents_abi::unix_now() * 1000.0) as i64
 }

@@ -254,9 +254,7 @@ impl SqliteStorage {
 }
 
 fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
+    lk_agents_abi::unix_now() as i64
 }
 
 fn timestamp(secs: i64) -> Option<pbjson_types::Timestamp> {
