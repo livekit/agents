@@ -171,15 +171,11 @@ impl From<TaskRow> for TaskWrite {
     }
 }
 
-/// The `failed` and `rejected` reasons.
+/// The `livekit/reason` codes of a failed task (server.md "Tasks on the wire").
 pub const REASON_WORKER_LOST: &str = "worker-lost";
 pub const REASON_LEASE_TIMEOUT: &str = "lease-timeout";
-pub const REASON_REJECTED: &str = "rejected";
 pub const REASON_THREAD_NOT_FOUND: &str = "thread-not-found";
 pub const REASON_STORAGE_UNAVAILABLE: &str = "storage-unavailable";
-pub const REASON_TIMEOUT: &str = "timeout";
-pub const REASON_UNKNOWN_CLASS: &str = "unknown-class";
-pub const REASON_INVALID_ARGUMENTS: &str = "invalid-arguments";
 
 /// The channel of the append-only run that writes a task's `submitted` row before the lease.
 pub const SUBMIT_CHANNEL: &str = "submit";

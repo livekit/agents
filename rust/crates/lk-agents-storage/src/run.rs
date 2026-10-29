@@ -17,9 +17,8 @@ use livekit_protocol::agent::chat_context::ChatItem;
 pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 
 pub use lk_agents_abi::storage::thread::{
-    REASON_INVALID_ARGUMENTS, REASON_LEASE_TIMEOUT, REASON_REJECTED, REASON_STORAGE_UNAVAILABLE,
-    REASON_THREAD_NOT_FOUND, REASON_TIMEOUT, REASON_UNKNOWN_CLASS, REASON_WORKER_LOST, RunOutcome,
-    SUBMIT_CHANNEL, TaskPatch, WaitOptions, agent_message, merge_write, wait_patch,
+    REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_THREAD_NOT_FOUND, REASON_WORKER_LOST,
+    RunOutcome, SUBMIT_CHANNEL, TaskPatch, WaitOptions, agent_message, merge_write, wait_patch,
 };
 pub use lk_agents_abi::storage::{RunUsage, TaskState};
 
