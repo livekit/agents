@@ -6,6 +6,7 @@ use super::output::{
     transcription::{ParticipantTranscriptionOutput, SegmentIds},
 };
 use super::pre_connect_audio::PreConnectAudioHandler;
+use futures_util::FutureExt as _;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
@@ -21,7 +22,6 @@ use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt,
     TOPIC_CHAT, Ts,
 };
-use futures_util::FutureExt as _;
 use lk_agents_net::monotone::Monotone;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
