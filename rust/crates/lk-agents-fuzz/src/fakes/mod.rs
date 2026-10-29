@@ -582,6 +582,5 @@ impl StreamSink<AudioFrame> for Forward {
     }
 }
 
-pub mod audio;
 
 pub mod remote_session;

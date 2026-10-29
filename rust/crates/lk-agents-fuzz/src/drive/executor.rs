@@ -12,7 +12,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::fakes::audio::VideoForwarderParts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, VideoInput};
@@ -20,6 +19,7 @@ use lk_agents_abi::{
     AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, EotDetector, HOST_TEARDOWN_TIMEOUT, LegEvent,
     SpawnerExt, Stt, Vad,
 };
+use lk_agents_runtime::voice::audio::VideoForwarderParts;
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -826,21 +826,25 @@ impl Executor {
     /// Drains an activated stream into the queue.
     fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
-        let (time, closing) =
-            (shared.time.clone(), crate::fakes::audio::closing(shared.closing.subscribe()));
+        let (time, closing) = (
+            shared.time.clone(),
+            lk_agents_runtime::voice::audio::closing(shared.closing.subscribe()),
+        );
         match stream {
             PendingLeg::Stt(mut source) => {
-                source.report_retries(crate::fakes::audio::report_to(self.reports.clone()));
-                crate::fakes::audio::spawn_drain(
+                source.report_retries(lk_agents_runtime::voice::audio::report_to(
+                    self.reports.clone(),
+                ));
+                lk_agents_runtime::voice::audio::spawn_drain(
                     &shared.spawner,
                     time,
                     closing,
-                    crate::fakes::audio::tagged(sink, source),
+                    lk_agents_runtime::voice::audio::tagged(sink, source),
                     self.reports.clone(),
                     (channel, sink),
                 );
             }
-            PendingLeg::Vad(source) => crate::fakes::audio::spawn_drain(
+            PendingLeg::Vad(source) => lk_agents_runtime::voice::audio::spawn_drain(
                 &shared.spawner,
                 time,
                 closing,
