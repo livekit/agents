@@ -73,7 +73,7 @@ pub fn emit(
     }
     let x = &x;
     let mut out: Vec<Out> =
-        x.str_classes.iter().map(|c| str_class(decls, x, c)).collect::<Result<_, _>>()?;
+        x.str_classes.iter().map(|c| str_class(decls, x, declared, c)).collect::<Result<_, _>>()?;
     let mut modules: Vec<&str> = Vec::new();
     for m in
         x.wrappers.iter().map(|w| w.module.as_str()).chain(x.forwards.iter().map(|f| f.0.as_str()))
@@ -269,29 +269,54 @@ fn wrapper_module(
     Ok(Out { path: format!("{module}.py"), text: b })
 }
 
-fn export<'a>(x: &'a Exposed, c: &StrClass, name: &str) -> Result<&'a ExportFn, String> {
-    x.fns
+/// A function a str class applies to its string: its host name, doc, and stub parameters and result.
+struct Applied {
+    name: String,
+    doc: Vec<String>,
+    params: Vec<(String, bool)>,
+    ret: String,
+}
+
+/// `name` as an in-place export or a declared function (`#[host(functions)]`).
+fn applied(
+    decls: &[Decl],
+    x: &Exposed,
+    declared: &crate::decl::Declarations,
+    c: &StrClass,
+    name: &str,
+) -> Result<Applied, String> {
+    if let Some(f) = x.fns.iter().find(|f| f.name == name) {
+        let (params, ret) = signature_parts(decls, x, &f.sig)?;
+        return Ok(Applied { name: f.name.clone(), doc: f.doc.clone(), params, ret });
+    }
+    let found = declared
+        .classes
         .iter()
-        .find(|f| f.name == name)
-        .ok_or_else(|| format!("{}: {}: `{name}` is not an exported fn", c.source, c.name))
+        .filter(|class| class.form == crate::decl::Form::Functions)
+        .find_map(|class| class.methods.iter().find(|m| m.name == name).map(|m| (class, m)));
+    let Some((class, m)) = found else {
+        return Err(format!("{}: {}: `{name}` is not an exported fn", c.source, c.name));
+    };
+    let mut imports = crate::class_stub::Imports::new(declared);
+    let (params, ret) = crate::class_stub::signature_parts(class, m, &mut imports);
+    Ok(Applied { name: m.name.clone(), doc: m.doc.clone(), params, ret })
 }
 
 /// The one string parameter an applied fn takes: `(its stub text, its name)`.
-fn one_str(
-    decls: &[Decl],
-    x: &Exposed,
-    c: &StrClass,
-    f: &ExportFn,
-) -> Result<(String, String), String> {
-    let (params, _) = signature_parts(decls, x, &f.sig)?;
-    let [(p, false)] = params.as_slice() else {
+fn one_str(c: &StrClass, f: &Applied) -> Result<(String, String), String> {
+    let [(p, false)] = f.params.as_slice() else {
         return Err(format!("{}: {}: `{}` must take the string alone", c.source, c.name, f.name));
     };
     let name = p.split(':').next().unwrap_or(p).trim().to_owned();
     Ok((p.clone(), name))
 }
 
-fn str_class(decls: &[Decl], x: &Exposed, c: &StrClass) -> Result<Out, String> {
+fn str_class(
+    decls: &[Decl],
+    x: &Exposed,
+    declared: &crate::decl::Declarations,
+    c: &StrClass,
+) -> Result<Out, String> {
     let mut b = String::new();
     header(&mut b, &[c.source.as_str()]);
     b.push_str("from typing import Any\n\n");
@@ -301,8 +326,8 @@ fn str_class(decls: &[Decl], x: &Exposed, c: &StrClass) -> Result<Out, String> {
     if docstring(&mut b, &c.doc, 4) {
         b.push('\n');
     }
-    let new = export(x, c, &c.new)?;
-    let (param, arg) = one_str(decls, x, c, new)?;
+    let new = applied(decls, x, declared, c, &c.new)?;
+    let (param, arg) = one_str(c, &new)?;
     b.push_str(&format!("    def __new__(cls, {param}) -> {}:\n", c.name));
     b.push_str(&format!("        return super().__new__(cls, _core.{}({arg}))\n\n", new.name));
     b.push_str(
@@ -310,14 +335,13 @@ fn str_class(decls: &[Decl], x: &Exposed, c: &StrClass) -> Result<Out, String> {
     );
     for (members, property) in [(&c.properties, true), (&c.methods, false)] {
         for (py, f) in members {
-            let f = export(x, c, f)?;
-            one_str(decls, x, c, f)?;
-            let (_, ret) = signature_parts(decls, x, &f.sig)?;
+            let f = applied(decls, x, declared, c, f)?;
+            one_str(c, &f)?;
             b.push('\n');
             if property {
                 b.push_str("    @property\n");
             }
-            b.push_str(&format!("    def {py}(self) -> {ret}:\n"));
+            b.push_str(&format!("    def {py}(self) -> {}:\n", f.ret));
             docstring(&mut b, &f.doc, 8);
             b.push_str(&format!("        return _core.{}(self)\n", f.name));
         }
