@@ -28,4 +28,3 @@ build.targets = ["lk_blingfire"]
 build.tool-args = ["-j1"]
 install.components = ["python"]
 sdist.include = ["vendor/blingfire.tar.gz"]
-
