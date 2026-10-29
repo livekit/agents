@@ -168,10 +168,10 @@ pub struct SpeechHandle {
     /// before the loop has acted on it.
     interrupt_requested: AtomicBool,
 
-    scheduled: watch::Sender<bool>,
+    scheduled: Monotone<bool>,
     /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
-    interrupted: watch::Sender<bool>,
-    done: watch::Sender<bool>,
+    interrupted: Monotone<bool>,
+    done: Monotone<bool>,
 
     // Level-triggered, because `SpeechHandle._clear_authorization` clears it.
     authorized: watch::Sender<bool>,
@@ -200,13 +200,32 @@ impl PartialEq for SpeechHandle {
 
 impl Eq for SpeechHandle {}
 
-/// A flag that only moves forward (`set` once), awaited with [`raised`].
-type Monotone<T> = watch::Sender<T>;
+/// A level-triggered flag that only moves forward: `false` to `true`, never back.
+struct Monotone<T>(watch::Sender<T>);
 
-/// Resolves once `flag` is set: level-triggered, so a late waiter does not hang.
-async fn raised(flag: &watch::Sender<bool>) {
-    // The handle holds the sender for the whole wait, so the channel never closes under it.
-    let _ = flag.subscribe().wait_for(|set| *set).await;
+impl Monotone<bool> {
+    fn new() -> Self {
+        Monotone(watch::Sender::new(false))
+    }
+
+    fn get(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    /// Debug-panics on a regression: `authorized` and `allow_interruptions` go backwards and are
+    /// plain watch cells.
+    fn set(&self, v: bool) {
+        self.0.send_modify(|cur| {
+            debug_assert!(v >= *cur, "a speech handle's forward-only flag would regress");
+            *cur = v;
+        });
+    }
+
+    /// Resolves once set; a late waiter does not hang.
+    async fn raised(&self) {
+        // The handle holds the sender for the whole wait, so the channel never closes under it.
+        let _ = self.0.subscribe().wait_for(|set| *set).await;
+    }
 }
 
 use lk_agents_abi::lock;
@@ -239,14 +258,14 @@ impl SpeechHandle {
                 match effect {
                     StateEffect::PublishAcceptedView(view) => {
                         self.interruptions.send_replace(view.allow_interruptions);
-                        self.interrupted.send_replace(view.interrupted);
-                        self.done.send_replace(view.done);
+                        self.interrupted.set(view.interrupted);
+                        self.done.set(view.done);
                     }
                     StateEffect::PublishRequestFlag(requested) => {
                         self.interrupt_requested.store(requested, Ordering::Release);
                     }
                     StateEffect::NewGeneration => {
-                        self.generations.lock().unwrap().push(Arc::new(watch::Sender::new(false)));
+                        self.generations.lock().unwrap().push(Arc::new(Monotone::new()));
                     }
                     StateEffect::PublishAuthorization(authorized) => {
                         self.authorized.send_replace(authorized);
@@ -258,7 +277,7 @@ impl SpeechHandle {
             (transition.reply, generation_done)
         };
         if let Some(step) = generation_done {
-            self.generation_cell(step).send_replace(true);
+            self.generation_cell(step).set(true);
         }
         Ok(reply)
     }
@@ -277,9 +296,9 @@ impl SpeechHandle {
             creation: watch::Sender::new(creation),
             api,
             interrupt_requested: AtomicBool::new(false),
-            scheduled: watch::Sender::new(false),
-            interrupted: watch::Sender::new(false),
-            done: watch::Sender::new(false),
+            scheduled: Monotone::new(),
+            interrupted: Monotone::new(),
+            done: Monotone::new(),
             authorized: watch::Sender::new(false),
             interruptions: watch::Sender::new(allow_interruptions),
             generations: Mutex::new(Vec::new()),
@@ -386,7 +405,7 @@ impl SpeechHandle {
 
     /// The loop interrupted the speech: its playout, its tools and any follow-up step.
     pub fn interrupted(&self) -> bool {
-        *self.interrupted.borrow()
+        self.interrupted.get()
     }
 
     /// The loop refused the host's `interrupt()` (the speech disallowed it by then): the request
@@ -405,21 +424,21 @@ impl SpeechHandle {
 
     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
     pub fn mark_scheduled(&self) {
-        self.scheduled.send_replace(true);
+        self.scheduled.set(true);
     }
 
     /// `_wait_for_scheduled`. The caller must re-check [`interrupted`](Self::interrupted) after:
     /// a cancelled speech is never marked scheduled, so the driver races this against the interrupt.
     pub async fn wait_for_scheduled(&self) {
-        raised(&self.scheduled).await;
+        self.scheduled.raised().await;
     }
 
     pub async fn wait_for_interrupted(&self) {
-        raised(&self.interrupted).await;
+        self.interrupted.raised().await;
     }
 
     pub async fn wait_for_done(&self) {
-        raised(&self.done).await;
+        self.done.raised().await;
     }
 
     /// `allow_interruptions` as the loop last wrote it.
@@ -511,14 +530,14 @@ impl SpeechHandle {
     /// passes the step captured at tool-call time, so a long tool waits for its own step's playout.
     pub async fn wait_for_generation(&self, step: usize) -> Result<(), SpeechError> {
         let step = lock(&self.inner).state.generation(step)?;
-        raised(&self.generation_cell(step)).await;
+        self.generation_cell(step).raised().await;
         Ok(())
     }
 
     /// `_wait_for_generation()` with `step_idx=-1`: the step currently running.
     pub async fn wait_for_latest_generation(&self) -> Result<(), SpeechError> {
         let step = lock(&self.inner).state.latest_generation()?;
-        raised(&self.generation_cell(step)).await;
+        self.generation_cell(step).raised().await;
         Ok(())
     }
 
@@ -639,11 +658,11 @@ impl SpeechHandle {
     }
 
     pub fn scheduled(&self) -> bool {
-        *self.scheduled.borrow()
+        self.scheduled.get()
     }
 
     pub fn done(&self) -> bool {
-        *self.done.borrow()
+        self.done.get()
     }
 }
 
