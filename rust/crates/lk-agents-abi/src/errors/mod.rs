@@ -9,8 +9,6 @@ mod stream;
 pub use stream::PullError;
 pub(crate) mod side_table;
 
-#[cfg(feature = "python")]
-pub use api::api_error_to_py;
 pub use api::{
     ApiError, ApiErrorKind, DEFAULT_CONNECTION_MESSAGE, DEFAULT_TIMEOUT_MESSAGE,
     TRANSIENT_CLIENT_STATUSES, TimeoutPhase, http_error_message, http_reason, retryable_for_status,

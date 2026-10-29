@@ -6,11 +6,12 @@ use crate::errors::api::{ApiError, ApiErrorKind};
 
 /// A provider failure, from either side of the seam.
 // Clones share the side-table entry. Crossing to the host re-raises the original exception.
-#[crate::host(error(with = crate::python::provider_error_to_py))]
+#[crate::host(error)]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProviderError {
     /// A host failure plus the provider-specific metadata used by retry policy.
     #[error("{error}")]
+    #[host(delegate = error)]
     Host {
         error: HostError,
         api_kind: Option<ApiErrorKind>,
@@ -19,6 +20,7 @@ pub enum ProviderError {
     },
     /// A native provider's failure, already classified by [`crate::errors::retryable_for_status`].
     #[error("{0}")]
+    #[host(delegate)]
     Local(#[from] ApiError),
 }
 
@@ -100,14 +102,6 @@ impl ProviderError {
         }
     }
 
-    /// The class it raises as, for an error type wrapping it (`#[host(delegate)]`).
-    pub fn host_kind(&self) -> &str {
-        match self {
-            ProviderError::Host { .. } => "=HostError",
-            ProviderError::Local(err) => err.kind.class_name(),
-        }
-    }
-
     pub fn message(&self) -> &str {
         match self {
             ProviderError::Host { error, .. } => &error.message,
@@ -135,7 +129,7 @@ pub fn chained_connection_error(message: String, cause: &ProviderError) -> Provi
     #[cfg(feature = "python")]
     {
         return pyo3::Python::attach(|py| {
-            let err = crate::python::raise_provider(py, local);
+            let err = crate::python::HostException::to_py_err(&local);
             match crate::python::to_py_exception(py, cause) {
                 Ok(cause) => err.set_cause(py, Some(pyo3::PyErr::from_value(cause.into_bound(py)))),
                 Err(e) => drop(e),

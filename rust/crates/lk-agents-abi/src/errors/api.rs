@@ -13,17 +13,6 @@ pub enum ApiErrorKind {
 }
 
 impl ApiErrorKind {
-    pub fn class_name(self) -> &'static str {
-        match self {
-            ApiErrorKind::Api => "APIError",
-            ApiErrorKind::Status => "APIStatusError",
-            ApiErrorKind::Connection => "APIConnectionError",
-            ApiErrorKind::Timeout => "APITimeoutError",
-            // No class of its own: `isinstance(e, APIStatusError) and e.status_code == 499`.
-            ApiErrorKind::Cancelled => "APIStatusError",
-        }
-    }
-
     /// The one place the 499 rule is written.
     pub fn for_status(status_code: i64) -> ApiErrorKind {
         if status_code == CANCELLED_STATUS { ApiErrorKind::Cancelled } else { ApiErrorKind::Status }
@@ -78,7 +67,9 @@ pub fn http_error_message(message: &str, status: i64, reason: Option<&str>) -> S
 }
 
 /// The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
-/// failing layer does not say (a foreign SDK timeout), never guessed.
+/// failing layer does not say (a foreign SDK timeout), never guessed. Its wire string is the
+/// Python value of `APITimeoutError.phase`.
+#[crate::host(wire_enum)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeoutPhase {
     Pool,
@@ -88,21 +79,25 @@ pub enum TimeoutPhase {
     Total,
 }
 
-impl TimeoutPhase {
-    /// The Python value of `APITimeoutError.phase`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TimeoutPhase::Pool => "pool",
-            TimeoutPhase::Connect => "connect",
-            TimeoutPhase::Read => "read",
-            TimeoutPhase::Write => "write",
-            TimeoutPhase::Total => "total",
-        }
-    }
-}
-
-/// `body` stays on the Python object.
-#[crate::host(error(with = api_error_to_py))]
+/// `body` stays on the Python object. `retryable` goes to the constructor: its `__init__` default
+/// is `True`, so setting it afterwards is too late for a plugin reading it.
+#[crate::host(error(
+    by = kind,
+    kinds(
+        Api(class = "livekit.agents._exceptions.APIError", kwargs(retryable)),
+        Status(
+            class = "livekit.agents._exceptions.APIStatusError",
+            kwargs(retryable, status_code, request_id)
+        ),
+        // The reference detects cancellation as `APIStatusError` with status 499.
+        Cancelled(
+            class = "livekit.agents._exceptions.APIStatusError",
+            kwargs(retryable, status_code, request_id)
+        ),
+        Connection(class = "livekit.agents._exceptions.APIConnectionError", kwargs(retryable)),
+        Timeout(class = "livekit.agents._exceptions.APITimeoutError", kwargs(retryable, phase)),
+    )
+))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct ApiError {
@@ -114,12 +109,6 @@ pub struct ApiError {
     pub request_id: Option<String>,
     /// [`ApiErrorKind::Timeout`] only.
     pub phase: Option<TimeoutPhase>,
-}
-
-/// Raises the `APIError` subclass of `kind`.
-#[cfg(feature = "python")]
-pub fn api_error_to_py(error: ApiError) -> pyo3::PyErr {
-    crate::python::provider_error_to_py(super::ProviderError::Local(error))
 }
 
 impl ApiError {

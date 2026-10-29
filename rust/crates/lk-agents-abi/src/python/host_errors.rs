@@ -103,48 +103,8 @@ pub fn raise_host(py: Python<'_>, error: crate::errors::HostError) -> PyErr {
     }
 }
 
-pub fn provider_error_to_py(err: ProviderError) -> PyErr {
-    Python::attach(|py| raise_provider(py, err))
-}
-
 pub fn capture(py: Python<'_>, err: &PyErr) -> ProviderError {
     capture_value(&err.value(py).clone().into_any())
-}
-
-/// `retryable` must go to the constructor: its `__init__` default is `True`, so setting it
-/// afterwards is too late for a plugin reading it.
-pub fn raise_provider(py: Python<'_>, err: ProviderError) -> PyErr {
-    let api = match err {
-        ProviderError::Host { error, .. } => return raise_host(py, error),
-        ProviderError::Local(api) => api,
-    };
-    let Some(types) = error_types(py) else {
-        // No package around us (unit test or teardown).
-        return PyRuntimeError::new_err(api.message);
-    };
-    let class = match api.kind {
-        ApiErrorKind::Api => &types.api,
-        ApiErrorKind::Status => &types.status,
-        ApiErrorKind::Connection => &types.connection,
-        ApiErrorKind::Timeout => &types.timeout,
-        // The reference detects cancellation as `APIStatusError` with status 499.
-        ApiErrorKind::Cancelled => &types.status,
-    };
-    let kwargs = PyDict::new(py);
-    let build = || -> PyResult<PyErr> {
-        kwargs.set_item("retryable", api.retryable)?;
-        if matches!(api.kind, ApiErrorKind::Status | ApiErrorKind::Cancelled) {
-            kwargs.set_item("status_code", api.status_code.unwrap_or(0))?;
-            kwargs.set_item("request_id", api.request_id.clone())?;
-            kwargs.set_item("body", py.None())?;
-        }
-        if api.kind == ApiErrorKind::Timeout {
-            kwargs.set_item("phase", api.phase.map(|p| p.as_str()))?;
-        }
-        let instance = class.bind(py).call((api.message.clone(),), Some(&kwargs))?;
-        Ok(PyErr::from_value(instance))
-    };
-    build().unwrap_or_else(|e| e)
 }
 
 /// Without releasing the side-table entry, for events that report an error rather than raise it.
@@ -156,7 +116,7 @@ pub fn to_py_exception(py: Python<'_>, err: &ProviderError) -> PyResult<Py<PyAny
             None => PyRuntimeError::new_err(error.to_string()).into_value(py).into_any(),
         });
     }
-    Ok(raise_provider(py, err.clone()).into_value(py).into_any())
+    Ok(super::HostException::to_py_err(err).into_value(py).into_any())
 }
 
 /// For a `#[host(kind = "..", kwargs)]` variant: the class called with the message and the

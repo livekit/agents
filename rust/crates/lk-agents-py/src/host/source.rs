@@ -20,7 +20,7 @@ pub fn recv<'py, T: Send + 'static>(
                 "StreamStateError",
                 PullError::Overlap.to_string(),
             )),
-            Err(PullError::Failed(err)) => Err(lk_agents_abi::python::provider_error_to_py(err)),
+            Err(PullError::Failed(err)) => Err(lk_agents_abi::python::HostException::to_py_err(&err)),
         }
     })
 }

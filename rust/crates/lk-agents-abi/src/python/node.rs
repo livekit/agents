@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[rustfmt::skip]
 use super::{
-    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, provider_error_to_py,
+    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, HostException,
 };
 use crate::errors::ProviderError;
 
@@ -47,7 +47,7 @@ impl ItemStream {
             };
             match next {
                 Some(Ok(item)) => Ok(item),
-                Some(Err(e)) => Err(provider_error_to_py(e)),
+                Some(Err(e)) => Err(e.to_py_err()),
                 None => Err(PyStopAsyncIteration::new_err(())),
             }
         })

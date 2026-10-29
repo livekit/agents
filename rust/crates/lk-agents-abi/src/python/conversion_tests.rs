@@ -160,8 +160,8 @@ fn media_collection_failure_keeps_the_invalid_element_path() {
     attach(|py| {
         let source = module(py, "frames = [object()]\n").getattr("frames").unwrap();
         let reference = intern_media(source.unbind());
-        let error = provider_error_to_py(
-            reference.audio_frames().expect_err("invalid frames must not become an empty list"),
+        let error = HostException::to_py_err(
+            &reference.audio_frames().expect_err("invalid frames must not become an empty list"),
         );
         let notes = error.value(py).getattr("__notes__").unwrap().extract::<Vec<String>>().unwrap();
         assert!(notes.iter().any(|note| note.contains("frames[0]")));
