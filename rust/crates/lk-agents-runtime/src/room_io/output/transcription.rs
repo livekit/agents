@@ -14,22 +14,29 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, Clock, HOST_TEARDOWN_TIMEOUT, Monotone, Spawner,
     SpawnerExt, TOPIC_TRANSCRIPTION, TimedString, Ts,
 };
-use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
+use lk_agents_voice::room_io::ingress::MAX_INCOMING_STREAMS;
 use lk_agents_voice::room_io::transcription::{
-    ParticipantTracks, Subject, Writer, WriterEffect, Writing, retained_bytes, stream_attributes,
+    Admission, Batch, ParticipantTracks, Subject, Writer, WriterEffect, cancellable,
+    stream_attributes,
 };
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::{Notify, mpsc};
 
 struct WriterState {
     core: Writer,
-    sender: Option<mpsc::Sender<Batch>>,
-    finish: Option<Batch>,
+    admission: Admission,
+    sender: Option<mpsc::Sender<Queued>>,
+    finish: Option<Queued>,
     deadline: Option<Ts>,
     subject: Subject,
-    failure: Option<IoError>,
+}
+
+/// An admitted batch with the subject it was captured for.
+struct Queued {
+    batch: Batch,
+    subject: Subject,
 }
 
 fn subject_for_participant(
@@ -64,23 +71,9 @@ fn subject_for_participant(
     Ok(Subject::for_participant(participant, &local_id, &peers))
 }
 
-/// A transcription stream's header: final or not, and the subject's microphone when known.
-struct Batch {
-    effects: Vec<WriterEffect>,
-    subject: Subject,
-    // The permits include the batch currently waiting on the SDK, not only queued batches.
-    _bytes: Option<OwnedSemaphorePermit>,
-    streams: Option<OwnedSemaphorePermit>,
-}
-
-fn capacity(resource: &str) -> IoError {
-    IoError::TranscriptionCapacity(resource.into())
-}
-
 struct OpenWriter {
     writer: Box<dyn TextStreamWriter>,
     track: Option<TrackSid>,
-    _admission: OwnedSemaphorePermit,
 }
 
 struct Performer {
@@ -89,12 +82,7 @@ struct Performer {
 }
 
 impl Performer {
-    async fn perform(
-        &mut self,
-        effect: WriterEffect,
-        subject: &Subject,
-        admission: Option<OwnedSemaphorePermit>,
-    ) -> Result<()> {
+    async fn perform(&mut self, effect: WriterEffect, subject: &Subject) -> Result<()> {
         match effect {
             WriterEffect::OpenStream { segment, is_final, expression } => {
                 let Some(participant) = subject.participant.clone() else {
@@ -117,11 +105,7 @@ impl Performer {
                         attributes,
                     })
                     .await?;
-                self.writer = Some(OpenWriter {
-                    writer,
-                    track: subject.stream_track.clone(),
-                    _admission: admission.expect("every admitted stream open owns a permit"),
-                });
+                self.writer = Some(OpenWriter { writer, track: subject.stream_track.clone() });
             }
             WriterEffect::Write { payload } => {
                 if let Some(open) = &self.writer {
@@ -180,8 +164,6 @@ pub struct ParticipantTranscriptionOutput {
     ids: Arc<SegmentIds>,
     clock: Arc<dyn Clock>,
     writer: Mutex<WriterState>,
-    bytes: Arc<Semaphore>,
-    streams: Arc<Semaphore>,
     changed: Notify,
     performer_done: Monotone<bool>,
     next_in_chain: Option<Arc<dyn TextOutput>>,
@@ -205,14 +187,12 @@ impl ParticipantTranscriptionOutput {
             clock,
             writer: Mutex::new(WriterState {
                 core: Writer::new(is_delta_stream, json_format),
+                admission: Admission::default(),
                 sender: Some(sender),
                 finish: None,
                 deadline: None,
                 subject: Subject::default(),
-                failure: None,
             }),
-            bytes: Arc::new(Semaphore::new(MAX_STREAM_BYTES)),
-            streams: Arc::new(Semaphore::new(MAX_INCOMING_STREAMS)),
             changed: Notify::new(),
             performer_done: Monotone::new(false),
             next_in_chain,
@@ -227,11 +207,9 @@ impl ParticipantTranscriptionOutput {
     }
 
     fn reject(&self, writer: &mut WriterState, error: IoError) -> IoError {
-        let error = writer.failure.get_or_insert(error).clone();
-        writer.core.clear_effects();
+        let error = writer.admission.fail(&mut writer.core, error);
         writer.finish.take();
         writer.sender.take();
-        writer.core.reset(Writing::Closed);
         self.changed.notify_waiters();
         error
     }
@@ -241,48 +219,28 @@ impl ParticipantTranscriptionOutput {
     }
 
     fn submit(&self, writer: &mut WriterState) -> Result<()> {
-        if writer.core.expression_bytes() > MAX_STREAM_BYTES {
-            return Err(self.reject(writer, capacity("expression bytes")));
-        }
-        let effects = writer.core.take_effects();
-        if effects.is_empty() {
+        let admitted = writer.admission.admit(&mut writer.core);
+        let Some(batch) = admitted.inspect_err(|_| self.reject_admitted(writer))? else {
             return Ok(());
+        };
+        let queued = Queued { batch, subject: writer.subject.clone() };
+        let sent = writer.sender.as_ref().is_some_and(|sender| sender.try_send(queued).is_ok());
+        if !sent {
+            return Err(self.reject(writer, IoError::Rtc("transcription output is closed".into())));
         }
-        let bytes = retained_bytes(&effects)
-            .filter(|bytes| *bytes <= MAX_STREAM_BYTES)
-            .ok_or_else(|| self.reject(writer, capacity("queued text bytes")))?;
-        let opens = effects
-            .iter()
-            .filter(|effect| matches!(effect, WriterEffect::OpenStream { .. }))
-            .count();
-        let sender = writer.sender.clone().ok_or_else(|| {
-            self.reject(writer, IoError::Rtc("transcription output is closed".into()))
-        })?;
-        let queue = sender
-            .try_reserve_owned()
-            .map_err(|_| self.reject(writer, capacity("queued batches")))?;
-        let byte_permit = self
-            .bytes
-            .clone()
-            .try_acquire_many_owned(bytes as u32)
-            .map_err(|_| self.reject(writer, capacity("queued text bytes")))?;
-        let stream_permit = self
-            .streams
-            .clone()
-            .try_acquire_many_owned(opens as u32)
-            .map_err(|_| self.reject(writer, capacity("streams")))?;
-        queue.send(Batch {
-            effects,
-            subject: writer.subject.clone(),
-            _bytes: Some(byte_permit),
-            streams: Some(stream_permit),
-        });
         Ok(())
+    }
+
+    /// Admission latched its refusal; the queue stops with it.
+    fn reject_admitted(&self, writer: &mut WriterState) {
+        writer.finish.take();
+        writer.sender.take();
+        self.changed.notify_waiters();
     }
 
     fn status(&self) -> (Option<IoError>, Option<Ts>) {
         let writer = self.writer.lock().unwrap();
-        (writer.failure.clone(), writer.deadline)
+        (writer.admission.failure().cloned(), writer.deadline)
     }
 
     async fn effect(
@@ -290,7 +248,6 @@ impl ParticipantTranscriptionOutput {
         performer: &mut Performer,
         effect: WriterEffect,
         subject: &Subject,
-        admission: Option<OwnedSemaphorePermit>,
     ) -> Result<()> {
         let (failure, deadline) = self.status();
         if let Some(error) = failure {
@@ -299,10 +256,8 @@ impl ParticipantTranscriptionOutput {
         if deadline.is_some_and(|deadline| self.clock.now() >= deadline) {
             return Err(IoError::Rtc("transcription cleanup deadline expired".into()));
         }
-        // Creation and consuming close retain ownership until their SDK outcomes settle.
-        let cancellable =
-            matches!(effect, WriterEffect::Write { .. } | WriterEffect::PublishLegacy { .. });
-        let action = performer.perform(effect, subject, admission);
+        let cancellable = cancellable(&effect);
+        let action = performer.perform(effect, subject);
         if !cancellable {
             return action.await;
         }
@@ -330,28 +285,34 @@ impl ParticipantTranscriptionOutput {
         }
     }
 
-    async fn batch(&self, performer: &mut Performer, batch: Batch) -> Result<()> {
-        let Batch { effects, subject, mut streams, _bytes } = batch;
+    async fn batch(&self, performer: &mut Performer, queued: Queued) -> Result<()> {
+        let Queued { batch: Batch { effects, mut ticket }, subject } = queued;
+        let mut result = Ok(());
         for effect in effects {
-            let admission = if matches!(effect, WriterEffect::OpenStream { .. }) {
-                Some(match &mut streams {
-                    Some(streams) => {
-                        streams.split(1).expect("a batch reserves each stream before admission")
-                    }
-                    // The one final batch uses its reserved control slot after data has drained.
-                    None => {
-                        self.streams.clone().try_acquire_owned().map_err(|_| capacity("streams"))?
-                    }
-                })
-            } else {
-                None
-            };
-            self.effect(performer, effect, &subject, admission).await?;
+            let opening = matches!(effect, WriterEffect::OpenStream { .. });
+            if opening
+                && let Err(error) = self.writer.lock().unwrap().admission.open_stream(&mut ticket)
+            {
+                result = Err(error);
+                break;
+            }
+            let was_open = performer.writer.is_some();
+            result = self.effect(performer, effect, &subject).await;
+            // Slots taken minus streams still open: an open replaced or refused, or a close.
+            let released = usize::from(was_open) + usize::from(opening)
+                - usize::from(performer.writer.is_some());
+            for _ in 0..released {
+                self.writer.lock().unwrap().admission.stream_closed();
+            }
+            if result.is_err() {
+                break;
+            }
         }
-        Ok(())
+        self.writer.lock().unwrap().admission.performed(ticket);
+        result
     }
 
-    async fn run(self: Arc<Self>, mut receiver: mpsc::Receiver<Batch>, mut performer: Performer) {
+    async fn run(self: Arc<Self>, mut receiver: mpsc::Receiver<Queued>, mut performer: Performer) {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -381,7 +342,12 @@ impl ParticipantTranscriptionOutput {
         receiver.close();
         while receiver.try_recv().is_ok() {}
         // The worker, not a caller, owns this consuming close even beyond a waiter's deadline.
-        if let Err(error) = performer.close().await {
+        let open = performer.writer.is_some();
+        let closed = performer.close().await;
+        if open {
+            self.writer.lock().unwrap().admission.stream_closed();
+        }
+        if let Err(error) = closed {
             self.fail(error);
         }
         self.performer_done.set(true);
@@ -390,7 +356,7 @@ impl ParticipantTranscriptionOutput {
     pub async fn set_participant(&self, participant: Option<ParticipantIdentity>) -> Result<()> {
         let subject = subject_for_participant(self.room.as_ref(), participant)?;
         let mut writer = self.writer.lock().unwrap();
-        if let Some(error) = &writer.failure {
+        if let Some(error) = writer.admission.failure() {
             return Err(error.clone());
         }
         let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
@@ -439,17 +405,12 @@ impl ParticipantTranscriptionOutput {
         let deadline = {
             let mut writer = self.writer.lock().unwrap();
             if writer.sender.is_some() {
-                writer.core.close();
-                let effects = writer.core.take_effects();
-                if retained_bytes(&effects).is_none_or(|bytes| bytes > MAX_STREAM_BYTES * 2) {
-                    self.reject(&mut writer, capacity("final text bytes"));
-                } else {
-                    writer.finish = Some(Batch {
-                        effects,
-                        subject: writer.subject.clone(),
-                        _bytes: None,
-                        streams: None,
-                    });
+                let WriterState { core, admission, .. } = &mut *writer;
+                match admission.finish(core) {
+                    Ok(batch) => {
+                        writer.finish = Some(Queued { batch, subject: writer.subject.clone() })
+                    }
+                    Err(_) => self.reject_admitted(&mut writer),
                 }
                 writer.sender.take();
             }
@@ -468,7 +429,7 @@ impl ParticipantTranscriptionOutput {
         if self.performer_done.get() {
             self.tasks.lock().unwrap().clear();
         }
-        self.writer.lock().unwrap().failure.clone().map_or(Ok(()), Err)
+        self.writer.lock().unwrap().admission.failure().cloned().map_or(Ok(()), Err)
     }
 }
 
@@ -490,7 +451,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
         Box::pin(async move {
             let shown = {
                 let mut writer = self.writer.lock().unwrap();
-                if let Some(error) = &writer.failure {
+                if let Some(error) = writer.admission.failure() {
                     return Err(error.clone());
                 }
                 if let Err(error) = writer.core.admit_text(&text.text) {
@@ -515,7 +476,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
     fn flush(&self) {
         let accepted = {
             let mut writer = self.writer.lock().unwrap();
-            if writer.failure.is_some() {
+            if writer.admission.failure().is_some() {
                 return;
             }
             let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());

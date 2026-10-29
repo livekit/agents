@@ -1,6 +1,6 @@
 //! Transcript visibility, segment framing and subject routing over supplied records.
 
-use super::ingress::MAX_STREAM_BYTES;
+use super::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
 use crate::transcription::{Visible, VisibleStream};
 use crate::tts::markup::expression_attribute;
@@ -347,6 +347,131 @@ pub fn stream_attributes(is_final: bool, track: Option<&TrackSid>) -> BTreeMap<S
     attributes
 }
 
+/// Whether the performer may abandon this effect at a failure or the cleanup deadline: a stream
+/// open and its consuming close keep their SDK outcome.
+pub fn cancellable(effect: &WriterEffect) -> bool {
+    matches!(effect, WriterEffect::Write { .. } | WriterEffect::PublishLegacy { .. })
+}
+
+/// One admitted batch and the capacity it holds until performed.
+pub struct Batch {
+    pub effects: Vec<WriterEffect>,
+    pub ticket: Ticket,
+}
+
+/// Text bytes held until the batch is performed, and stream slots reserved for its opens. The
+/// close's final batch reserves its open's slot only when it opens.
+#[derive(Debug)]
+pub struct Ticket {
+    bytes: usize,
+    streams: Option<usize>,
+}
+
+fn capacity(resource: &str) -> IoError {
+    IoError::TranscriptionCapacity(resource.into())
+}
+
+/// The bounded work the transcription performer holds: queued and in-flight text bytes, open and
+/// reserved streams, queued batches; and the first failure, after which nothing is admitted.
+#[derive(Default)]
+pub struct Admission {
+    bytes: usize,
+    streams: usize,
+    batches: usize,
+    failure: Option<IoError>,
+}
+
+impl Admission {
+    pub fn failure(&self) -> Option<&IoError> {
+        self.failure.as_ref()
+    }
+
+    /// Latches the first failure and drops the writer's pending effects; returns the latched one.
+    pub fn fail(&mut self, writer: &mut Writer, error: IoError) -> IoError {
+        writer.clear_effects();
+        writer.reset(Writing::Closed);
+        self.failure.get_or_insert(error).clone()
+    }
+
+    /// The writer's pending effects as one batch, `None` when there are none.
+    pub fn admit(&mut self, writer: &mut Writer) -> Result<Option<Batch>> {
+        let admitted = self.try_admit(writer);
+        admitted.map_err(|error| self.fail(writer, error))
+    }
+
+    fn try_admit(&mut self, writer: &mut Writer) -> Result<Option<Batch>> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        if writer.expression_bytes() > MAX_STREAM_BYTES {
+            return Err(capacity("expression bytes"));
+        }
+        let effects = writer.take_effects();
+        if effects.is_empty() {
+            return Ok(None);
+        }
+        let bytes = retained_bytes(&effects)
+            .filter(|bytes| *bytes <= MAX_STREAM_BYTES.saturating_sub(self.bytes))
+            .ok_or_else(|| capacity("queued text bytes"))?;
+        let opens = effects
+            .iter()
+            .filter(|effect| matches!(effect, WriterEffect::OpenStream { .. }))
+            .count();
+        if self.batches == MAX_INCOMING_STREAMS {
+            return Err(capacity("queued batches"));
+        }
+        if opens > MAX_INCOMING_STREAMS - self.streams {
+            return Err(capacity("streams"));
+        }
+        self.bytes += bytes;
+        self.streams += opens;
+        self.batches += 1;
+        Ok(Some(Batch { effects, ticket: Ticket { bytes, streams: Some(opens) } }))
+    }
+
+    /// Close's final batch, allowed twice the byte bound since it carries the open segment's
+    /// closing text.
+    pub fn finish(&mut self, writer: &mut Writer) -> Result<Batch> {
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        writer.close();
+        let effects = writer.take_effects();
+        if retained_bytes(&effects).is_none_or(|bytes| bytes > MAX_STREAM_BYTES * 2) {
+            return Err(self.fail(writer, capacity("final text bytes")));
+        }
+        Ok(Batch { effects, ticket: Ticket { bytes: 0, streams: None } })
+    }
+
+    /// A stream of `ticket`'s batch opens: it holds a slot until [`Self::stream_closed`].
+    pub fn open_stream(&mut self, ticket: &mut Ticket) -> Result<()> {
+        match &mut ticket.streams {
+            Some(reserved) => {
+                *reserved -= 1;
+                Ok(())
+            }
+            None if self.streams < MAX_INCOMING_STREAMS => {
+                self.streams += 1;
+                Ok(())
+            }
+            None => Err(capacity("streams")),
+        }
+    }
+
+    pub fn stream_closed(&mut self) {
+        self.streams -= 1;
+    }
+
+    /// The batch was performed or abandoned: its bytes and unopened stream slots are free.
+    pub fn performed(&mut self, ticket: Ticket) {
+        self.bytes -= ticket.bytes;
+        if let Some(reserved) = ticket.streams {
+            self.streams -= reserved;
+            self.batches -= 1;
+        }
+    }
+}
+
 pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
     effects.iter().try_fold(0usize, |total, effect| {
         let bytes = match effect {
@@ -363,4 +488,69 @@ pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
         };
         total.checked_add(bytes)
     })
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    /// A writer with one new segment's text pending: a stream open and a write.
+    fn segment(writer: &mut Writer, n: usize) {
+        let visible = writer.visible_of("hello");
+        writer.capture(visible, None, Some(format!("SG_{n}")));
+        writer.end_segment(Some(format!("SG_{}", n + 1)));
+    }
+
+    #[test]
+    fn open_streams_bound_admission_until_they_close() {
+        let mut admission = Admission::default();
+        let mut writer = Writer::new(true, false);
+        let mut tickets = Vec::new();
+        for n in 0..MAX_INCOMING_STREAMS {
+            segment(&mut writer, n);
+            let mut batch = admission.admit(&mut writer).unwrap().unwrap();
+            admission.open_stream(&mut batch.ticket).unwrap();
+            tickets.push(batch.ticket);
+        }
+        for ticket in tickets {
+            admission.performed(ticket);
+        }
+        segment(&mut writer, 99);
+        assert!(matches!(
+            admission.admit(&mut writer),
+            Err(IoError::TranscriptionCapacity(resource)) if resource == "streams"
+        ));
+        assert!(admission.failure().is_some(), "a refusal latches the output's failure");
+    }
+
+    #[test]
+    fn a_performed_batch_frees_its_bytes_and_unopened_slots() {
+        let mut admission = Admission::default();
+        let mut writer = Writer::new(true, false);
+        segment(&mut writer, 0);
+        let batch = admission.admit(&mut writer).unwrap().unwrap();
+        admission.performed(batch.ticket);
+        for n in 1..=MAX_INCOMING_STREAMS {
+            segment(&mut writer, n);
+            let batch = admission.admit(&mut writer).unwrap().unwrap();
+            admission.performed(batch.ticket);
+        }
+    }
+
+    #[test]
+    fn the_final_batch_takes_its_stream_slot_when_it_opens() {
+        let mut admission = Admission::default();
+        let mut writer = Writer::new(true, false);
+        let mut tickets = Vec::new();
+        for n in 0..MAX_INCOMING_STREAMS {
+            segment(&mut writer, n);
+            let mut batch = admission.admit(&mut writer).unwrap().unwrap();
+            admission.open_stream(&mut batch.ticket).unwrap();
+            tickets.push(batch.ticket);
+        }
+        let mut last = admission.finish(&mut writer).unwrap();
+        assert!(admission.open_stream(&mut last.ticket).is_err());
+        admission.stream_closed();
+        admission.open_stream(&mut last.ticket).unwrap();
+    }
 }
