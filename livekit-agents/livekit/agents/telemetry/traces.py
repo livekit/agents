@@ -1349,6 +1349,13 @@ async def _upload_session_report(
         job_id=report.job_id,
         simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
         redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
+        duration=int((report.duration or 0) * 1000),
+        # Agent evals read this to pick sessions. Schema: evalschema/session-summary.schema.json
+        # in livekit/cloud-protocol.
+        session_summary=json.dumps(
+            report.to_dict(include_chat_history=False, include_events=False),
+            separators=(",", ":"),
+        ),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()

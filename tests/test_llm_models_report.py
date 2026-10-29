@@ -228,6 +228,29 @@ async def test_openai_realtime_reports_safe_nested_settings(hosted: bool) -> Non
         await model.aclose()
 
 
+async def test_thunderphone_reports_settings_without_phone_numbers() -> None:
+    thunderphone = pytest.importorskip("livekit.plugins.thunderphone")
+    model = thunderphone.RealtimeModel(
+        api_key="sk_live_private-key",
+        model="spark",
+        voice="voice-1",
+        language="en",
+        live_transcripts=True,
+        caller_number="+15551234567",
+        callee_number="+15557654321",
+    )
+    try:
+        reported = _snapshot(model)
+        assert reported["model"] == "spark"
+        assert reported["voice"] == "voice-1"
+        assert reported["language"] == "en"
+        assert reported["live_transcripts"] is True
+        assert "1555" not in json.dumps(reported)
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
 async def test_google_nested_configs_exclude_customer_content() -> None:
     plugin = pytest.importorskip("livekit.plugins.google")
     types = pytest.importorskip("google.genai.types")

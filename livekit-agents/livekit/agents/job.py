@@ -465,6 +465,8 @@ class JobContext:
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
             models=_serialize_session_models(session),
+            agent_name=self.job.agent_name,
+            tags=sorted(self._tagger.tags),
         )
 
         if recorder_io:
@@ -473,6 +475,9 @@ class JobContext:
             if recorder_io.recording_started_at:
                 sr.audio_recording_started_at = recorder_io.recording_started_at
                 sr.duration = sr.timestamp - sr.audio_recording_started_at
+
+        if sr.duration is None and sr.started_at:
+            sr.duration = sr.timestamp - sr.started_at
 
         return sr
 

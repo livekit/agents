@@ -901,7 +901,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(ws_url, headers=headers, heartbeat=30.0),
+                self._session.ws_connect(ws_url, headers=headers, autoping=False),
                 self._conn_options.timeout,
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
@@ -983,8 +983,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     @utils.log_exceptions(logger=logger)
     async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        )
         while True:
-            msg = await ws.receive()
+            msg = await monitor.receive()
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     await self._handle_message(json.loads(msg.data))
@@ -1113,6 +1116,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 "Unknown Sarvam realtime STT event",
                 extra={**self._build_log_context(), "event": event, "data": data},
             )
+        if event in ("vad.speech_start", "vad.speech_end") or (
+            event in ("transcript.partial", "transcript.final") and self._is_valid_transcript(data)
+        ):
+            self._mark_provider_progress()
 
     def _log_stt_event(self, event: object, data: dict[str, Any]) -> None:
         if event == "pong":

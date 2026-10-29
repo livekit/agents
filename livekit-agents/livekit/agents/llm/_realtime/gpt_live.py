@@ -28,7 +28,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 
 from . import gpt_live_types as types
 
@@ -64,6 +64,7 @@ _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
+        "credit_balance_exhausted",
         "invalid_api_key",
         "account_deactivated",
         "billing_hard_limit_reached",
@@ -74,7 +75,7 @@ _FATAL_ERROR_CODES = frozenset(
 Role = Literal["user", "assistant"]
 GPTLiveVoices = Literal["beacon", "cedar", "cinder", "marin", "stone", "vesper"]
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 
 class ResponsesDelegationOptions(TypedDict, total=False):
@@ -1039,7 +1040,11 @@ class GPTLiveSession(
         self._emit_error(api_error, recoverable=True)
 
     def _is_fatal_error(self, error: types.ErrorBody) -> bool:
-        return (error.code or error.type or "") in _FATAL_ERROR_CODES
+        # match either field: OpenAI has changed the code while keeping the type (#7805)
+        code, type_ = error.code, error.type
+        return (isinstance(code, str) and code in _FATAL_ERROR_CODES) or (
+            isinstance(type_, str) and type_ in _FATAL_ERROR_CODES
+        )
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

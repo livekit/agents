@@ -13,6 +13,7 @@ from typing_extensions import Required
 
 from livekit.agents import AgentSession, JobContext, inference, stt, tts
 from livekit.agents._reporting import Sensitive, report_options
+from livekit.agents.observability import Tagger
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.report import SessionReport, _serialize_session_models
 
@@ -59,6 +60,8 @@ def _report(session: AgentSession) -> SessionReport:
     ctx.job.id = "job-1"
     ctx.job.room.sid = "room-1"
     ctx.job.room.name = "test-room"
+    ctx.job.agent_name = "test-agent"
+    ctx._tagger = Tagger()
     return JobContext.make_session_report(ctx, session)
 
 
@@ -475,6 +478,92 @@ async def test_nabrah_reports_settings_without_credentials_or_custom_vocabulary(
         assert reported["language"] == "ar-SA"
         assert reported["end_of_utterance_silence_ms"] == 500
         assert reported["disable_number_normalization"] is True
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+async def test_assemblyai_tts_reports_settings_without_credentials(hosted: bool) -> None:
+    assemblyai = pytest.importorskip("livekit.plugins.assemblyai")
+    kwargs = {
+        "api_key": "private-key",
+        "base_url": "wss://private-endpoint.example.com",
+        "voice": "voice-1",
+        "sample_rate": 22050,
+    }
+    model = (
+        inference.TTS(
+            "assemblyai/assemblyai-tts-1",
+            api_secret="private-secret",
+            extra_kwargs={"word_timestamps": True, "unknown": "private-value"},
+            **kwargs,
+        )
+        if hosted
+        else assemblyai.TTS(word_timestamps=True, **kwargs)
+    )
+    try:
+        reported = _report(AgentSession(tts=model)).models["tts"]
+        assert reported["voice"] == "voice-1"
+        assert reported["sample_rate"] == 22050
+        assert (reported["extra_kwargs"] if hosted else reported)["word_timestamps"] is True
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
+async def test_reson8_reports_nested_settings_without_biasing_content() -> None:
+    reson8 = pytest.importorskip("livekit.plugins.reson8")
+    model = reson8.STT(
+        api_key="private-key",
+        base_url="https://private-endpoint.example.com",
+        language="en",
+        audio=reson8.AudioOptions(sample_rate=24000),
+        turn=reson8.TurnOptions(final_probability=0.8),
+        biasing=reson8.BiasingOptions(
+            phrases=["private-name"], patterns=["private-pattern"], strength=1.5
+        ),
+    )
+    try:
+        reported = _report(AgentSession(stt=model)).models["stt"]
+        assert reported["audio"]["sample_rate"] == 24000
+        assert reported["turn"]["final_probability"] == 0.8
+        assert reported["biasing"] == {"strength": 1.5}
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
+async def test_mistral_tts_excludes_reference_audio_and_pronunciation_hints() -> None:
+    mistralai = pytest.importorskip("livekit.plugins.mistralai")
+    model = mistralai.TTS(
+        api_key="private-key",
+        model="voxtral-mini-tts-3",
+        ref_audio="private-audio",
+        phoneme_hints={"private-name": ["a"]},
+        expressiveness=3.0,
+    )
+    try:
+        reported = _report(AgentSession(tts=model)).models["tts"]
+        assert reported["expressiveness"] == 3.0
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
+async def test_azure_stt_excludes_pronunciation_reference_text() -> None:
+    azure = pytest.importorskip("livekit.plugins.azure")
+    speechsdk = pytest.importorskip("azure.cognitiveservices.speech")
+    model = azure.STT(
+        speech_key="private-key",
+        speech_region="eastus",
+        pronunciation_assessment=speechsdk.PronunciationAssessmentConfig(
+            reference_text="private-reference-text"
+        ),
+    )
+    try:
+        reported = _report(AgentSession(stt=model)).models["stt"]
+        assert reported["speech_region"] == "eastus"
         assert "private-" not in json.dumps(reported)
     finally:
         await model.aclose()

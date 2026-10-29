@@ -299,7 +299,7 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
             return await asyncio.wait_for(
-                self._session.ws_connect(self._stt._base_url),
+                self._session.ws_connect(self._stt._base_url, autoping=False),
                 self._conn_options.timeout,
             )
         except (
@@ -329,9 +329,12 @@ class SpeechStream(stt.SpeechStream):
                 ) from None
 
             async def _await_ready() -> None:
+                monitor = utils.aio.WebSocketMonitor(
+                    ws, liveness_timeout=self._conn_options.liveness_timeout
+                )
                 while True:
                     try:
-                        msg = await ws.receive()
+                        msg = await monitor.receive()
                     except Exception as e:
                         raise APIConnectionError(
                             f"nabrah STT ready handshake failed ({type(e).__name__})"
@@ -411,9 +414,12 @@ class SpeechStream(stt.SpeechStream):
             raise self._stream_failure(f"nabrah STT send failed ({type(e).__name__})") from None
 
     async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        )
         while True:
             try:
-                msg = await ws.receive()
+                msg = await monitor.receive()
             except Exception as e:
                 raise self._stream_failure(
                     f"nabrah STT receive failed ({type(e).__name__})"
@@ -431,7 +437,10 @@ class SpeechStream(stt.SpeechStream):
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:
-                self._process_message(json.loads(msg.data))
+                data = json.loads(msg.data)
+                self._process_message(data)
+                if data.get("type") == "transcript":
+                    self._mark_provider_progress()
             except APIError:
                 raise
             except Exception:

@@ -412,6 +412,7 @@ class SpeechStream(stt.RecognizeStream):
                 msg_type = data.get("type", "")
 
                 if msg_type == "transcript":
+                    self._mark_provider_progress()
                     text = data.get("text", "")
                     if not text:
                         continue
@@ -431,6 +432,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type in ("speech_start", "vad_start"):
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.START_OF_SPEECH,
@@ -438,6 +440,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type in ("speech_end", "vad_end"):
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.END_OF_SPEECH,
@@ -445,7 +448,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type == "processing":
-                    pass
+                    self._mark_provider_progress()
 
                 elif msg_type == "error":
                     error_msg = data.get("message", "Unknown error")
