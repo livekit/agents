@@ -15,7 +15,7 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{
     AbortHandle, AudioFrame, Clock, Closed, Spawner, SpawnerExt, TaskSet, Ts, unix_secs,
 };
-use lk_agents_voice::avatar::output::OutputState;
+use lk_agents_voice::avatar::output::{Finish, OutputState};
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, FinishedPayload, LOG, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED,
     RPC_PLAYBACK_STARTED, playback_method, stream_name,
@@ -149,8 +149,8 @@ impl Inner {
                 stream_id: Some(opened.id().to_owned()),
             };
             *writer = SegmentWriter::Open(opened);
-            self.register_segment(segment, token)?;
-            if !self.wait_playback_start {
+            let continued = self.register_segment(segment, token)?;
+            if !self.wait_playback_start && !continued {
                 // approximated: the avatar does not report lk.playback_started
                 self.tracker.report_started(segment.key, unix_secs(self.clock.wall()));
             }
@@ -161,17 +161,18 @@ impl Inner {
         Ok(())
     }
 
+    /// Routes the stream's playback reports to its segment; whether an earlier stream of the
+    /// segment already started it.
     fn register_segment(
         self: &Arc<Self>,
         segment: &Arc<Segment>,
         token: AvatarPlaybackSegment,
-    ) -> Result<()> {
-        self.segment
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .core
-            .register(segment.key, token.clone())
-            .map_err(output_error)?;
+    ) -> Result<bool> {
+        let continued = {
+            let mut state = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+            state.core.register(segment.key, token.clone()).map_err(output_error)?;
+            state.core.continued(segment.key)
+        };
         for base in [RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED] {
             if base == RPC_PLAYBACK_STARTED && !self.wait_playback_start {
                 continue;
@@ -187,7 +188,9 @@ impl Inner {
                 }
                 if base == RPC_PLAYBACK_FINISHED {
                     inner.on_playback_finished(key, payload)
-                } else if inner.tracker.report_started(key, unix_secs(inner.clock.wall())) {
+                } else if continued
+                    || inner.tracker.report_started(key, unix_secs(inner.clock.wall()))
+                {
                     "ok".into()
                 } else {
                     "reject: stale playback segment".into()
@@ -202,7 +205,7 @@ impl Inner {
                 return Err(IoError::Rtc("the avatar segment retired".into()));
             }
         }
-        Ok(())
+        Ok(continued)
     }
 
     fn on_playback_finished(&self, key: PlaybackSegment, payload: &str) -> String {
@@ -217,10 +220,23 @@ impl Inner {
                     synchronized_transcript: report.synchronized_transcript,
                 })
             });
-        let event = match event {
+        let mut event = match event {
             Ok(event) => event,
             Err(error) => return format!("reject: {error}"),
         };
+        let finish = self.segment.lock().unwrap_or_else(|p| p.into_inner()).core.finished(
+            key,
+            event.playback_position,
+            event.interrupted,
+        );
+        match finish {
+            None => return "reject: stale playback segment".into(),
+            Some(Finish::Continue { route }) => {
+                self.reopen_segment(key, route);
+                return "ok".into();
+            }
+            Some(Finish::Done { played }) => event.playback_position = played,
+        }
         if !self.tracker.playback_finished(key, event) {
             return "reject: stale playback segment".into();
         }
@@ -248,15 +264,41 @@ impl Inner {
         if let Some(writer) = writer {
             self.close_segment(writer);
         }
-        if let Some(token) = token {
-            for base in [RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED] {
-                if base == RPC_PLAYBACK_STARTED && !self.wait_playback_start {
-                    continue;
+        self.retire_route(token);
+    }
+
+    /// The avatar gave up on the segment's stream while the agent still feeds it: that stream
+    /// closes and the next frame opens another.
+    fn reopen_segment(&self, key: PlaybackSegment, route: Option<AvatarPlaybackSegment>) {
+        let segment =
+            self.segment.lock().unwrap_or_else(|p| p.into_inner()).writers.get(&key).cloned();
+        if let Some(segment) = segment {
+            let outcome = self.close_outcome.clone();
+            self.closing.spawn(&*self.spawner, "avatar_stream_reopen", async move {
+                let mut writer = segment.writer.lock().await;
+                if let SegmentWriter::Open(_) = &*writer
+                    && let SegmentWriter::Open(given_up) =
+                        std::mem::replace(&mut *writer, SegmentWriter::Unopened)
+                    && let Err(error) = given_up.close().await
+                {
+                    outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
+                    log::error!(target: LOG, error = error.to_string().as_str();
+                        "failed to close avatar audio stream");
                 }
-                let Ok(method) = playback_method(base, &token) else { continue };
-                if let Err(error) = self.room.local().unregister_rpc_method(method) {
-                    log::error!(target: LOG, error = error.to_string().as_str(); "failed to retire avatar playback route");
-                }
+            });
+        }
+        self.retire_route(route);
+    }
+
+    fn retire_route(&self, token: Option<AvatarPlaybackSegment>) {
+        let Some(token) = token else { return };
+        for base in [RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED] {
+            if base == RPC_PLAYBACK_STARTED && !self.wait_playback_start {
+                continue;
+            }
+            let Ok(method) = playback_method(base, &token) else { continue };
+            if let Err(error) = self.room.local().unregister_rpc_method(method) {
+                log::error!(target: LOG, error = error.to_string().as_str(); "failed to retire avatar playback route");
             }
         }
     }
@@ -511,8 +553,18 @@ impl AudioOutput for DataStreamAudioOutput {
         if let Some(segment) = segment {
             self.inner.close_segment(segment);
         }
-        if let Some(key) = key {
-            self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).core.flush(key);
+        let Some(key) = key else { return };
+        let finished = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).core.flush(key);
+        // Every stream of the segment has finished already: its finish is due now.
+        if let Some(played) = finished {
+            let event = PlaybackFinished {
+                playback_position: played,
+                interrupted: false,
+                synchronized_transcript: None,
+            };
+            if self.inner.tracker.playback_finished(key, event) {
+                self.inner.retire_segment(key);
+            }
         }
     }
 

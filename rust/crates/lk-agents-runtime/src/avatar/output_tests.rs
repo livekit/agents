@@ -165,6 +165,58 @@ async fn the_avatars_playback_finished_rpc_ends_the_segment_and_a_stranger_is_re
     assert_eq!(*f.events.0.lock().unwrap(), ["started", "finished 0.01 false"]);
 }
 
+// Catches: the avatar's idle timeout (no chunk for 10 s: a paused `say(audio=)` stream, a slow
+// voice) finishing a segment the agent was still feeding. The output retired it, the next capture
+// failed with "the avatar segment retired", and the playout read that as the speech's normal end:
+// the rest of its audio was dropped. The segment continues on a new stream, and its one finish
+// covers both.
+#[tokio::test]
+async fn an_idle_finish_of_a_segment_still_capturing_continues_it_on_a_new_stream() {
+    let f = fixture("idle_finish", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.out.capture_frame(&frame()).await.unwrap();
+    let local = f.room.local_participant();
+    let reply = local.invoke_rpc(
+        &output_method(&f, RPC_PLAYBACK_FINISHED, 0),
+        "avatar",
+        r#"{"playback_position": 0.01, "interrupted": false}"#,
+    );
+    assert_eq!(reply.as_deref(), Some("ok"));
+    f.out.capture_frame(&frame()).await.expect("the agent is still feeding this segment");
+    f.out.flush();
+    settle().await;
+    let streams = local.byte_streams();
+    assert_eq!(streams.len(), 2, "the rest of the segment goes on a new stream");
+    assert!(streams.iter().all(|stream| stream.closed));
+    assert_eq!(*f.events.0.lock().unwrap(), ["started"], "the segment is not done yet");
+    let reply = local.invoke_rpc(
+        &output_method(&f, RPC_PLAYBACK_FINISHED, 1),
+        "avatar",
+        r#"{"playback_position": 0.01, "interrupted": false}"#,
+    );
+    assert_eq!(reply.as_deref(), Some("ok"));
+    assert_eq!(*f.events.0.lock().unwrap(), ["started", "finished 0.02 false"]);
+}
+
+// Catches: an idle finish that covered all a segment's audio leaving its playout waiting on a
+// report that will never come once the agent flushes it.
+#[tokio::test]
+async fn an_idle_finish_covering_the_whole_segment_finishes_it_at_its_flush() {
+    let f = fixture("idle_finish_flushed", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.out.capture_frame(&frame()).await.unwrap();
+    let reply = f.room.local_participant().invoke_rpc(
+        &output_method(&f, RPC_PLAYBACK_FINISHED, 0),
+        "avatar",
+        r#"{"playback_position": 0.01, "interrupted": false}"#,
+    );
+    assert_eq!(reply.as_deref(), Some("ok"));
+    f.out.flush();
+    settle().await;
+    assert_eq!(*f.events.0.lock().unwrap(), ["started", "finished 0.01 false"]);
+    assert_eq!(f.room.local_participant().byte_streams().len(), 1);
+}
+
 // Catches: an interruption that never asks the avatar to clear, or one whose segment never
 // finishes when the avatar does not answer (the session would wait forever).
 #[tokio::test]

@@ -1,6 +1,7 @@
 //! Avatar output admission and route retirement. Time, writers, RPC and tasks belong to runtime.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 
@@ -12,6 +13,16 @@ pub enum OutputError {
     DifferentSegment,
 }
 
+/// What an avatar's `lk.playback_finished` does to its segment.
+#[derive(Debug, PartialEq)]
+pub enum Finish {
+    /// The segment is done, `played` of it heard over all its streams.
+    Done { played: Duration },
+    /// The avatar gave up on a stream the agent is still feeding (its idle timeout): the segment
+    /// continues on a new stream; the given-up stream's route retires.
+    Continue { route: Option<AvatarPlaybackSegment> },
+}
+
 /// One output attachment admits at most two unfinished segments. Resource owners remain outside
 /// this state; only correlation keys and the route token cross its synchronous boundary.
 #[derive(Debug, Default)]
@@ -19,6 +30,8 @@ pub struct OutputState {
     active: Option<PlaybackSegment>,
     last: Option<PlaybackSegment>,
     outstanding: BTreeMap<PlaybackSegment, Option<AvatarPlaybackSegment>>,
+    /// What the avatar reported played of a segment's earlier streams.
+    carried: BTreeMap<PlaybackSegment, Duration>,
     closed: bool,
     highest_segment: u64,
 }
@@ -62,10 +75,36 @@ impl OutputState {
         self.last
     }
 
-    pub fn flush(&mut self, key: PlaybackSegment) {
+    /// The segment's audio is complete. `Some(played)` when the avatar already finished all of
+    /// it: no stream continued it, so no other report will come.
+    pub fn flush(&mut self, key: PlaybackSegment) -> Option<Duration> {
         if self.active == Some(key) {
             self.active = None;
         }
+        let reopened = self.outstanding.get(&key).is_some_and(Option::is_some);
+        self.carried.get(&key).copied().filter(|_| !reopened)
+    }
+
+    /// The avatar finished `key` having played `played` of its stream; `None` for a segment
+    /// already retired. Only an uninterrupted finish of the segment still capturing continues it.
+    pub fn finished(
+        &mut self,
+        key: PlaybackSegment,
+        played: Duration,
+        interrupted: bool,
+    ) -> Option<Finish> {
+        let route = self.outstanding.get_mut(&key)?;
+        let carried = self.carried.get(&key).copied().unwrap_or_default();
+        if interrupted || self.active != Some(key) {
+            return Some(Finish::Done { played: carried + played });
+        }
+        self.carried.insert(key, carried + played);
+        Some(Finish::Continue { route: route.take() })
+    }
+
+    /// The segment already played on an earlier stream: a later stream does not start it again.
+    pub fn continued(&self, key: PlaybackSegment) -> bool {
+        self.carried.contains_key(&key)
     }
 
     pub fn register(
@@ -93,6 +132,7 @@ impl OutputState {
         if self.last == Some(key) {
             self.last = None;
         }
+        self.carried.remove(&key);
         self.outstanding.remove(&key).flatten()
     }
 
@@ -151,6 +191,24 @@ mod tests {
         assert_eq!(state.last(), Some(new));
         assert!(state.contains(new));
         assert_eq!(state.retire(new), Some(new_token));
+    }
+
+    #[test]
+    fn an_idle_finish_continues_the_capturing_segment_and_its_final_finish_carries_it() {
+        let mut state = OutputState::default();
+        let token =
+            |id: &str| AvatarPlaybackSegment { playback: key(1), stream_id: Some(id.into()) };
+        state.admit(key(1)).unwrap();
+        state.register(key(1), token("first")).unwrap();
+        let ms = Duration::from_millis;
+        assert_eq!(
+            state.finished(key(1), ms(10), false),
+            Some(Finish::Continue { route: Some(token("first")) })
+        );
+        state.admit(key(1)).expect("the agent keeps feeding the segment");
+        state.register(key(1), token("second")).unwrap();
+        assert_eq!(state.flush(key(1)), None, "the continuation stream reports its own finish");
+        assert_eq!(state.finished(key(1), ms(20), false), Some(Finish::Done { played: ms(30) }));
     }
 
     #[test]
