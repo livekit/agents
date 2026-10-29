@@ -18,7 +18,7 @@ pub use chain::{
 };
 use lk_agents_abi::ApiConnectOptions;
 pub use llm::{FallbackLlm, LlmBackend};
-pub use machine::{AvailabilityChange, ChainPolicy, ErrorPlan, FallbackPolicy};
+pub use machine::{ChainPolicy, FallbackPolicy};
 pub use realtime::{CapabilityMismatch, merge_capabilities as merge_realtime_capabilities};
 pub use stt::{
     FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession,
@@ -85,4 +85,13 @@ mod resampling_tests {
         assert_eq!(resampling_plan(&[24_000, 16_000], Some(48_000)), (48_000, vec![true, true]));
         assert_eq!(resampling_plan(&[22_050], None), (22_050, vec![false]));
     }
+}
+
+/// The allocation stays alive for the chain's lifetime; clones retain the provider's identity.
+pub(crate) fn backend_resource<T: ?Sized>(
+    backend: &std::sync::Arc<T>,
+) -> lk_agents_abi::resources::ResourceId {
+    lk_agents_abi::resources::ResourceId(
+        std::sync::Arc::as_ptr(backend).cast::<()>() as usize as u64
+    )
 }

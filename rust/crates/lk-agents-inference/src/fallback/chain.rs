@@ -32,6 +32,10 @@ pub trait Backend: Send + Sync + 'static {
 
     fn label(&self) -> String;
 
+    fn resource_id(&self) -> ResourceId {
+        ResourceId((self as *const Self).cast::<()>() as usize as u64)
+    }
+
     fn modality(&self) -> Modality {
         Modality::Llm
     }
@@ -165,8 +169,8 @@ impl<B: Backend> FallbackChain<B> {
         let status: Vec<Status> = entries
             .iter()
             .enumerate()
-            .map(|(index, _)| Status {
-                resource: ResourceId(index as u64),
+            .map(|(_, backend)| Status {
+                resource: backend.resource_id(),
                 closed: false,
                 recovery: [None, None],
                 active: Vec::new(),
@@ -237,12 +241,6 @@ impl<B: Backend> FallbackChain<B> {
     pub fn is_available(&self, index: usize) -> bool {
         let state = self.status.lock().expect("chain status");
         state.backends.get(index).is_some_and(|backend| state.health.is_available(backend.resource))
-    }
-
-    fn order(&self) -> Vec<usize> {
-        let state = self.status.lock().expect("chain status");
-        let resources: Vec<_> = state.backends.iter().map(|backend| backend.resource).collect();
-        state.health.order(&resources, self.policy.sticky)
     }
 
     fn select(&self, index: usize, selection_id: u64) {
@@ -316,15 +314,15 @@ impl<B: Backend> FallbackChain<B> {
             return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).into());
         }
         let all_failed = {
-            let status = self.status.lock().expect("chain status");
+            let mut status = self.status.lock().expect("chain status");
+            let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
+            status.health.refresh(&priority, self.clock.now());
             status.backends.iter().all(|entry| !status.health.is_available(entry.resource))
         };
         if all_failed {
             self.observer.all_unavailable();
         }
-        let entries = self
-            .order()
-            .into_iter()
+        let entries = (0..self.entries.len())
             .map(|index| {
                 (
                     index,
@@ -349,7 +347,7 @@ impl<B: Backend> FallbackChain<B> {
         let mut active: Option<(u64, usize, u64, RunningAttempt<T, S>)> = None;
         let mut served = None;
         let recover_conn = conn_options_for_attempt(caller_conn, &self.policy);
-        for index in self.order() {
+        for index in 0..self.entries.len() {
             if !self.is_available(index) {
                 self.try_recovery(index, slot, req, &recover_conn, deadline);
             }
@@ -680,7 +678,7 @@ impl<B: Backend> FallbackChain<B> {
             match s.backends.get(index) {
                 Some(st) if !st.closed => {
                     let resource = st.resource;
-                    s.health.observe(resource, available)
+                    s.health.observe(resource, available, None)
                 }
                 _ => false,
             }

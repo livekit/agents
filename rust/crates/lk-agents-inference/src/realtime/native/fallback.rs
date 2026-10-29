@@ -30,6 +30,13 @@ pub enum RealtimeChild {
 }
 
 impl RealtimeChild {
+    fn resource_id(&self) -> ResourceId {
+        match self {
+            Self::Native(model) => crate::fallback::backend_resource(model),
+            Self::Host(model, _) => crate::fallback::backend_resource(model),
+        }
+    }
+
     fn capabilities(&self) -> RealtimeCapabilities {
         match self {
             RealtimeChild::Native(m) => m.capabilities(),
@@ -151,6 +158,8 @@ impl Realtime for RealtimeFallbackModel {
             self.active.store(0, std::sync::atomic::Ordering::Relaxed);
             let session = Arc::new(FallbackSession {
                 children: self.children.clone(),
+                priority: self.children.iter().map(RealtimeChild::resource_id).collect(),
+                cooldown: std::time::Duration::from_secs_f64(self.cooldown),
                 caps: self.caps,
                 regenerate_on_swap: self.regenerate_on_swap,
                 observer: Arc::clone(&self.observer),
@@ -160,10 +169,8 @@ impl Realtime for RealtimeFallbackModel {
                 model_active: Arc::clone(&self.active),
                 state: Mutex::new(SessionState {
                     active: first,
-                    policy: FallbackPolicy::realtime(
-                        self.children.len(),
-                        std::time::Duration::from_secs_f64(self.cooldown),
-                    ),
+                    policy: FallbackPolicy::default(),
+                    active_index: 0,
                     swapping: false,
                     fresh: false,
                     held: FallbackBacklog::default(),
@@ -192,6 +199,7 @@ struct OpenGeneration {
 struct SessionState {
     active: Arc<dyn RealtimeSession>,
     policy: FallbackPolicy,
+    active_index: usize,
     /// The old session is closing and the new one opening: everything sent names the old one, or
     /// is superseded by the frame the driver gives the new one, and is dropped (audio would lag).
     swapping: bool,
@@ -206,6 +214,8 @@ struct SessionState {
 
 pub struct FallbackSession {
     children: Vec<RealtimeChild>,
+    priority: Vec<ResourceId>,
+    cooldown: std::time::Duration,
     caps: RealtimeCapabilities,
     regenerate_on_swap: bool,
     observer: Arc<dyn ChainObserver>,
@@ -229,13 +239,13 @@ impl FallbackSession {
         let _ = self.restart_tx.send(switch_model);
     }
 
-    fn announce(&self, changes: Vec<crate::fallback::AvailabilityChange>) {
-        for c in changes {
-            let label = self.children[c.index].label();
+    fn announce(&self, changes: Vec<ResourceId>, available: bool) {
+        for backend in changes {
+            let index = self.priority.iter().position(|id| *id == backend).expect("known backend");
             self.observer.availability_changed(AvailabilityChanged {
-                index: c.index,
-                label,
-                available: c.available,
+                index,
+                label: self.children[index].label(),
+                available,
             });
         }
     }
@@ -285,12 +295,17 @@ impl FallbackSession {
             order.insert(0, target);
             let entries = order
                 .into_iter()
-                .map(|index| (index, ResourceId(index as u64), self.children[index].label()))
+                .map(|index| (index, self.priority[index], self.children[index].label()))
                 .collect();
             ChainRequest::new(
                 Modality::Realtime,
                 entries,
-                ChainPolicy::llm_defaults(),
+                ChainPolicy {
+                    max_retry_per_backend: 0,
+                    attempt_timeout: None,
+                    retry_interval: None,
+                    sticky: false,
+                },
                 None,
                 &st.policy,
             )
@@ -316,15 +331,21 @@ impl FallbackSession {
                             ChainEvent::Succeeded { attempt }
                         }
                         Err(error) => {
-                            let changes =
-                                self.lock().policy.set_available(index, false, self.clock.now());
-                            self.announce(changes.into_iter().collect());
+                            let backend = self.priority[index];
+                            if self.lock().policy.observe(
+                                backend,
+                                false,
+                                Some(self.clock.now().saturating_add(self.cooldown)),
+                            ) {
+                                self.announce(vec![backend], false);
+                            }
                             ChainEvent::Failed { attempt, error, produced_output: false }
                         }
                     };
                     effects.extend(request.handle(event, self.clock.now()));
                 }
-                ChainEffect::WakeAt(_) => {
+                ChainEffect::WakeAt(at) => {
+                    self.clock.wait_until(at).await;
                     effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
                 }
                 ChainEffect::Finished(outcome) => break outcome,
@@ -335,10 +356,10 @@ impl FallbackSession {
         };
         let opened = outcome.map(|()| opened.expect("successful realtime open"));
         // Closed while the new model opened: it is closed too, never adopted.
-        if let Ok(session) = &opened
-            && self.lock().closed
-        {
-            session.aclose().await;
+        if self.lock().closed {
+            if let Ok(session) = opened {
+                session.aclose().await;
+            }
             return;
         }
         let mut st = self.lock();
@@ -346,7 +367,7 @@ impl FallbackSession {
         match opened {
             Ok(session) => {
                 st.active = session;
-                st.policy.set_active_index(target);
+                st.active_index = target;
                 self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
                 st.events.push_back(Event::SessionSwapped { regenerate: self.regenerate_on_swap });
             }
@@ -506,8 +527,16 @@ impl RealtimeSession for FallbackSession {
                     changed = restart_rx.changed() => {
                         if changed.is_err() { continue; }
                         let switch_model = *restart_rx.borrow_and_update();
-                        let (target, changes) = self.lock().policy.restart_target(switch_model, self.clock.now());
-                        self.announce(changes);
+                        let (target, changes) = {
+                            let mut st = self.lock();
+                            let changes = st.policy.refresh(&self.priority, self.clock.now());
+                            let target = if switch_model {
+                                st.policy.candidates(&self.priority, false).into_iter()
+                                    .find(|&index| index != st.active_index).unwrap_or(st.active_index)
+                            } else { st.active_index };
+                            (target, changes)
+                        };
+                        self.announce(changes, true);
                         self.swap(target).await;
                         continue;
                     }
@@ -520,10 +549,25 @@ impl RealtimeSession for FallbackSession {
                         return None;
                     }
                     Some(Event::Error(e)) if !e.recoverable => {
-                        let plan =
-                            self.lock().policy.on_child_error(false, false, self.clock.now());
-                        self.announce(plan.changes);
-                        match plan.swap_to {
+                        let (target, recovered, failed) = {
+                            let mut st = self.lock();
+                            let now = self.clock.now();
+                            let recovered = st.policy.refresh(&self.priority, now);
+                            let backend = self.priority[st.active_index];
+                            let failed = st.policy.observe(
+                                backend,
+                                false,
+                                Some(now.saturating_add(self.cooldown)),
+                            );
+                            (
+                                st.policy.candidates(&self.priority, false).first().copied(),
+                                recovered,
+                                failed.then_some(backend),
+                            )
+                        };
+                        self.announce(recovered, true);
+                        self.announce(failed.into_iter().collect(), false);
+                        match target {
                             Some(target) => {
                                 // While a fallback remains the error is recoverable.
                                 self.lock().events.push_back(Event::Error(RealtimeModelError {
@@ -737,6 +781,76 @@ mod fallback_session_tests {
             ["UpdateInstructions", "UpdateTools", "generate_reply:early", "generate_reply:late"]
         );
     }
+    #[tokio::test]
+    async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
+        struct BlockedOpen(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+        impl Realtime for BlockedOpen {
+            fn label(&self) -> String {
+                "blocked-open".into()
+            }
+            fn capabilities(&self) -> RealtimeCapabilities {
+                RealtimeCapabilities { audio_output: true, ..Default::default() }
+            }
+            fn session(
+                &self,
+                _: bool,
+            ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>>
+            {
+                Box::pin(async move {
+                    self.0.notify_one();
+                    self.1.notified().await;
+                    Err(lk_agents_abi::errors::ApiError::connection(None).into())
+                })
+            }
+        }
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let model = RealtimeFallbackModel::new(
+            vec![
+                RealtimeChild::Native(Arc::new(Model(scripted(vec![fatal()])))),
+                RealtimeChild::Native(Arc::new(BlockedOpen(entered.clone(), release.clone()))),
+                RealtimeChild::Native(Arc::new(Model(scripted(vec![])))),
+            ],
+            10.0,
+            false,
+            Arc::new(crate::fallback::IgnoreEvents),
+            WallAnchor::of(&lk_agents_abi::RealClock::default()),
+        )
+        .unwrap();
+        let session = model.session(false).await.unwrap();
+        let reading = tokio::spawn({
+            let session = session.clone();
+            async move { session.next_event().await }
+        });
+        entered.notified().await;
+        session.aclose().await;
+        release.notify_one();
+        let _ = reading.await.unwrap();
+        assert!(
+            session.next_event().await.is_none(),
+            "session close fabricated a fatal cancellation error"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeating_the_same_backend_does_not_create_a_second_fallback_identity() {
+        let child: Arc<dyn Realtime> = Arc::new(Model(scripted(vec![fatal()])));
+        let model = RealtimeFallbackModel::new(
+            vec![RealtimeChild::Native(child.clone()), RealtimeChild::Native(child)],
+            10.0,
+            false,
+            Arc::new(crate::fallback::IgnoreEvents),
+            WallAnchor::of(&lk_agents_abi::RealClock::default()),
+        )
+        .unwrap();
+        let session = model.session(false).await.unwrap();
+        assert!(
+            matches!(session.next_event().await, Some(Event::Error(e)) if !e.recoverable),
+            "one failed backend cannot fall back to another occurrence of itself"
+        );
+        session.aclose().await;
+    }
+
     // A failed open is attempted once in one failover, even when it is immediately eligible
     // for a later request. The cap turns an accidental infinite swap loop into a test failure.
     #[tokio::test]

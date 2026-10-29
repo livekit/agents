@@ -244,6 +244,10 @@ impl Backend for SttBackend {
     }
     type Session = SttSession;
 
+    fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
+        super::backend_resource(&self.inner)
+    }
+
     fn label(&self) -> String {
         self.inner.label()
     }

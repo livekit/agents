@@ -8,13 +8,11 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
 
-use lk_agents_abi::ApiConnectOptions;
-pub use lk_agents_abi::llm::fallback::{AvailabilityChange, ErrorPlan};
 use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 /// The `conn_options` fields the chain rewrites before handing a request to a child.
 /// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
-/// are [`caller_default`] and [`conn_options_for_attempt`].
+/// are [`super::caller_default`] and [`super::conn_options_for_attempt`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainPolicy {
     pub max_retry_per_backend: u32,
@@ -67,8 +65,6 @@ impl ChainPolicy {
 #[derive(Debug, Default)]
 pub struct FallbackPolicy {
     entries: BTreeMap<ResourceId, Health>,
-    active_index: usize,
-    cooldown: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -86,26 +82,23 @@ impl Default for Health {
 }
 
 impl FallbackPolicy {
-    pub fn realtime(model_count: usize, cooldown: Duration) -> Self {
-        Self {
-            entries: (0..model_count).map(|i| (ResourceId(i as u64), Health::default())).collect(),
-            cooldown: Some(cooldown),
-            ..Self::default()
-        }
-    }
-
     pub fn is_available(&self, backend: ResourceId) -> bool {
         self.entries.get(&backend).is_none_or(|entry| entry.available)
     }
 
     /// Every observation supersedes probes authorized before it, even a repeated failure.
-    pub fn observe(&mut self, backend: ResourceId, available: bool) -> bool {
+    pub fn observe(
+        &mut self,
+        backend: ResourceId,
+        available: bool,
+        cooldown_until: Option<Ts>,
+    ) -> bool {
         let entry = self.entries.entry(backend).or_default();
         entry.generation += 1;
         let changed = entry.available != available;
         entry.available = available;
-        if available {
-            entry.cooldown_until = None;
+        if changed {
+            entry.cooldown_until = if available { None } else { cooldown_until };
         }
         changed
     }
@@ -115,7 +108,9 @@ impl FallbackPolicy {
     }
 
     pub fn order(&self, backends: &[ResourceId], sticky: bool) -> Vec<usize> {
-        let mut order: Vec<_> = (0..backends.len()).collect();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut order: Vec<_> =
+            (0..backends.len()).filter(|&index| seen.insert(backends[index])).collect();
         if sticky && !order.is_empty() {
             let selected = |index: usize| {
                 self.entries
@@ -141,91 +136,29 @@ impl FallbackPolicy {
         if self.probe_generation(backend) != generation {
             return false;
         }
-        self.observe(backend, true)
+        self.observe(backend, true, None)
     }
 
-    pub fn active_index(&self) -> usize {
-        self.active_index
-    }
-
-    pub fn set_active_index(&mut self, index: usize) {
-        self.active_index = index;
-    }
-
-    /// Repeated failure does not re-arm the realtime cooldown or announce another transition.
-    pub fn set_available(
-        &mut self,
-        index: usize,
-        available: bool,
-        now: Ts,
-    ) -> Option<AvailabilityChange> {
-        let backend = ResourceId(index as u64);
-        let entry = self.entries.get(&backend)?;
-        if entry.available == available {
-            return None;
+    /// A backend recovers either on a successful probe or when its declared cooldown expires.
+    /// `None` requires a probe. Repeated failure invalidates probes without extending cooldown.
+    pub fn refresh(&mut self, priority: &[ResourceId], now: Ts) -> Vec<ResourceId> {
+        let mut recovered = Vec::new();
+        for &backend in priority {
+            if self.entries.get(&backend).is_some_and(|entry| {
+                !entry.available && entry.cooldown_until.is_some_and(|at| at <= now)
+            }) {
+                self.observe(backend, true, None);
+                recovered.push(backend);
+            }
         }
-        self.observe(backend, available);
-        if !available {
-            self.entries.get_mut(&backend).expect("known backend").cooldown_until =
-                self.cooldown.map(|cooldown| now.saturating_add(cooldown));
-        }
-        Some(AvailabilityChange { index, available })
+        recovered
     }
 
-    fn sweep(&mut self, now: Ts) -> Vec<AvailabilityChange> {
-        let expired: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.cooldown_until.is_some_and(|at| at <= now))
-            .map(|(id, _)| id.0 as usize)
-            .collect();
-        expired.into_iter().filter_map(|index| self.set_available(index, true, now)).collect()
-    }
-
-    fn next_available(&self, exclude_current: bool) -> Option<usize> {
-        self.entries
-            .iter()
-            .find(|(id, entry)| {
-                entry.available && !(exclude_current && id.0 as usize == self.active_index)
-            })
-            .map(|(id, _)| id.0 as usize)
-    }
-
-    pub fn next_available_index(
-        &mut self,
-        now: Ts,
-        exclude_current: bool,
-    ) -> (Option<usize>, Vec<AvailabilityChange>) {
-        let changes = self.sweep(now);
-        (self.next_available(exclude_current), changes)
-    }
-
-    /// Child reconnects retain ownership of recoverable errors. A terminal failure starts one
-    /// fallback pass; even zero cooldown cannot resurrect that child in the same pass.
-    pub fn on_child_error(&mut self, recoverable: bool, swap_busy: bool, now: Ts) -> ErrorPlan {
-        if recoverable {
-            return ErrorPlan { changes: vec![], rewrite_recoverable: false, swap_to: None };
-        }
-        let mut changes = self.sweep(now);
-        changes.extend(self.set_available(self.active_index, false, now));
-        let target = self.next_available(false);
-        ErrorPlan {
-            changes,
-            rewrite_recoverable: target.is_some(),
-            swap_to: target.filter(|_| !swap_busy),
-        }
-    }
-
-    pub fn restart_target(
-        &mut self,
-        switch_model: bool,
-        now: Ts,
-    ) -> (usize, Vec<AvailabilityChange>) {
-        if !switch_model {
-            return (self.active_index, vec![]);
-        }
-        let changes = self.sweep(now);
-        (self.next_available(true).unwrap_or(self.active_index), changes)
+    pub fn candidates(&self, priority: &[ResourceId], sticky: bool) -> Vec<usize> {
+        self.order(priority, sticky)
+            .into_iter()
+            .filter(|&index| self.is_available(priority[index]))
+            .collect()
     }
 }
 
@@ -286,10 +219,11 @@ impl ChainRequest {
         deadline: Option<Ts>,
         health: &FallbackPolicy,
     ) -> Self {
-        let all_unavailable = entries.iter().all(|(_, id, _)| !health.is_available(*id));
-        if !all_unavailable {
-            entries.retain(|(_, id, _)| health.is_available(*id));
-        }
+        let priority: Vec<_> = entries.iter().map(|(_, id, _)| *id).collect();
+        let candidates = health.candidates(&priority, policy.sticky);
+        let order =
+            if candidates.is_empty() { health.order(&priority, policy.sticky) } else { candidates };
+        entries = order.into_iter().map(|index| entries[index].clone()).collect();
         Self {
             modality,
             entries,

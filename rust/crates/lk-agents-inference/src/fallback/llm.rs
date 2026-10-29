@@ -46,6 +46,10 @@ impl Backend for LlmBackend {
     type Req = ChatRequest;
     type Session = LlmStream;
 
+    fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
+        super::backend_resource(&self.inner)
+    }
+
     fn label(&self) -> String {
         self.inner.label()
     }
