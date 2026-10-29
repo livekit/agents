@@ -15,7 +15,7 @@ pub mod summarize;
 mod transcript;
 
 pub use chat::{
-    ChatMessageExt, EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, chat_message_text_content, positions_of,
+    ChatMessageExt, EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, chat_message_text_content,
     remove_expressive_instructions, strip_assistant_markup, strip_message_markup,
 };
 pub use expr::ExpressiveTag;

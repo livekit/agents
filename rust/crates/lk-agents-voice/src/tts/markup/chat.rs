@@ -14,15 +14,6 @@ pub fn remove_expressive_instructions(chat_ctx: &mut ChatContext) -> usize {
     before - chat_ctx.items.len()
 }
 
-pub fn positions_of(item_ids: impl IntoIterator<Item = impl AsRef<str>>, id: &str) -> Vec<usize> {
-    item_ids
-        .into_iter()
-        .enumerate()
-        .filter(|(_, item_id)| item_id.as_ref() == id)
-        .map(|(index, _)| index)
-        .collect()
-}
-
 /// Left in history, tags few-shot the LLM into markup nothing converts.
 pub fn strip_assistant_markup(chat_ctx: &mut ChatContext) -> usize {
     let mut changed = 0;
