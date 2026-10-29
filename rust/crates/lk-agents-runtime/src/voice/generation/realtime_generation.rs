@@ -17,7 +17,7 @@ use lk_agents_voice::generation::realtime::{
     RealtimeControl, RealtimeEffect, RealtimeObservation, RealtimePlayout, unheard_messages,
 };
 use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
-use lk_agents_voice::io::RealtimeAudioNode;
+use lk_agents_abi::voice::nodes::RealtimeAudioNode;
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::StepNext;
 use lk_agents_voice::trace::GenerationStep;

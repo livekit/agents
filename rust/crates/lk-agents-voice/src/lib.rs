@@ -20,7 +20,6 @@ pub mod events;
 pub mod experts;
 pub mod filler_scheduler;
 pub mod generation;
-pub mod io;
 pub mod ivr;
 pub mod keyterm_detection;
 pub mod recorder_io;

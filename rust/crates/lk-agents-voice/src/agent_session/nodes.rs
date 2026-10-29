@@ -273,14 +273,14 @@ mod tests {
         fn text_node(
             &self,
             _below: Arc<dyn TextOutput>,
-        ) -> Result<Arc<dyn crate::io::TextNode>, HostError> {
+        ) -> Result<Arc<dyn lk_agents_abi::voice::nodes::TextNode>, HostError> {
             unreachable!()
         }
 
         fn audio_node(
             &self,
             _below: Arc<dyn lk_agents_abi::voice::io::AudioOutput>,
-        ) -> Result<Arc<dyn crate::io::RealtimeAudioNode>, HostError> {
+        ) -> Result<Arc<dyn lk_agents_abi::voice::nodes::RealtimeAudioNode>, HostError> {
             unreachable!()
         }
 

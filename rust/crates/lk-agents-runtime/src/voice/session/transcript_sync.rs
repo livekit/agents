@@ -2,13 +2,11 @@
 //! forwards released words. Its decisions are voice's `SyncLifecycle`.
 
 use lk_agents_abi::voice::io::{
-    AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
-    PlaybackSegment, PlaybackTracker, Result, TextOutput,
+    AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackEvent, PlaybackFinished,
+    PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
 };
-use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString};
 use lk_agents_net::monotone::Monotone;
-use lk_agents_voice::io::AudioSinkProxy;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::lifecycle::{
     SyncEffect, SyncEvent, SyncLifecycle, TranscriptOutput as Out,
@@ -446,6 +444,63 @@ impl TranscriptSynchronizer {
                 }
             }
         }
+    }
+}
+
+/// A stable node beneath an audio wrapper chain, with its own segment tracker.
+pub struct AudioSinkProxy {
+    tracker: Arc<PlaybackTracker>,
+    next: Arc<dyn AudioOutput>,
+}
+
+impl AudioSinkProxy {
+    pub fn new(next: Arc<dyn AudioOutput>) -> Arc<Self> {
+        let tracker = Arc::new(PlaybackTracker::new());
+        next.tracker().observe(tracker.clone());
+        Arc::new(AudioSinkProxy { tracker, next })
+    }
+}
+
+impl AudioOutput for AudioSinkProxy {
+    fn label(&self) -> &str {
+        "AudioSinkProxy"
+    }
+
+    fn tracker(&self) -> &Arc<PlaybackTracker> {
+        &self.tracker
+    }
+
+    /// The proxy itself imposes nothing; the answer is whatever is below it.
+    fn capabilities(&self) -> AudioOutputCapabilities {
+        AudioOutputCapabilities { pause: true }
+    }
+
+    fn sample_rate(&self) -> Option<u32> {
+        self.next.sample_rate()
+    }
+
+    fn next_in_chain(&self) -> Option<Arc<dyn AudioOutput>> {
+        Some(self.next.clone())
+    }
+
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.next.capture_frame(frame).await })
+    }
+
+    fn flush_segment(&self) {
+        self.next.flush();
+    }
+
+    fn clear_buffer(&self) {
+        self.next.clear_buffer();
+    }
+
+    fn on_attached(&self) {
+        self.next.on_attached();
+    }
+
+    fn on_detached(&self) {
+        self.next.on_detached();
     }
 }
 

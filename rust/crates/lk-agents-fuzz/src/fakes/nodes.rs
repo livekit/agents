@@ -14,7 +14,7 @@ use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamSource, Stt,
     SttSink, SttSource, TimedString, Ts, Tts, TtsSink, TtsSource,
 };
-use lk_agents_voice::io::{RealtimeAudioNode, TextNode};
+use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 
 use crate::record::NodeUse;
 
