@@ -1,5 +1,8 @@
 use crate::agent_activity::scheduling::SpeechId;
 
+pub mod state;
+use state::{Effect as StateEffect, Input as StateInput, Reply, SpeechState};
+
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, Modality, Monotone};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -151,14 +154,6 @@ pub enum CreationError {
     Consumed,
 }
 
-/// `_allow_interruptions` and its hold count and restore value, in one cell so holds are atomic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Interruptions {
-    allow: bool,
-    holds: u32,
-    restore: bool,
-}
-
 /// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
 /// creates the speech, and a handle constructed directly never gets one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,12 +165,19 @@ enum Creation {
     Detached,
 }
 
+enum HandleInput {
+    Accepted(StateInput),
+    Complete(Option<ProviderError>),
+    HostRequest { force: bool, created: bool },
+    ValidateHostSetter { allow: bool },
+    TasksCancelled,
+}
+
 struct Inner {
-    error: Option<ProviderError>,
+    state: SpeechState,
     chat_items: Vec<ChatItem>,
     /// What the [`INTERRUPTION_TIMEOUT`] watchdog cancels (`speech_handle._tasks`).
     tasks: Vec<lk_agents_abi::AbortHandle>,
-    watchdog_armed: bool,
     /// The metrics of the user turn a preemptive reply was adopted for.
     user_metrics: Option<lk_agents_abi::MetricsReport>,
     /// The host's own object for the speech (its `SpeechHandle`), so every event, tool and hook
@@ -183,8 +185,6 @@ struct Inner {
     host: Option<lk_agents_abi::HostRef>,
     /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
     blocking_tools: Vec<(String, String)>,
-    /// A host `interrupt()` landed in [`SpeechHandle::mark_done`], not yet journalled.
-    interrupted_at_done: bool,
 }
 
 /// `SpeechHandle`: one speech's id, state and outcome, shared by the loop that runs the speech and
@@ -213,7 +213,7 @@ pub struct SpeechHandle {
     // Level-triggered, because `SpeechHandle._clear_authorization` clears it.
     authorized: watch::Sender<bool>,
     // `watch` so the hold/release read-modify-write runs under one write lock.
-    interruptions: watch::Sender<Interruptions>,
+    interruptions: watch::Sender<bool>,
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One cell per tool-loop step, addressed absolutely.
@@ -240,6 +240,60 @@ impl Eq for SpeechHandle {}
 use lk_agents_abi::lock;
 
 impl SpeechHandle {
+    /// Capture live request observations under the same lock as the accepted transition.
+    /// This interpreter remains here until the concrete host handle moves to runtime.
+    fn transition(&self, input: HandleInput) -> Result<Reply, SpeechError> {
+        let (reply, cancel_tasks, generation_done) = {
+            let mut inner = lock(&self.inner);
+            let input = match input {
+                HandleInput::Accepted(input) => input,
+                HandleInput::Complete(error) => StateInput::Complete {
+                    error,
+                    interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
+                },
+                HandleInput::HostRequest { force, created } => StateInput::HostRequest {
+                    force,
+                    created,
+                    already_requested: self.interrupt_requested.load(Ordering::Acquire),
+                },
+                HandleInput::ValidateHostSetter { allow } => StateInput::ValidateHostSetter {
+                    allow,
+                    interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
+                },
+                HandleInput::TasksCancelled => StateInput::TasksCancelled {
+                    interrupt_requested: self.interrupt_requested.load(Ordering::Acquire),
+                },
+            };
+            let transition = inner.state.handle(input)?;
+            let (mut cancel_tasks, mut generation_done) = (false, false);
+            for effect in transition.effects {
+                match effect {
+                    StateEffect::PublishAcceptedView(view) => {
+                        self.interruptions.send_replace(view.allow_interruptions);
+                        self.interrupted.set(view.interrupted);
+                        self.done.set(view.done);
+                    }
+                    StateEffect::PublishRequestFlag(requested) => {
+                        self.interrupt_requested.store(requested, Ordering::Release);
+                    }
+                    StateEffect::CancelTasks => cancel_tasks = true,
+                    StateEffect::GenerationDone => generation_done = true,
+                }
+            }
+            (transition.reply, cancel_tasks, generation_done)
+        };
+        // Aborting a linked task can run its cleanup. Release storage before touching tasks.
+        if cancel_tasks {
+            self.cancel_tasks();
+            self.transition(HandleInput::TasksCancelled)
+                .expect("cancelled-task completion cannot refuse");
+        }
+        if generation_done {
+            let _ = self.mark_generation_done();
+        }
+        Ok(reply)
+    }
+
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn base(
         creation: Creation,
@@ -258,24 +312,17 @@ impl SpeechHandle {
             interrupted: Monotone::new(false),
             done: Monotone::new(false),
             authorized: watch::Sender::new(false),
-            interruptions: watch::Sender::new(Interruptions {
-                allow: allow_interruptions,
-                holds: 0,
-                // `_interruption_holds_restore = allow_interruptions` (`SpeechHandle.__init__`).
-                restore: allow_interruptions,
-            }),
+            interruptions: watch::Sender::new(allow_interruptions),
             generations: Mutex::new(Vec::new()),
             // `_num_steps = 1`, so `RunContext`'s `_initial_step_idx` is 0.
             num_steps: AtomicU32::new(1),
             inner: Mutex::new(Inner {
-                error: None,
+                state: SpeechState::new(allow_interruptions),
                 chat_items: Vec::new(),
                 tasks: Vec::new(),
-                watchdog_armed: false,
                 user_metrics: None,
                 host: None,
                 blocking_tools: Vec::new(),
-                interrupted_at_done: false,
             }),
         }
     }
@@ -302,14 +349,10 @@ impl SpeechHandle {
 
     /// The loop creates the speech behind this handle with its accepted interruptibility.
     pub fn create(&self, id: SpeechId, allow_interruptions: bool) {
-        // The host cannot hold it before this.
-        self.interruptions.send_modify(|s| {
-            *s = Interruptions {
-                allow: allow_interruptions,
-                holds: 0,
-                restore: allow_interruptions,
-            };
-        });
+        self.transition(HandleInput::Accepted(StateInput::ResetInterruptions {
+            allow: allow_interruptions,
+        }))
+        .expect("resetting interruptions cannot refuse");
         let _ = self.speech_id.set(id.to_string().into());
         let _ = self.id.set(id);
     }
@@ -373,13 +416,15 @@ impl SpeechHandle {
     /// The loop refused the host's `interrupt()` (the speech disallowed it by then): the request
     /// is dropped, so the speech is not reported interrupted for it.
     pub(crate) fn interrupt_refused(&self) {
-        let _inner = lock(&self.inner);
-        self.interrupt_requested.store(false, Ordering::Release);
+        self.transition(HandleInput::Accepted(StateInput::InterruptRefused))
+            .expect("clearing a refused request cannot refuse");
     }
 
     /// A host `interrupt()` landed as the speech was marked done, once: the loop journals it.
     pub(crate) fn take_interrupted_at_done(&self) -> bool {
-        std::mem::take(&mut lock(&self.inner).interrupted_at_done)
+        self.transition(HandleInput::Accepted(StateInput::TakeInterruptedAtDone))
+            .expect("reading the completion indication cannot refuse")
+            .flag()
     }
 
     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
@@ -403,7 +448,7 @@ impl SpeechHandle {
 
     /// `allow_interruptions` as the loop last wrote it.
     pub fn allow_interruptions(&self) -> bool {
-        self.interruptions.borrow().allow
+        *self.interruptions.borrow()
     }
 
     /// The user may cut it now: not interrupted already, and interruptions allowed.
@@ -414,59 +459,21 @@ impl SpeechHandle {
     /// The `allow_interruptions` setter. Ignores the hold count, so a set during a hold is undone by
     /// the last release, as in the reference.
     pub fn set_allow_interruptions(&self, value: bool) -> Result<(), SpeechError> {
-        if self.interrupted() && !value {
-            return Err(SpeechError::AlreadyInterrupted);
-        }
-        self.interruptions.send_if_modified(|s| {
-            let changed = s.allow != value;
-            s.allow = value;
-            changed
-        });
+        self.transition(HandleInput::Accepted(StateInput::SetAllowInterruptions { allow: value }))?;
         Ok(())
     }
 
     /// Disallow interruptions until every hold taken here is released: counted, so one holder's
     /// release cannot lift another's. The first holder's value is restored.
     pub fn hold_interruptions(&self) -> Result<(), SpeechError> {
-        // Read before writing, as the setter's guard does.
-        let interrupted = self.interrupted();
-        let mut err = None;
-        self.interruptions.send_if_modified(|s| {
-            if s.holds == 0 {
-                if interrupted {
-                    // `self.allow_interruptions = False` raises, so the count is NOT incremented.
-                    err = Some(SpeechError::AlreadyInterrupted);
-                    return false;
-                }
-                s.restore = s.allow;
-                s.allow = false;
-            }
-            s.holds += 1;
-            true
-        });
-        err.map_or(Ok(()), Err)
+        self.transition(HandleInput::Accepted(StateInput::HoldInterruptions))?;
+        Ok(())
     }
 
     /// `SpeechHandle._release_interruptions`.
     pub fn release_interruptions(&self) {
-        let interrupted = self.interrupted();
-        self.interruptions.send_if_modified(|s| {
-            if s.holds == 0 {
-                return false;
-            }
-            s.holds -= 1;
-            if s.holds != 0 {
-                return false;
-            }
-            // `contextlib.suppress(RuntimeError)`: a forced interrupt leaves nothing to restore.
-            if interrupted && !s.restore {
-                return false;
-            }
-            // Equivalent mutant, as in the setter.
-            let changed = s.allow != s.restore;
-            s.allow = s.restore;
-            changed
-        });
+        self.transition(HandleInput::Accepted(StateInput::ReleaseInterruptions))
+            .expect("releasing an interruption hold cannot refuse");
     }
 
     // No `subscribe_allow_interruptions`: nothing in the reference awaits `allow_interruptions`.
@@ -475,31 +482,21 @@ impl SpeechHandle {
     /// [`INTERRUPTION_TIMEOUT`] and calls [`on_interruption_timeout`](Self::on_interruption_timeout).
     /// The guards, then `_cancel` (`speech_handle.SpeechHandle._cancel`).
     pub fn interrupt(&self, force: bool) -> Result<bool, SpeechError> {
-        // Before the `allow_interruptions` guard: a done non-interruptible speech does not raise.
-        if self.interrupted() || self.done() {
-            return Ok(false);
-        }
-        if !force && !self.allow_interruptions() {
-            return Err(SpeechError::InterruptionsNotAllowed);
-        }
-        self.interrupted.set(true);
-        self.inner.lock().unwrap().watchdog_armed = true;
-        Ok(true)
+        Ok(self.transition(HandleInput::Accepted(StateInput::Interrupt { force }))?.flag())
     }
 
     /// The watchdog body (`SpeechHandle._cancel`): cancel every linked task, then mark done.
     /// Returns whether it fired.
     pub fn on_interruption_timeout(&self) -> bool {
-        if !self.take_interruption_timeout() {
-            return false;
-        }
-        self.cancel_tasks();
-        self.mark_done(None);
-        true
+        self.transition(HandleInput::Accepted(StateInput::WatchdogFired))
+            .expect("an interruption timeout cannot refuse")
+            .flag()
     }
 
     pub(crate) fn take_interruption_timeout(&self) -> bool {
-        std::mem::replace(&mut self.inner.lock().unwrap().watchdog_armed, false)
+        self.transition(HandleInput::Accepted(StateInput::TakeWatchdog))
+            .expect("taking the interruption timeout cannot refuse")
+            .flag()
     }
 
     /// Cancel every linked task, as `_cancel` does, without marking the speech done.
@@ -597,45 +594,17 @@ impl SpeechHandle {
     /// reference's handle (`interrupt()` before done is an interruption); see
     /// [`take_interrupted_at_done`](Self::take_interrupted_at_done).
     pub fn mark_done(&self, error: Option<ProviderError>) {
-        {
-            // Under the lock the host's `interrupt()` checks `done` in, so a request is either
-            // refused as too late or seen here.
-            let mut inner = lock(&self.inner);
-            if !self.done() {
-                if self.interrupt_requested.load(Ordering::Acquire) && !self.interrupted() {
-                    self.interrupted.set(true);
-                    inner.interrupted_at_done = true;
-                }
-                if let Some(err) = error {
-                    inner.error = Some(err);
-                }
-                self.done.set(true);
-            }
-        }
-
-        // Both run on every call; with no generation the mark refuses, which is fine here.
-        let _ = self.mark_generation_done();
-        self.inner.lock().unwrap().watchdog_armed = false;
+        self.transition(HandleInput::Complete(error)).expect("completing a speech cannot refuse");
     }
 
     /// `exception()`. [`SpeechError::NotDoneYet`] stands in for `asyncio.InvalidStateError`.
     pub fn exception(&self) -> Result<Option<ProviderError>, SpeechError> {
-        if !self.done() {
-            return Err(SpeechError::NotDoneYet);
-        }
-        Ok(self.inner.lock().unwrap().error.clone())
+        lock(&self.inner).state.exception()
     }
 
     /// How a done speech ended, as `SpeechDone` reports it.
     pub fn outcome(&self) -> crate::events::SpeechOutcome {
-        use crate::events::SpeechOutcome;
-        if matches!(self.exception(), Ok(Some(_))) {
-            SpeechOutcome::Failed
-        } else if self.interrupted() {
-            SpeechOutcome::Interrupted
-        } else {
-            SpeechOutcome::Completed
-        }
+        lock(&self.inner).state.outcome()
     }
 
     /// `wait_for_playout()`, and so `__await__`; see [`wait_for_playout_for_host`] for the
@@ -762,9 +731,7 @@ impl SpeechHandle {
     /// Enqueue the setter; the accepted view changes when the loop applies it.
     #[host(setter(name = "allow_interruptions"))]
     pub fn set_allow_interruptions_for_host(&self, value: bool) -> Result<(), SpeechRefused> {
-        if !value && (self.interrupt_requested.load(Ordering::Acquire) || self.interrupted()) {
-            return Err(SpeechError::AlreadyInterrupted.into());
-        }
+        self.transition(HandleInput::ValidateHostSetter { allow: value })?;
         if *self.creation.borrow() == Creation::Detached {
             return Ok(self.set_allow_interruptions(value)?);
         }
@@ -796,19 +763,9 @@ impl SpeechHandle {
         #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
     ) -> Result<(), SpeechRefused> {
         let created = self.created();
+        if !self.transition(HandleInput::HostRequest { force, created: created.is_some() })?.flag()
         {
-            // Checked and recorded under the lock `mark_done` takes: a request it does not see
-            // is refused as too late.
-            let _inner = lock(&self.inner);
-            if self.interrupt_requested.load(Ordering::Acquire)
-                || (created.is_some() && (self.interrupted() || self.done()))
-            {
-                return Ok(());
-            }
-            if !force && !self.allow_interruptions_for_host() {
-                return Err(SpeechError::InterruptionsNotAllowed.into());
-            }
-            self.interrupt_requested.store(true, Ordering::Release);
+            return Ok(());
         }
         let interrupt = move |api: &Api, speech| {
             // A closed loop has nothing left to interrupt.
@@ -839,9 +796,7 @@ impl SpeechHandle {
     #[host(method(name = "hold_interruptions"))]
     pub fn hold_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
         let speech = self.attached()?;
-        if self.interrupted() {
-            return Err(SpeechError::AlreadyInterrupted.into());
-        }
+        self.transition(HandleInput::Accepted(StateInput::ValidateHostHold))?;
         let _ = self.api.send(crate::agent_session::Command::from(
             crate::agent_session::SpeechCommand::HoldInterruptions { speech, hold: true },
         ));
