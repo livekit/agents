@@ -21,7 +21,7 @@ from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _fsm, _inference
 from ._chat_context import AMDChatContext, AMDRequest, Turn, update_transcript
-from ._stt import AMDTranscriber
+from ._stt import AMDTranscriber, LateAMDFinal
 from .events import (
     AMDCategory,
     AMDCompletedEvent,
@@ -582,6 +582,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._held_reply._cancel()
         self._held_turn_id = self._held_reply = None
         turn_transcript = self._resources.stt.end_turn(transcript, late_wait=_LATE_AMD_FINAL_WAIT)
+        late_final = self._resources.stt.late_final
         now = time.monotonic()
         speaking = self._session.user_state == "speaking"
         if not speaking and not self._speech_since_commit:
@@ -602,18 +603,18 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._turns[turn.turn_id] = turn
         self._voicemail_turn_id = None
         if turn_transcript.transcript:
-            self._start_classification(turn)
+            self._start_classification(turn, late_final)
             self._add_realtime_transcript(turn)
-        elif self._resources.stt.awaits_late_final:
+        elif late_final is not None:
             # no text yet, without session STT: classify once the AMD final arrives
-            self._spawn(self._classify_when_heard(turn))
+            self._spawn(self._classify_when_heard(turn, late_final))
         elif self._pending_turn is None:
             self._record_prediction(turn, AMDReason.REUSED)
         self._prediction_changed.set()
         self._update_idle()
         return _AMDTurnHooks(self, turn.turn_id)
 
-    def _start_classification(self, turn: Turn) -> None:
+    def _start_classification(self, turn: Turn, late_final: LateAMDFinal | None = None) -> None:
         self._chat_ctx.add_transcript(turn)
         self._cancel_classification()
         self._pending_turn = turn
@@ -628,15 +629,20 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if self._menu_atask is not None:
             self._menu_atask.cancel()
             self._menu_atask = None
-        self._classifier_atask = self._spawn(self._classify(turn, request))
+        self._classifier_atask = self._spawn(self._classify(turn, request, late_final))
 
-    async def _classify_when_heard(self, turn: Turn) -> None:
-        late = await self._resources.stt.late_amd_transcript()
+    async def _classify_when_heard(self, turn: Turn, late_final: LateAMDFinal) -> None:
+        late = await late_final.wait()
         if self.lifecycle is not AMDLifecycle.ACTIVE:
             return
         if late is not None:
             turn.transcript = dataclasses.replace(turn.transcript, amd=late)
-            self._start_classification(turn)
+            if turn.prediction is None:
+                self._start_classification(turn)
+            else:
+                # a pending result was reused for this turn; a prediction is never revised,
+                # so the next turn's request covers this text
+                self._chat_ctx.add_transcript(turn)
             self._add_realtime_transcript(turn)
         elif turn.prediction is None and self._pending_turn is None:
             self._record_prediction(turn, AMDReason.REUSED)
@@ -756,8 +762,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             logger.error("amd prediction handler failed", extra={"error_type": type(exc).__name__})
             self._finish(AMDReason.INTERNAL_ERROR)
 
-    async def _classify(self, turn: Turn, request: AMDRequest) -> None:
-        late = await self._resources.stt.late_amd_transcript()
+    async def _classify(
+        self, turn: Turn, request: AMDRequest, late_final: LateAMDFinal | None
+    ) -> None:
+        late = await late_final.wait() if late_final is not None else None
         if late is not None:
             turn.transcript = dataclasses.replace(turn.transcript, amd=late)
             update_transcript(self._chat_ctx, turn)

@@ -2063,6 +2063,60 @@ async def test_without_session_stt_a_turn_is_classified_when_its_final_arrives()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("session_stt", [False, True])
+async def test_a_final_before_the_classifier_waits_still_belongs_to_the_turn(
+    session_stt: bool,
+) -> None:
+    stt = DrainingSTT()
+    session_options = {"stt": FakeSTT()} if session_stt else None
+    async with running(stt=stt, session_options=session_options) as (
+        detector,
+        _,
+        classifier,
+        _,
+    ):
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn("Hello." if session_stt else ""))
+        stream.send_fake_transcript("Please state your name.")  # before the task starts
+        request = await classifier.request()
+        assert request.current_turn.extra["turn_id"] == 1
+        assert detector._turns[1].transcript.amd == "Please state your name."
+
+
+@pytest.mark.asyncio
+async def test_a_reused_prediction_is_kept_when_the_turn_final_arrives() -> None:
+    # without session STT, turn 2 waits for its final while turn 1 is still classified
+    stt = DrainingSTT()
+    async with running(stt=stt) as (detector, _, classifier, _):
+        events: list[AMDPredictionEvent] = []
+        detector.on("amd_prediction", events.append)
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn(""))
+        stream.send_fake_transcript("Please state your name.")
+        await classifier.request()
+        commit_turn(detector, end_of_turn(""))
+        classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
+        await eventually(lambda: detector._turns[2].prediction is not None)
+        assert detector._turns[2].prediction.reason is AMDReason.REUSED
+
+        stream.send_fake_transcript("Why are you calling?")
+        await eventually(lambda: detector._turns[2].transcript.amd == "Why are you calling?")
+        await asyncio.sleep(0.01)
+        assert classifier.requests.empty()
+        assert [event.turn_id for event in events] == [1, 2]
+
+        # the next request covers the late text
+        commit_turn(detector, end_of_turn(""))
+        stream.send_fake_transcript("Hello?")
+        request = await classifier.request()
+        assert request.current_turn.extra["turn_id"] == 3
+        assert [turn.text_content for turn in request.earlier_turns] == [
+            "Please state your name.",
+            "Why are you calling?",
+        ]
+
+
+@pytest.mark.asyncio
 async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() -> None:
     stt = DrainingSTT()
     async with running(stt=stt) as (detector, _, classifier, _):

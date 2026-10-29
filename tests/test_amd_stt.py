@@ -84,7 +84,9 @@ async def test_a_final_within_the_wait_belongs_to_the_turn_just_ended(
     amd, stream = transcriber
     ended = amd.end_turn("Sam Lee speaking.", late_wait=0.3)
     assert ended == AMDTranscript(session="Sam Lee speaking.", amd="")
-    waiting = asyncio.create_task(amd.late_amd_transcript())
+    late = amd.late_final
+    assert late is not None
+    waiting = asyncio.create_task(late.wait())
     await asyncio.sleep(0.1)
     stream.send_fake_transcript("Sam Lee speaking.")
     assert await waiting == "Sam Lee speaking."
@@ -99,9 +101,25 @@ async def test_a_final_after_the_wait_belongs_to_the_next_turn(
 ) -> None:
     amd, stream = transcriber
     amd.end_turn("Sam Lee speaking.", late_wait=0.3)
-    assert await amd.late_amd_transcript() is None
+    late = amd.late_final
+    assert late is not None
+    assert await late.wait() is None
     await amd_heard(amd, stream, "Sam Lee speaking.")
     assert amd.end_turn("Yes.").amd == "Sam Lee speaking."
+
+
+@pytest.mark.asyncio
+async def test_a_final_before_the_wait_starts_still_belongs_to_the_turn(
+    transcriber: tuple[AMDTranscriber, DrainingStream],
+) -> None:
+    amd, stream = transcriber
+    amd.end_turn("Sam Lee speaking.", late_wait=0.3)
+    late = amd.late_final
+    assert late is not None
+    stream.send_fake_transcript("Sam Lee speaking.")
+    await wait_for_transcript(lambda: amd.late_final is None)
+    assert await late.wait() == "Sam Lee speaking."
+    assert amd.end_turn("").amd == ""
 
 
 @pytest.mark.asyncio
@@ -112,7 +130,9 @@ async def test_without_session_stt_a_final_after_the_wait_belongs_to_the_next_tu
     ) as amd:
         amd.push_audio(rtc.AudioFrame.create(16000, 1, 320))
         amd.end_turn("Sam Lee speaking.", late_wait=0.3)
-        assert await amd.late_amd_transcript() is None
+        late = amd.late_final
+        assert late is not None
+        assert await late.wait() is None
         await amd_heard(amd, model.streams[0], "Sam Lee speaking.")
         assert amd.end_turn("").amd == "Sam Lee speaking."
     await model.aclose()
@@ -125,10 +145,7 @@ async def test_a_turn_with_its_amd_final_needs_no_wait(
     amd, stream = transcriber
     await amd_heard(amd, stream, "Sam Lee speaking.")
     amd.end_turn("Sam Lee speaking.", late_wait=0.3)
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    assert await amd.late_amd_transcript() is None
-    assert loop.time() == started
+    assert amd.late_final is None
 
 
 def test_the_classifier_sees_both_transcripts_only_with_an_amd_stt() -> None:
