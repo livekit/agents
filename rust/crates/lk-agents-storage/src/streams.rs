@@ -381,7 +381,7 @@ mod tests {
     }
 
     // Catches: an expired or deleted stream read as an empty one, indistinguishable from a
-    // stream with nothing yet (decision 61: expiry is explicit).
+    // stream with nothing yet (expiry is explicit).
     #[tokio::test]
     async fn an_expired_or_deleted_stream_is_not_found() {
         let dir = tempdir();
