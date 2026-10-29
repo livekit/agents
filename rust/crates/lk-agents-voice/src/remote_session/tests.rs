@@ -7,8 +7,8 @@ fn at(secs: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(secs)
 }
 
-// Catches: a function call's provider extras dropped or sent as JSON text with quotes, a call
-// output losing its error flag, or an agent update sending an empty instructions string the console
+// Catches: a function call's provider extras dropped or not sent as their JSON text (decision 117,
+// Q29: a string goes quoted, so it reads back a string), a call output losing its error flag, or an agent update sending an empty instructions string the console
 // shows as "instructions changed to nothing".
 #[test]
 fn tool_items_and_agent_updates_encode_for_the_console() {
@@ -26,7 +26,7 @@ fn tool_items_and_agent_updates_encode_for_the_console() {
         group_id: None,
     });
     let Some(Item::FunctionCall(encoded)) = encode_chat_item(&call).item else { panic!() };
-    assert_eq!(encoded.extra.get("google").map(String::as_str), Some("sig"));
+    assert_eq!(encoded.extra.get("google").map(String::as_str), Some("\"sig\""));
     assert_eq!(encoded.extra.get("n").map(String::as_str), Some("3"));
     assert_eq!(encoded.created_at.map(|t| t.seconds), Some(5));
 
