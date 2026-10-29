@@ -59,7 +59,9 @@ impl Run {
         // person's track, minted when they join.
         let legs = setup.room_legs;
         // The console's socket is a leg of the host's like the fakes, so the room's stay off.
-        let console = setup.console.then(|| fakes::FakeCli::connect(world.clone(), time.clock()));
+        let console = setup
+            .console
+            .then(|| fakes::FakeCli::connect(world.clone(), time.clock(), Some(registry.clone())));
         let host_mic = (legs.is_none() && console.is_none()).then(|| {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())

@@ -320,6 +320,8 @@ pub enum Sink {
         segment: u32,
         accepted: bool,
     },
+    /// The console's CLI acknowledged its last flush as played.
+    ConsoleReceipt,
     /// The product paused, or resumed, a pausable output.
     Paused {
         output: u32,

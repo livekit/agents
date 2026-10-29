@@ -779,6 +779,7 @@ fn sink_output(sink: &Sink) -> Option<u32> {
         | Sink::Started { .. }
         | Sink::Progressed { .. }
         | Sink::Reset { .. }
+        | Sink::ConsoleReceipt
         | Sink::Recorder(_) => None,
     }
 }

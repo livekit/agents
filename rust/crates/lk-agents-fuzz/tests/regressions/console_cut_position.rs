@@ -14,7 +14,7 @@ use lk_agents_runtime::net::task::TokioSpawner;
 #[tokio::test(start_paused = true)]
 async fn a_cut_console_segment_reports_only_confirmed_audio() {
     let clock: Arc<dyn Clock> = Arc::new(SimClock::new());
-    let (console, _cli) = FakeCli::connect(Arc::new(TokioSpawner::current()), clock);
+    let (console, _cli) = FakeCli::connect(Arc::new(TokioSpawner::current()), clock, None);
     let output = console.clone().as_audio_output();
     let second = AudioFrame::new(vec![0; 96_000], 48_000, 1, 48_000);
     output.capture_frame(&second).await.unwrap();

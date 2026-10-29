@@ -10,6 +10,7 @@ mod amd_tap_queued_at_close;
 mod close_ends_its_tasks;
 mod console_cut_position;
 mod console_delivery;
+mod console_reply_plays_out;
 mod cut_by_output_forwards_its_text;
 mod cut_reply_keeps_heard_words;
 mod determinism;

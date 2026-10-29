@@ -12,7 +12,7 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{Input, Ref, RtEvent},
-    record::{Applied, Handle, Recording},
+    record::{Applied, Handle, Recording, Sink},
 };
 
 pub struct SpeechErrorIsInjected;
@@ -20,7 +20,7 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, was refused by Close before scheduling, was a say the driver refused on the journal, or lost its own keyed sink completion after its declared deadline.",
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, was refused by Close before scheduling, was a say the driver refused on the journal, or lost its own keyed sink completion after its declared deadline with no playback receipt in between.",
         examples: &[
             failed_by_injection,
             failed_from_its_own_missing_playback,
@@ -93,7 +93,8 @@ impl Rule for SpeechErrorIsInjected {
                     .iter()
                     .any(|(_, step)| matches!(step, Step::Speech(SpeechStep::SayRefused { .. })));
             // Missing external completion is a sink failure, not a provider failure. Accept only
-            // the keyed diagnostic for this speech after its own declared completion deadline.
+            // the keyed diagnostic for this speech after its own declared completion deadline,
+            // and only when no receipt came in between: the console's CLI loses none.
             let missing_playback = internal.steps().iter().any(|(lost_at, step)| {
                 let Step::Playout(PlayoutStep::FinishLost { speech: lost_speech, segment, .. }) =
                     step
@@ -109,7 +110,12 @@ impl Rule for SpeechErrorIsInjected {
                             if due_speech == lost_speech
                                 && due_at <= lost_at
                                 && at.saturating_duration_since(lk_agents_abi::Ts::ZERO).as_millis()
-                                    <= u128::from(lost_at.at_ms))
+                                    <= u128::from(lost_at.at_ms)
+                                && !r.sink().iter().any(|(receipt_at, sink)| {
+                                    matches!(sink, Sink::ConsoleReceipt)
+                                        && due_at < receipt_at
+                                        && receipt_at <= lost_at
+                                }))
                 })
             });
             let output_refused = internal.steps().iter().any(|(_, step)| {

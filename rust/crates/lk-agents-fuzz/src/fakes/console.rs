@@ -1,5 +1,7 @@
 //! The CLI peer's bytes and paced speaker, driving the real console transport and audio legs.
 
+use super::Registry;
+use crate::record::Sink;
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{BoxFuture, Clock, Spawner, Ts};
@@ -27,8 +29,9 @@ impl Connector for Socket {
     }
 }
 
-/// The CLI's microphone, requests and playout acknowledgements, in socket order. Its speaker
-/// acknowledges flushed audio only after playing it, unless a clear cut that segment first.
+/// The CLI's microphone, requests and playout acknowledgements, in socket order. As the Go CLI's
+/// speaker, it acknowledges a flush once everything queued has played, and only the last flush:
+/// a newer flush or a clear drops the acknowledgement still owed.
 #[derive(Clone)]
 pub struct FakeCli {
     to_agent: tokio::sync::mpsc::UnboundedSender<proto::AgentSessionMessage>,
@@ -37,7 +40,12 @@ pub struct FakeCli {
 }
 
 impl FakeCli {
-    pub fn connect(world: Arc<dyn Spawner>, clock: Arc<dyn Clock>) -> (Arc<ConsoleIo>, FakeCli) {
+    /// `receipts` records each acknowledgement the CLI sends.
+    pub fn connect(
+        world: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
+        receipts: Option<Arc<Registry>>,
+    ) -> (Arc<ConsoleIo>, FakeCli) {
         let (agent, cli) = tokio::io::duplex(64 * 1024);
         let (read, write) = tokio::io::split(agent);
         let socket =
@@ -80,8 +88,10 @@ impl FakeCli {
                             );
                         }
                         Some(Message::AudioPlaybackFlush(_)) => {
-                            let (speaker, played, this) =
-                                (speaker.clone(), played.clone(), segment);
+                            segment += 1;
+                            played.store(segment, std::sync::atomic::Ordering::Relaxed);
+                            let (speaker, played, this, receipts) =
+                                (speaker.clone(), played.clone(), segment, receipts.clone());
                             let audio = std::mem::take(&mut pending);
                             let until = speaker.clock.now().saturating_add(audio);
                             let mut playing = speaker.playing_until.lock().unwrap();
@@ -94,11 +104,16 @@ impl FakeCli {
                                     speaker.send(Message::AudioPlaybackFinished(
                                         console_io::AudioPlaybackFinished {},
                                     ));
+                                    if let Some(receipts) = &receipts {
+                                        receipts.record_sink(Sink::ConsoleReceipt);
+                                    }
                                 }
                             });
                         }
                         Some(Message::AudioPlaybackClear(_)) => {
+                            // The speaker's ring is emptied: nothing queued plays on.
                             pending = Duration::ZERO;
+                            *speaker.playing_until.lock().unwrap() = None;
                             segment += 1;
                             played.store(segment, std::sync::atomic::Ordering::Relaxed);
                         }
