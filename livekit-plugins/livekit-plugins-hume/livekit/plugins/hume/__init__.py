@@ -24,6 +24,7 @@ from livekit.agents import Plugin
 from .tts import (
     TTS,
     AudioFormat,
+    ModelVersion,
     Utterance,
     VoiceById,
     VoiceByName,

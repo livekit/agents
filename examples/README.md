@@ -18,7 +18,7 @@ session = AgentSession(
 )
 ```
 
-**Note:** OpenAI Realtime models are available through `inference.RealtimeModel`; use provider plugin classes for direct credentials. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
+**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic.
 
 ## 📁 Example Categories
 
@@ -54,7 +54,7 @@ Basic building blocks and fundamental examples showing core LiveKit concepts lik
 
 ### 🛠️ [Other](./other/)
 
-Additional examples including text-only agents, various TTS providers, transcription services, and translation utilities.
+Additional examples including text-only agents, transcription services, and translation utilities.
 
 ## Running Examples
 

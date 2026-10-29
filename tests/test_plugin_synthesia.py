@@ -790,6 +790,8 @@ class TestAvatarSession:
             self.init_kwargs = None
             self.error = None
             self.response = StartSessionResponse(session_id="sess_123")
+            # Set to an asyncio.Event to hold start_session() open until it is set.
+            self.gate = None
 
     class _RecorderAPI:
         def __init__(self, recorder):
@@ -797,6 +799,8 @@ class TestAvatarSession:
 
         async def start_session(self, request, *, conn_options=None):
             self._rec.requests.append(request)
+            if self._rec.gate is not None:
+                await self._rec.gate.wait()
             if self._rec.error is not None:
                 raise self._rec.error
             return self._rec.response
@@ -1466,6 +1470,147 @@ class TestAvatarSession:
         assert agent.listener_count("conversation_item_added") == 0
         assert agent.output.audio.closed is True
         assert session._audio_output is None
+
+    async def _start_in_background(self, session, room, agent=None):
+        await session.start(
+            agent or self._FakeAgentSession(),
+            room,
+            livekit_url=self.LK_URL,
+            livekit_api_key=self.LK_KEY,
+            livekit_api_secret=self.LK_SECRET,
+            wait_for_avatar=False,
+        )
+
+    async def test_background_start_returns_before_the_session_call(
+        self, api_recorder, instant_join
+    ):
+        api_recorder.gate = asyncio.Event()
+        room, agent = self._FakeRoom(), self._FakeAgentSession()
+        session = self._session()
+        await self._start_in_background(session, room, agent)
+
+        # The sink is installed before the session call returns, and still
+        # holds audio until the avatar's video track exists.
+        sink = agent.output.audio
+        assert isinstance(sink, self._FakeAudioOutput)
+        assert sink.wait_remote_track == rtc.TrackKind.KIND_VIDEO
+        ready = asyncio.create_task(session.wait_until_ready())
+        await asyncio.sleep(0)
+        assert not ready.done()
+
+        api_recorder.gate.set()
+        await ready
+        assert agent.output.audio is sink
+        assert len(api_recorder.requests) == 1
+        assert room.listener_count("disconnected") == 1
+        await session.aclose()
+
+    async def test_background_start_failure_raises_from_wait_until_ready(
+        self, api_recorder, instant_join
+    ):
+        api_recorder.error = SynthesiaError("bad key", type=ErrorType.AUTH)
+        room, agent = self._FakeRoom(), self._FakeAgentSession()
+        session = self._session()
+        await self._start_in_background(session, room, agent)
+        sink = agent.output.audio
+
+        with pytest.raises(SynthesiaError) as exc:
+            await session.wait_until_ready()
+        assert exc.value.type is ErrorType.AUTH
+        assert sink.closed
+        with pytest.raises(SynthesiaError, match="requires a started avatar session"):
+            await session.swap_avatar("default")
+        await session.aclose()
+
+    async def test_background_start_failure_log_omits_the_message(
+        self, api_recorder, instant_join, caplog
+    ):
+        api_recorder.error = SynthesiaError(
+            "echoed: lk-token-secret", type=ErrorType.AUTH, status=401, request_id="req_1"
+        )
+        session = self._session()
+        with caplog.at_level(logging.ERROR, logger="livekit.plugins.synthesia"):
+            await self._start_in_background(session, self._FakeRoom())
+            with pytest.raises(SynthesiaError, match="echoed"):
+                await session.wait_until_ready()
+
+        [record] = [r for r in caplog.records if r.getMessage() == "avatar failed to start"]
+        assert "lk-token-secret" not in caplog.text
+        assert record.exc_info is None
+        assert (record.type, record.status, record.request_id) == ("auth", 401, "req_1")
+        await session.aclose()
+
+    async def test_background_start_wraps_unexpected_errors(self, api_recorder, instant_join):
+        api_recorder.error = RuntimeError("socket closed")
+        room = self._FakeRoom()
+        session = self._session()
+        await self._start_in_background(session, room)
+
+        with pytest.raises(SynthesiaError) as exc:
+            await session.wait_until_ready()
+        assert isinstance(exc.value.__cause__, RuntimeError)
+        await session.aclose()
+
+    async def test_background_start_join_timeout(self, api_recorder, hanging_join):
+        room, agent = self._FakeRoom(), self._FakeAgentSession()
+        session = self._session(join_timeout=0.05)
+        await self._start_in_background(session, room, agent)
+        sink = agent.output.audio
+
+        with pytest.raises(SynthesiaError) as exc:
+            await session.wait_until_ready()
+        assert exc.value.type is ErrorType.TIMEOUT
+        assert sink.closed
+        await session.aclose()
+
+    async def test_aclose_cancels_background_start(self, api_recorder, instant_join):
+        api_recorder.gate = asyncio.Event()
+        room, agent = self._FakeRoom(), self._FakeAgentSession()
+        session = self._session()
+        await self._start_in_background(session, room, agent)
+        sink = agent.output.audio
+        await asyncio.sleep(0)
+
+        await session.aclose()
+
+        with pytest.raises(SynthesiaError, match="closed while starting"):
+            await session.wait_until_ready()
+        assert sink.closed
+
+    async def test_aclose_before_background_start_runs(self, api_recorder, instant_join):
+        api_recorder.gate = asyncio.Event()
+        room = self._FakeRoom()
+        session = self._session()
+        await self._start_in_background(session, room)
+
+        # No yield: the launch task is cancelled before it runs a single step.
+        await session.aclose()
+
+        with pytest.raises(SynthesiaError, match="closed while starting"):
+            await asyncio.wait_for(session.wait_until_ready(), timeout=1)
+
+    async def test_start_while_background_start_runs_raises(self, api_recorder, instant_join):
+        api_recorder.gate = asyncio.Event()
+        room = self._FakeRoom()
+        session = self._session()
+        await self._start_in_background(session, room)
+
+        with pytest.raises(SynthesiaError, match="already in progress"):
+            await self._start(session, room)
+        await session.aclose()
+
+    async def test_wait_until_ready_after_blocking_start_returns(self, api_recorder, instant_join):
+        room = self._FakeRoom()
+        session = self._session()
+        await self._start(session, room)
+
+        await session.wait_until_ready()
+        await session.aclose()
+
+    async def test_wait_until_ready_before_start_raises(self):
+        session = self._session()
+        with pytest.raises(SynthesiaError, match="not started"):
+            await session.wait_until_ready()
 
 
 class TestUsageExample:

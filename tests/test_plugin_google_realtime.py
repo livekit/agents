@@ -1087,9 +1087,70 @@ def test_tool_behavior_default_follows_the_model(
     assert (behavior if utils.is_given(behavior) else None) == expected
 
 
+@pytest.mark.parametrize(
+    ("vertexai", "expected_role"),
+    [
+        (True, "system"),
+        (False, "model"),
+    ],
+)
+async def test_update_instructions_role_for_api(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool, expected_role: str
+) -> None:
+    """Vertex AI replaces the system instruction with role="system"; Gemini keeps role="model".
+
+    On Vertex, role="model" only appends a model turn and leaves the previous instructions in
+    effect (issue #7785). The Gemini API rejects role="system", so that path stays on role="model".
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.vertexai = vertexai
+        await session.update_instructions("replacement instructions")
+
+        contents = [m for m in await _drain_sent(session) if isinstance(m, types.LiveClientContent)]
+        assert len(contents) == 1
+        assert contents[0].turn_complete is False
+        assert contents[0].turns is not None
+        assert len(contents[0].turns) == 1
+        turn = contents[0].turns[0]
+        assert turn.role == expected_role
+        assert turn.parts is not None
+        assert turn.parts[0].text == "replacement instructions"
+
+
 def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gemini-3.8-live", [("user", "<instructions>\nGreet the guest.\n</instructions>")]),
+        (
+            "gemini-3.1-flash-live-preview",
+            [("user", "<instructions>\nGreet the guest.\n</instructions>")],
+        ),
+        (
+            "gemini-2.5-flash-native-audio-preview-12-2025",
+            [("model", "Greet the guest."), ("user", ".")],
+        ),
+    ],
+)
+async def test_reply_instructions_turns_follow_the_model(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected: list[tuple[str, str]]
+) -> None:
+    """Without the placeholder, a trailing model turn is continued rather than answered, and
+    an unwrapped user turn is later recalled as something the user said."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.model = model
+        fut = session.generate_reply(instructions="Greet the guest.")
+        try:
+            sent = [m for m in await _drain_sent(session) if isinstance(m, types.LiveClientContent)]
+        finally:
+            fut.cancel()
+        assert len(sent) == 1
+        assert sent[0].turn_complete
+        assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected

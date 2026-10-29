@@ -41,6 +41,28 @@ await avatar.swap_avatar("<another-id-from-avatar-ids>")  # switch mid-session
 await avatar.swap_avatar("default")  # back to the first id
 ```
 
+## Faster first words
+
+By default `start()` returns once the avatar has joined the room, so the agent's
+greeting is only generated after the session request completes. Pass
+`wait_for_avatar=False` to return straight away and launch the avatar in the
+background. The greeting is then generated while the avatar starts, held until
+the avatar's video is up, and spoken as soon as it is.
+
+```python
+await avatar.start(session, room=ctx.room, wait_for_avatar=False)
+await session.start(agent=Agent(...), room=ctx.room)
+session.generate_reply(instructions="Greet the user.")
+
+await avatar.wait_until_ready()  # optional: raises synthesia.SynthesiaError if the avatar failed to start
+```
+
+With `wait_for_avatar=False`, a failed launch no longer raises from `start()`.
+It closes the avatar session, is logged, and is raised by `wait_until_ready()`.
+The agent's audio stays routed to the avatar until the session ends, so its
+speech won't be heard: end or restart the session when `wait_until_ready()`
+raises.
+
 ## Parameters
 
 | Parameter | Default | Description |
