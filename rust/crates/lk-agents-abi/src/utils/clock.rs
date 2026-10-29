@@ -73,10 +73,6 @@ impl<T: HostClock + ?Sized> HostClock for std::sync::Arc<T> {
     }
 }
 
-/// The host loop's own clock when it runs on virtual time, else `None` (an ambient value).
-#[derive(Clone, Default)]
-pub struct LoopClock(pub Option<std::sync::Arc<dyn Clock>>);
-
 /// `_core.SessionClock`: the handle a session hands the native clients a host provider is built
 /// on (`obj._bind_session_clock(clock)`), so a session on a virtual clock times a stalled gateway
 /// out in its own seconds, not wall ones.

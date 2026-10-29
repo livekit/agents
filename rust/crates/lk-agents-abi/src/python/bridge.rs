@@ -92,7 +92,7 @@ impl Ambient for std::sync::Arc<dyn crate::Clock> {
     fn ambient() -> Self {
         CLOCK_SCOPE
             .with(|s| s.borrow().last().cloned())
-            .or_else(|| crate::utils::clock::LoopClock::ambient().0)
+            .or_else(|| linked().and_then(|runtime| Python::try_attach(runtime.loop_clock).flatten()))
             .unwrap_or_else(|| std::sync::Arc::new(crate::RealClock::new()))
     }
 }
@@ -102,13 +102,6 @@ thread_local! {
 }
 
 pub use crate::utils::clock::HostClock;
-
-impl Ambient for crate::utils::clock::LoopClock {
-    fn ambient() -> Self {
-        let loop_clock = linked().map(|runtime| runtime.loop_clock);
-        crate::utils::clock::LoopClock(loop_clock.and_then(|f| Python::try_attach(f).flatten()))
-    }
-}
 
 /// Popped on drop.
 pub struct ClockScope(bool);
