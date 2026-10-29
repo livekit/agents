@@ -2,7 +2,7 @@
 
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
-use lk_agents_abi::types::provider::{ProviderAttempts as Port, SynthesisObservation};
+use lk_agents_abi::types::provider::{ProviderAttempts as Port, ResponseObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
 use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
@@ -30,10 +30,16 @@ impl Port for ProviderAttempts {
         conn_options.validate()?;
         let mut policy = RequestPolicy::from_options(&conn_options);
         // A host callback does not expose its SDK's connect/write progress. Its total deadline
-        // still covers those phases; read is observable only while a recognition awaits a result.
+        // still covers those phases; read is observable only while a response is owed.
         policy.connect_timeout = None;
         policy.write_timeout = None;
-        if !matches!(kind, RequestKind::SttStream | RequestKind::TtsBatch | RequestKind::TtsStream) {
+        if !matches!(
+            kind,
+            RequestKind::Llm
+                | RequestKind::SttStream
+                | RequestKind::TtsBatch
+                | RequestKind::TtsStream
+        ) {
             policy.read_timeout = None;
         }
         let now = Ts::from_nanos(now_ns);
@@ -77,6 +83,10 @@ impl Port for ProviderAttempts {
             return Err(error.clone());
         }
         if self.interrupted.take().is_some() {
+            // A read deadline the machine retries replays the request: not after delivered output.
+            if produced_output && self.kind != RequestKind::SttStream {
+                return Ok(RetryDecision::Raise);
+            }
             return Ok(RetryDecision::Retry(self.retry_delay(now)));
         }
         let error = error.attempt_error();
@@ -147,13 +157,13 @@ impl Port for ProviderAttempts {
         }
     }
 
-    fn observe_synthesis(&mut self, observation: SynthesisObservation, now_ns: u64) {
+    fn observe_response(&mut self, observation: ResponseObservation, now_ns: u64) {
         match observation {
-            SynthesisObservation::Audio if !self.input_ended => self.complete_response(),
-            SynthesisObservation::Progress | SynthesisObservation::Audio => {
+            ResponseObservation::Audio if !self.input_ended => self.complete_response(),
+            ResponseObservation::Progress | ResponseObservation::Audio => {
                 self.response(false, now_ns);
             }
-            SynthesisObservation::Complete => self.complete_response(),
+            ResponseObservation::Complete => self.complete_response(),
         }
     }
 
@@ -340,15 +350,15 @@ mod tests {
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(operation.ready(at(10)), Ok(false), "idle input owes no response");
         operation.expect_response(at(10));
-        operation.observe_synthesis(SynthesisObservation::Progress, at(11));
+        operation.observe_response(ResponseObservation::Progress, at(11));
         assert_eq!(operation.ready(at(12)), Ok(false), "progress restarted the deadline");
-        operation.observe_synthesis(SynthesisObservation::Complete, at(12));
+        operation.observe_response(ResponseObservation::Complete, at(12));
         assert_eq!(operation.ready(at(20)), Ok(false), "a completed response disarms it");
         operation.expect_response(at(20));
-        operation.observe_synthesis(SynthesisObservation::Audio, at(21));
+        operation.observe_response(ResponseObservation::Audio, at(21));
         assert_eq!(operation.ready(at(30)), Ok(false), "audio settles a non-final request");
         operation.input_ended(at(30));
-        operation.observe_synthesis(SynthesisObservation::Audio, at(31));
+        operation.observe_response(ResponseObservation::Audio, at(31));
         assert_eq!(operation.ready(at(32)), Ok(false), "after the final input, audio is progress");
         let error = operation.ready(at(33)).unwrap_err();
         assert_eq!((error.kind, error.phase), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read)));

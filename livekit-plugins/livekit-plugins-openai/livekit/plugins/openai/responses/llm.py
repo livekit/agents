@@ -13,7 +13,15 @@ from pydantic import JsonValue, TypeAdapter
 from yarl import URL
 
 import openai
-from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    _bindings,
+    llm,
+    utils,
+)
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
@@ -121,8 +129,11 @@ class _ResponsesWebsocket:
         self,
         msg: Mapping[str, object],
         *,
+        attempts: _bindings.Attempts,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> AsyncGenerator[dict[str, JsonValue], None]:
+        """Send ``msg`` and yield its events; ``attempts`` runs the read deadline."""
+
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
                 # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
@@ -146,16 +157,11 @@ class _ResponsesWebsocket:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
         ws = await self._acquire_and_send(data, conn_options)
+        attempts.expect_response()
         completed = False
         try:
             while True:
-                try:
-                    async with asyncio.timeout(conn_options.read_timeout):
-                        raw_msg = await ws.receive()
-                except TimeoutError as e:
-                    raise APITimeoutError(
-                        "OpenAI Responses WebSocket read timed out", phase="read"
-                    ) from e
+                raw_msg = await ws.receive()
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
                     exc = raw_msg.data
                     status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
@@ -176,6 +182,7 @@ class _ResponsesWebsocket:
                     continue
 
                 event = _WS_EVENT.validate_json(raw_msg.data)
+                attempts.progress()
                 yield event
                 if event["type"] in [
                     "response.completed",
@@ -183,6 +190,7 @@ class _ResponsesWebsocket:
                     "response.incomplete",
                     "error",
                 ]:
+                    attempts.complete_response()
                     completed = True
                     return
         finally:
@@ -559,7 +567,7 @@ class LLMStream(llm.LLMStream):
                     **self._extra_kwargs,
                 }
                 async for raw_event in self._websocket.generate_response(
-                    payload, conn_options=self._conn_options
+                    payload, attempts=self._core_attempts, conn_options=self._conn_options
                 ):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)

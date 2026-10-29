@@ -168,18 +168,18 @@ class Attempts:
 
     def progress(self) -> None:
         """Response data arrived; heartbeats are not progress."""
-        self._observe_synthesis("progress")
+        self._observe_response("progress")
 
     def audio_received(self) -> None:
         """Audio settles a protocol's first response; after the final input it is progress."""
-        self._observe_synthesis("audio")
+        self._observe_response("audio")
 
     def complete_response(self) -> None:
         """No response remains outstanding."""
-        self._observe_synthesis("complete")
+        self._observe_response("complete")
 
-    def _observe_synthesis(self, observation: str) -> None:
-        self._request.observe_synthesis(observation, _now_ns())
+    def _observe_response(self, observation: str) -> None:
+        self._request.observe_response(observation, _now_ns())
         self._changed.set()
 
     def observe(self, event: SpeechEvent) -> None:

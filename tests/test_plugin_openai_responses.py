@@ -16,6 +16,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    _bindings,
     llm as agents_llm,
     utils,
 )
@@ -64,6 +65,10 @@ class _RecordingWS:
         self.closed = True
 
 
+def _attempts() -> _bindings.Attempts:
+    return _bindings.Attempts("llm", DEFAULT_API_CONNECT_OPTIONS, lambda *_: None)
+
+
 def _make_transport() -> _ResponsesWebsocket:
     return _ResponsesWebsocket(api_key="test-key", timeout=1.0, model="gpt-4.1")
 
@@ -88,7 +93,7 @@ async def _capture_sent_payload(msg: dict) -> dict:
     transport = _make_transport()
     rec = _RecordingWS({"type": "response.completed", "response": {"output": []}})
     _use_connections(transport, rec)
-    async for _ in transport.generate_response(msg):
+    async for _ in transport.generate_response(msg, attempts=_attempts()):
         pass
     assert rec.sent is not None
     return json.loads(rec.sent)
@@ -127,7 +132,12 @@ async def test_incomplete_response_is_a_terminal_websocket_event() -> None:
     transport = _make_transport()
     _use_connections(transport, rec)
 
-    events = [event async for event in transport.generate_response({"type": "response.create"})]
+    events = [
+        event
+        async for event in transport.generate_response(
+            {"type": "response.create"}, attempts=_attempts()
+        )
+    ]
 
     assert events == [frame]
     assert rec.receive_calls == 1
@@ -179,7 +189,7 @@ async def test_stale_reused_ws_is_discarded_and_request_succeeds() -> None:
     for ws in acquired:
         transport._pool.put(ws)
 
-    async for _ in transport.generate_response({"type": "response.create"}):
+    async for _ in transport.generate_response({"type": "response.create"}, attempts=_attempts()):
         pass
 
     assert all(s.sent is None for s in stale), "stale sockets must not carry the request"
@@ -197,7 +207,9 @@ async def test_fresh_ws_send_failure_is_raised() -> None:
     _use_connections(transport, dead_fresh)
 
     with pytest.raises(APIConnectionError):
-        async for _ in transport.generate_response({"type": "response.create"}):
+        async for _ in transport.generate_response(
+            {"type": "response.create"}, attempts=_attempts()
+        ):
             pass
     await transport.aclose()
 
@@ -407,7 +419,11 @@ class _ReplayResponsesWS:
         self.requests: list[dict] = []
 
     def generate_response(
-        self, payload: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        payload: dict,
+        *,
+        attempts: _bindings.Attempts,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):  # noqa: ANN201
         self.attempts += 1
         self.requests.append(payload)
@@ -522,7 +538,11 @@ class _StallingResponsesWS:
         self.requests: list[dict] = []
 
     def generate_response(
-        self, payload: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        payload: dict,
+        *,
+        attempts: _bindings.Attempts,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):  # noqa: ANN201
         self.attempts += 1
         frames = self._frames
@@ -579,7 +599,9 @@ class _CachingResponsesWS:
         self.release: asyncio.Event | None = None
         self.concurrent_started = asyncio.Event()
 
-    async def generate_response(self, payload: dict, *, conn_options: APIConnectOptions):
+    async def generate_response(
+        self, payload: dict, *, attempts: _bindings.Attempts, conn_options: APIConnectOptions
+    ):
         self.requests.append(payload)
         response = {**_RESPONSE_CREATED["response"], "id": f"resp_{len(self.requests)}"}
         yield {**_RESPONSE_CREATED, "response": response}

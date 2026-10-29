@@ -41,7 +41,7 @@ fn _extract_provider_attempts_observe_now_ns(obj: &Bound<'_, PyAny>) -> PyResult
     ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
-fn _extract_provider_attempts_observe_synthesis_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+fn _extract_provider_attempts_observe_response_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
     ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
@@ -122,9 +122,9 @@ impl _core_ProviderAttempts {
     }
 
     #[pyo3(signature = (observation, now_ns))]
-    fn observe_synthesis(&mut self, observation: ::lk_agents_abi::types::provider::SynthesisObservation, #[pyo3(from_py_with = _extract_provider_attempts_observe_synthesis_now_ns)] now_ns: u64) -> PyResult<()> {
+    fn observe_response(&mut self, observation: ::lk_agents_abi::types::provider::ResponseObservation, #[pyo3(from_py_with = _extract_provider_attempts_observe_response_now_ns)] now_ns: u64) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
-        <_core_ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::observe_synthesis(&mut self.0, observation, now_ns);
+        <_core_ProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::observe_response(&mut self.0, observation, now_ns);
         Ok(())
     }
 
