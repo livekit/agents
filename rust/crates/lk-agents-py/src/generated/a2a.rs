@@ -403,9 +403,8 @@ impl TurnHostProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(|obj| TurnHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
-    async fn handle(&self, ctx: &::lk_agents_abi::a2a::turn::TurnContext) -> ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>), ::lk_agents_abi::errors::ProviderError> {
+    fn handle<'a>(&'a self, ctx: &::lk_agents_abi::a2a::turn::TurnContext) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let ctx_arg = ::std::clone::Clone::clone(ctx);
         let context = ::lk_agents_abi::agent::HostContext::host_context(ctx).cloned();
@@ -413,6 +412,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::storage_turn::turn_context_to_py(py, ctx_arg)?];
                 Ok((host.bind(py).getattr("_core_handle")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -427,6 +427,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::generated::records::storage_turn::verdict_to_py(py, v)?), |o| Ok(crate::generated::records::storage_turn::turn_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }

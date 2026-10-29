@@ -265,27 +265,33 @@ impl Checkpoints {
     }
 }
 
-#[async_trait::async_trait]
 impl TurnHost for Fake {
     #[allow(clippy::type_complexity)]
-    async fn handle(
-        &self,
-        ctx: &TurnContext,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
-    {
-        let (verdicts, verdicts_rx) = mpsc::unbounded_channel();
-        let (events, events_rx) = mpsc::unbounded_channel();
-        let fake = self.clone();
-        let ctx = ctx.clone();
-        tokio::spawn(async move {
-            let mut checkpoints = Checkpoints { events: events.clone(), verdicts: verdicts_rx };
-            let out = fake
-                .run(ctx, &mut checkpoints)
-                .await
-                .map(|out| TurnEvent::Output { output: out.into() });
-            let _ = events.send(out);
-        });
-        Ok((Box::new(Verdicts(verdicts)), Box::new(Events(events_rx))))
+    fn handle<'a>(
+        &'a self,
+        ctx: &'a TurnContext,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+    > {
+        Box::pin(async move {
+            let (verdicts, verdicts_rx) = mpsc::unbounded_channel();
+            let (events, events_rx) = mpsc::unbounded_channel();
+            let fake = self.clone();
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                let mut checkpoints = Checkpoints { events: events.clone(), verdicts: verdicts_rx };
+                let out = fake
+                    .run(ctx, &mut checkpoints)
+                    .await
+                    .map(|out| TurnEvent::Output { output: out.into() });
+                let _ = events.send(out);
+            });
+            Ok((
+                Box::new(Verdicts(verdicts)) as Box<dyn StreamSink<_>>,
+                Box::new(Events(events_rx)) as Box<dyn StreamSource<_>>,
+            ))
+        })
     }
 }
 

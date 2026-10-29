@@ -1,12 +1,11 @@
 //! Attachments cross the managed turn as application references, never inline upload bytes.
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use lk_agents_core::a2a::{Policy, PolicySpec, TurnOptions};
 use lk_agents_abi::a2a::client::MessagePart;
 use lk_agents_abi::a2a::turn::{HandlerOutput, TurnContext, TurnEvent, TurnHost, Verdict};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, RealClock, StreamSink, StreamSource, Ts};
+use lk_agents_core::a2a::{Policy, PolicySpec, TurnOptions};
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::sqlite::SqliteStorage;
 use lk_agents_runtime::storage::{Storage, shortuuid};
@@ -36,29 +35,35 @@ impl StreamSource<TurnEvent> for Events {
     }
 }
 
-#[async_trait]
 impl TurnHost for Host {
-    async fn handle(
-        &self,
-        ctx: &TurnContext,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
-    {
-        let parts = &ctx.batch[0].parts;
-        assert!(matches!(&parts[0], MessagePart::TextPart { text, .. } if text == "review"));
-        for (part, expected) in
-            parts[1..].iter().zip(["private photo reference", "private document reference"])
-        {
-            assert!(
-                matches!(part, MessagePart::FilePart { url: Some(url), data: None, .. } if url == expected)
-            );
-        }
-        let event = TurnEvent::Output {
-            output: HandlerOutput {
-                output: Some(json!("received references")),
-                ..Default::default()
-            },
-        };
-        Ok((Box::new(Sink), Box::new(Events(Some(event)))))
+    fn handle<'a>(
+        &'a self,
+        ctx: &'a TurnContext,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+    > {
+        Box::pin(async move {
+            let parts = &ctx.batch[0].parts;
+            assert!(matches!(&parts[0], MessagePart::TextPart { text, .. } if text == "review"));
+            for (part, expected) in
+                parts[1..].iter().zip(["private photo reference", "private document reference"])
+            {
+                assert!(
+                    matches!(part, MessagePart::FilePart { url: Some(url), data: None, .. } if url == expected)
+                );
+            }
+            let event = TurnEvent::Output {
+                output: HandlerOutput {
+                    output: Some(json!("received references")),
+                    ..Default::default()
+                },
+            };
+            Ok((
+                Box::new(Sink) as Box<dyn StreamSink<_>>,
+                Box::new(Events(Some(event))) as Box<dyn StreamSource<_>>,
+            ))
+        })
     }
 }
 

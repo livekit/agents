@@ -95,13 +95,15 @@ pub enum TurnEvent {
 }
 
 #[crate::host(proxy(host = "livekit.agents.storage.context.TurnHost"))]
-#[async_trait::async_trait]
 pub trait TurnHost: Send + Sync {
     #[host(await, name = "_core_handle")]
-    async fn handle(
-        &self,
-        #[host(context)] ctx: &TurnContext,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>;
+    fn handle<'a>(
+        &'a self,
+        #[host(context)] ctx: &'a TurnContext,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+    >;
 }
 
 impl crate::agent::HostContext for TurnContext {

@@ -1,11 +1,9 @@
 //! The native JSON-RPC door against the shared backend contract.
 
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use a2a::{JsonRpcResponse, StreamResponse};
-use async_trait::async_trait;
 use lk_agents_abi::a2a::auth::{AuthGrant, AuthPrincipal, PrincipalKind};
 use lk_agents_abi::a2a::card::EndpointDescriptor;
 use lk_agents_abi::a2a::door::{A2ADoor as _, A2AResponse as _, DoorConfig, DoorError};
@@ -14,8 +12,8 @@ use lk_agents_abi::a2a::turn::{HandlerOutput, TurnContext, TurnEvent, TurnHost, 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, StreamSink, StreamSource, Ts};
 use lk_agents_runtime::a2a::door::Door;
-use serde_json::{Value, json};
 use lk_agents_storage::testing::Backend;
+use serde_json::{Value, json};
 use tokio_util::task::TaskTracker;
 
 struct Host;
@@ -41,81 +39,99 @@ impl StreamSource<TurnEvent> for Events {
     }
 }
 
-#[async_trait]
 impl TurnHost for Host {
-    async fn handle(
-        &self,
-        ctx: &TurnContext,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
-    {
-        let events = [
-            TurnEvent::Progress { task_id: ctx.task_id.clone(), text: "working".into() },
-            TurnEvent::Token { task_id: ctx.task_id.clone(), delta: "reply".into() },
-            TurnEvent::Output {
-                output: HandlerOutput { output: Some(json!("reply")), ..Default::default() },
-            },
-        ];
-        Ok((Box::new(Sink), Box::new(Events(events.into()))))
+    fn handle<'a>(
+        &'a self,
+        ctx: &'a TurnContext,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+    > {
+        Box::pin(async move {
+            let events = [
+                TurnEvent::Progress { task_id: ctx.task_id.clone(), text: "working".into() },
+                TurnEvent::Token { task_id: ctx.task_id.clone(), delta: "reply".into() },
+                TurnEvent::Output {
+                    output: HandlerOutput { output: Some(json!("reply")), ..Default::default() },
+                },
+            ];
+            Ok((
+                Box::new(Sink) as Box<dyn StreamSink<_>>,
+                Box::new(Events(events.into())) as Box<dyn StreamSource<_>>,
+            ))
+        })
     }
 }
 
 struct AskingHost;
 
-#[async_trait]
 impl TurnHost for AskingHost {
-    async fn handle(
-        &self,
-        ctx: &TurnContext,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
-    {
-        let text = ctx
-            .batch
-            .last()
-            .and_then(|message| message.parts.first())
-            .and_then(|part| match part {
-                lk_agents_abi::a2a::client::MessagePart::TextPart { text, .. } => {
-                    Some(text.as_str())
-                }
-                _ => None,
-            })
-            .unwrap_or_default();
-        let output = if text == "start" {
-            HandlerOutput { input_required: Some("Your name?".into()), ..Default::default() }
-        } else {
-            HandlerOutput { output: Some(json!(format!("Hello {text}"))), ..Default::default() }
-        };
-        Ok((
-            Box::new(Sink),
-            Box::new(Events(
-                [
-                    TurnEvent::Progress { task_id: ctx.task_id.clone(), text: "answering".into() },
-                    TurnEvent::Output { output },
-                ]
-                .into(),
-            )),
-        ))
+    fn handle<'a>(
+        &'a self,
+        ctx: &'a TurnContext,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+    > {
+        Box::pin(async move {
+            let text = ctx
+                .batch
+                .last()
+                .and_then(|message| message.parts.first())
+                .and_then(|part| match part {
+                    lk_agents_abi::a2a::client::MessagePart::TextPart { text, .. } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let output = if text == "start" {
+                HandlerOutput { input_required: Some("Your name?".into()), ..Default::default() }
+            } else {
+                HandlerOutput { output: Some(json!(format!("Hello {text}"))), ..Default::default() }
+            };
+            Ok((
+                Box::new(Sink) as Box<dyn StreamSink<_>>,
+                Box::new(Events(
+                    [
+                        TurnEvent::Progress {
+                            task_id: ctx.task_id.clone(),
+                            text: "answering".into(),
+                        },
+                        TurnEvent::Output { output },
+                    ]
+                    .into(),
+                )) as Box<dyn StreamSource<_>>,
+            ))
+        })
     }
 }
 
 struct BurstHost;
 
-#[async_trait]
 impl TurnHost for BurstHost {
-    async fn handle(
-        &self,
-        ctx: &TurnContext,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
-    {
-        let mut events: std::collections::VecDeque<_> = (0..100)
-            .map(|n| TurnEvent::Progress {
-                task_id: ctx.task_id.clone(),
-                text: format!("step {n}"),
-            })
-            .collect();
-        events.push_back(TurnEvent::Output {
-            output: HandlerOutput { output: Some(json!("done")), ..Default::default() },
-        });
-        Ok((Box::new(Sink), Box::new(Events(events))))
+    fn handle<'a>(
+        &'a self,
+        ctx: &'a TurnContext,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+    > {
+        Box::pin(async move {
+            let mut events: std::collections::VecDeque<_> = (0..100)
+                .map(|n| TurnEvent::Progress {
+                    task_id: ctx.task_id.clone(),
+                    text: format!("step {n}"),
+                })
+                .collect();
+            events.push_back(TurnEvent::Output {
+                output: HandlerOutput { output: Some(json!("done")), ..Default::default() },
+            });
+            Ok((
+                Box::new(Sink) as Box<dyn StreamSink<_>>,
+                Box::new(Events(events)) as Box<dyn StreamSource<_>>,
+            ))
+        })
     }
 }
 
