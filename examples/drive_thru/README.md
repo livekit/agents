@@ -49,3 +49,17 @@ https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/
 
 The STT model is also initialized with `keyterm` hints for McDonald's brand names (e.g., `"Big Mac"`, `"McFlurry"`, `"McCrispy"`) to improve transcription accuracy.
 https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/agent.py#L415-L430
+
+### Simulations
+
+`scenarios.yaml` holds scenarios that run the agent against a simulated customer, covering ordering, removal, combos, sizes, quantities, unavailable items and tool failures. Run them from the repo root:
+
+```bash
+lk agent simulate text examples/drive_thru/agent.py --scenarios examples/drive_thru/scenarios.yaml
+```
+
+All simulation glue lives in `simulation.py`. Each scenario's `userdata` can set:
+
+- `expected_order`: the items the order must hold when the run ends (order ids are ignored). `on_simulation_end` fails the run on a mismatch, even if the simulator passed it.
+- `unavailable_items`: menu item ids marked unavailable before the agent starts.
+- `failing_tools`: tools that raise instead of running, mocked on the live session with `mock_tools(..., session=session)`.

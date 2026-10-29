@@ -1585,8 +1585,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if not active_jobs:
             return
 
-        job_ids = [job_info.job.id for job_info in active_jobs]
-        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        # the jobs as they were assigned, so the server tracks them again
+        jobs = []
+        for job_info in active_jobs:
+            job = agent.Job()
+            job.CopyFrom(job_info.job)
+            job.state.participant_identity = job_info.accept_arguments.identity
+            jobs.append(job)
+
+        job_ids = [job.id for job in jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids, jobs=jobs)
         msg = agent.WorkerMessage(migrate_job=migrate_req)
         await self._queue_msg(msg)
 
