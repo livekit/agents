@@ -25,3 +25,11 @@ def otel_usage_records(metrics: AgentMetrics) -> list[tuple[str, str, OtelValue,
     """`collect_usage(ev)` minus the recording: the counter increments it would make. Empty for
     unhandled types, unknown types and honest zeros alike (the reference gates on truthiness).
     """
+
+class ModelUsageCollector:
+    """`metrics.ModelUsageCollector` -- the live per-model rollup."""
+    def __init__(self) -> None: ...
+    def collect(self, metrics: AgentMetrics) -> None:
+        """Fold one metric in."""
+    def flatten(self) -> list[dict[str, object]]:
+        """Every provider/model pair's usage."""

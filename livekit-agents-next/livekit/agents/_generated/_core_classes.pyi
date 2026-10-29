@@ -646,14 +646,6 @@ class VoiceSession:
     ) -> str: ...
 
 
-class ModelUsageCollector:
-    """`metrics.ModelUsageCollector` -- the live per-model rollup."""
-
-    def __init__(self) -> None: ...
-    def collect(self, metrics: Any) -> None: ...
-    def flatten(self) -> list[dict[str, Any]]: ...
-
-
 class ChatContent:
     """One element of `ChatMessage.content`: `str | ImageContent | AudioContent`, built by the host one
     constructor per arm so Rust never reads attributes or dispatches on `.type`.

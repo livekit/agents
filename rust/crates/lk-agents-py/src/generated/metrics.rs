@@ -42,3 +42,32 @@ pub fn otel_usage_records<'py>(py: Python<'py>, metrics: ::lk_agents_abi::metric
     let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_usage_records(metrics);
     Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2, x3,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?, crate::generated::records::telemetry::otel_value_to_py(py, x2)?, { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x3 { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() }])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
 }
+
+// Declared in rust/crates/lk-agents-abi/src/metrics/usage.rs.
+type ModelUsageCollectorImpl = <crate::Selected as super::Implementations>::UsageCollector;
+
+/// `metrics.ModelUsageCollector` -- the live per-model rollup.
+#[pyclass(name = "ModelUsageCollector", module = "livekit.agents._core")]
+pub struct ModelUsageCollector(ModelUsageCollectorImpl);
+
+#[pymethods]
+impl ModelUsageCollector {
+    #[new]
+    fn new() -> PyResult<ModelUsageCollector> {
+        let out = <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::new();
+        Ok(ModelUsageCollector(out))
+    }
+
+    /// Fold one metric in.
+    #[pyo3(signature = (metrics))]
+    fn collect(&mut self, metrics: ::lk_agents_abi::metrics::AgentMetrics) -> PyResult<()> {
+        <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::collect(&mut self.0, &metrics);
+        Ok(())
+    }
+
+    /// Every provider/model pair's usage.
+    fn flatten(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::metrics::ModelUsage>> {
+        let out = <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::flatten(&self.0);
+        Ok(out)
+    }
+}

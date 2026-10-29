@@ -47,22 +47,23 @@ impl<V: Default> OrderedByModel<V> {
     }
 }
 
-/// `usage.py:134`.
-#[derive(Debug, Clone, Default)]
-#[crate::class(mutable)]
-pub struct ModelUsageCollector {
-    llm: OrderedByModel<LlmModelUsage>,
-    tts: OrderedByModel<TtsModelUsage>,
-    stt: OrderedByModel<SttModelUsage>,
-    interruption: OrderedByModel<InterruptionModelUsage>,
-    eot: OrderedByModel<EotModelUsage>,
+/// `metrics.ModelUsageCollector` -- the live per-model rollup.
+#[crate::host(class(name = "ModelUsageCollector", pid = false))]
+pub trait UsageCollector: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
+
+    /// Fold one metric in.
+    #[host(call)]
+    fn collect(&mut self, metrics: &AgentMetrics);
+
+    /// Every provider/model pair's usage.
+    #[host(call)]
+    fn flatten(&self) -> Vec<ModelUsage>;
 }
 
-/// `metrics.ModelUsageCollector` -- the live per-model rollup.
-#[crate::host(object(pid = false))]
-impl ModelUsageCollector {
-    #[host(new)]
-    pub fn new() -> Self {
+impl UsageCollector for ModelUsageCollector {
+    fn new() -> Self {
         Self::default()
     }
 
@@ -70,8 +71,7 @@ impl ModelUsageCollector {
     ///
     /// VAD, EOU and avatar metrics are not billed; the explicit no-op arms make a new metric type a
     /// compile error. `Interruption` has no producer yet: no `AgentSession` builds that detector.
-    #[host(method)]
-    pub fn collect(&mut self, metrics: &AgentMetrics) {
+    fn collect(&mut self, metrics: &AgentMetrics) {
         match metrics {
             AgentMetrics::Llm(m) => self.collect_llm(m),
             AgentMetrics::RealtimeModel(m) => self.collect_realtime(m),
@@ -83,6 +83,30 @@ impl ModelUsageCollector {
         }
     }
 
+    /// `usage.py:262`. One entry per provider/model pair, grouped LLM, TTS, STT, interruption,
+    /// EOT, insertion-ordered within each group; cloned, as the reference deep-copies.
+    fn flatten(&self) -> Vec<ModelUsage> {
+        let mut out = Vec::new();
+        out.extend(self.llm.values().cloned().map(ModelUsage::Llm));
+        out.extend(self.tts.values().cloned().map(ModelUsage::Tts));
+        out.extend(self.stt.values().cloned().map(ModelUsage::Stt));
+        out.extend(self.interruption.values().cloned().map(ModelUsage::Interruption));
+        out.extend(self.eot.values().cloned().map(ModelUsage::Eot));
+        out
+    }
+}
+
+/// `usage.py:134`.
+#[derive(Debug, Clone, Default)]
+pub struct ModelUsageCollector {
+    llm: OrderedByModel<LlmModelUsage>,
+    tts: OrderedByModel<TtsModelUsage>,
+    stt: OrderedByModel<SttModelUsage>,
+    interruption: OrderedByModel<InterruptionModelUsage>,
+    eot: OrderedByModel<EotModelUsage>,
+}
+
+impl ModelUsageCollector {
     fn collect_llm(&mut self, m: &LlmMetrics) {
         let (provider, model) = provider_model(m.metadata.as_ref());
         let u = self.llm.entry(&provider, &model);
@@ -159,19 +183,6 @@ impl ModelUsageCollector {
         u.provider = provider;
         u.model = model;
         u.total_requests += u64::from(m.num_requests);
-    }
-
-    /// `usage.py:262`. One entry per provider/model pair, grouped LLM, TTS, STT, interruption,
-    /// EOT, insertion-ordered within each group; cloned, as the reference deep-copies.
-    #[host(method)]
-    pub fn flatten(&self) -> Vec<ModelUsage> {
-        let mut out = Vec::new();
-        out.extend(self.llm.values().cloned().map(ModelUsage::Llm));
-        out.extend(self.tts.values().cloned().map(ModelUsage::Tts));
-        out.extend(self.stt.values().cloned().map(ModelUsage::Stt));
-        out.extend(self.interruption.values().cloned().map(ModelUsage::Interruption));
-        out.extend(self.eot.values().cloned().map(ModelUsage::Eot));
-        out
     }
 
     /// [`flatten`](Self::flatten) wrapped in the record the session event and telemetry carry.

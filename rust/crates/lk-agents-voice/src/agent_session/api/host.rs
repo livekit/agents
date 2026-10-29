@@ -465,6 +465,7 @@ impl SessionApi {
     /// `session.usage.model_usage`: the usage of every model the session was billed for.
     #[host(getter)]
     pub fn usage(&self) -> Vec<lk_agents_abi::metrics::usage::ModelUsage> {
+        use lk_agents_abi::metrics::usage::UsageCollector as _;
         self.host.usage.lock().unwrap_or_else(|p| p.into_inner()).flatten()
     }
 

@@ -788,6 +788,7 @@ fn session_usage_updated(
     wire: &lk_agents_abi::voice::events::HostWire,
 ) -> Option<lk_agents_abi::voice::events::HostWire> {
     use lk_agents_abi::metrics::base::AgentMetrics;
+    use lk_agents_abi::metrics::usage::UsageCollector as _;
     let lk_agents_abi::voice::events::HostWire::MetricsCollected(m) = wire else { return None };
     if matches!(m.metrics, AgentMetrics::Eou(_) | AgentMetrics::Avatar(_)) {
         return None;
