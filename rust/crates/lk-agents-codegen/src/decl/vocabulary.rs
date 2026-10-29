@@ -24,7 +24,7 @@
 //! | associated type | `class(name = "X")` | an instance of the declared class `X`: the generated `Implementations` binds this type to `X`'s implementation |
 //! | associated type | `handle(class = "X")` | an implementation's own object, handed out (never taken in) as the registration shell's class `crate::handles::X`, built `From` it |
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
-//! | trait method | `call` | a synchronous call on `&self` |
+//! | trait method | `call` | a synchronous call on `&self` or `&mut self`; no receiver declares a static class method. Synchronous class calls may borrow another instance as `&Self` |
 //! | trait method | `await` | an `async fn` on `&self`, awaited by the host |
 //! | class method | `call, detach` | releases the GIL while the synchronous native operation executes; arguments are converted before release and results afterward |
 //! | trait method | `getter` | a read-only property on `&self` |

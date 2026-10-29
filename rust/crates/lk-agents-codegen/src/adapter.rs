@@ -273,6 +273,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     let mut s = doc(&m.doc, ind);
     match m.kind {
         MethodKind::New => s.push_str(&format!("{ind}#[new]\n")),
+        MethodKind::StaticCall => s.push_str(&format!("{ind}#[staticmethod]\n")),
         MethodKind::Getter => s.push_str(&format!("{ind}#[getter]\n")),
         MethodKind::Setter => s.push_str(&format!("{ind}#[setter({})]\n", m.name)),
         MethodKind::Function | MethodKind::AsyncFunction => s.push_str("#[pyfunction]\n"),
@@ -300,7 +301,11 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             prelude.push_str(&format!("{ind}    let {} = crate::host::entered();\n", p.name));
             continue;
         }
-        let (ty, convert) = input(&at, p)?;
+        let (ty, convert) = if p.ty == Ty::This {
+            (format!("PyRef<'_, {}>", c.name), None)
+        } else {
+            input(&at, p)?
+        };
         let extraction = if native(&p.ty) && contains_number(&p.ty) {
             format!("#[pyo3(from_py_with = {})] ", extractor_name(c, m, p))
         } else {
@@ -312,14 +317,26 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         }
     }
     let receiver = match m.kind {
-        MethodKind::New | MethodKind::Function | MethodKind::AsyncFunction => None,
+        MethodKind::New
+        | MethodKind::Function
+        | MethodKind::AsyncFunction
+        | MethodKind::StaticCall => None,
         _ if m.mutable => Some("&mut self"),
         _ => Some("&self"),
     };
     let passed: Vec<String> = m
         .params
         .iter()
-        .map(|p| if p.by_ref { format!("&{}", p.name) } else { p.name.clone() })
+        .map(|p| {
+            if p.ty == Ty::This {
+                let deref = if c.form == Form::MutableClass { "" } else { "*" };
+                format!("&{deref}{}.0", p.name)
+            } else if p.by_ref {
+                format!("&{}", p.name)
+            } else {
+                p.name.clone()
+            }
+        })
         .collect();
     let err = m.ret.err.as_ref().map(|e| format!(".map_err({})?", e.with)).unwrap_or_default();
     let (ret_ty, wrap) = output(&at, decls, c, &m.ret.ok)?;
@@ -367,7 +384,10 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             };
             let generics = if needs_py { "<'py>" } else { "" };
             let this = match m.kind {
-                MethodKind::New | MethodKind::Function | MethodKind::AsyncFunction => None,
+                MethodKind::New
+                | MethodKind::Function
+                | MethodKind::AsyncFunction
+                | MethodKind::StaticCall => None,
                 _ if m.mutable => Some("&mut self.0".to_owned()),
                 _ => Some("&self.0".to_owned()),
             };

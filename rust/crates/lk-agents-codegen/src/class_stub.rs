@@ -303,7 +303,10 @@ fn class(c: &Class, imports: &mut Imports) -> String {
 }
 
 fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
-    let mut params = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
+    let mut params = if matches!(
+        m.kind,
+        MethodKind::Function | MethodKind::AsyncFunction | MethodKind::StaticCall
+    ) {
         Vec::new()
     } else {
         vec!["self".to_owned()]
@@ -328,6 +331,10 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
     let tail = if doc.is_empty() { " ...\n".to_owned() } else { format!("\n{doc}") };
     let (head, name, ret) = match m.kind {
         MethodKind::Function | MethodKind::Call => ("def", m.name.as_str(), ret),
+        MethodKind::StaticCall => {
+            s.push_str("    @staticmethod\n");
+            ("def", m.name.as_str(), ret)
+        }
         MethodKind::Await | MethodKind::AsyncFunction => ("async def", m.name.as_str(), ret),
         MethodKind::New => ("def", "__init__", "None".to_owned()),
         MethodKind::Getter => {

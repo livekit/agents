@@ -871,3 +871,51 @@ fn native_class_stubs_keep_host_types_distinct_and_import_union_members() {
     assert!(stub.contains("AudioFrame | rtc.VideoFrame | End | Literal['not.a.type']"), "{stub}");
     assert!(!stub.contains("from not.a import"), "literal values are not type names: {stub}");
 }
+
+#[test]
+fn static_class_calls_construct_values_and_compare_borrowed_instances() {
+    let declarations = read(
+        r#"
+        #[crate::host(class(name = "Value", pid = false))]
+        pub trait Value: Sized {
+            #[host(new)] fn new(text: String) -> Self;
+            #[host(call)] fn from_parts(parts: Vec<String>) -> Self;
+            #[host(call, name = "__eq__")] fn equal(&self, other: &Self) -> bool;
+        }
+    "#,
+    )
+    .expect("static class construction and a borrowed comparison resolve");
+    let adapters = crate::adapter::emit(&declarations).unwrap();
+    let text = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
+    assert!(
+        text.contains(
+            "#[staticmethod]\n    #[pyo3(signature = (parts))]\n    fn from_parts(parts:"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("::from_parts(parts)") && !text.contains("::from_parts(&self"), "{text}");
+    assert!(
+        text.contains("other: PyRef<'_, Value>") && text.contains("::equal(&self.0, &*other.0)"),
+        "{text}"
+    );
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
+    assert!(
+        text.contains("@staticmethod\n    def from_parts(parts: Sequence[str]) -> Value"),
+        "{text}"
+    );
+    assert!(text.contains("def __eq__(self, other: Value) -> bool"), "{text}");
+    let unsupported = read(
+        r#"
+        #[crate::host(class)]
+        pub trait Value: Sized {
+            #[host(await)] async fn equal(&self, other: &Self) -> bool;
+        }
+    "#,
+    )
+    .unwrap_err();
+    assert!(
+        unsupported.contains("own-class input is borrowed as &Self by a synchronous class call"),
+        "{unsupported}"
+    );
+}

@@ -242,13 +242,21 @@ impl Resolver<'_> {
         if kind == MethodKind::Function && f.sig.asyncness.is_some() {
             kind = MethodKind::AsyncFunction;
         }
+        if kind == MethodKind::Call && f.sig.receiver().is_none() {
+            kind = MethodKind::StaticCall;
+        }
         let detach = match voc::find(&entries, "detach") {
             Some(flag) if flag.value.is_some() || !flag.nested.is_empty() => {
                 return Err(format!("{at}: detach is a bare flag"));
             }
             value => value.is_some(),
         };
-        if detach && !matches!(kind, MethodKind::New | MethodKind::Call | MethodKind::Function) {
+        if detach
+            && !matches!(
+                kind,
+                MethodKind::New | MethodKind::Call | MethodKind::StaticCall | MethodKind::Function
+            )
+        {
             return Err(format!(
                 "{at}: detach requires a synchronous constructor, call or function"
             ));
@@ -256,7 +264,7 @@ impl Resolver<'_> {
         let receiver = f.sig.receiver();
         let shape_ok = match kind {
             MethodKind::AsyncFunction => receiver.is_none() && f.sig.asyncness.is_some(),
-            MethodKind::New | MethodKind::Function => {
+            MethodKind::New | MethodKind::Function | MethodKind::StaticCall => {
                 receiver.is_none() && f.sig.asyncness.is_none()
             }
             MethodKind::Await | MethodKind::Next => {
@@ -271,7 +279,7 @@ impl Resolver<'_> {
         };
         if !shape_ok {
             return Err(format!(
-                "{at}: the signature does not fit `{}` (new/function: no receiver; getter: `&self`; call: `&self` or `&mut self`; await: `async fn(&self)`)",
+                "{at}: the signature does not fit `{}` (new/function: no receiver; getter: `&self`; call: no receiver, `&self` or `&mut self`; await: `async fn(&self)`)",
                 format!("{kind:?}").to_lowercase()
             ));
         }
@@ -340,7 +348,15 @@ impl Resolver<'_> {
                     "{pat}: a required positional parameter follows one with a default"
                 ));
             }
-            check_input(&pat, &ty)?;
+            if ty == Ty::This {
+                if !by_ref || !matches!(kind, MethodKind::Call | MethodKind::StaticCall) || detach {
+                    return Err(format!(
+                        "{pat}: an own-class input is borrowed as &Self by a synchronous class call"
+                    ));
+                }
+            } else {
+                check_input(&pat, &ty)?;
+            }
             params.push(Param {
                 name: ident.ident.to_string(),
                 ty,

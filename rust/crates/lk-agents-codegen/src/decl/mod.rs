@@ -364,6 +364,8 @@ pub enum MethodKind {
     New,
     /// A synchronous call on `&self` (or `&mut self`: [`Form::MutableClass`]).
     Call,
+    /// A synchronous class call with no receiver.
+    StaticCall,
     /// A module function: no receiver, synchronous.
     Function,
     /// An async module function with no receiver.
