@@ -33,3 +33,34 @@ pub fn hosting(
         spawner,
     ))
 }
+
+/// Execute the one operation planned by the voice protocol core.
+pub fn reply<'a>(
+    port: &'a dyn SessionPort,
+    request: &'a proto::SessionRequest,
+) -> lk_agents_abi::BoxFuture<'a, Result<Option<SessionReply>, lk_agents_abi::errors::HostError>> {
+    Box::pin(async move {
+        let Some(plan) = plan_request(request) else { return Ok(None) };
+        let answer = match plan {
+            RequestPlan::Reply(answer) => answer,
+            RequestPlan::ChatHistory => SessionReply::ChatHistory(port.chat_history().await?),
+            RequestPlan::AgentInfo => SessionReply::AgentInfo(port.agent_info().await?),
+            RequestPlan::RunInput(text) => SessionReply::RunInput(port.run_input(text).await?),
+            RequestPlan::SessionState => SessionReply::SessionState(port.session_state().await?),
+            RequestPlan::RtcStats => SessionReply::RtcStats(port.rtc_stats().await?),
+            RequestPlan::SessionUsage => SessionReply::SessionUsage(port.session_usage().await?),
+            RequestPlan::FrameworkInfo => {
+                let (sdk, version) = port.framework_info();
+                SessionReply::FrameworkInfo(sdk, version)
+            }
+            RequestPlan::UpdateIo(update) => {
+                port.update_io(update).await?;
+                SessionReply::UpdateIo
+            }
+            RequestPlan::FinalizeSimulation(provisional) => {
+                SessionReply::FinalizeSimulation(port.finalize_simulation(provisional).await?)
+            }
+        };
+        Ok(Some(answer))
+    })
+}

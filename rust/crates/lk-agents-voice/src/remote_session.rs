@@ -375,43 +375,40 @@ pub enum SessionReply {
     FinalizeSimulation(VerdictOutcome),
 }
 
-/// One remote request over the supplied session port, before transport encoding.
-/// Empty input is refused before entering the session, so it cannot interrupt the caller.
-pub fn reply<'a>(
-    port: &'a dyn SessionPort,
-    request: &'a proto::SessionRequest,
-) -> lk_agents_abi::BoxFuture<'a, Result<Option<SessionReply>, lk_agents_abi::errors::HostError>> {
-    Box::pin(async move {
-        use proto::session_request::Request;
-        let Some(operation) = &request.request else { return Ok(None) };
-        let reply = match operation {
-            Request::Ping(_) => SessionReply::Pong,
-            Request::GetChatHistory(_) => SessionReply::ChatHistory(port.chat_history().await?),
-            Request::GetAgentInfo(_) => SessionReply::AgentInfo(port.agent_info().await?),
-            Request::RunInput(input) if input.text.is_empty() => {
-                SessionReply::RunInput((None, Some("empty run_input text".to_owned())))
-            }
-            Request::RunInput(input) => SessionReply::RunInput(port.run_input(&input.text).await?),
-            Request::GetSessionState(_) => SessionReply::SessionState(port.session_state().await?),
-            Request::GetRtcStats(_) => SessionReply::RtcStats(port.rtc_stats().await?),
-            Request::GetSessionUsage(_) => SessionReply::SessionUsage(port.session_usage().await?),
-            Request::GetFrameworkInfo(_) => {
-                let (sdk, version) = port.framework_info();
-                SessionReply::FrameworkInfo(sdk, version)
-            }
-            Request::UpdateIo(io) => {
-                port.update_io(io_update(io)).await?;
-                SessionReply::UpdateIo
-            }
-            Request::FinalizeSimulation(input) => SessionReply::FinalizeSimulation(
-                port.finalize_simulation((
-                    input.provisional_success,
-                    input.provisional_reason.clone(),
-                ))
-                .await?,
-            ),
-        };
-        Ok(Some(reply))
+/// One requested port operation, or an answer that needs no session operation.
+pub enum RequestPlan<'a> {
+    Reply(SessionReply),
+    ChatHistory,
+    AgentInfo,
+    RunInput(&'a str),
+    SessionState,
+    RtcStats,
+    SessionUsage,
+    FrameworkInfo,
+    UpdateIo(IoUpdate),
+    FinalizeSimulation(SimulationVerdict),
+}
+
+/// Unknown requests receive no response. Empty input never enters or interrupts the session.
+pub fn plan_request(request: &proto::SessionRequest) -> Option<RequestPlan<'_>> {
+    use proto::session_request::Request;
+    Some(match request.request.as_ref()? {
+        Request::Ping(_) => RequestPlan::Reply(SessionReply::Pong),
+        Request::GetChatHistory(_) => RequestPlan::ChatHistory,
+        Request::GetAgentInfo(_) => RequestPlan::AgentInfo,
+        Request::RunInput(input) if input.text.is_empty() => RequestPlan::Reply(
+            SessionReply::RunInput((None, Some("empty run_input text".to_owned()))),
+        ),
+        Request::RunInput(input) => RequestPlan::RunInput(&input.text),
+        Request::GetSessionState(_) => RequestPlan::SessionState,
+        Request::GetRtcStats(_) => RequestPlan::RtcStats,
+        Request::GetSessionUsage(_) => RequestPlan::SessionUsage,
+        Request::GetFrameworkInfo(_) => RequestPlan::FrameworkInfo,
+        Request::UpdateIo(io) => RequestPlan::UpdateIo(io_update(io)),
+        Request::FinalizeSimulation(input) => RequestPlan::FinalizeSimulation((
+            input.provisional_success,
+            input.provisional_reason.clone(),
+        )),
     })
 }
 
