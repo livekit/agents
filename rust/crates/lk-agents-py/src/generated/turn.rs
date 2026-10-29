@@ -21,7 +21,7 @@ fn _extract_inference_eot_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u3
 /// defaults, shared by every stream it opens, so a stream's cloud-to-local fallback rescales the
 /// table the detector answers from.
 #[pyclass(frozen, name = "InferenceEot", module = "livekit.agents._core")]
-pub struct InferenceEot(::std::sync::Arc<InferenceEotImpl>);
+pub struct InferenceEot(pub(crate) ::std::sync::Arc<InferenceEotImpl>);
 
 #[pymethods]
 impl InferenceEot {
@@ -119,7 +119,7 @@ type EotStreamImpl = <crate::Selected as super::Implementations>::EotStream;
 /// `TurnDetectorStream`: one stream of the user's audio, answering `predict()` at each pause. The
 /// session's own detector when handed to it, which implements its stream operations.
 #[pyclass(frozen, name = "EotStream", module = "livekit.agents._core")]
-pub struct EotStream(::std::sync::Arc<EotStreamImpl>);
+pub struct EotStream(pub(crate) ::std::sync::Arc<EotStreamImpl>);
 
 #[pymethods]
 impl EotStream {
@@ -250,7 +250,7 @@ fn _extract_interruption_detector_update_options_min_interruption_duration(obj: 
 /// `inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
 /// backchannel while the agent speaks. Natively the session's interruption source.
 #[pyclass(frozen, name = "InterruptionDetector", module = "livekit.agents._core")]
-pub struct InterruptionDetector(::std::sync::Arc<InterruptionDetectorImpl>);
+pub struct InterruptionDetector(pub(crate) ::std::sync::Arc<InterruptionDetectorImpl>);
 
 #[pymethods]
 impl InterruptionDetector {

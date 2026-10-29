@@ -15,7 +15,7 @@ type _core_TelemetryPolicyImpl = <crate::Selected as super::Implementations>::Te
 
 /// One destination's content policy: what its snapshot keeps, drops or replaces.
 #[pyclass(frozen, name = "_core_TelemetryPolicy", module = "livekit.agents._core")]
-pub struct _core_TelemetryPolicy(::std::sync::Arc<_core_TelemetryPolicyImpl>);
+pub struct _core_TelemetryPolicy(pub(crate) ::std::sync::Arc<_core_TelemetryPolicyImpl>);
 
 #[pymethods]
 impl _core_TelemetryPolicy {
@@ -132,7 +132,7 @@ type _core_MetricSeriesImpl = <crate::Selected as super::Implementations>::Metri
 /// The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
 /// and series before the host SDK creates a new one.
 #[pyclass(name = "_core_MetricSeries", module = "livekit.agents._core")]
-pub struct _core_MetricSeries(_core_MetricSeriesImpl);
+pub struct _core_MetricSeries(pub(crate) _core_MetricSeriesImpl);
 
 #[pymethods]
 impl _core_MetricSeries {
@@ -211,7 +211,7 @@ fn _extract_llm_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f6
 
 /// `LLMStream`'s metric fold as the host drives it.
 #[pyclass(name = "LlmMetricState", module = "livekit.agents._core")]
-pub struct LlmMetricState(LlmMetricStateImpl);
+pub struct LlmMetricState(pub(crate) LlmMetricStateImpl);
 
 #[pymethods]
 impl LlmMetricState {
@@ -274,7 +274,7 @@ fn _extract_tts_metric_state_finish_host(obj: &Bound<'_, PyAny>) -> PyResult<(f6
 
 /// The TTS streams' metric fold as the host drives it.
 #[pyclass(name = "TtsMetricState", module = "livekit.agents._core")]
-pub struct TtsMetricState(TtsMetricStateImpl);
+pub struct TtsMetricState(pub(crate) TtsMetricStateImpl);
 
 #[pymethods]
 impl TtsMetricState {
@@ -338,7 +338,7 @@ type TaggerImpl = <crate::Selected as super::Implementations>::Tagger;
 /// ctx.tagger.remove("voicemail:true")
 /// ```
 #[pyclass(name = "Tagger", module = "livekit.agents._core")]
-pub struct Tagger(TaggerImpl);
+pub struct Tagger(pub(crate) TaggerImpl);
 
 #[pymethods]
 impl Tagger {
@@ -476,7 +476,7 @@ fn _extract_upload_gate_is_disabled_response_body(obj: &Bound<'_, PyAny>) -> PyR
 
 /// Per-session upload gate: the "data recording is disabled" latch, one transition, one warning.
 #[pyclass(name = "UploadGate", module = "livekit.agents._core")]
-pub struct UploadGate(UploadGateImpl);
+pub struct UploadGate(pub(crate) UploadGateImpl);
 
 #[pymethods]
 impl UploadGate {
@@ -566,7 +566,7 @@ fn _extract_session_report_projection_event_record_timestamp(obj: &Bound<'_, PyA
 }
 
 #[pyclass(frozen, name = "_core_SessionReportProjection", module = "livekit.agents._core")]
-pub struct _core_SessionReportProjection(::std::sync::Arc<_core_SessionReportProjectionImpl>);
+pub struct _core_SessionReportProjection(pub(crate) ::std::sync::Arc<_core_SessionReportProjectionImpl>);
 
 #[pymethods]
 impl _core_SessionReportProjection {
@@ -659,7 +659,7 @@ fn _extract_event_retention_expire_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u6
 /// Bounded retention of a session report's host event snapshots. The native policy retains only
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
 #[pyclass(name = "_core_EventRetention", module = "livekit.agents._core")]
-pub struct _core_EventRetention(_core_EventRetentionImpl);
+pub struct _core_EventRetention(pub(crate) _core_EventRetentionImpl);
 
 #[pymethods]
 impl _core_EventRetention {
@@ -767,7 +767,7 @@ fn _extract_session_report_upload_upload_start_time_millis(obj: &Bound<'_, PyAny
 
 /// Credentials for the session recording endpoint and host OTLP exporters.
 #[pyclass(frozen, name = "_core_SessionReportUpload", module = "livekit.agents._core")]
-pub struct _core_SessionReportUpload(::std::sync::Arc<_core_SessionReportUploadImpl>);
+pub struct _core_SessionReportUpload(pub(crate) ::std::sync::Arc<_core_SessionReportUploadImpl>);
 
 #[pymethods]
 impl _core_SessionReportUpload {
@@ -815,7 +815,7 @@ fn _extract_prepared_transcript_check_input_item_bytes(obj: &Bound<'_, PyAny>) -
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
 /// append it off their event loop; no whole-history extraction crosses a binding call.
 #[pyclass(frozen, name = "_core_PreparedTranscript", module = "livekit.agents._core")]
-pub struct _core_PreparedTranscript(::std::sync::Arc<_core_PreparedTranscriptImpl>);
+pub struct _core_PreparedTranscript(pub(crate) ::std::sync::Arc<_core_PreparedTranscriptImpl>);
 
 #[pymethods]
 impl _core_PreparedTranscript {

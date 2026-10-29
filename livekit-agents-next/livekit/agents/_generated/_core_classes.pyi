@@ -407,17 +407,6 @@ class ChatItem:
     def fields(self) -> dict[str, Any]: ...
 
 
-class PlaybackTracker:
-    """A host sink's side (`io.AudioOutput._core_tracker()`): it reports its playback events here, in
-    its own `time.time()` stamps and float seconds.
-    """
-
-    def __init__(self) -> None: ...
-    def note_flush(self) -> None: ...
-    def reset(self) -> None: ...
-    async def wait_for_playout(self) -> tuple[float, bool, str | None]: ...
-
-
 class TrackPublishOptions:
     """The host's view: what `_core_rtc.LocalParticipant._core_publish_audio_track` builds its
     `rtc.AudioSource`, `LocalAudioTrack` and `rtc.TrackPublishOptions` from.

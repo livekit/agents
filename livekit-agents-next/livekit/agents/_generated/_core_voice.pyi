@@ -21,15 +21,7 @@ from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoIn
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import AudioFrame
 
-from .._core import (
-    ChatContent,
-    ChatItem,
-    PlaybackInfo,
-    PlaybackTracker,
-    RoomEventBus,
-    SessionRecorder,
-    VoiceAgent,
-)
+from .._core import ChatContent, ChatItem, PlaybackInfo, RoomEventBus, SessionRecorder, VoiceAgent
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
 from .amd import AMDPredictionEvent, AmdConstants
@@ -169,6 +161,19 @@ class BackgroundAudioPlayer:
     @property
     def closed(self) -> bool: ...
     async def aclose(self) -> None: ...
+
+class PlaybackTracker:
+    """`_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+    shared with the session that reads it. Its state machine stays here until the audio-output
+    legs are redesigned (MORNING Q85).
+    """
+    def __init__(self) -> None: ...
+    def note_flush(self) -> None: ...
+    def reset(self) -> None: ...
+    async def wait_for_playout(self) -> tuple[float, bool, str | None]:
+        """`AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
+        synchronized_transcript)`.
+        """
 
 def _core_playback_begin(tracker: PlaybackTracker, segment: PlaybackSegment) -> bool: ...
 

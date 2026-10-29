@@ -215,14 +215,8 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         _ => ("frozen, ", format!("::std::sync::Arc<{name}Impl>")),
     };
     // Associated class factories can construct a wrapper from another generated family.
-    let visibility = if decls.classes.iter().any(|owner| {
-        owner.family != c.family && owner.instances.iter().any(|(_, target)| target == name)
-    }) || native_arguments(decls).values().flatten().any(|w| w.name == c.name)
-    {
-        "pub(crate) "
-    } else {
-        ""
-    };
+    // Held fields are crate-wide: another family wraps or reads instances of this class.
+    let visibility = "pub(crate) ";
     let host_module = &c.host_module;
     let subclass = if c.subclass { "subclass, " } else { "" };
     s.push_str(&format!(
@@ -799,9 +793,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Proxy { declared: Some((family, name)), .. } => {
             format!("crate::generated::{family}::{name}Proxy::from_host(&{v})")
         }
-        Ty::Shared { rust, .. } => {
-            format!("<{rust} as ::lk_agents_abi::python::ArcClass>::shared(&{v})")
-        }
+        Ty::Shared { class, family, .. } => format!(
+            "{v}.cast::<crate::generated::{family}::{class}>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)"
+        ),
         // The host's async iterable, pulled in a copy of the context the call was made in.
         Ty::HostSource(item) => format!(
             "crate::host::capture_context({v}.py()).and_then(|context| crate::host::stream::HostStream::open({v}.py(), &{v}, &context, |o| Ok({}?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as {})",
@@ -903,9 +897,11 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Handle { class, .. } => {
             (format!("crate::handles::{class}"), format!("crate::handles::{class}::from({{}})"))
         }
-        Ty::Shared { rust, .. } => (
+        Ty::Shared { class, family, .. } => (
             "Bound<'py, PyAny>".into(),
-            format!("<{rust} as ::lk_agents_abi::python::ArcClass>::wrap({{py}}, {{}})?"),
+            format!(
+                "::pyo3::Bound::new({{py}}, crate::generated::{family}::{class}({{}}))?.into_any()"
+            ),
         ),
         Ty::Duplex { class, .. } => (
             class.clone(),

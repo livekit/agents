@@ -689,8 +689,8 @@ impl Resolver<'_> {
                     (["std", "sync", "Arc"], [Shape::Named { found: Found::Item { module, item }, args }])
                         if args.is_empty() && self.arc_object(*module, *item, at)?.is_some() =>
                     {
-                        let class = self.arc_object(*module, *item, at)?.expect("checked");
-                        Ty::Shared { rust: self.krate.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?, class }
+                        let (class, family) = self.arc_object(*module, *item, at)?.expect("checked");
+                        Ty::Shared { rust: self.krate.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?, class, family }
                     }
                     (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
                         if args.is_empty() && !self.is_stream_source(*module, *item) =>
@@ -719,22 +719,28 @@ impl Resolver<'_> {
         }
     }
 
-    /// The host class of an item declared `#[host(object(cell = "arc"))]`, if it is one.
-    fn arc_object(&self, module: usize, item: usize, at: &str) -> Result<Option<String>, String> {
+    /// `(class, family)` of the declared class an ABI type implements in its own module, if any.
+    fn arc_object(
+        &self,
+        module: usize,
+        item: usize,
+        at: &str,
+    ) -> Result<Option<(String, String)>, String> {
         let k = self.krate;
         let ident = k.item_name(module, item);
         for i in &k.modules[module].items {
             let syn::Item::Impl(imp) = i else { continue };
-            if imp.trait_.is_some()
-                || !matches!(&*imp.self_ty, syn::Type::Path(p) if p.path.is_ident(&ident))
-            {
+            let Some((_, path, _)) = &imp.trait_ else { continue };
+            if !matches!(&*imp.self_ty, syn::Type::Path(p) if p.path.is_ident(&ident)) {
                 continue;
             }
-            let entries = voc::read(&imp.attrs).map_err(|e| format!("{at}: {e}"))?;
-            if let Some(object) = voc::find(&entries, "object")
-                && voc::text(at, &object.nested, "cell")?.as_deref() == Some("arc")
-            {
-                return Ok(Some(voc::text(at, &object.nested, "name")?.unwrap_or(ident)));
+            let Ok(Found::Item { module: m, item: t }) = k.resolve(module, path) else { continue };
+            let syn::Item::Trait(tr) = &k.modules[m].items[t] else { continue };
+            let entries = voc::read(&tr.attrs).map_err(|e| format!("{at}: {e}"))?;
+            if let Some(class) = voc::find(&entries, "class") {
+                let name = voc::text(at, &class.nested, "name")?.unwrap_or(tr.ident.to_string());
+                let family = k.modules[m].path.first().cloned().unwrap_or_default();
+                return Ok(Some((name, family)));
             }
         }
         Ok(None)
@@ -1094,9 +1100,7 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         // Handed back as the host object it was taken from (`check_handed_back`); a native
         // implementation as the declared class it is.
         Ty::Proxy { declared: Some(_), boxed: false, .. } | Ty::Native { .. } => Ok(()),
-        Ty::Proxy { .. } => {
-            Err(format!("{at}: a host proxy is not returned to the host"))
-        }
+        Ty::Proxy { .. } => Err(format!("{at}: a host proxy is not returned to the host")),
         Ty::HostSource(_) | Ty::HostDuplex { .. } => {
             Err(format!("{at}: a host stream is not handed back to the host"))
         }

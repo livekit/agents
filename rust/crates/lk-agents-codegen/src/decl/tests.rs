@@ -396,7 +396,7 @@ fn mutable_classes_and_functions_are_their_own_forms() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
         llm.contains("#[pyclass(name = \"Parser\"")
-            && llm.contains("pub struct Parser(ParserImpl);"),
+            && llm.contains("pub struct Parser(pub(crate) ParserImpl);"),
         "{llm}"
     );
     assert!(
@@ -1018,7 +1018,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
 #[test]
 fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
     let decls = read(
-        "pub struct Tracker;\n#[crate::host(object(cell = \"arc\"))]\nimpl Tracker {}\n\
+        "pub struct Tracker;\n#[crate::host(class(name = \"Tracker\"))]\npub trait Tracked: Sized {}\nimpl Tracked for Tracker {}\n\
          #[crate::host(proxy(host = \"livekit.agents.io.Sink\", view = \"livekit.agents.view._Sink\"))]\n\
          pub trait Sink: Send + Sync {\n\
              #[host(read_once, name = \"_core_tracker\")] fn tracker(&self) -> &std::sync::Arc<Tracker>;\n\
@@ -1030,7 +1030,7 @@ fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
         "let view = crate::host::construct(&obj.py().import(\"livekit.agents.view\")?.getattr(\"_Sink\")?, (obj,), None)?;\n        let obj = &view;",
-        "<::lk_agents_abi::llm::class::Tracker as ::lk_agents_abi::python::ArcClass>::shared(&v)",
+        "v.cast::<crate::generated::llm::Tracker>().map(|this| ::std::sync::Arc::clone(&this.get().0))",
         "fn tracker(&self) -> &::std::sync::Arc<::lk_agents_abi::llm::class::Tracker> {",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");

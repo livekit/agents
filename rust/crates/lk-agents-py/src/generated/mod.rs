@@ -135,6 +135,7 @@ pub trait Implementations: 'static {
     type AvatarRunner: ::lk_agents_abi::voice::avatar::AvatarRunner;
     type PlayState: ::lk_agents_abi::voice::background_audio::PlayState;
     type BackgroundAudioPlayer: ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer<State = Self::PlayState>;
+    type Playback: ::lk_agents_abi::voice::io::Playback;
     type PlaybackReports: ::lk_agents_abi::voice::io::PlaybackReports;
     type AgentNodes: ::lk_agents_abi::voice::nodes::AgentNodes;
     type NodeCalls: ::lk_agents_abi::voice::nodes::NodeCalls;
@@ -359,6 +360,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::AvatarRunner>()?;
     m.add_class::<voice::PlayState>()?;
     m.add_class::<voice::BackgroundAudioPlayer>()?;
+    m.add_class::<voice::PlaybackTracker>()?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_begin, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_current_segment, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_playback_note_capture, m)?)?;

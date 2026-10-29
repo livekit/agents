@@ -527,10 +527,12 @@ pub enum Ty {
         class: String,
         family: String,
     },
-    /// `Arc<T>` of an `object(cell = "arc")` class: the `_core` object itself, shared both ways.
+    /// `Arc<T>` of an ABI type implementing a declared class: the `_core` object itself, shared
+    /// both ways (`<family>::<class>` holds the `Arc`).
     Shared {
         rust: String,
         class: String,
+        family: String,
     },
     /// `Self::<assoc>` declared `handle(class = "X")`: an implementation's own object handed to
     /// the host as the registration shell's class `crate::handles::X` (`From` the implementation's

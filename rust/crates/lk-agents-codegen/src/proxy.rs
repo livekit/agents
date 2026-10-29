@@ -391,8 +391,8 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Instance { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));
         }
-        Ty::Shared { rust, .. } => {
-            format!("<{rust} as ::lk_agents_abi::python::ArcClass>::wrap(py, {v})?")
+        Ty::Shared { class, family, .. } => {
+            format!("::pyo3::Bound::new(py, crate::generated::{family}::{class}({v}))?.into_any()")
         }
         // Seconds, as the host's timeouts and delays are.
         Ty::Duration => {

@@ -89,7 +89,7 @@ type MarkupImpl = <crate::Selected as super::Implementations>::MarkupClass;
 ///
 /// Plugins opt in by overriding `_provider_key`.
 #[pyclass(frozen, name = "Markup", module = "livekit.agents._core")]
-pub struct Markup(::std::sync::Arc<MarkupImpl>);
+pub struct Markup(pub(crate) ::std::sync::Arc<MarkupImpl>);
 
 #[pymethods]
 impl Markup {
@@ -134,7 +134,7 @@ type TranscriptMarkupStripperImpl = <crate::Selected as super::Implementations>:
 
 /// Stateful, provider-agnostic markup stripper for one transcript segment.
 #[pyclass(name = "TranscriptMarkupStripper", module = "livekit.agents._core")]
-pub struct TranscriptMarkupStripper(TranscriptMarkupStripperImpl);
+pub struct TranscriptMarkupStripper(pub(crate) TranscriptMarkupStripperImpl);
 
 #[pymethods]
 impl TranscriptMarkupStripper {
@@ -204,7 +204,7 @@ fn _extract_sentence_pacer_poll_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
 /// Paces a synthesis's sentences: the first at once, the rest in batches once the audio already
 /// synthesized is nearly played.
 #[pyclass(name = "SentencePacer", module = "livekit.agents._core")]
-pub struct SentencePacer(SentencePacerImpl);
+pub struct SentencePacer(pub(crate) SentencePacerImpl);
 
 #[pymethods]
 impl SentencePacer {

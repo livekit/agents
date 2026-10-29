@@ -40,7 +40,7 @@ fn _extract_storage_get_thread_items_limit(obj: &Bound<'_, PyAny>) -> PyResult<:
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
 #[pyclass(frozen, name = "Storage", module = "livekit.agents._core")]
-pub struct Storage(::std::sync::Arc<StorageImpl>);
+pub struct Storage(pub(crate) ::std::sync::Arc<StorageImpl>);
 
 #[pymethods]
 impl Storage {
@@ -236,7 +236,7 @@ fn _extract_context_activation_save_revision(obj: &Bound<'_, PyAny>) -> PyResult
 
 /// Activation state and revision/schema decisions. Application type validation stays in the host.
 #[pyclass(frozen, name = "_core_ContextActivation", module = "livekit.agents._core")]
-pub struct _core_ContextActivation(::std::sync::Arc<_core_ContextActivationImpl>);
+pub struct _core_ContextActivation(pub(crate) ::std::sync::Arc<_core_ContextActivationImpl>);
 
 #[pymethods]
 impl _core_ContextActivation {
@@ -326,7 +326,7 @@ type _core_AppTransactionImpl = <crate::Selected as super::Implementations>::App
 /// applied atomically when the transaction ends, so a read after a write in the same
 /// transaction is refused.
 #[pyclass(frozen, name = "_core_AppTransaction", module = "livekit.agents._core")]
-pub struct _core_AppTransaction(::std::sync::Arc<_core_AppTransactionImpl>);
+pub struct _core_AppTransaction(pub(crate) ::std::sync::Arc<_core_AppTransactionImpl>);
 
 #[pymethods]
 impl _core_AppTransaction {
@@ -380,7 +380,7 @@ type _core_VoiceStoreImpl = <crate::Selected as super::Implementations>::VoiceSt
 
 /// The stable context store and initial snapshot belonging to one live call's lane.
 #[pyclass(frozen, name = "_core_VoiceStore", module = "livekit.agents._core")]
-pub struct _core_VoiceStore(::std::sync::Arc<_core_VoiceStoreImpl>);
+pub struct _core_VoiceStore(pub(crate) ::std::sync::Arc<_core_VoiceStoreImpl>);
 
 #[pymethods]
 impl _core_VoiceStore {

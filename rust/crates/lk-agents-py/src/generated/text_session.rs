@@ -22,7 +22,7 @@ fn _extract_text_session_runner_progress_operation(obj: &Bound<'_, PyAny>) -> Py
 }
 
 #[pyclass(frozen, name = "TextSessionRunner", module = "livekit.agents._core")]
-pub struct TextSessionRunner(::std::sync::Arc<TextSessionRunnerImpl>);
+pub struct TextSessionRunner(pub(crate) ::std::sync::Arc<TextSessionRunnerImpl>);
 
 #[pymethods]
 impl TextSessionRunner {

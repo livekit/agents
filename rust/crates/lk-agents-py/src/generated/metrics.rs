@@ -48,7 +48,7 @@ type ModelUsageCollectorImpl = <crate::Selected as super::Implementations>::Usag
 
 /// `metrics.ModelUsageCollector` -- the live per-model rollup.
 #[pyclass(name = "ModelUsageCollector", module = "livekit.agents._core")]
-pub struct ModelUsageCollector(ModelUsageCollectorImpl);
+pub struct ModelUsageCollector(pub(crate) ModelUsageCollectorImpl);
 
 #[pymethods]
 impl ModelUsageCollector {

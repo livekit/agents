@@ -22,7 +22,7 @@ fn _extract_credentials_thread_grant_token_ttl_seconds(obj: &Bound<'_, PyAny>) -
 }
 
 #[pyclass(frozen, name = "_core_Credentials", module = "livekit.agents._core")]
-pub struct _core_Credentials(::std::sync::Arc<_core_CredentialsImpl>);
+pub struct _core_Credentials(pub(crate) ::std::sync::Arc<_core_CredentialsImpl>);
 
 #[pymethods]
 impl _core_Credentials {
@@ -126,7 +126,7 @@ pub fn _core_a2a_message_data<'py>(py: Python<'py>, message: Bound<'_, PyAny>) -
 type ReplyImpl = <crate::Selected as super::Implementations>::Reply;
 
 #[pyclass(frozen, name = "Reply", module = "livekit.agents._core")]
-pub struct Reply(::std::sync::Arc<ReplyImpl>);
+pub struct Reply(pub(crate) ::std::sync::Arc<ReplyImpl>);
 
 #[pymethods]
 impl Reply {
@@ -174,7 +174,7 @@ impl Reply {
 type AgentClientImpl = <crate::Selected as super::Implementations>::AgentClient;
 
 #[pyclass(frozen, name = "AgentClient", module = "livekit.agents._core")]
-pub struct AgentClient(::std::sync::Arc<AgentClientImpl>);
+pub struct AgentClient(pub(crate) ::std::sync::Arc<AgentClientImpl>);
 
 #[pymethods]
 impl AgentClient {
@@ -262,7 +262,7 @@ fn _extract_a2_a_door_dispatch_body_size(obj: &Bound<'_, PyAny>) -> PyResult<::s
 }
 
 #[pyclass(frozen, name = "_core_A2ADoor", module = "livekit.agents._core")]
-pub struct _core_A2ADoor(::std::sync::Arc<_core_A2ADoorImpl>);
+pub struct _core_A2ADoor(pub(crate) ::std::sync::Arc<_core_A2ADoorImpl>);
 
 #[pymethods]
 impl _core_A2ADoor {
@@ -314,7 +314,7 @@ impl _core_A2ADoor {
 type _core_A2AResponseImpl = <crate::Selected as super::Implementations>::A2AResponse;
 
 #[pyclass(frozen, name = "_core_A2AResponse", module = "livekit.agents._core")]
-pub struct _core_A2AResponse(::std::sync::Arc<_core_A2AResponseImpl>);
+pub struct _core_A2AResponse(pub(crate) ::std::sync::Arc<_core_A2AResponseImpl>);
 
 #[pymethods]
 impl _core_A2AResponse {
@@ -350,7 +350,7 @@ impl _core_A2AResponse {
 type _core_RemoteInteractionImpl = <crate::Selected as super::Implementations>::RemoteInteraction;
 
 #[pyclass(frozen, name = "_core_RemoteInteraction", module = "livekit.agents._core")]
-pub struct _core_RemoteInteraction(::std::sync::Arc<_core_RemoteInteractionImpl>);
+pub struct _core_RemoteInteraction(pub(crate) ::std::sync::Arc<_core_RemoteInteractionImpl>);
 
 #[pymethods]
 impl _core_RemoteInteraction {

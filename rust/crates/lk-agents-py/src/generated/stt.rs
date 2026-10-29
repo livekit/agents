@@ -31,7 +31,7 @@ fn _extract_fallback_stt_stream_start_time_offset(obj: &Bound<'_, PyAny>) -> PyR
 
 /// `stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[pyclass(frozen, name = "FallbackStt", module = "livekit.agents._core")]
-pub struct FallbackStt(::std::sync::Arc<FallbackSttImpl>);
+pub struct FallbackStt(pub(crate) ::std::sync::Arc<FallbackSttImpl>);
 
 #[pymethods]
 impl FallbackStt {
@@ -164,7 +164,7 @@ fn _extract_inference_stt_stream_start_time_offset(obj: &Bound<'_, PyAny>) -> Py
 /// every view (`identified`); each view's connections carry its own job's identification. As the
 /// session's STT it implements the keyterm and conversation hooks.
 #[pyclass(frozen, name = "InferenceStt", module = "livekit.agents._core")]
-pub struct InferenceStt(::std::sync::Arc<InferenceSttImpl>);
+pub struct InferenceStt(pub(crate) ::std::sync::Arc<InferenceSttImpl>);
 
 #[pymethods]
 impl InferenceStt {
@@ -306,7 +306,7 @@ fn _extract_stt_stream_adapter_stream_start_time_offset(obj: &Bound<'_, PyAny>) 
 
 /// `stt.StreamAdapter`'s engine as the host builds it; the public class stays Python.
 #[pyclass(frozen, name = "SttStreamAdapter", module = "livekit.agents._core")]
-pub struct SttStreamAdapter(::std::sync::Arc<SttStreamAdapterImpl>);
+pub struct SttStreamAdapter(pub(crate) ::std::sync::Arc<SttStreamAdapterImpl>);
 
 #[pymethods]
 impl SttStreamAdapter {

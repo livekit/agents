@@ -138,10 +138,8 @@ impl Default for PlaybackTracker {
 
 /// A host sink's side (`io.AudioOutput._core_tracker()`): it reports its playback events here, in
 /// its own `time.time()` stamps and float seconds.
-#[crate::host(object(cell = "arc"))]
 impl PlaybackTracker {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    #[host(new)]
     pub fn new() -> Self {
         PlaybackTracker {
             state: Mutex::new(TrackerState {
@@ -302,7 +300,6 @@ impl PlaybackTracker {
     }
 
     /// `AudioOutput.flush`'s `super()` half: the segment is closed; its playout is still owed.
-    #[host(method)]
     pub fn note_flush(&self) {
         let mut state = self.state.lock().unwrap();
         state.capturing = false;
@@ -312,7 +309,6 @@ impl PlaybackTracker {
     /// `_reset_playback_count`, plus: a parked `wait_for_playout` is released with
     /// `Finished { interrupted: true }` at what the open segment played (never the previous
     /// segment's finish), rather than left waiting forever.
-    #[host(method)]
     pub fn reset(&self) {
         let mut s = self.state.lock().unwrap();
         let played = s.open_progress();
@@ -396,14 +392,6 @@ impl PlaybackTracker {
         true
     }
 
-    /// `AudioOutput.wait_for_playout()`: [`wait_for_playout`](Self::wait_for_playout)'s event as
-    /// `(playback_position, interrupted, synchronized_transcript)`.
-    #[host(method(name = "wait_for_playout"))]
-    pub async fn wait_for_playout_for_host(&self) -> (f64, bool, Option<String>) {
-        let ev = self.wait_for_playout().await;
-        (ev.playback_position.as_secs_f64(), ev.interrupted, ev.synchronized_transcript)
-    }
-
     /// Wait for every segment captured so far; returns the last event. The target is latched at
     /// entry, as the reference does, or this never returns while the agent talks.
     pub async fn wait_for_playout(&self) -> PlaybackFinished {
@@ -425,6 +413,39 @@ impl PlaybackTracker {
             Poll::Pending
         })
         .await
+    }
+}
+
+/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+/// shared with the session that reads it. Its state machine stays here until the audio-output
+/// legs are redesigned (MORNING Q85).
+#[crate::host(class(name = "PlaybackTracker"))]
+pub trait Playback: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
+    #[host(call)]
+    fn note_flush(&self);
+    #[host(call)]
+    fn reset(&self);
+    /// `AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
+    /// synchronized_transcript)`.
+    #[host(await, name = "wait_for_playout")]
+    async fn wait_for_played(&self) -> (f64, bool, Option<String>);
+}
+
+impl Playback for PlaybackTracker {
+    fn new() -> Self {
+        PlaybackTracker::new()
+    }
+    fn note_flush(&self) {
+        PlaybackTracker::note_flush(self)
+    }
+    fn reset(&self) {
+        PlaybackTracker::reset(self)
+    }
+    async fn wait_for_played(&self) -> (f64, bool, Option<String>) {
+        let ev = self.wait_for_playout().await;
+        (ev.playback_position.as_secs_f64(), ev.interrupted, ev.synchronized_transcript)
     }
 }
 

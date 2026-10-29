@@ -36,7 +36,7 @@ fn _extract_audio_byte_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::s
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
 /// the target) to cut TTS time-to-first-audio.
 #[pyclass(name = "AudioByteStream", module = "livekit.agents.utils.audio")]
-pub struct AudioByteStream(AudioByteStreamImpl);
+pub struct AudioByteStream(pub(crate) AudioByteStreamImpl);
 
 #[pymethods]
 impl AudioByteStream {
@@ -131,7 +131,7 @@ fn _extract_connection_pool_state_closed_id(obj: &Bound<'_, PyAny>) -> PyResult<
 }
 
 #[pyclass(name = "ConnectionPoolState", module = "livekit.agents._core")]
-pub struct ConnectionPoolState(ConnectionPoolStateImpl);
+pub struct ConnectionPoolState(pub(crate) ConnectionPoolStateImpl);
 
 #[pymethods]
 impl ConnectionPoolState {
@@ -259,7 +259,7 @@ fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64
 }
 
 #[pyclass(subclass, name = "ExpFilter", module = "livekit.agents.utils.exp_filter")]
-pub struct ExpFilter(ExpFilterImpl);
+pub struct ExpFilter(pub(crate) ExpFilterImpl);
 
 #[pymethods]
 impl ExpFilter {
@@ -307,7 +307,7 @@ fn _extract_moving_average_add_sample_sample(obj: &Bound<'_, PyAny>) -> PyResult
 }
 
 #[pyclass(subclass, name = "MovingAverage", module = "livekit.agents.utils.moving_average")]
-pub struct MovingAverage(MovingAverageImpl);
+pub struct MovingAverage(pub(crate) MovingAverageImpl);
 
 #[pymethods]
 impl MovingAverage {

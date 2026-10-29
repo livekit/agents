@@ -68,7 +68,7 @@ fn _extract_data_stream_audio_output_new_clear_buffer_timeout(obj: &Bound<'_, Py
 
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
 #[pyclass(frozen, name = "DataStreamAudioOutput", module = "livekit.agents._core")]
-pub struct DataStreamAudioOutput(::std::sync::Arc<DataStreamAudioOutputImpl>);
+pub struct DataStreamAudioOutput(pub(crate) ::std::sync::Arc<DataStreamAudioOutputImpl>);
 
 #[pymethods]
 impl DataStreamAudioOutput {
@@ -136,7 +136,7 @@ fn _extract_data_stream_audio_receiver_notify_playback_finished_playback_positio
 
 /// The worker's receiver keeps stream identity with each delivered frame and playback report.
 #[pyclass(frozen, name = "DataStreamAudioReceiver", module = "livekit.agents._core")]
-pub struct DataStreamAudioReceiver(::std::sync::Arc<DataStreamAudioReceiverImpl>);
+pub struct DataStreamAudioReceiver(pub(crate) ::std::sync::Arc<DataStreamAudioReceiverImpl>);
 
 #[pymethods]
 impl DataStreamAudioReceiver {
@@ -215,7 +215,7 @@ fn _extract_avatar_runner_clear_buffer_epoch(obj: &Bound<'_, PyAny>) -> PyResult
 
 /// The avatar worker's native queue owner. Its decisions remain in RunnerCore.
 #[pyclass(frozen, name = "AvatarRunner", module = "livekit.agents._core")]
-pub struct AvatarRunner(::std::sync::Arc<AvatarRunnerImpl>);
+pub struct AvatarRunner(pub(crate) ::std::sync::Arc<AvatarRunnerImpl>);
 
 #[pymethods]
 impl AvatarRunner {
@@ -279,7 +279,7 @@ fn _extract_play_state_new_fade_out(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
 
 /// A sound's monotone stop and completion handle.
 #[pyclass(frozen, name = "PlayState", module = "livekit.agents._core")]
-pub struct PlayState(::std::sync::Arc<PlayStateImpl>);
+pub struct PlayState(pub(crate) ::std::sync::Arc<PlayStateImpl>);
 
 #[pymethods]
 impl PlayState {
@@ -363,7 +363,7 @@ fn _extract_background_audio_player_on_agent_state_draw(obj: &Bound<'_, PyAny>) 
 
 /// Runtime-owned mixer and published background track.
 #[pyclass(frozen, name = "BackgroundAudioPlayer", module = "livekit.agents._core")]
-pub struct BackgroundAudioPlayer(::std::sync::Arc<BackgroundAudioPlayerImpl>);
+pub struct BackgroundAudioPlayer(pub(crate) ::std::sync::Arc<BackgroundAudioPlayerImpl>);
 
 #[pymethods]
 impl BackgroundAudioPlayer {
@@ -424,6 +424,50 @@ impl BackgroundAudioPlayer {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
+type PlaybackTrackerImpl = <crate::Selected as super::Implementations>::Playback;
+
+/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+/// shared with the session that reads it. Its state machine stays here until the audio-output
+/// legs are redesigned (MORNING Q85).
+#[pyclass(frozen, name = "PlaybackTracker", module = "livekit.agents._core")]
+pub struct PlaybackTracker(pub(crate) ::std::sync::Arc<PlaybackTrackerImpl>);
+
+#[pymethods]
+impl PlaybackTracker {
+    #[new]
+    fn new() -> PyResult<PlaybackTracker> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <PlaybackTrackerImpl as ::lk_agents_abi::voice::io::Playback>::new();
+        Ok(PlaybackTracker(::std::sync::Arc::new(out)))
+    }
+
+    fn note_flush(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <PlaybackTrackerImpl as ::lk_agents_abi::voice::io::Playback>::note_flush(&self.0);
+        Ok(())
+    }
+
+    fn reset(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <PlaybackTrackerImpl as ::lk_agents_abi::voice::io::Playback>::reset(&self.0);
+        Ok(())
+    }
+
+    /// `AudioOutput.wait_for_playout()`: the last event as `(playback_position, interrupted,
+    /// synchronized_transcript)`.
+    #[pyo3(name = "wait_for_playout")]
+    fn wait_for_played<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <PlaybackTrackerImpl as ::lk_agents_abi::voice::io::Playback>::wait_for_played(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
 type PlaybackReportsImpl = <crate::Selected as super::Implementations>::PlaybackReports;
 
 fn _extract_playback_reports_started_created_at(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
@@ -450,7 +494,7 @@ fn _extract_playback_reports_finished_playback_position(obj: &Bound<'_, PyAny>) 
 #[pyo3(signature = (tracker, segment))]
 pub fn _core_playback_begin(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>) -> PyResult<bool> {
     ::lk_agents_abi::python::check_pid()?;
-    let tracker = <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&tracker)?;
+    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::begin(tracker, segment);
     Ok(out)
@@ -460,7 +504,7 @@ pub fn _core_playback_begin(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>
 #[pyo3(signature = (tracker))]
 pub fn _core_playback_current_segment<'py>(py: Python<'py>, tracker: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     ::lk_agents_abi::python::check_pid()?;
-    let tracker = <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&tracker)?;
+    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
     let out = <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::current_segment(tracker);
     Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::io_events::playback_segment_to_py(py, value)?)).transpose()?)
 }
@@ -469,7 +513,7 @@ pub fn _core_playback_current_segment<'py>(py: Python<'py>, tracker: Bound<'_, P
 #[pyo3(signature = (tracker))]
 pub fn _core_playback_note_capture<'py>(py: Python<'py>, tracker: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
-    let tracker = <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&tracker)?;
+    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
     let out = <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::note_capture(tracker);
     Ok(crate::generated::records::io_events::playback_segment_to_py(py, out)?)
 }
@@ -478,7 +522,7 @@ pub fn _core_playback_note_capture<'py>(py: Python<'py>, tracker: Bound<'_, PyAn
 #[pyo3(signature = (tracker, segment, created_at))]
 pub fn _core_playback_started(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_playback_reports_started_created_at)] created_at: f64) -> PyResult<bool> {
     ::lk_agents_abi::python::check_pid()?;
-    let tracker = <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&tracker)?;
+    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::started(tracker, segment, created_at);
     Ok(out)
@@ -488,7 +532,7 @@ pub fn _core_playback_started(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAn
 #[pyo3(signature = (tracker, segment, started_at, offset, duration))]
 pub fn _core_playback_progressed(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_playback_reports_progressed_started_at)] started_at: f64, #[pyo3(from_py_with = _extract_playback_reports_progressed_offset)] offset: f64, #[pyo3(from_py_with = _extract_playback_reports_progressed_duration)] duration: f64) -> PyResult<bool> {
     ::lk_agents_abi::python::check_pid()?;
-    let tracker = <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&tracker)?;
+    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::progressed(tracker, segment, started_at, offset, duration).map_err(|e: ::lk_agents_abi::voice::io::InvalidPlaybackTime| <::lk_agents_abi::voice::io::InvalidPlaybackTime as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
@@ -498,7 +542,7 @@ pub fn _core_playback_progressed(tracker: Bound<'_, PyAny>, segment: Bound<'_, P
 #[pyo3(signature = (tracker, segment, playback_position, interrupted, synchronized_transcript))]
 pub fn _core_playback_finished(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_playback_reports_finished_playback_position)] playback_position: f64, interrupted: bool, synchronized_transcript: ::std::option::Option<::std::string::String>) -> PyResult<bool> {
     ::lk_agents_abi::python::check_pid()?;
-    let tracker = <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&tracker)?;
+    let tracker = tracker.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?;
     let segment = crate::generated::records::io_events::playback_segment_from_py(&segment)?;
     let out = <PlaybackReportsImpl as ::lk_agents_abi::voice::io::PlaybackReports>::finished(tracker, segment, playback_position, interrupted, synchronized_transcript).map_err(|e: ::lk_agents_abi::voice::io::InvalidPlaybackTime| <::lk_agents_abi::voice::io::InvalidPlaybackTime as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
@@ -510,7 +554,7 @@ type AgentNodesImpl = <crate::Selected as super::Implementations>::AgentNodes;
 /// `_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
 /// the agent's binding.
 #[pyclass(frozen, name = "AgentNodes", module = "livekit.agents._core")]
-pub struct AgentNodes(::std::sync::Arc<AgentNodesImpl>);
+pub struct AgentNodes(pub(crate) ::std::sync::Arc<AgentNodesImpl>);
 
 #[pymethods]
 impl AgentNodes {
@@ -564,7 +608,7 @@ type TtsNodeFramesImpl = <crate::Selected as super::Implementations>::TtsNodeFra
 
 /// The default `tts_node`'s frames.
 #[pyclass(frozen, name = "TtsNodeFrames", module = "livekit.agents._core")]
-pub struct TtsNodeFrames(::std::sync::Arc<TtsNodeFramesImpl>);
+pub struct TtsNodeFrames(pub(crate) ::std::sync::Arc<TtsNodeFramesImpl>);
 
 #[pymethods]
 impl TtsNodeFrames {
@@ -589,7 +633,7 @@ type SttNodeEventsImpl = <crate::Selected as super::Implementations>::SttNodeEve
 
 /// The default `stt_node`'s speech events.
 #[pyclass(frozen, name = "SttNodeEvents", module = "livekit.agents._core")]
-pub struct SttNodeEvents(::std::sync::Arc<SttNodeEventsImpl>);
+pub struct SttNodeEvents(pub(crate) ::std::sync::Arc<SttNodeEventsImpl>);
 
 #[pymethods]
 impl SttNodeEvents {
@@ -965,7 +1009,7 @@ fn _extract_playout_ledger_add_pushed_samples_sample_rate(obj: &Bound<'_, PyAny>
 }
 
 #[pyclass(frozen, name = "PlayoutLedger", module = "livekit.agents._core")]
-pub struct PlayoutLedger(::std::sync::Arc<PlayoutLedgerImpl>);
+pub struct PlayoutLedger(pub(crate) ::std::sync::Arc<PlayoutLedgerImpl>);
 
 #[pymethods]
 impl PlayoutLedger {
@@ -1099,7 +1143,7 @@ type SessionOptionsImpl = <crate::Selected as super::Implementations>::SessionOp
 /// `AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
 /// and the session layer they became (plus every `update_options` so far).
 #[pyclass(frozen, name = "SessionOptions", module = "livekit.agents._core")]
-pub struct SessionOptions(::std::sync::Arc<SessionOptionsImpl>);
+pub struct SessionOptions(pub(crate) ::std::sync::Arc<SessionOptionsImpl>);
 
 #[pymethods]
 impl SessionOptions {
@@ -1171,7 +1215,7 @@ fn _extract_voice_session_commit_user_turn_stt_flush_duration(obj: &Bound<'_, Py
 /// `voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,
 /// closed at `aclose()`; every other method is one command to its loop.
 #[pyclass(frozen, name = "VoiceSession", module = "livekit.agents._core")]
-pub struct VoiceSession(::std::sync::Arc<VoiceSessionImpl>);
+pub struct VoiceSession(pub(crate) ::std::sync::Arc<VoiceSessionImpl>);
 
 #[pymethods]
 impl VoiceSession {
@@ -1773,7 +1817,7 @@ type GetDtmfResultImpl = <crate::Selected as super::Implementations>::DtmfResult
 
 /// A collected, space-separated keypad sequence.
 #[pyclass(frozen, name = "GetDtmfResult", module = "livekit.agents._core")]
-pub struct GetDtmfResult(::std::sync::Arc<GetDtmfResultImpl>);
+pub struct GetDtmfResult(pub(crate) ::std::sync::Arc<GetDtmfResultImpl>);
 
 #[pymethods]
 impl GetDtmfResult {
@@ -1852,7 +1896,7 @@ fn _extract_warm_transfer_new_ringing_timeout(obj: &Bound<'_, PyAny>) -> PyResul
 
 /// A transfer plan and the runtime ownership of its current dial.
 #[pyclass(frozen, name = "WarmTransfer", module = "livekit.agents._core")]
-pub struct WarmTransfer(::std::sync::Arc<WarmTransferImpl>);
+pub struct WarmTransfer(pub(crate) ::std::sync::Arc<WarmTransferImpl>);
 
 #[pymethods]
 impl WarmTransfer {
@@ -1910,7 +1954,7 @@ type ConsoleIoImpl = <crate::Selected as super::Implementations>::ConsoleIo;
 
 /// `lk agent console`'s socket, opened when the session starts.
 #[pyclass(frozen, name = "ConsoleIo", module = "livekit.agents._core")]
-pub struct ConsoleIo(::std::sync::Arc<ConsoleIoImpl>);
+pub struct ConsoleIo(pub(crate) ::std::sync::Arc<ConsoleIoImpl>);
 
 #[pymethods]
 impl ConsoleIo {
@@ -1942,7 +1986,7 @@ type RoomAudioInputImpl = <crate::Selected as super::Implementations>::RoomAudio
 /// `_core.RoomAudioInput`: the room's microphone leg, taken as itself wherever the host passes
 /// an audio input.
 #[pyclass(frozen, name = "RoomAudioInput", module = "livekit.agents._core")]
-pub struct RoomAudioInput(::std::sync::Arc<RoomAudioInputImpl>);
+pub struct RoomAudioInput(pub(crate) ::std::sync::Arc<RoomAudioInputImpl>);
 
 #[pymethods]
 impl RoomAudioInput {
@@ -1993,7 +2037,7 @@ type RoomVideoInputImpl = <crate::Selected as super::Implementations>::RoomVideo
 /// `_core.RoomVideoInput`: the room's video leg, taken as itself wherever the host passes a video
 /// input.
 #[pyclass(frozen, name = "RoomVideoInput", module = "livekit.agents._core")]
-pub struct RoomVideoInput(::std::sync::Arc<RoomVideoInputImpl>);
+pub struct RoomVideoInput(pub(crate) ::std::sync::Arc<RoomVideoInputImpl>);
 
 #[pymethods]
 impl RoomVideoInput {
@@ -2044,7 +2088,7 @@ type _core_RoomSessionImpl = <crate::Selected as super::Implementations>::RoomSe
 /// `_core_RoomSession`: what a session's room I/O is built from, handed to the host and taken
 /// back as itself.
 #[pyclass(frozen, name = "_core_RoomSession", module = "livekit.agents._core")]
-pub struct _core_RoomSession(::std::sync::Arc<_core_RoomSessionImpl>);
+pub struct _core_RoomSession(pub(crate) ::std::sync::Arc<_core_RoomSessionImpl>);
 
 #[pymethods]
 impl _core_RoomSession {
@@ -2988,7 +3032,7 @@ impl AudioOutputProxy {
         };
         let tracker = {
             let v = crate::host::read(obj, "_core_tracker")?;
-            <::lk_agents_abi::voice::io::PlaybackTracker as ::lk_agents_abi::python::ArcClass>::shared(&v)?
+            v.cast::<crate::generated::voice::PlaybackTracker>().map(|this| ::std::sync::Arc::clone(&this.get().0)).map_err(::pyo3::PyErr::from)?
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;

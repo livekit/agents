@@ -63,7 +63,7 @@ fn _extract_inference_vad_update_options_deactivation_threshold(obj: &Bound<'_, 
 
 /// The Silero VAD behind `inference.VAD`.
 #[pyclass(frozen, name = "InferenceVad", module = "livekit.agents._core")]
-pub struct InferenceVad(::std::sync::Arc<InferenceVadImpl>);
+pub struct InferenceVad(pub(crate) ::std::sync::Arc<InferenceVadImpl>);
 
 #[pymethods]
 impl InferenceVad {
