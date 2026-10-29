@@ -30,6 +30,8 @@ struct Host {
 
     closed: Mutex<Vec<usize>>,
     exits: Notify,
+    /// Each event reads the pool back, as the Python host's handlers can while the GIL is held.
+    reads_pool: std::sync::OnceLock<ProcPool>,
 }
 
 impl Host {
@@ -206,6 +208,9 @@ impl Executors for Host {
         }
     }
     fn emit(&self, event: PoolEvent, p: &Executor) {
+        if let Some(pool) = self.reads_pool.get() {
+            pool.processes();
+        }
         self.events.lock().unwrap().push((event, number(p)));
     }
 }
@@ -531,6 +536,30 @@ async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
     reaped.send_replace(true);
     pool.aclose().await;
     assert!(!dead_process_was_launched, "OS-exited warm process was assigned before reaping");
+}
+
+// Catches: a host call made under the pool's lock. The Python host's emit takes the GIL, which a
+// loop thread reading `ProcPool.processes` holds while it waits on that lock: a reap during that
+// read deadlocked the worker.
+#[test]
+fn an_event_handler_can_read_the_pool() {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let host = Arc::new(Host::default());
+            let pool = pool(&host, 1);
+            let _ = host.reads_pool.set(pool.clone());
+            pool.start().await.unwrap();
+            pool.launch_job("j1", job()).await.unwrap();
+            pool.aclose().await;
+            assert!(count(&host, PoolEvent::Closed) >= 1);
+        });
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the pool deadlocked on a host call made under its lock");
 }
 
 mod generated_sequences;

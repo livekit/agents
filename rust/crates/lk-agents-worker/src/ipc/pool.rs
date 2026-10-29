@@ -167,7 +167,6 @@ enum Failure {
 enum ReservationState {
     Waiting,
     Reserved(ProcessId),
-    Completed,
     Failed(Failure),
 }
 
@@ -221,6 +220,10 @@ struct State {
     tasks: Vec<OwnedTask>,
     /// The close's join of `tasks`, started by the first close.
     cleanup: Option<OwnedTask>,
+    /// What to tell the host once the lock is released: a host call takes the host's own lock
+    /// (Python's GIL), which a host thread reading the pool holds while it waits on this one.
+    released: Vec<Executor>,
+    failed_tasks: Vec<String>,
 }
 
 impl State {
@@ -298,6 +301,8 @@ impl ProcPool {
                 refill_paused_until: None,
                 tasks: Vec::new(),
                 cleanup: None,
+                released: Vec::new(),
+                failed_tasks: Vec::new(),
             }),
             changed: Notify::new(),
             idle_ready: watch::channel(Readiness::Pending).0,
@@ -323,9 +328,10 @@ impl ProcPool {
         self.update(|_, st| st.target_idle = n.min(idle));
     }
 
-    /// Changes the state, then allocates, publishes readiness and wakes the waiters.
+    /// Changes the state, then allocates, publishes readiness, tells the host what was released
+    /// and wakes the waiters. No host call is made under the lock.
     fn update<R>(&self, f: impl FnOnce(&Self, &mut State) -> R) -> R {
-        let result = {
+        let (result, released, failed_tasks) = {
             let mut st = lock(&self.0.state);
             if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
                 st.refill_paused_until = None;
@@ -338,8 +344,14 @@ impl ProcPool {
             } else if st.ready.len() >= self.0.opts.num_idle_processes {
                 self.0.idle_ready.send_replace(Readiness::Ready);
             }
-            result
+            (result, std::mem::take(&mut st.released), std::mem::take(&mut st.failed_tasks))
         };
+        for executor in released {
+            self.0.host.emit(PoolEvent::Closed, &executor);
+        }
+        for error in failed_tasks {
+            crate::diagnostics::emit(log::Level::Error, format!("process pool task failed: {error}"));
+        }
         self.0.changed.notify_waiters();
         result
     }
@@ -353,10 +365,7 @@ impl ProcPool {
         st.tasks.push(TokioSpawner::current().spawn(step));
         for task in finished {
             if let Some(Err(error)) = task.now_or_never() {
-                crate::diagnostics::emit(
-                    log::Level::Error,
-                    format!("process pool task failed: {error}"),
-                );
+                st.failed_tasks.push(error.to_string());
             }
         }
     }
@@ -372,8 +381,7 @@ impl ProcPool {
         self.update(|_, st| st.started = true);
         if first {
             let pool = self.clone();
-            let mut st = lock(&self.0.state);
-            self.own(&mut st, async move { pool.refill().await });
+            self.update(|this, st| this.own(st, async move { pool.refill().await }));
         }
         let mut ready = self.0.idle_ready.subscribe();
         let wait = self.0.opts.initialize_timeout + Duration::from_secs(2);
@@ -708,7 +716,7 @@ impl ProcPool {
         if let Some(process) = st.processes.remove(&id)
             && let Some(executor) = process.executor
         {
-            self.0.host.emit(PoolEvent::Closed, &executor);
+            st.released.push(executor);
         }
     }
 
@@ -718,9 +726,7 @@ impl ProcPool {
         if let ReservationState::Reserved(process) = request.state {
             self.retire(st, process);
         }
-        if request.state != ReservationState::Completed {
-            st.release_job(&request.job_id, id);
-        }
+        st.release_job(&request.job_id, id);
         for process in st.processes.values_mut() {
             if process.request == Some(id) {
                 process.request = None;
@@ -848,11 +854,9 @@ impl ProcPool {
             let reservations: Vec<_> = st.requests.keys().copied().collect();
             for id in reservations {
                 let request = st.requests.get_mut(&id).unwrap();
-                if request.state != ReservationState::Completed {
-                    request.state = ReservationState::Failed(Failure::Closed);
-                    let job_id = request.job_id.clone();
-                    st.release_job(&job_id, id);
-                }
+                request.state = ReservationState::Failed(Failure::Closed);
+                let job_id = request.job_id.clone();
+                st.release_job(&job_id, id);
             }
             let processes: Vec<_> = st.processes.keys().copied().collect();
             for id in processes {
