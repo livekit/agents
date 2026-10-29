@@ -333,9 +333,6 @@ from ._generated._core_utils import (
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
-    camel_to_snake_case as camel_to_snake_case,
-    is_cloud as is_cloud,
-    observability_url as observability_url,
 )
 from ._generated._core_vad import (
     InferenceVad as InferenceVad,

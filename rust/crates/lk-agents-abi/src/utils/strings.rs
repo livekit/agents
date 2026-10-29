@@ -1,4 +1,4 @@
-//! Text classification data and host utility declarations.
+//! Text classification data.
 
 /// Characters accepted by Python's whitespace classification, including ASCII separators.
 pub const PYTHON_WHITESPACE: &[char] = &[
@@ -7,17 +7,3 @@ pub const PYTHON_WHITESPACE: &[char] = &[
     '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}',
     '\u{205f}', '\u{3000}',
 ];
-
-#[crate::host(functions(pid = false))]
-pub trait TextFunctions {
-    #[host(function)]
-    fn camel_to_snake_case(name: &str) -> String;
-}
-
-#[crate::host(functions(pid = false))]
-pub trait TransportFunctions {
-    #[host(function, name = "is_cloud")]
-    fn is_cloud_url(url: &str) -> bool;
-    #[host(function, pid = true)]
-    fn observability_url(livekit_url: &str, env_override: Option<String>) -> Option<String>;
-}

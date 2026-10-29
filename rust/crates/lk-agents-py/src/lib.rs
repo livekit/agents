@@ -44,7 +44,6 @@ impl generated::Implementations for Selected {
     type BackgroundAudioPlayer =
         lk_agents_runtime::voice::background_audio::HostBackgroundAudioPlayer;
     type PlayState = lk_agents_runtime::voice::background_audio::PlayState;
-    type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
     type ImageFunctions = lk_agents_runtime::images::ImageFunctions;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
@@ -54,7 +53,6 @@ impl generated::Implementations for Selected {
     type ProviderMetrics = lk_agents_runtime::cores::ProviderMetrics;
     type LlmMetricState = lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = lk_agents_runtime::cores::TtsMetricState;
-    type TransportFunctions = lk_agents_runtime::net::strings::TransportAlgorithms;
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::media::blingfire::MediaTokenization;
     type AudioDecoder =

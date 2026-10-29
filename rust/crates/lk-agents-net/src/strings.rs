@@ -47,16 +47,6 @@ pub fn observability_url(livekit_url: &str, env_override: Option<&str>) -> Optio
     is_cloud_url(livekit_url).then(|| format!("https://{host}"))
 }
 
-pub struct TransportAlgorithms;
-impl lk_agents_abi::utils::strings::TransportFunctions for TransportAlgorithms {
-    fn is_cloud_url(url: &str) -> bool {
-        is_cloud_url(url)
-    }
-    fn observability_url(livekit_url: &str, env_override: Option<String>) -> Option<String> {
-        observability_url(livekit_url, env_override.as_deref())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
