@@ -5,8 +5,8 @@
 //! samples and the tail is 10. `AudioByteStream` is progressive: a 100-sample push comes out as
 //! 20 + 40 + (40 held).
 
-use lk_agents_abi::media::emitter::EmitterError;
 use crate::Frame;
+use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::{SynthesizedAudio, TimedString, Ts};
 
 use super::{AudioEmitter, Effects, HostEffect};

@@ -4,9 +4,9 @@ use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
-use lk_agents_abi::AudioFrame;
 use lk_agents_media::AudioByteStream;
 
 use super::{
