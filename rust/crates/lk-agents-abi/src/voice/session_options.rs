@@ -495,6 +495,24 @@ pub struct UpdateKwargs {
     #[python(ty = "NotGivenOr[list[str]]")]
     #[binding(default)]
     pub keyterms: Option<Vec<String>>,
+    /// Merged over the session's interruption handling; its `mode` is set at construction.
+    #[python(
+        ty = "NotGivenOr[InterruptionOptions]",
+        type_import = "..voice.turn:InterruptionOptions"
+    )]
+    #[binding(default)]
+    pub interruption: Option<InterruptionKwargs>,
+    #[python(ty = "NotGivenOr[float]")]
+    #[binding(default)]
+    pub min_consecutive_speech_delay: Option<f64>,
+    #[python(
+        ty = "NotGivenOr[Sequence[TextTransforms] | None]",
+        type_import = "collections.abc:Sequence",
+        type_import = "..voice.agent_session:TextTransforms"
+    )]
+    #[binding(default)]
+    pub tts_text_transforms:
+        lk_agents_abi::Maybe<Option<lk_agents_abi::voice::session_options::TextTransformSet>>,
 }
 
 // `Maybe<T>` has `Debug` only for `Maybe<Option<T>>`, so these impls are written out.
@@ -533,8 +551,8 @@ debug_record!(SessionKwargs {
 });
 
 debug_record!(UpdateKwargs {
-    endpointing_opts, keyterms;
-    turn_detection, expressive
+    endpointing_opts, keyterms, interruption, min_consecutive_speech_delay;
+    turn_detection, expressive, tts_text_transforms
 });
 
 /// `LegSet` as the host states it before `start()`, so `session.options` can resolve early.
@@ -934,8 +952,15 @@ mod host {
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             let d = obj.cast::<PyDict>()?;
             // An option this session cannot change is refused, not dropped.
-            const KNOWN: [&str; 4] =
-                ["endpointing_opts", "turn_detection", "expressive", "keyterms"];
+            const KNOWN: [&str; 7] = [
+                "endpointing_opts",
+                "turn_detection",
+                "expressive",
+                "keyterms",
+                "interruption",
+                "min_consecutive_speech_delay",
+                "tts_text_transforms",
+            ];
             for key in d.keys() {
                 let key: String = key.extract()?;
                 if !KNOWN.contains(&key.as_str()) {
@@ -960,6 +985,27 @@ mod host {
                 keyterms: match d.get_item("keyterms")? {
                     Some(v) if !unsaid(&v)? => Some(v.extract()?),
                     _ => None,
+                },
+                interruption: match d.get_item("interruption")? {
+                    Some(v) if !unsaid(&v)? => {
+                        let interruption: InterruptionKwargs = v.extract()?;
+                        if interruption.mode.is_some() {
+                            return Err(pyo3::exceptions::PyValueError::new_err(
+                                "update_options(interruption=) takes no mode: the interruption \
+                                 mode is set with VoiceSession(turn_handling=)",
+                            ));
+                        }
+                        Some(interruption)
+                    }
+                    _ => None,
+                },
+                min_consecutive_speech_delay: match d.get_item("min_consecutive_speech_delay")? {
+                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
+                    _ => None,
+                },
+                tts_text_transforms: match d.get_item("tts_text_transforms")? {
+                    Some(v) => v.extract()?,
+                    None => Maybe::NotGiven,
                 },
             })
         }

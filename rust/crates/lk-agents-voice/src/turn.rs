@@ -157,7 +157,7 @@ pub(crate) fn endpointing_options(kw: &EndpointingKwargs) -> EndpointingOptions 
     }
 }
 
-fn interruption_options(kw: &InterruptionKwargs) -> InterruptionOptions {
+pub(crate) fn interruption_options(kw: &InterruptionKwargs) -> InterruptionOptions {
     InterruptionOptions {
         enabled: kw.enabled,
         mode: kw.mode,

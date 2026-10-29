@@ -17,7 +17,7 @@ import inspect
 import time
 import weakref
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
@@ -127,7 +127,7 @@ if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from .amd import AMD
-    from .turn import EndpointingOptions, TurnDetectionMode
+    from .turn import EndpointingOptions, InterruptionOptions, TurnDetectionMode
 
 __all__ = [
     "VoiceSession",
@@ -817,20 +817,32 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
+        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Change only the supplied settings of the session. A replaced STT, TTS or VAD is
         installed in place, without restarting the call or interrupting speech; a setting an
-        ``override_options`` layer holds takes the new value once the layer is released."""
+        ``override_options`` layer holds takes the new value once the layer is released.
+        ``interruption`` merges over the session's, except its ``mode``, which is set at
+        construction."""
         update = _given(
             stt=_stt_model(stt),
             tts=_tts_model(tts),
             vad=vad,
             turn_detection=turn_detection,
             endpointing_opts=endpointing_opts,
+            interruption=interruption,
+            min_consecutive_speech_delay=min_consecutive_speech_delay,
+            tts_text_transforms=tts_text_transforms,
             expressive=expressive,
             keyterms=keyterms,
+        )
+        update = self._completed(
+            update,
+            lambda k: self._base_options[k] if k in self._base_options else self._current_option(k),
         )
         self._base_options.update(update)
         self._send_options({k: v for k, v in update.items() if not self._layered(k)})
@@ -844,6 +856,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
+        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
     ) -> AsyncIterator[None]:
         """Layer settings over the session's for the block: each takes its value from the
         topmost layer that sets it, else from the base, and the layer is released when the
@@ -854,6 +869,15 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad=vad,
             turn_detection=turn_detection,
             endpointing_opts=endpointing_opts,
+            interruption=interruption,
+            min_consecutive_speech_delay=min_consecutive_speech_delay,
+            tts_text_transforms=tts_text_transforms,
+        )
+        layer = self._completed(
+            layer,
+            lambda k: (
+                self._effective_option(k) if k in self._base_options else self._current_option(k)
+            ),
         )
         for key in layer:
             if not self._layered(key):
@@ -868,6 +892,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ]
             self._send_options({k: self._effective_option(k) for k in layer})
 
+    @staticmethod
+    def _completed(options: dict[str, Any], under: Callable[[str], Any]) -> dict[str, Any]:
+        """``options`` with each group (endpointing, interruption) filled in from the value it
+        lands on, so restoring a base or a lower layer restores every key of the group."""
+        return {k: {**under(k), **v} if k in _GROUPS else v for k, v in options.items()}
+
     def _layered(self, key: str) -> bool:
         return any(key in layer for layer in self._option_layers)
 
@@ -878,14 +908,20 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._base_options[key]
 
     def _current_option(self, key: str) -> Any:
-        """The value ``key`` has now, as ``update_options`` takes it."""
+        """The value ``key`` has in the core, as ``update_options`` takes it: current until this
+        session sends ``key``, which then keeps it in ``_base_options`` and the layers."""
         if key in _MODELS:
             return getattr(self, f"_{key}")
         resolved = self.options
         if key == "turn_detection":
             return resolved["turn_detection_mode"]
-        endpointing = resolved["endpointing"]
-        return {k: endpointing[k] for k in ("mode", "min_delay", "max_delay", "alpha")}
+        if key == "endpointing_opts":
+            endpointing = resolved["endpointing"]
+            return {k: endpointing[k] for k in ("mode", "min_delay", "max_delay", "alpha")}
+        if key == "interruption":
+            # the mode is the construction's; update_options takes no mode
+            return {k: v for k, v in resolved["interruption"].items() if k != "mode"}
+        return resolved[key]
 
     def _send_options(self, update: dict[str, Any]) -> None:
         models = {k: v for k, v in update.items() if k in _MODELS}
@@ -1425,6 +1461,9 @@ _NODES = ("llm_node", "tts_node", "stt_node", "transcription_node", "realtime_au
 
 # the providers `update_options` replaces; each is the session's own, never an agent's
 _MODELS = ("stt", "tts", "vad")
+
+# the options given as a partial dict, merged key by key over the session's
+_GROUPS = ("endpointing_opts", "interruption")
 
 
 def _given(**options: Any) -> dict[str, Any]:

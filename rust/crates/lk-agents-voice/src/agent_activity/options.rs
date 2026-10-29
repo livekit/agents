@@ -5,7 +5,8 @@ use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
     EndpointingOptions, InterruptionOptions, PreemptiveGenerationOptions, TurnHandlingOptions,
-    UserTurnLimitOptions, count, endpointing_options, nullable, turn_handling_layer,
+    UserTurnLimitOptions, count, endpointing_options, interruption_options, nullable,
+    turn_handling_layer,
 };
 use lk_agents_abi::{Maybe, Vocabulary, secs};
 pub use lk_agents_abi::voice::session_options::{
@@ -307,11 +308,24 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
 
 /// What `update_options(..)` says.
 pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
-    let UpdateKwargs { endpointing_opts, turn_detection, expressive: _, keyterms: _ } = kw.clone();
+    let UpdateKwargs {
+        endpointing_opts,
+        turn_detection,
+        expressive: _,
+        keyterms: _,
+        interruption,
+        min_consecutive_speech_delay,
+        tts_text_transforms,
+    } = kw.clone();
     let mut o = AgentSessionOptions::default();
     if let Some(e) = endpointing_opts {
         o.turn.endpointing = endpointing_options(&e);
     }
+    if let Some(i) = interruption {
+        o.turn.interruption = interruption_options(&i);
+    }
+    o.speech.min_consecutive_speech_delay = min_consecutive_speech_delay.map(secs);
+    o.speech.tts_text_transforms = tts_text_transforms;
     o.turn.detection = match turn_detection {
         Maybe::NotGiven => None,
         Maybe::Given(TurnDetectionKwarg::Null) => Some(TurnDetection::Auto),

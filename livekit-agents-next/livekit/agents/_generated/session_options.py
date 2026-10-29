@@ -18,7 +18,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..voice.agent_session import SessionConnectOptions, TextTransforms
-    from ..voice.turn import EndpointingOptions, TurnDetectionMode, TurnHandlingOptions
+    from ..voice.turn import (
+        EndpointingOptions,
+        InterruptionOptions,
+        TurnDetectionMode,
+        TurnHandlingOptions,
+    )
     from .expressive import ExpressiveOptions
     from .keyterms import STTContextOptions
 
@@ -57,6 +62,10 @@ class UpdateKwargs(TypedDict):
     expressive: NotGivenOr[bool | ExpressiveOptions]
     keyterms: NotGivenOr[list[str]]
     """The user-defined keyterms, replaced; the detected ones stay."""
+    interruption: NotGivenOr[InterruptionOptions]
+    """Merged over the session's interruption handling; its `mode` is set at construction."""
+    min_consecutive_speech_delay: NotGivenOr[float]
+    tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None]
 
 
 class SessionLegs(TypedDict):

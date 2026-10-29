@@ -50,6 +50,31 @@ async def test_temporary_options_restore_the_base_after_an_exception() -> None:
         await session.aclose()
 
 
+async def test_live_session_changes_interruption_and_delivery_settings() -> None:
+    async def interruption(**expected: object) -> None:
+        # the running core applies a change on its own loop
+        for _ in range(100):
+            if expected.items() <= session.options["interruption"].items():
+                return
+            await asyncio.sleep(0.01)
+        assert expected.items() <= session.options["interruption"].items()
+
+    async with VoiceSession(vad=None, turn_detection="manual") as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        session.update_options(
+            interruption={"min_duration": 1.5},
+            min_consecutive_speech_delay=0.4,
+            tts_text_transforms=None,
+        )
+        async with session.override_options(interruption={"enabled": False}):
+            async with session.override_options(interruption={"min_words": 2}):
+                await interruption(enabled=False, min_words=2, min_duration=1.5)
+            await interruption(enabled=False, min_words=0)
+        await interruption(enabled=True, min_words=0, min_duration=1.5)
+        assert session.options["min_consecutive_speech_delay"] == 0.4
+        assert session.options["tts_text_transforms"] is None
+
+
 def _voiced_session(tts: FakeTTS) -> VoiceSession:
     session = VoiceSession(vad=None, tts=tts, turn_handling={"turn_detection": None})
     session.output.audio = FakeAudioOutput()
