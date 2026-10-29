@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::Notify;
 
 use crate::StorageError;
 use crate::sql::{SqlValue, Statement, StatementResult};
