@@ -33,7 +33,7 @@ async def _start_confirmation(
     ready = asyncio.Event()
     continued = asyncio.Event()
 
-    class Confirm(AgentTask[bool]):
+    class Confirm(AgentTask[Any]):
         async def on_enter(self) -> None:
             await self.session.say("Please confirm the synthetic details.")
             ready.set()
@@ -49,7 +49,7 @@ async def _start_confirmation(
                 self.complete(task_result)
             return ToolResult(None, reply_required=False)
 
-    class Wrapper(AgentTask[bool]):
+    class Wrapper(AgentTask[Any]):
         def __init__(self, remaining: int) -> None:
             super().__init__(instructions="Await synthetic confirmation.")
             self.remaining = remaining
@@ -133,26 +133,34 @@ async def test_nested_completion_records_parent_speech(depth: int, content: str)
         assert [
             event.item.text_content for event in followup.events if event.type == "message"
         ] == ["A separate reply."]
+        with pytest.raises(RuntimeError, match="^no final output$"):
+            _ = followup.final_output
     finally:
         await session.aclose()
 
 
 @pytest.mark.parametrize("depth", [0, 1, 2])
 @pytest.mark.parametrize("disable_retries", [False, True], ids=["default_retries", "no_retries"])
-async def test_task_output_survives_parent_speech(depth: int, disable_retries: bool) -> None:
-    session, continued, llm = await _start_confirmation(depth=depth)
+@pytest.mark.parametrize(
+    "task_result", [True, False, 0, ""], ids=["true", "false", "zero", "empty"]
+)
+async def test_task_output_survives_parent_speech(
+    depth: int, disable_retries: bool, task_result: bool | int | str
+) -> None:
+    session, continued, llm = await _start_confirmation(depth=depth, task_result=task_result)
     try:
         with patch.object(llm, "chat", wraps=llm.chat) as requests:
             result = await asyncio.wait_for(
                 session.run(
                     user_input="yes",
-                    output_type=bool,
+                    output_type=type(task_result),
                     output_options=None if disable_retries else NOT_GIVEN,
                 ),
                 timeout=3,
             )
             assert requests.call_count == 1
-        assert result.final_output is True
+        assert type(result.final_output) is type(task_result)
+        assert result.final_output == task_result
         assert continued.is_set()
         assert [event.item.text_content for event in result.events if event.type == "message"] == (
             PARENT_LINES
