@@ -407,9 +407,7 @@ async def test_end_call_tool_waits_for_a_reply_when_turn_was_silent(monkeypatch)
         session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
         session.on("close", lambda _: events.append("close"))
 
-    await run_realtime_tool_turn(
-        agent, tool_executed=called, speak=False, on_session=on_session
-    )
+    await run_realtime_tool_turn(agent, tool_executed=called, speak=False, on_session=on_session)
     assert events[0] == "close"
 
 
