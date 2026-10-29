@@ -1,4 +1,4 @@
-//! The session report's process admission (decision 88): transcripts in preparation, recordings
+//! The session report's process admission: transcripts in preparation, recordings
 //! in flight and the retained session events of every session. The hosting process owns one and
 //! lends it through [`ProcessEnv::report_admission`](crate::env::ProcessEnv::report_admission); clones share it.
 

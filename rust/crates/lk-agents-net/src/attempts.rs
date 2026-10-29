@@ -165,7 +165,7 @@ pub enum AttemptStep {
     GiveUp(ApiError),
     /// A retiring request's outcome was still unknown at its deadline; no attempt follows.
     Unresolved,
-    /// The attempt missed its cleanup deadline; the runtime still owns it (decision 14).
+    /// The attempt missed its cleanup deadline; the runtime still owns it.
     CleanupIncomplete(u32),
 }
 

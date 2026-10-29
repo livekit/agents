@@ -17,7 +17,7 @@ use crate::worker_io::WorkerIo;
 /// The media worker pool, read at use so a fork is checked before dispatching work.
 pub type WorkerPool = fn() -> Result<Arc<dyn MediaPool>, String>;
 
-/// What the hosting process lends a declared class (decision 100): the generated bindings pass
+/// What the hosting process lends a declared class: the generated bindings pass
 /// it to each declared constructor that takes it, and Rust callers and tests build their own.
 /// Handles bound to the process runtime are read on use, so constructing a client starts
 /// nothing and a fork-inherited runtime is refused rather than used.

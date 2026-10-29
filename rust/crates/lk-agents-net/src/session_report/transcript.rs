@@ -13,7 +13,7 @@ pub(super) const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;
 
 /// Retains only bounded JSON, rather than a second copy of every native chat item.
 /// Prepared under the process's preparation admission; the console report serializes on the
-/// caller's blocking pool (decision 88).
+/// caller's blocking pool.
 pub struct TranscriptBuilder {
     state: Mutex<TranscriptState>,
     permit: Arc<OwnedSemaphorePermit>,

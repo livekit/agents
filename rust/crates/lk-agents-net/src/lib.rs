@@ -1,4 +1,4 @@
-//! `lk-agents-net`: the shared async transport of the I/O crates (decision 77).
+//! `lk-agents-net`: the shared async transport of the I/O crates.
 //!
 //! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
 //! - [`http`]: HTTPS exchanges reporting transport observations, under [`attempts`].
@@ -6,7 +6,7 @@
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
 //! - [`session_report`]: the LiveKit Cloud session report's transcript and recording upload.
-//! - [`env`]: what the hosting process lends a client (decision 88).
+//! - [`env`]: what the hosting process lends a client.
 //! - [`task`]: owned tasks with correlated cancellation and one observed outcome.
 //! - [`sse`]: event-stream framing over response bytes.
 //! - [`token`]: framework credentials signed with LiveKit's token crate.

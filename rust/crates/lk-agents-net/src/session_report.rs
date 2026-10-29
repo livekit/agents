@@ -1,5 +1,5 @@
 //! The LiveKit Cloud session report: its transcript, prepared incrementally, and the recording
-//! upload at session end. Not user telemetry (decision 87): it has its own small process
+//! upload at session end. Not user telemetry: it has its own small process
 //! admission, and cancelling an upload drops its transport and file.
 //!
 //! - [`admission`]: the process's preparation, upload and event retention capacity.
@@ -62,7 +62,7 @@ struct RecordingUpload {
 }
 
 /// Credentials for the session recording endpoint and host OTLP exporters, under the process's
-/// upload admission (decision 88).
+/// upload admission.
 pub struct SessionReportUploader {
     api_key: String,
     api_secret: String,

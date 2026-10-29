@@ -81,7 +81,7 @@ impl Drop for RetainedEvents {
     }
 }
 
-/// A session's retained events, charged to the process's report admission (decision 88).
+/// A session's retained events, charged to the process's report admission.
 pub struct EventRetention {
     capture_content: bool,
     retained: RetainedEvents,
