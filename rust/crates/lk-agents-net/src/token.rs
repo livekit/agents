@@ -87,5 +87,6 @@ mod tests {
         );
         assert!(claims.exp > claims.nbf && claims.exp - claims.nbf <= 600);
         assert!(!inference_bearer("", "secret").unwrap_err().retryable);
+        assert!(!inference_bearer("key", "").unwrap_err().retryable);
     }
 }
