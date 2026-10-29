@@ -6,7 +6,7 @@ import asyncio
 import time
 import weakref
 from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -19,19 +19,47 @@ from ._generated._retry import (
     _core_RetryDecisionStop,
 )
 from .log import logger
+from .types import APIConnectOptions, NotGivenOr
+
+if TYPE_CHECKING:
+    from ._generated.llm import ChatChunk
+    from ._generated.metrics import STTMetrics
+    from ._generated.stt import STT, SpeechData, SpeechEvent
+    from .utils.audio import AudioBuffer
 
 _T = TypeVar("_T")
+_InputT = TypeVar("_InputT")
+_OutputT = TypeVar("_OutputT", covariant=True)
+_MetricsT = TypeVar("_MetricsT", bound="STTMetrics")
 
 
-def on_loop(owner: Any, build: Callable[[], _T]) -> _T:
+class _PumpStream(Protocol[_OutputT]):
+    def end_input(self) -> None: ...
+    async def recv(self) -> _OutputT | None: ...
+    async def aclose(self) -> None: ...
+
+
+class _MetricsProvider(Protocol):
+    @property
+    def label(self) -> str: ...
+    @property
+    def model(self) -> str: ...
+    @property
+    def provider(self) -> str: ...
+    def emit(self, event: Literal["metrics_collected"], metrics: BaseModel) -> None: ...
+
+
+def on_loop(owner: object, build: Callable[[], _T]) -> _T:
     """``build()`` once per running event loop: a core object over host providers calls them on
     the loop it was built on, so an object shared by two loops (two jobs on threads, per-test
     loops) gets one each."""
-    built = owner.__dict__.setdefault("_core_by_loop", weakref.WeakKeyDictionary())
+    built: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _T] = owner.__dict__.setdefault(
+        "_core_by_loop", weakref.WeakKeyDictionary()
+    )
     loop = asyncio.get_running_loop()
     if (native := built.get(loop)) is None:
         native = built[loop] = build()
-    return native  # type: ignore[no-any-return]
+    return native
 
 
 def built_on_loop(owner: Any) -> list[Any]:
@@ -51,7 +79,7 @@ def core_leg(provider: Any) -> Any:
     return leg() if leg is not None else provider
 
 
-def overrides(obj: Any, base: type, *names: str) -> bool:
+def overrides(obj: object, base: type, *names: str) -> bool:
     """Whether ``obj``'s class replaces any of ``base``'s ``names``: the core object would bypass
     it, so the provider is run through its plugin surface instead."""
     return any(getattr(type(obj), n) is not getattr(base, n) for n in names)
@@ -86,7 +114,9 @@ def _now_ns() -> int:
 class Attempts:
     """Execute host callbacks as the shared supplied-time attempt machine authorizes them."""
 
-    def __init__(self, kind: str, conn: Any, emit_error: Callable[[Exception, bool], None]) -> None:
+    def __init__(
+        self, kind: str, conn: APIConnectOptions, emit_error: Callable[[Exception, bool], None]
+    ) -> None:
         self.kind = kind
         self.emit_error = emit_error
         self.core = False
@@ -121,7 +151,7 @@ class Attempts:
         self._request.input_ended(_now_ns())
         self._changed.set()
 
-    def observe(self, event: Any) -> None:
+    def observe(self, event: SpeechEvent) -> None:
         self._request.observe(event, _now_ns())
         self._changed.set()
 
@@ -206,10 +236,10 @@ class Attempts:
 
 
 async def pump(
-    native: Any,
-    items: AsyncIterable[Any],
-    feed: Callable[[Any], None],
-    out: Callable[[Any], None],
+    native: _PumpStream[_OutputT],
+    items: AsyncIterable[_InputT],
+    feed: Callable[[_InputT], None],
+    out: Callable[[_OutputT], None],
 ) -> None:
     """A core stream fed ``items`` (each through ``feed``, then its end of input) while ``out``
     takes what it yields, until it ends. A feed that fails ends the stream with its error rather
@@ -236,21 +266,30 @@ async def pump(
         await native.aclose()
 
 
-def metrics_context(provider: Any, *, cancelled: bool = False) -> tuple[float, str, bool, str, str]:
+def metrics_context(
+    provider: _MetricsProvider, *, cancelled: bool = False
+) -> tuple[float, str, bool, str, str]:
     """What a provider's metrics are stamped with: now, its label, model and provider."""
     return (time.time(), provider.label, cancelled, provider.model, provider.provider)
 
 
-def emit_metrics(provider: Any, kind: str, record: dict[str, Any] | None) -> None:
+def emit_metrics(provider: _MetricsProvider, kind: str, record: dict[str, object] | None) -> None:
     """A request's metrics, folded by the core, as the provider's ``metrics_collected`` event."""
     if record is None:
         return
     from ._generated import metrics
 
-    provider.emit("metrics_collected", getattr(metrics, kind).model_validate(record))
+    metric_type: type[BaseModel] = getattr(metrics, kind)
+    provider.emit("metrics_collected", metric_type.model_validate(record))
 
 
-async def recognize(stt: Any, buffer: Any, *, language: Any, conn_options: Any) -> Any:
+async def recognize(
+    stt: STT,
+    buffer: AudioBuffer,
+    *,
+    language: NotGivenOr[str],
+    conn_options: APIConnectOptions,
+) -> SpeechEvent:
     """``STT.recognize``: ``_recognize_impl`` in attempts, its metrics once it answers."""
     started = time.perf_counter()
     attempts = Attempts("stt_batch", conn_options, stt._emit_error)
@@ -269,7 +308,7 @@ async def recognize(stt: Any, buffer: Any, *, language: Any, conn_options: Any) 
     return event
 
 
-def chat_chunk_has_response(chunk: Any) -> bool:
+def chat_chunk_has_response(chunk: ChatChunk) -> bool:
     return bool(chunk.delta and (chunk.delta.content or chunk.delta.tool_calls))
 
 
@@ -284,16 +323,16 @@ def model_usage_repr(usage: BaseModel) -> str:
     return f"{type(usage).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
 
 
-def _default_total_tokens(metrics: Any) -> Any:
+def _default_total_tokens(metrics: _MetricsT) -> _MetricsT:
     if "total_tokens" not in metrics.model_fields_set:
         metrics.total_tokens = metrics.input_tokens + metrics.output_tokens
     return metrics
 
 
-def speech_data_post_init(data: Any) -> None:
+def speech_data_post_init(data: SpeechData) -> None:
     from ._generated.language import LanguageCode
 
-    def code(lang: Any) -> Any:
+    def code(lang: LanguageCode) -> LanguageCode:
         return (
             LanguageCode(lang)
             if isinstance(lang, str) and not isinstance(lang, LanguageCode)
@@ -301,6 +340,7 @@ def speech_data_post_init(data: Any) -> None:
         )
 
     data.language = code(data.language)
-    for name in ("source_languages", "target_languages"):
-        if (langs := getattr(data, name)) is not None:
-            setattr(data, name, [code(lang) for lang in langs])
+    if data.source_languages is not None:
+        data.source_languages = [code(lang) for lang in data.source_languages]
+    if data.target_languages is not None:
+        data.target_languages = [code(lang) for lang in data.target_languages]
