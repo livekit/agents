@@ -47,9 +47,10 @@ impl generated::Implementations for Selected {
     type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
     type TransportFunctions = lk_agents_runtime::net::strings::TransportAlgorithms;
     type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
-    type MediaTokenization = lk_agents_runtime::codecs::MediaTokenization;
-    type AudioDecoder = lk_agents_runtime::codecs::StreamDecoder;
-    type StreamBuffer = lk_agents_runtime::codecs::StreamBuffer;
+    type MediaTokenization = lk_agents_runtime::media::blingfire::MediaTokenization;
+    type AudioDecoder =
+        lk_agents_runtime::inference::codecs::StreamDecoder<lk_agents_runtime::process::Process>;
+    type StreamBuffer = lk_agents_runtime::media::StreamBuffer;
     type AudioEmitter = lk_agents_runtime::audio_emitter::AudioEmitter;
     type DataStreamAudioReceiver = lk_agents_runtime::avatar_receiver::DataStreamAudioReceiver;
     type AvatarRunner = lk_agents_runtime::avatar_runner::AvatarRunner;

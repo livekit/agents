@@ -5,6 +5,7 @@ use lk_agents_abi::voice::rtc::{
     AudioSource, LocalParticipant, RtcError, TrackPublication, TrackPublishOptions, TrackSource,
 };
 use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt};
+use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
 use lk_agents_media::{Mixer, StreamId};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -299,7 +300,9 @@ impl BackgroundAudioPlayer {
         }
         let handle = PlaybackHandle::new(sound.config.fade_out);
         let input = match sound.input {
-            PlaybackInput::File(path) => Input::File(FileInput { path, looping, decoder: None }),
+            PlaybackInput::File(path) => {
+                Input::File(FileInput { path, looping, clock: self.clock.clone(), decoder: None })
+            }
             PlaybackInput::Stream(stream) => Input::Stream(stream),
         };
         self.queued.lock().unwrap().push(Source {
@@ -604,12 +607,8 @@ impl Source {
             match input {
                 Input::Stream(stream) => stream.close().await,
                 Input::File(mut file) => {
-                    if let Some(decoder) = file.decoder.as_mut() {
-                        if let Err(error) =
-                            decoder.close(lk_agents_abi::HOST_TEARDOWN_TIMEOUT).await
-                        {
-                            log::warn!("background audio cleanup incomplete: {error}");
-                        }
+                    if let Err(error) = file.close().await {
+                        log::warn!("background audio cleanup incomplete: {error}");
                     }
                 }
                 Input::Closed => {}
@@ -630,7 +629,8 @@ impl Drop for Source {
 struct FileInput {
     path: String,
     looping: bool,
-    decoder: Option<Box<dyn lk_agents_abi::media::decoder::FileDecoder>>,
+    clock: Arc<dyn Clock>,
+    decoder: Option<AudioDecoder>,
 }
 
 impl FileInput {
@@ -640,14 +640,20 @@ impl FileInput {
         num_channels: u16,
     ) -> Option<Result<Vec<i16>, String>> {
         if self.decoder.is_none() {
-            match lk_agents_abi::media::decoder::open(
-                lk_agents_abi::media::decoder::FileDecoderOptions {
-                    path: self.path.clone(),
-                    looping: self.looping,
+            let opened = crate::process::workers().map_err(|e| e.to_string()).and_then(|workers| {
+                let limits = decoder_limits(sample_rate, num_channels);
+                let path = self.path.clone();
+                AudioDecoder::open_file(
+                    &workers,
+                    path,
+                    self.looping,
                     sample_rate,
                     num_channels,
-                },
-            ) {
+                    limits,
+                )
+                .map_err(|e| e.to_string())
+            });
+            match opened {
                 Ok(decoder) => self.decoder = Some(decoder),
                 Err(error) => return Some(Err(error)),
             }
@@ -659,8 +665,17 @@ impl FileInput {
                 .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
                 .collect())),
             Ok(None) => None,
-            Err(error) => Some(Err(error)),
+            Err(error) => Some(Err(error.to_string())),
         }
+    }
+
+    /// Observes the decoder's native settlement, bounded by the host teardown budget.
+    async fn close(&mut self) -> Result<(), DecoderError> {
+        let Some(decoder) = self.decoder.as_mut() else { return Ok(()) };
+        let limit = lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
+        lk_agents_abi::utils::clock::timeout(self.clock.as_ref(), limit, decoder.close())
+            .await
+            .unwrap_or(Err(DecoderError::IncompleteCleanup))
     }
 }
 

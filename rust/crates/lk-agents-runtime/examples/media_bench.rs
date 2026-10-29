@@ -1,6 +1,6 @@
 //! `cargo run -p lk-agents-runtime --features media-ffmpeg,media-resample,media-images
 //! --example media_bench -- output.json [codecs|recording|images|control|all]`.
-//! Measures the registered background decoder, declared recorder implementation and shipped
+//! Measures the background file decoder, declared recorder implementation and shipped
 //! admitted image preparation against an independent anchored 1ms Tokio heartbeat.
 
 #[cfg(not(all(feature = "media-ffmpeg", feature = "media-images")))]
@@ -97,7 +97,7 @@ mod bench {
             Ok::<_, Error>(json!({
                 "heartbeat_ms": 1, "cadence_ms": 20,
                 "scope": concat!(
-                    "Shipped native entrypoints: registered background file decoder, ",
+                    "Shipped native entrypoints: background file decoder, ",
                     "ABI recorder implementation, admitted image preparation. Sustained active waves, ",
                     "anchored scheduled deadlines including missed ticks; thread CPU and wall poll ",
                     "timing. Python/GIL/RTC conversion excluded.",
@@ -215,6 +215,7 @@ mod bench {
     }
 
     async fn decode(path: &Path, count: usize) -> Result<Value, Error> {
+        let workers = lk_agents_runtime::process::workers()?;
         let (stop, heartbeat, observations) = start_heartbeat().await;
         let start = Instant::now();
         let mut samples = 0;
@@ -231,13 +232,13 @@ mod bench {
             for _ in 0..count {
                 let open_started = Instant::now();
                 let open_cpu_start = thread_cpu();
-                match lk_agents_abi::media::decoder::open(
-                    lk_agents_abi::media::decoder::FileDecoderOptions {
-                        path: path.to_string_lossy().into_owned(),
-                        looping: false,
-                        sample_rate: RATE,
-                        num_channels: 1,
-                    },
+                match lk_agents_inference::codecs::AudioDecoder::open_file(
+                    &workers,
+                    path.to_string_lossy().into_owned(),
+                    false,
+                    RATE,
+                    1,
+                    lk_agents_inference::codecs::decoder_limits(RATE, 1),
                 ) {
                     Ok(mut decoder) => {
                         let (start, ready) = oneshot::channel();
@@ -246,19 +247,21 @@ mod bench {
                             ready.await.map_err(|_| "decoder wave cancelled".to_owned())?;
                             let mut samples = 0;
                             let mut signal = false;
-                            while let Some(frame) = decoder.next().await? {
+                            while let Some(frame) =
+                                decoder.next().await.map_err(|e| e.to_string())?
+                            {
                                 samples += frame.samples_per_channel as usize;
                                 signal |= frame.data.iter().any(|byte| *byte != 0);
                             }
-                            decoder.close(Duration::from_secs(5)).await?;
+                            decoder.close().await.map_err(|e| e.to_string())?;
                             if samples.abs_diff(SAMPLES) > 1920 || !signal {
                                 return Err("decoded duration/signal mismatch".to_owned());
                             }
                             Ok::<_, String>(samples)
                         }));
                     }
-                    Err(error) if error.contains("capacity exhausted") => refused += 1,
-                    Err(error) => return Err(error.into()),
+                    Err(lk_agents_inference::codecs::DecoderError::WorkerAdmission(_)) => refused += 1,
+                    Err(error) => return Err(error.to_string().into()),
                 }
                 open_cpu.push((thread_cpu() - open_cpu_start) * 1000.);
                 open_max_ms = open_max_ms.max(open_started.elapsed().as_secs_f64() * 1000.);

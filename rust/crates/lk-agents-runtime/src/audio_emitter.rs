@@ -19,7 +19,7 @@ use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{DecodePlan, Decoder};
 use tokio::sync::{Notify, watch};
 
-use crate::codecs::{self, DecoderInput, decoder_limits};
+use lk_agents_inference::codecs::{self, DecoderInput, decoder_limits};
 
 /// What the emitter runs on, lent by the process (decision 88).
 pub struct EmitterEnv {

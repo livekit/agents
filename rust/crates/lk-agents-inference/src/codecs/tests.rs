@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::*;
 use lk_agents_media::workers::MediaWorkerLimits;
 
@@ -84,17 +86,12 @@ async fn decoded_stereo_is_normalized_before_delivery_to_a_mono_input() {
 }
 
 #[tokio::test]
-async fn background_file_service_preserves_audio_and_reports_file_and_codec_failures() {
+async fn file_decoding_preserves_audio_and_reports_file_and_codec_failures() {
+    let workers = workers();
+    let open = |path: String| AudioDecoder::open_file(&workers, path, false, 24_000, 1, limits());
     let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
     let file = AudioFile::wav("service", &pcm);
-    let mut decoder =
-        lk_agents_abi::media::decoder::open(lk_agents_abi::media::decoder::FileDecoderOptions {
-            path: file.path(),
-            looping: false,
-            sample_rate: 24_000,
-            num_channels: 1,
-        })
-        .unwrap();
+    let mut decoder = open(file.path()).unwrap();
     let mut actual = Vec::new();
     while let Some(frame) = decoder.next().await.unwrap() {
         assert_eq!((frame.sample_rate, frame.num_channels), (24_000, 1));
@@ -103,37 +100,24 @@ async fn background_file_service_preserves_audio_and_reports_file_and_codec_fail
         );
     }
     assert_eq!(actual, pcm);
-    decoder.close(Duration::from_secs(1)).await.unwrap();
-    let mut missing =
-        lk_agents_abi::media::decoder::open(lk_agents_abi::media::decoder::FileDecoderOptions {
-            path: format!("{}.missing", file.path()),
-            looping: false,
-            sample_rate: 24_000,
-            num_channels: 1,
-        })
-        .unwrap();
-    assert!(missing.next().await.unwrap_err().contains("No such file"));
-    missing.close(Duration::from_secs(1)).await.unwrap();
+    decoder.close().await.unwrap();
+    let mut missing = open(format!("{}.missing", file.path())).unwrap();
+    assert!(missing.next().await.unwrap_err().to_string().contains("No such file"));
+    missing.close().await.unwrap();
 
     let garbage = AudioFile::wav("garbage", &[]);
     std::fs::write(&garbage.0, b"not audio at all").unwrap();
-    let mut unreadable =
-        lk_agents_abi::media::decoder::open(lk_agents_abi::media::decoder::FileDecoderOptions {
-            path: garbage.path(),
-            looping: false,
-            sample_rate: 24_000,
-            num_channels: 1,
-        })
-        .unwrap();
+    let mut unreadable = open(garbage.path()).unwrap();
     let error = tokio::time::timeout(Duration::from_secs(1), unreadable.next())
         .await
         .expect("garbage input must settle its pull")
-        .unwrap_err();
-    #[cfg(feature = "media-ffmpeg")]
+        .unwrap_err()
+        .to_string();
+    #[cfg(feature = "ffmpeg")]
     assert!(error.starts_with("ffmpeg:"), "expected codec failure, got {error}");
-    #[cfg(not(feature = "media-ffmpeg"))]
+    #[cfg(not(feature = "ffmpeg"))]
     assert!(error.starts_with("invalid WAV file:"), "expected codec failure, got {error}");
-    unreadable.close(Duration::from_secs(1)).await.unwrap();
+    unreadable.close().await.unwrap();
 }
 
 #[tokio::test]

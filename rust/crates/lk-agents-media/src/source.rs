@@ -73,6 +73,17 @@ pub fn frames(
     })
 }
 
+/// Refuses, before any worker is admitted, a streamed container this build cannot decode.
+pub fn check_stream(mime: &str) -> crate::Result<()> {
+    if cfg!(feature = "ffmpeg") || crate::mime_to_av_format(Some(mime)) == Some("wav") {
+        return Ok(());
+    }
+    Err(CodecError::UnsupportedMime {
+        mime: mime.into(),
+        reason: "container decoding needs the ffmpeg feature",
+    })
+}
+
 /// A file decodes by its WAV extension without ffmpeg, else by probing.
 fn file_mime(path: &str) -> &'static str {
     let wav =

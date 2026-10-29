@@ -7,10 +7,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use lk_agents_abi::media::decoder::FileDecoderOptions;
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
 use lk_agents_abi::recorder::{AudioRecorder, SessionRecorder as RecorderApi};
 use lk_agents_abi::utils::video::VideoFrame;
+use lk_agents_inference::codecs::{AudioDecoder, decoder_limits};
 use lk_agents_media::workers::MediaWorkerClass;
 use lk_agents_runtime::recording::SessionRecorder;
 use serde_json::{Value, json};
@@ -100,10 +100,8 @@ async fn measure<F: Future>(name: &str, workload: Value, future: F) -> F::Output
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "real native workload; records host-dependent measurements"]
 async fn media_never_block_measurements() {
-    let manifest: Value = serde_json::from_str(include_str!(
-        "../../../../scripts/bench/budgets.json"
-    ))
-    .unwrap();
+    let manifest: Value =
+        serde_json::from_str(include_str!("../../../../scripts/bench/budgets.json")).unwrap();
     println!(
         "MEDIA_PROFILE {}",
         json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH,
@@ -187,24 +185,28 @@ async fn media_never_block_measurements() {
             let mut decoders = Vec::new();
             for _ in 0..32 {
                 decoders.push(
-                    lk_agents_abi::media::decoder::open(FileDecoderOptions {
-                        path: path.to_string_lossy().into_owned(),
-                        looping: false,
-                        sample_rate: 48_000,
-                        num_channels: 1,
-                    })
+                    AudioDecoder::open_file(
+                        &workers,
+                        path.to_string_lossy().into_owned(),
+                        false,
+                        48_000,
+                        1,
+                        decoder_limits(48_000, 1),
+                    )
                     .unwrap(),
                 );
             }
             // Each stream has more PCM than its bounded output queue, so capacity stays owned
             // while consumers are stalled. A 33rd stream is refused before its file is opened.
             assert!(
-                lk_agents_abi::media::decoder::open(FileDecoderOptions {
-                    path: path.to_string_lossy().into_owned(),
-                    looping: false,
-                    sample_rate: 48_000,
-                    num_channels: 1,
-                })
+                AudioDecoder::open_file(
+                    &workers,
+                    path.to_string_lossy().into_owned(),
+                    false,
+                    48_000,
+                    1,
+                    decoder_limits(48_000, 1),
+                )
                 .is_err()
             );
             let mut tasks = Vec::new();
@@ -214,7 +216,7 @@ async fn media_never_block_measurements() {
                     while let Some(frame) = decoder.next().await.unwrap() {
                         samples += frame.samples_per_channel as usize;
                     }
-                    decoder.close(Duration::from_secs(5)).await.unwrap();
+                    decoder.close().await.unwrap();
                     assert_eq!(samples, 480_000, "codec tail and head must preserve duration");
                 });
             }

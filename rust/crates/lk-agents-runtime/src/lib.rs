@@ -42,7 +42,6 @@ pub use lk_agents_storage as storage;
 pub mod a2a;
 pub mod agent_run;
 pub mod audio_emitter;
-pub mod codecs;
 pub mod host;
 #[cfg(feature = "media-images")]
 pub mod images;

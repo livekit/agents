@@ -1,19 +1,22 @@
 //! Background decoding: one admitted native job runs a `lk_agents_media::source` decode and hands
 //! its frames to an async consumer through a bounded queue. Pulls yield cooperatively;
-//! cancellation retains native ownership through worker settlement.
+//! cancellation retains native ownership through worker settlement. The pool is the process's,
+//! lent by [`Env`](crate::env::Env) (decision 88).
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
-use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, MediaWorkers};
-use lk_agents_media::{AudioFormat, CodecError};
+use lk_agents_media::{AudioFormat, CodecError, StreamBuffer};
 use tokio::sync::Notify;
+
+use crate::env::Env;
 
 /// Streamed bytes the native decoder has not read yet; a push beyond it is refused, not queued.
 const MAX_PENDING_INPUT: usize = 8 * 1024 * 1024;
@@ -197,14 +200,7 @@ impl AudioDecoder {
         num_channels: u16,
         limits: DecoderLimits,
     ) -> Result<(Self, DecoderInput), DecoderError> {
-        #[cfg(not(feature = "media-ffmpeg"))]
-        if lk_agents_media::mime_to_av_format(Some(mime)) != Some("wav") {
-            return Err(CodecError::UnsupportedMime {
-                mime: mime.into(),
-                reason: "container decoding needs the runtime media-ffmpeg feature",
-            }
-            .into());
-        }
+        source::check_stream(mime)?;
         let input = Arc::new(StreamBuffer::new());
         let source = Source::Stream { mime: mime.to_owned(), input: input.clone() };
         let decoder = Self::start(workers, source, sample_rate, num_channels, limits)?;
@@ -383,67 +379,30 @@ impl DecoderInput {
     }
 }
 
-impl lk_agents_abi::media::decoder::FileDecoder for AudioDecoder {
-    fn next(
-        &mut self,
-    ) -> lk_agents_abi::utils::spawner::BoxFuture<
-        '_,
-        Result<Option<lk_agents_abi::AudioFrame>, String>,
-    > {
-        Box::pin(async move { self.next().await.map_err(|error| error.to_string()) })
-    }
-
-    fn close(
-        &mut self,
-        timeout: Duration,
-    ) -> lk_agents_abi::utils::spawner::BoxFuture<'_, Result<(), String>> {
-        Box::pin(async move {
-            match tokio::time::timeout(timeout, self.close()).await {
-                Ok(closed) => closed.map_err(|error| error.to_string()),
-                Err(_) => Err(DecoderError::IncompleteCleanup.to_string()),
-            }
-        })
-    }
-}
-
-lk_agents_abi::inventory::submit! {
-    lk_agents_abi::media::decoder::FileDecoderProvider {
-        open: |options| {
-            let lk_agents_abi::media::decoder::FileDecoderOptions {
-                path, looping, sample_rate, num_channels,
-            } = options;
-            let workers = crate::process::workers().map_err(|error| error.to_string())?;
-            let limits = decoder_limits(sample_rate, num_channels);
-            AudioDecoder::open_file(&workers, path, looping, sample_rate, num_channels, limits)
-                .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
-                .map_err(|error| error.to_string())
-        },
-    }
-}
-
 /// `_core.AudioDecoder`, the native half of `utils.codecs.AudioStreamDecoder`: input is queued
 /// without waiting, frames are awaited, and EOF never blocks the host loop.
-pub struct StreamDecoder {
+pub struct StreamDecoder<E> {
     input: DecoderInput,
     output: tokio::sync::Mutex<AudioDecoder>,
+    env: PhantomData<fn() -> E>,
 }
 
 fn failure(error: impl std::fmt::Display) -> CodecFailure {
     CodecFailure(error.to_string())
 }
 
-impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
+impl<E: Env> lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder<E> {
     fn new(
         mime: String,
         sample_rate: Option<u32>,
         num_channels: u16,
     ) -> Result<Self, CodecFailure> {
-        let workers = crate::process::workers().map_err(failure)?;
+        let workers = E::workers().map_err(failure)?;
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
         let (output, input) =
             AudioDecoder::open_stream(&workers, &mime, sample_rate, num_channels, limits)
                 .map_err(failure)?;
-        Ok(Self { input, output: tokio::sync::Mutex::new(output) })
+        Ok(Self { input, output: tokio::sync::Mutex::new(output), env: PhantomData })
     }
 
     fn push(&self, data: &[u8]) -> Result<(), CodecFailure> {
@@ -465,13 +424,8 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
     }
 }
 
-pub use lk_agents_media::StreamBuffer;
-
-#[cfg(feature = "python")]
-pub use lk_agents_media::blingfire::MediaTokenization;
-
 /// Two seconds of queued PCM, delivered in 10 ms chunks.
-pub(crate) fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
+pub fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
     let output_samples =
         (sample_rate as usize).saturating_mul(usize::from(num_channels)).saturating_mul(2);
     DecoderLimits {

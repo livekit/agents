@@ -51,7 +51,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 [features]
 # Native applications keep the resampler; deterministic ports can select the linear one.
 default = ["media-resample"]
-media-ffmpeg = ["lk-agents-media/ffmpeg"]
+media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
 media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images"]
 # The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
