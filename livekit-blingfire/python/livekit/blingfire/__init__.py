@@ -15,28 +15,34 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version as _distribution_version
+
 import lk_blingfire as _cext
 
-from .version import __version__
+__version__ = _distribution_version("livekit-blingfire")
 
 
 def text_to_sentences(text: str) -> str:
+    """Return sentences separated by newlines."""
     return _cext.text_to_sentences(text)
 
 
 def text_to_sentences_with_offsets(
     text: str,
 ) -> tuple[str, list[tuple[int, int]]]:
+    """Return sentences and half-open input spans using Python character indices."""
     return _cext.text_to_sentences_with_offsets(text)
 
 
 def text_to_words(text: str) -> str:
+    """Return word and punctuation tokens separated by spaces."""
     return _cext.text_to_words(text)
 
 
 def text_to_words_with_offsets(
     text: str,
 ) -> tuple[str, list[tuple[int, int]]]:
+    """Return tokens and half-open input spans using Python character indices."""
     return _cext.text_to_words_with_offsets(text)
 
 
