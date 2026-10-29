@@ -220,10 +220,10 @@ struct State {
     tasks: Vec<OwnedTask>,
     /// The close's join of `tasks`, started by the first close.
     cleanup: Option<OwnedTask>,
-    /// What to tell the host once the lock is released: a host call takes the host's own lock
-    /// (Python's GIL), which a host thread reading the pool holds while it waits on this one.
+    /// The processes to report closed once the lock is released: a host call takes the host's
+    /// own lock (Python's GIL), which a host thread reading the pool holds while it waits on
+    /// this one.
     released: Vec<Executor>,
-    failed_tasks: Vec<String>,
 }
 
 impl State {
@@ -302,7 +302,6 @@ impl ProcPool {
                 tasks: Vec::new(),
                 cleanup: None,
                 released: Vec::new(),
-                failed_tasks: Vec::new(),
             }),
             changed: Notify::new(),
             idle_ready: watch::channel(Readiness::Pending).0,
@@ -331,7 +330,7 @@ impl ProcPool {
     /// Changes the state, then allocates, publishes readiness, tells the host what was released
     /// and wakes the waiters. No host call is made under the lock.
     fn update<R>(&self, f: impl FnOnce(&Self, &mut State) -> R) -> R {
-        let (result, released, failed_tasks) = {
+        let (result, released) = {
             let mut st = lock(&self.0.state);
             if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
                 st.refill_paused_until = None;
@@ -344,13 +343,10 @@ impl ProcPool {
             } else if st.ready.len() >= self.0.opts.num_idle_processes {
                 self.0.idle_ready.send_replace(Readiness::Ready);
             }
-            (result, std::mem::take(&mut st.released), std::mem::take(&mut st.failed_tasks))
+            (result, std::mem::take(&mut st.released))
         };
         for executor in released {
             self.0.host.emit(PoolEvent::Closed, &executor);
-        }
-        for error in failed_tasks {
-            crate::diagnostics::emit(log::Level::Error, format!("process pool task failed: {error}"));
         }
         self.0.changed.notify_waiters();
         result
@@ -365,7 +361,11 @@ impl ProcPool {
         st.tasks.push(TokioSpawner::current().spawn(step));
         for task in finished {
             if let Some(Err(error)) = task.now_or_never() {
-                st.failed_tasks.push(error.to_string());
+                // A queued log line, not a host call.
+                crate::diagnostics::emit(
+                    log::Level::Error,
+                    format!("process pool task failed: {error}"),
+                );
             }
         }
     }
@@ -794,7 +794,9 @@ impl ProcPool {
         let mut last_error = None;
         loop {
             let (id, process) = self.acquire(request).await.map_err(|error| match error {
-                Failure::AcquireExhausted { attempts } => LaunchError::AcquireExhausted { attempts },
+                Failure::AcquireExhausted { attempts } => {
+                    LaunchError::AcquireExhausted { attempts }
+                }
                 Failure::LaunchExhausted => {
                     last_error.take().map_or(LaunchError::NoProcess, LaunchError::Launch)
                 }

@@ -328,7 +328,10 @@ struct Driver {
 }
 
 impl Driver {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the actor takes each of its channels and I/O tasks as it is spawned"
+    )]
     async fn run(
         mut self,
         mut commands: mpsc::Receiver<Command>,
