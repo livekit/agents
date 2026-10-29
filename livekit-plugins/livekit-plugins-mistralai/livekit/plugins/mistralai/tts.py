@@ -26,6 +26,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral, models
@@ -53,9 +54,9 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str | None
     response_format: RESPONSE_FORMAT
-    ref_audio: str | None
+    ref_audio: Sensitive[str | None]
     expressiveness: float | None = None
-    phoneme_hints: dict[str, list[models.IPAPhoneme]] | None = None
+    phoneme_hints: Sensitive[dict[str, list[models.IPAPhoneme]] | None] = None
     use_realtime: bool = False
 
 
@@ -134,6 +135,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def update_options(
         self,

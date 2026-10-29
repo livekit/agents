@@ -133,6 +133,14 @@ class RealtimeModelFallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "llm": self._models,
+            "cooldown": self._cooldown,
+            "regenerate_on_swap": self._regenerate_on_swap,
+        }
+
     @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata of the model currently serving sessions (the primary until a swap)."""

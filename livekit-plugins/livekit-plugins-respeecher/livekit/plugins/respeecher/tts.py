@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -33,6 +34,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -57,9 +59,9 @@ class _TTSOptions:
     encoding: TTSEncoding
     sample_rate: int
     voice_id: str
-    voice_settings: NotGivenOr[VoiceSettings]
-    api_key: str
-    base_url: str
+    voice_settings: Sensitive[NotGivenOr[VoiceSettings]]
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
 
 
 async def list_voices(
@@ -171,6 +173,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Respeecher"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

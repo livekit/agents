@@ -35,6 +35,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.stt import SpeechData
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -246,9 +247,9 @@ class BiasingOptions:
     """
 
     custom_model_id: str | None = None
-    phrases: Sequence[str] | None = None
+    phrases: Sensitive[Sequence[str] | None] = None
     strength: float | None = None
-    patterns: Sequence[str] | None = None
+    patterns: Sensitive[Sequence[str] | None] = None
 
     def __post_init__(self) -> None:
         check_comma_joined("phrases", self.phrases, limit=MAX_PHRASES)
@@ -459,6 +460,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Reson8"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def update_options(
         self,

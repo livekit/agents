@@ -26,6 +26,7 @@ import os
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -38,6 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -75,8 +77,8 @@ class _TTSOptions:
     language: TTSLanguages | str
     sample_rate: TTSSampleRates | int
     speed: float
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
     allow_insecure_base_url: bool
 
 
@@ -166,6 +168,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Vakyam"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts, exclude=["allow_insecure_base_url"]),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

@@ -39,6 +39,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
@@ -61,8 +62,8 @@ class SimplismartSTTOptions(BaseModel):
     max_speech_duration_s: float = 30
     min_silence_duration_ms: int = 2000
     speech_pad_ms: int = 400
-    initial_prompt: str | None = None
-    hotwords: str | None = None
+    initial_prompt: Sensitive[str | None] = None
+    hotwords: Sensitive[str | None] = None
     num_speakers: int = 0
     compression_ratio_threshold: float | None = 2.4
     beam_size: int = 4
@@ -191,6 +192,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Simplismart"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def model(self) -> str:

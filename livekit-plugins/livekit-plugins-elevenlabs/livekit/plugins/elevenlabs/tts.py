@@ -39,6 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -228,6 +229,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "ElevenLabs"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts, exclude=["word_tokenizer"]),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -624,12 +631,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 @dataclass
 class _TTSOptions:
-    api_key: str
+    api_key: Sensitive[str]
     voice_id: str
     voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
     language: NotGivenOr[LanguageCode]
-    base_url: str
+    base_url: Sensitive[str]
     encoding: TTSEncoding
     sample_rate: int
     streaming_latency: NotGivenOr[int]

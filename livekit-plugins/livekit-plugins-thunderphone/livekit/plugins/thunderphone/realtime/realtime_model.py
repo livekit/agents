@@ -159,6 +159,7 @@ class RealtimeModel(_openai.RealtimeModel):
 
         self._tp_agent_id = str(agent_id).strip() if agent_id is not None else None
         self._tp_engine = model
+        self._tp_language = language
         self._tp_live_transcripts = bool(live_transcripts)
 
         url = _build_url(
@@ -206,6 +207,14 @@ class RealtimeModel(_openai.RealtimeModel):
     @property
     def provider(self) -> str:
         return "ThunderPhone"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "agent_id": self._tp_agent_id,
+            "language": self._tp_language,
+            "live_transcripts": self._tp_live_transcripts,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         if turn_detection_disabled:

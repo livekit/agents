@@ -23,6 +23,7 @@ import httpx2 as httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
@@ -58,7 +59,7 @@ _NO_FORCED_TOOL_CHOICE_PATTERNS = (
 @dataclass
 class _LLMOptions:
     model: str | ChatModels
-    user: NotGivenOr[str]
+    user: Sensitive[NotGivenOr[str]]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
@@ -159,6 +160,9 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def chat(
         self,

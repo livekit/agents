@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
@@ -213,6 +213,10 @@ class STT(
     @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return {}
 
     @abstractmethod
     async def _recognize_impl(

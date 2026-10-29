@@ -40,6 +40,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
 
@@ -68,10 +69,10 @@ STREAM_CHUNK_BYTES = 1024
 
 @dataclass
 class GnaniSTTOptions:
-    api_key: str
+    api_key: Sensitive[str]
     language: str
     sample_rate: int = SAMPLE_RATE_16K
-    base_url: str = GNANI_STT_BASE_URL
+    base_url: Sensitive[str] = GNANI_STT_BASE_URL
     preferred_language: str | None = None
     format: str = "verbatim"
     itn_native_numerals: bool = False
@@ -167,6 +168,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Gnani"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
