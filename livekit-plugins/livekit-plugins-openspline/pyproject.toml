@@ -4,16 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-openspline"
-version = "0.1.0"
+dynamic = ["version"]
 description = "OpenSpline avatar plugin for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10,<3.13"
-dependencies = ["openspline>=0.1.2,<0.2", "livekit-agents>=1.8.9,<2", "livekit-api>=1.2.1,<2"]
+dependencies = ["openspline>=0.1.2,<0.2", "livekit-agents>=1.8.10", "livekit-api>=1.2.1,<2"]
 
 [project.urls]
 Documentation = "https://docs.openspline.dev/connectors/livekit"
-Source = "https://github.com/openspline/openspline"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/openspline/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

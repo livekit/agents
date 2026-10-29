@@ -1,8 +1,9 @@
-"""Run with: python experiments/livekit/examples/agent.py dev."""
+"""Run with Python 3.10–3.12: uv run openspline_avatar.py dev."""
 
 import os
 
 from dotenv import load_dotenv
+
 from livekit import agents
 from livekit.agents import Agent, AgentServer, AgentSession
 from livekit.plugins import openai, openspline
