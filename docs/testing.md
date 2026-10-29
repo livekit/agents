@@ -196,6 +196,19 @@ The SDK judge API remains supported without requiring a separate scenario or
 judging subsystem inside the agent core. Simulation verdicts and SDK judgments
 keep their distinct result types and meanings.
 
+Programmatic tests need no room: a session started without one, as above, runs
+offline (`session.start(agent)` outside a job, or `room=None` where a job would
+supply its room). The framework ships no test-only room or fake export; its own
+room-level behavior is tested in Rust over simulated SDK peers.
+
+The framework's deterministic simulation runs the real voice, room and avatar
+executors and the real decision cores, with fakes only at the SDK and provider
+ports. Executors spawn and sleep only through an injected spawner and clock, so
+a deterministic scheduler using basic partial-order sampling decides every
+interleaving, and every `select!` is biased so no branch is chosen at random.
+The [Rust plan](internals/rust-core.md#deterministic-simulation-testing) owns
+that contract.
+
 The [Rust plan](internals/rust-core.md#support-algorithms-and-observations)
 defines these implementation boundaries; this page owns the public testing,
 evaluation and simulation-context contracts.
