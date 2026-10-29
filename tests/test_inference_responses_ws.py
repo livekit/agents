@@ -367,6 +367,24 @@ async def test_ws_per_call_extra_headers_warns(caplog: pytest.LogCaptureFixture)
     await llm_model.aclose()
 
 
+async def test_gateway_tool_not_allowed_is_400() -> None:
+    llm_model = _make_llm()
+    refused = {
+        "type": "gateway.error",
+        "code": "tool_not_allowed",
+        "message": 'tools[0].type "file_search" is not supported; hosted tool not allowed',
+    }
+    _use_connection(llm_model, _ScriptedWs([_CONNECTED, refused]))
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _drain(llm_model)
+
+    assert "hosted tool not allowed" in exc_info.value.message
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.retryable is False
+    await llm_model.aclose()
+
+
 async def test_gateway_upstream_connect_failed_is_retryable_502() -> None:
     llm_model = _make_llm()
     upstream_failed = {
