@@ -8,11 +8,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
-from livekit.agents._core import Storage
 from livekit.agents.storage.context import _TurnHost
 from livekit.agents.types import APIConnectOptions
 
-from .._core import ChatItem
+from .._core import ChatItem, Storage
 from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate

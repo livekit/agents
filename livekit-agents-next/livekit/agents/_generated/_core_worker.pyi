@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
-from livekit.agents._core import EndpointServer, ServerConfig
 from livekit.agents.cli import _DevServer
 from livekit.agents.http import AsgiApplication, ExchangeStream
 from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool

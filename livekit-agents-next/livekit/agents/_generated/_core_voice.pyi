@@ -10,18 +10,6 @@ from typing import Any
 
 from datetime import date
 from livekit.agents import VAD
-from livekit.agents._core import (
-    AgentNodes,
-    ConsoleIo,
-    DuplexRealtimeModel,
-    HostRealtimeModel,
-    InterruptionDetector,
-    NativeRealtimeModel,
-    RealtimeFallbackModel,
-    SessionRecorder,
-    VoiceAgent,
-    _core_VoiceStore,
-)
 from livekit.agents._core_view import TurnDetector
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.job import JobContext
@@ -40,15 +28,24 @@ from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublicati
 from livekit.rtc import AudioFrame
 
 from .._core import (
+    AgentNodes,
     ChatContent,
     ChatItem,
+    DuplexRealtimeModel,
+    HostRealtimeModel,
+    InterruptionDetector,
+    NativeRealtimeModel,
     PlaybackInfo,
     PlaybackTracker,
+    RealtimeFallbackModel,
     RoomAudioInput,
     RoomEventBus,
     RoomVideoInput,
+    SessionRecorder,
     SpeechHandle,
+    VoiceAgent,
     _core_RoomSession,
+    _core_VoiceStore,
 )
 from ..types import NotGivenOr
 from .amd import AmdConstants

@@ -590,6 +590,9 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             .iter()
             .map(|class| {
                 let (module, name) = class.rsplit_once('.').expect("a host class is dotted");
+                // A `_core` class: relative, so a family stub never imports the class it defines.
+                let module =
+                    if module == lk_agents_bindgen::DEFAULT_MODULE { ".._core" } else { module };
                 imports.add(module, name);
                 name
             })
