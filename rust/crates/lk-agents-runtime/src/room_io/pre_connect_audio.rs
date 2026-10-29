@@ -268,7 +268,7 @@ async fn receive_bytes(stream: &mut ByteStream) -> std::result::Result<HeadBytes
     let next = |error: lk_agents_abi::errors::ProviderError| HeadError::Stream(error.to_string());
     while let Some(chunk) = stream.chunks.next().await.map_err(next)? {
         head.push(&chunk)?;
-        lk_agents_abi::yield_now().await;
+        super::yield_now().await;
     }
     Ok(head)
 }

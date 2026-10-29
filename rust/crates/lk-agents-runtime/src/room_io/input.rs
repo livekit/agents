@@ -412,7 +412,7 @@ impl ParticipantAudioInput {
                     return false;
                 }
             }
-            lk_agents_abi::yield_now().await;
+            super::yield_now().await;
         }
         true
     }
