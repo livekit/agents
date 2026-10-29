@@ -1,5 +1,4 @@
 use crate::agent_activity::scheduling::SpeechId;
-use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 
 pub mod state;
 use state::{
@@ -12,7 +11,6 @@ use lk_agents_abi::{ChatItem, Modality, Monotone};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 use tokio::sync::watch;
 
 /// The `extra` key marking a call that detached (`RunContext.update()`): its speech no longer
@@ -25,12 +23,6 @@ pub const TOOL_NON_BLOCKING_EXTRA_KEY: &str = "__livekit_agents_tool_non_blockin
 pub fn speech_priorities() -> (i32, i32, i32) {
     use crate::agent_activity::scheduling as s;
     (s::SPEECH_PRIORITY_LOW, s::SPEECH_PRIORITY_NORMAL, s::SPEECH_PRIORITY_HIGH)
-}
-
-/// `HOST_TEARDOWN_TIMEOUT`, in seconds.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn interruption_timeout() -> Duration {
-    HOST_TEARDOWN_TIMEOUT
 }
 
 /// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.

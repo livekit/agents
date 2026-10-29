@@ -462,7 +462,6 @@ fn is_emoji(c: char) -> bool {
 }
 
 /// `filter_emoji`. Stateless: nothing here spans a chunk boundary.
-#[lk_agents_abi::host(export(pid = false))]
 pub fn filter_emoji(chunk: &str) -> String {
     if !chunk.chars().any(is_emoji) {
         return chunk.to_owned();

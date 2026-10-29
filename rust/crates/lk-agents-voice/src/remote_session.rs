@@ -39,7 +39,6 @@ pub const HEADER_SIZE: usize = 4;
 pub const MAX_MESSAGE_SIZE: usize = 1 << 20;
 
 /// `TOPIC_SESSION_MESSAGES` (`remote_session.py:57`): the byte-stream topic both halves register on.
-#[lk_agents_abi::host(export(name = "session_messages_topic", pid = false))]
 pub const TOPIC_SESSION_MESSAGES: &str = "lk.agent.session";
 
 pub use lk_agents_abi::voice::events::UserState;
@@ -549,7 +548,6 @@ pub trait ClientSink: Send + Sync {
 }
 
 /// `struct.pack(">I", len(data)) + data`, as one buffer so no sender can splice between header and body.
-#[lk_agents_abi::host(export)]
 pub fn frame(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER_SIZE + payload.len());
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
