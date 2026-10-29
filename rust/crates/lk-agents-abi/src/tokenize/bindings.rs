@@ -29,13 +29,6 @@ pub trait TokenizeFunctions {
     ) -> Vec<(String, usize, usize)>;
 
     #[host(function)]
-    fn basic_split_sentences(
-        text: String,
-        #[host(default = 20)] min_sentence_len: usize,
-        #[host(kw, default = false)] retain_format: bool,
-    ) -> Vec<(String, usize, usize)>;
-
-    #[host(function)]
     fn replace_words(
         text: String,
         replacements: indexmap::IndexMap<String, String>,
@@ -43,14 +36,8 @@ pub trait TokenizeFunctions {
     ) -> Option<(String, usize)>;
 
     #[host(function)]
-    fn split_paragraphs(text: String) -> Vec<(String, usize, usize)>;
-
-    #[host(function)]
     #[python(forward(module = "tokenize_basic"))]
     fn tokenize_paragraphs(text: String) -> Vec<String>;
-
-    #[host(function)]
-    fn xml_has_unclosed_tags(text: String) -> bool;
 
     /// `hyphenate_word(word)`: the pieces, broken at the possible hyphenation points.
     #[host(function)]

@@ -17,24 +17,13 @@ def split_words(
     retain_format: bool = False,
 ) -> list[tuple[str, int, int]]: ...
 
-def basic_split_sentences(
-    text: str,
-    min_sentence_len: int = 20,
-    *,
-    retain_format: bool = False,
-) -> list[tuple[str, int, int]]: ...
-
 def replace_words(
     text: str,
     replacements: dict[str, str],
     hold_last_word: bool = False,
 ) -> tuple[str, int] | None: ...
 
-def split_paragraphs(text: str) -> list[tuple[str, int, int]]: ...
-
 def tokenize_paragraphs(text: str) -> list[str]: ...
-
-def xml_has_unclosed_tags(text: str) -> bool: ...
 
 def hyphenate_word(word: str) -> list[str]:
     """`hyphenate_word(word)`: the pieces, broken at the possible hyphenation points."""

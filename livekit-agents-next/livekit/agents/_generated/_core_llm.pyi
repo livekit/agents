@@ -21,7 +21,6 @@ from .._core import ChatItem, FallbackTtsStream
 from .mcp import MCPToolOptions
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
-from .tool_context import DuplicateMode, DuplicateScope
 
 def chat_ctx_copy_plan(
     facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
@@ -324,8 +323,6 @@ def to_strict_json_schema(
     null_sentinel_for_defaults: bool = False,
 ) -> dict[str, object]: ...
 
-def resolve_ref(*, root: dict[str, object], ref: str) -> dict[str, object]: ...
-
 def inject_schema_defaults(value: object, schema: object, root: object | None = None) -> object: ...
 
 def build_legacy_openai_schema(
@@ -345,19 +342,6 @@ def build_strict_openai_schema(
 def to_openai_response_format(name: str, schema: object) -> dict[str, object]: ...
 
 def parse_function_arguments(raw: str) -> dict[str, object]: ...
-
-def duplicate_key(
-    name: str,
-    args: object | None,
-    scope: DuplicateScope,
-) -> tuple[str, str | None]: ...
-
-def decide_duplicate(
-    name: str,
-    mode: DuplicateMode,
-    confirm_duplicate: bool | None,
-    in_flight: Sequence[tuple[str, bool]],
-) -> tuple[str, object | None]: ...
 
 def inject_confirm_duplicate(parameters: object) -> dict[str, object]: ...
 

@@ -844,14 +844,6 @@ pub fn to_strict_json_schema<'py>(py: Python<'py>, schema: Bound<'_, PyAny>, nul
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, root, r#ref))]
-pub fn resolve_ref<'py>(py: Python<'py>, root: Bound<'_, PyAny>, r#ref: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
-    let root = match ::lk_agents_abi::python::value_from_py(&root, "root")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("root", ": expected a dict"))) }?;
-    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::resolve_ref(&root, &r#ref).map_err(|e: ::lk_agents_abi::llm::provider_format::StrictError| <::lk_agents_abi::llm::provider_format::StrictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
-}
-
-#[pyfunction]
 #[pyo3(signature = (value, schema, root = None))]
 pub fn inject_schema_defaults<'py>(py: Python<'py>, value: Bound<'_, PyAny>, schema: Bound<'_, PyAny>, root: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
     let value = ::lk_agents_abi::python::value_from_py(&value, "value")?;
@@ -890,22 +882,6 @@ pub fn to_openai_response_format<'py>(py: Python<'py>, name: ::std::string::Stri
 pub fn parse_function_arguments<'py>(py: Python<'py>, raw: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
     let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::parse_function_arguments(&raw).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
-}
-
-#[pyfunction]
-#[pyo3(signature = (name, args, scope))]
-pub fn duplicate_key(name: ::std::string::String, args: Option<Bound<'_, PyAny>>, scope: ::lk_agents_abi::llm::mcp::DuplicateScope) -> PyResult<(::std::string::String, ::std::option::Option<::std::string::String>)> {
-    ::lk_agents_abi::python::check_pid()?;
-    let args = args.map(|v| ::lk_agents_abi::python::value_from_py(&v, "args")).transpose()?;
-    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::duplicate_key(&name, args, scope);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (name, mode, confirm_duplicate, in_flight))]
-pub fn decide_duplicate<'py>(py: Python<'py>, name: ::std::string::String, mode: ::lk_agents_abi::llm::mcp::DuplicateMode, confirm_duplicate: ::std::option::Option<bool>, in_flight: ::std::vec::Vec<(::std::string::String, bool)>) -> PyResult<Bound<'py, PyAny>> {
-    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::decide_duplicate_wire(&name, mode, confirm_duplicate, in_flight);
-    Ok({ let (x0, x1,) = out; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, match x1 { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? }])?.into_any() })
 }
 
 #[pyfunction]

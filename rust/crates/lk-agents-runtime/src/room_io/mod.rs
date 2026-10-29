@@ -84,16 +84,6 @@ impl room_owner::RoomRuntime for RoomFactory {
         wait::agent(room.as_ref(), name).await
     }
 
-    async fn wait_for_participant_attribute(
-        room: room_owner::RoomSession,
-        identity: String,
-        attribute: String,
-        value: String,
-    ) -> std::result::Result<(), RtcError> {
-        let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
-        wait::participant_attribute(room.as_ref(), identity, attribute, value).await
-    }
-
     async fn wait_for_track_publication(
         room: room_owner::RoomSession,
         identity: Option<String>,

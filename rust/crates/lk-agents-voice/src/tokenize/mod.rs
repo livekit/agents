@@ -38,13 +38,6 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
     ) -> Vec<(String, usize, usize)> {
         split_words_of(&text, ignore_punctuation, split_character, retain_format)
     }
-    fn basic_split_sentences(
-        text: String,
-        min_sentence_len: usize,
-        retain_format: bool,
-    ) -> Vec<(String, usize, usize)> {
-        basic_split_sentences(&text, min_sentence_len, retain_format)
-    }
     fn replace_words(
         text: String,
         replacements: indexmap::IndexMap<String, String>,
@@ -52,16 +45,10 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
     ) -> Option<(String, usize)> {
         replace_words(&text, replacements, hold_last_word)
     }
-    fn split_paragraphs(text: String) -> Vec<(String, usize, usize)> {
-        split_paragraphs(&text)
-    }
     fn tokenize_paragraphs(text: String) -> Vec<String> {
         tokenize_paragraphs(&text)
     }
     fn hyphenate_word(word: String) -> Vec<String> {
         crate::transcription::synchronizer::hyphenate_word(&word)
-    }
-    fn xml_has_unclosed_tags(text: String) -> bool {
-        xml::has_unclosed_tags(&text)
     }
 }

@@ -483,21 +483,9 @@ pub trait InferenceModels {
     #[host(function)]
     fn inference_default_url(#[host(default = None)] server_url: Option<String>) -> String;
 
-    /// Whether the build links a native provider of the local models.
-    #[host(function)]
-    fn local_models_native() -> bool;
-
     /// Loads the native models' weights; `false` when no provider is linked.
     #[host(function)]
     fn local_models_init(vad: bool, eot: bool) -> bool;
-
-    /// The frames an interruption must span: `min_interruption_duration` at the detector's rate.
-    #[host(function)]
-    fn interruption_min_frames(min_interruption_duration: f64) -> u32;
-
-    /// The interruption probability a window of frame probabilities reports.
-    #[host(function)]
-    fn interruption_estimate_probability(probabilities: Vec<f64>) -> f64;
 
     /// `"provider/model:voice"` split into the model and its voice.
     #[host(function)]
@@ -517,20 +505,6 @@ pub trait InferenceModels {
     /// `"provider/model:language"` split into the model and its language.
     #[host(function)]
     fn stt_parse_model_string(model: String) -> (String, Option<String>);
-
-    /// Whether these options ask the provider for speaker diarization.
-    #[host(function)]
-    fn stt_diarization_enabled(
-        #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, Value>>,
-    ) -> bool;
-
-    /// Whether the model carries the agent's context across recognitions.
-    #[host(function)]
-    fn stt_supports_agent_context_carryover(#[host(default = None)] model: Option<String>) -> bool;
-
-    /// Whether the model reports word timings by default.
-    #[host(function)]
-    fn stt_aligned_transcript_for_model(#[host(default = None)] model: Option<String>) -> bool;
 
     /// The lowest reasoning effort the model supports, or `None` if it has no such control.
     #[host(function)]

@@ -1,12 +1,11 @@
 //! The voice core's own IO nodes over the host traits in `lk_agents_abi::voice::io`: the proxy
 //! beneath a wrapper chain, and the text and audio nodes a host hands in.
 
+use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::io::{
-    AudioOutput, AudioOutputCapabilities, AudioOutputExt, IoError, PlaybackTracker, Result,
-    TextOutput,
+    AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackTracker, Result,
 };
 pub use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
-use lk_agents_abi::{AudioFrame, TimedString};
 use std::sync::Arc;
 
 /// A stable node beneath an audio wrapper chain, with its own segment tracker.

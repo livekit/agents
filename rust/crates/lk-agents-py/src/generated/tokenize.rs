@@ -13,21 +13,10 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
 type TokenizeFunctionsImpl = <crate::Selected as super::Implementations>::TokenizeFunctions;
 
-fn _extract_tokenize_functions_basic_split_sentences_min_sentence_len(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "min_sentence_len")
-}
-
 #[pyfunction]
 #[pyo3(signature = (text, *, ignore_punctuation = true, split_character = false, retain_format = false))]
 pub fn split_words(text: ::std::string::String, ignore_punctuation: bool, split_character: bool, retain_format: bool) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
     let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::split_words(text, ignore_punctuation, split_character, retain_format);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (text, min_sentence_len = 20, *, retain_format = false))]
-pub fn basic_split_sentences(text: ::std::string::String, #[pyo3(from_py_with = _extract_tokenize_functions_basic_split_sentences_min_sentence_len)] min_sentence_len: usize, retain_format: bool) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::basic_split_sentences(text, min_sentence_len, retain_format);
     Ok(out)
 }
 
@@ -41,22 +30,8 @@ pub fn replace_words(text: ::std::string::String, replacements: Bound<'_, PyAny>
 
 #[pyfunction]
 #[pyo3(signature = (text))]
-pub fn split_paragraphs(text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::split_paragraphs(text);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (text))]
 pub fn tokenize_paragraphs(text: ::std::string::String) -> PyResult<::std::vec::Vec<::std::string::String>> {
     let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::tokenize_paragraphs(text);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (text))]
-pub fn xml_has_unclosed_tags(text: ::std::string::String) -> PyResult<bool> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::xml_has_unclosed_tags(text);
     Ok(out)
 }
 

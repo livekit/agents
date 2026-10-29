@@ -2,7 +2,6 @@
 //! formatting, schemas and tool-argument rules, with provider formatting run on an admitted
 //! media worker of the hosting process.
 use lk_agents_abi::llm::provider_format::host::LlmAlgorithmError;
-use lk_agents_abi::llm::provider_format::tools::{DuplicateKey, DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::provider_format::{SerializedImage, StrictError};
 use lk_agents_abi::llm::schema::SchemaError;
 use lk_agents_abi::{ChatItem, Role};
@@ -71,12 +70,6 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
     ) -> Result<Map<String, Value>, StrictError> {
         provider_format::to_strict_json_schema(schema, null_sentinel_for_defaults)
     }
-    fn resolve_ref(
-        root: &Map<String, Value>,
-        r#ref: &str,
-    ) -> Result<Map<String, Value>, StrictError> {
-        provider_format::resolve_ref(root, r#ref)
-    }
     fn inject_schema_defaults(
         value: &Value,
         schema: &Value,
@@ -112,19 +105,6 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
     }
     fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, LlmAlgorithmError> {
         tool_arguments::parse_logged(raw).map_err(LlmAlgorithmError)
-    }
-    fn duplicate_key(name: &str, args: Option<Value>, scope: DuplicateScope) -> DuplicateKey {
-        provider_format::tools::duplicate_key(name, args.as_ref(), scope)
-    }
-    fn decide_duplicate_wire(
-        name: &str,
-        mode: DuplicateMode,
-        confirm_duplicate: Option<bool>,
-        in_flight: Vec<(String, bool)>,
-    ) -> (String, Option<Value>) {
-        let (decision, value) =
-            provider_format::tools::decide_duplicate_wire(name, mode, confirm_duplicate, in_flight);
-        (decision.to_owned(), value)
     }
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value> {
         provider_format::tools::inject_confirm_duplicate(parameters)

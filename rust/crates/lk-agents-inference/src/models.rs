@@ -54,22 +54,8 @@ impl InferenceModels for Models {
         )
     }
 
-    fn local_models_native() -> bool {
-        crate::local_models::is_native()
-    }
-
     fn local_models_init(vad: bool, eot: bool) -> bool {
         crate::local_models::init(vad, eot)
-    }
-
-    fn interruption_min_frames(min_interruption_duration: f64) -> u32 {
-        crate::interruption::min_frames_for(min_interruption_duration)
-    }
-
-    fn interruption_estimate_probability(probabilities: Vec<f64>) -> f64 {
-        // The detector's probabilities are `f32`; the host's floats are read at that width.
-        let probabilities: Vec<f32> = probabilities.into_iter().map(|p| p as f32).collect();
-        crate::interruption::estimate_probability(&probabilities)
     }
 
     fn tts_parse_model_string(model: String) -> (String, Option<String>) {
@@ -88,18 +74,6 @@ impl InferenceModels for Models {
     fn stt_parse_model_string(model: String) -> (String, Option<String>) {
         let (model, language) = crate::stt::options::parse_model_string(&model);
         (model.to_owned(), language.map(str::to_owned))
-    }
-
-    fn stt_diarization_enabled(extra_kwargs: Option<Map<String, Value>>) -> bool {
-        crate::stt::options::diarization_enabled(extra_kwargs.as_ref())
-    }
-
-    fn stt_supports_agent_context_carryover(model: Option<String>) -> bool {
-        crate::stt::options::supports_agent_context_carryover(model.as_deref())
-    }
-
-    fn stt_aligned_transcript_for_model(model: Option<String>) -> bool {
-        crate::stt::options::aligned_transcript_for_model(model.as_deref())
     }
 
     fn min_reasoning_effort(model: String) -> Option<String> {

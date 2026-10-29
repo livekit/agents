@@ -158,14 +158,6 @@ pub trait RoomRuntime {
     ) -> std::result::Result<ParticipantIdentity, RtcError>;
 
     #[host(function)]
-    async fn wait_for_participant_attribute(
-        room: RoomSession,
-        identity: String,
-        attribute: String,
-        value: String,
-    ) -> std::result::Result<(), RtcError>;
-
-    #[host(function)]
     async fn wait_for_track_publication(
         room: RoomSession,
         identity: Option<String>,

@@ -3,12 +3,8 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::ChatItem;
-use lk_agents_abi::tts::markup::bindings::{
-    CuePlan, MarkupClass, MarkupFunctions, TranscriptStripper,
-};
-use lk_agents_abi::tts::markup::{
-    self as abi, ExpressiveTag, Mood, NonverbalField, SpeechSteering,
-};
+use lk_agents_abi::tts::markup::bindings::{MarkupClass, MarkupFunctions, TranscriptStripper};
+use lk_agents_abi::tts::markup::{self as abi, ExpressiveTag, NonverbalField, SpeechSteering};
 
 use super::MarkupExt;
 
@@ -27,24 +23,6 @@ impl MarkupFunctions for SpeechMarkup {
     fn supported_nonverbals(provider: String) -> BTreeMap<NonverbalField, Vec<String>> {
         super::nonverbals_of(&provider)
     }
-    fn max_input_len(provider: String) -> Option<usize> {
-        super::max_input_len_of(&provider)
-    }
-    fn sentence_tokenizer_config(
-        provider: String,
-        expressive: bool,
-    ) -> (Option<usize>, Option<usize>, bool) {
-        super::sentence_tokenizer_of(&provider, expressive)
-    }
-    fn steering_instructions(provider: String, steering: SpeechSteering) -> String {
-        super::steering_instructions_of(&provider, &steering)
-    }
-    fn convert_expression_tags(text: String) -> String {
-        super::convert_expression_tags(&text)
-    }
-    fn extract_and_strip(text: String, xml_tags: Vec<String>) -> (String, Vec<(String, String)>) {
-        super::extract_and_strip(&text, &xml_tags.iter().map(String::as_str).collect::<Vec<_>>())
-    }
     fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>) {
         super::split_all_markup(&text)
     }
@@ -56,15 +34,6 @@ impl MarkupFunctions for SpeechMarkup {
     }
     fn split_expr_markup(text: String) -> (String, Vec<ExpressiveTag>) {
         super::split_expr_markup(&text)
-    }
-    fn expression_attribute(tags: Vec<ExpressiveTag>) -> Option<BTreeMap<String, String>> {
-        super::expression_attribute_map(tags)
-    }
-    fn drop_bracket_cues(texts: Vec<String>, end_of_stream: bool) -> (CuePlan, CuePlan) {
-        super::drop_bracket_cues_plan(&texts, end_of_stream)
-    }
-    fn match_mood(label: String, fallback: Option<Mood>) -> Option<Mood> {
-        super::match_mood(&label, fallback)
     }
     fn to_xml(
         tag_name: String,

@@ -38,17 +38,8 @@ def inference_default_url(server_url: str | None = None) -> str:
     production. `server_url` is the running job's (`AgentServer(ws_url=)`), else `LIVEKIT_URL`.
     """
 
-def local_models_native() -> bool:
-    """Whether the build links a native provider of the local models."""
-
 def local_models_init(vad: bool, eot: bool) -> bool:
     """Loads the native models' weights; `false` when no provider is linked."""
-
-def interruption_min_frames(min_interruption_duration: float) -> int:
-    """The frames an interruption must span: `min_interruption_duration` at the detector's rate."""
-
-def interruption_estimate_probability(probabilities: Sequence[float]) -> float:
-    """The interruption probability a window of frame probabilities reports."""
 
 def tts_parse_model_string(model: str) -> tuple[str, str | None]:
     """`"provider/model:voice"` split into the model and its voice."""
@@ -61,15 +52,6 @@ def tts_markup_provider_key(model: str) -> str:
 
 def stt_parse_model_string(model: str) -> tuple[str, str | None]:
     """`"provider/model:language"` split into the model and its language."""
-
-def stt_diarization_enabled(extra_kwargs: dict[str, object] | None = None) -> bool:
-    """Whether these options ask the provider for speaker diarization."""
-
-def stt_supports_agent_context_carryover(model: str | None = None) -> bool:
-    """Whether the model carries the agent's context across recognitions."""
-
-def stt_aligned_transcript_for_model(model: str | None = None) -> bool:
-    """Whether the model reports word timings by default."""
 
 def min_reasoning_effort(model: str) -> str | None:
     """The lowest reasoning effort the model supports, or `None` if it has no such control."""

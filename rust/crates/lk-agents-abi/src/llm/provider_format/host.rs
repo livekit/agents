@@ -1,5 +1,4 @@
 //! Chat and tool-format exports; implementations live in their owning cores and runtime.
-use super::tools::{DuplicateKey, DuplicateMode, DuplicateScope};
 use super::{SerializedImage, StrictError};
 use crate::llm::schema::SchemaError;
 use crate::{ChatItem, Role};
@@ -41,11 +40,6 @@ pub trait LlmAlgorithms {
         #[host(kw, default = false)] null_sentinel_for_defaults: bool,
     ) -> Result<Map<String, Value>, StrictError>;
     #[host(function)]
-    fn resolve_ref(
-        #[host(kw)] root: &Map<String, Value>,
-        r#ref: &str,
-    ) -> Result<Map<String, Value>, StrictError>;
-    #[host(function)]
     fn inject_schema_defaults(
         value: &Value,
         schema: &Value,
@@ -71,15 +65,6 @@ pub trait LlmAlgorithms {
     ) -> Result<Map<String, Value>, SchemaError>;
     #[host(function)]
     fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, LlmAlgorithmError>;
-    #[host(function, pid = true)]
-    fn duplicate_key(name: &str, args: Option<Value>, scope: DuplicateScope) -> DuplicateKey;
-    #[host(function, name = "decide_duplicate")]
-    fn decide_duplicate_wire(
-        name: &str,
-        mode: DuplicateMode,
-        confirm_duplicate: Option<bool>,
-        in_flight: Vec<(String, bool)>,
-    ) -> (String, Option<Value>);
     #[host(function)]
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value>;
 }

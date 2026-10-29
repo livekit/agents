@@ -33,41 +33,6 @@ pub fn supported_nonverbals<'py>(py: Python<'py>, provider: ::std::string::Strin
 }
 
 #[pyfunction]
-#[pyo3(signature = (provider))]
-pub fn max_input_len(provider: ::std::string::String) -> PyResult<::std::option::Option<usize>> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::max_input_len(provider);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (provider, *, expressive))]
-pub fn sentence_tokenizer_config(provider: ::std::string::String, expressive: bool) -> PyResult<(::std::option::Option<usize>, ::std::option::Option<usize>, bool)> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::sentence_tokenizer_config(provider, expressive);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (provider, steering))]
-pub fn steering_instructions(provider: ::std::string::String, steering: ::lk_agents_abi::tts::markup::SpeechSteering) -> PyResult<::std::string::String> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::steering_instructions(provider, steering);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (text))]
-pub fn convert_expression_tags(text: ::std::string::String) -> PyResult<::std::string::String> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::convert_expression_tags(text);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (text, xml_tags))]
-pub fn extract_and_strip(text: ::std::string::String, xml_tags: ::std::vec::Vec<::std::string::String>) -> PyResult<(::std::string::String, ::std::vec::Vec<(::std::string::String, ::std::string::String)>)> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::extract_and_strip(text, xml_tags);
-    Ok(out)
-}
-
-#[pyfunction]
 #[pyo3(signature = (text))]
 pub fn split_all_markup(text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
     let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_all_markup(text);
@@ -92,27 +57,6 @@ pub fn strip_expr_markup(text: ::std::string::String) -> PyResult<::std::string:
 #[pyo3(signature = (text))]
 pub fn split_expr_markup(text: ::std::string::String) -> PyResult<(::std::string::String, ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>)> {
     let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_expr_markup(text);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (tags))]
-pub fn expression_attribute(tags: ::std::vec::Vec<::lk_agents_abi::tts::markup::ExpressiveTag>) -> PyResult<::std::option::Option<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::expression_attribute(tags);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (texts, end_of_stream))]
-pub fn drop_bracket_cues(texts: ::std::vec::Vec<::std::string::String>, end_of_stream: bool) -> PyResult<(::std::vec::Vec<(usize, ::std::option::Option<::std::string::String>)>, ::std::vec::Vec<(usize, ::std::option::Option<::std::string::String>)>)> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::drop_bracket_cues(texts, end_of_stream);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (label, fallback = None))]
-pub fn match_mood(label: ::std::string::String, fallback: ::std::option::Option<::lk_agents_abi::tts::markup::Mood>) -> PyResult<::std::option::Option<::lk_agents_abi::tts::markup::Mood>> {
-    let out = <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::match_mood(label, fallback);
     Ok(out)
 }
 

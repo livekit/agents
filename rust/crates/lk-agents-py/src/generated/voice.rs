@@ -981,16 +981,6 @@ pub fn wait_for_agent<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_o
 }
 
 #[pyfunction]
-#[pyo3(signature = (room, identity, attribute, value))]
-pub fn wait_for_participant_attribute<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, identity: ::std::string::String, attribute: ::std::string::String, value: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
-    ::lk_agents_abi::python::check_pid()?;
-    crate::host::future_into_py(py, async move {
-        let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::wait_for_participant_attribute(room, identity, attribute, value).await.map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
-    })
-}
-
-#[pyfunction]
 #[pyo3(signature = (room, identity, kinds, include_local, subscribed))]
 pub fn wait_for_track_publication<'py>(py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, identity: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_room_runtime_wait_for_track_publication_kinds)] kinds: ::std::option::Option<::std::vec::Vec<i32>>, include_local: bool, subscribed: bool) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;

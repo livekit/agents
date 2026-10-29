@@ -1,6 +1,6 @@
 //! Host-visible speech transformations; implementations live with voice algorithms.
 
-use super::{ExpressiveTag, Mood, NonverbalField, SpeechSteering};
+use super::{ExpressiveTag, NonverbalField, SpeechSteering};
 use crate::ChatItem;
 use std::collections::BTreeMap;
 
@@ -11,19 +11,6 @@ pub trait MarkupFunctions {
     #[host(function)]
     fn supported_nonverbals(provider: String) -> BTreeMap<NonverbalField, Vec<String>>;
     #[host(function)]
-    fn max_input_len(provider: String) -> Option<usize>;
-    #[host(function)]
-    fn sentence_tokenizer_config(
-        provider: String,
-        #[host(kw)] expressive: bool,
-    ) -> (Option<usize>, Option<usize>, bool);
-    #[host(function)]
-    fn steering_instructions(provider: String, steering: SpeechSteering) -> String;
-    #[host(function)]
-    fn convert_expression_tags(text: String) -> String;
-    #[host(function)]
-    fn extract_and_strip(text: String, xml_tags: Vec<String>) -> (String, Vec<(String, String)>);
-    #[host(function)]
     fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>);
     #[host(function)]
     fn strip_all_markup(text: String) -> String;
@@ -31,12 +18,6 @@ pub trait MarkupFunctions {
     fn strip_expr_markup(text: String) -> String;
     #[host(function)]
     fn split_expr_markup(text: String) -> (String, Vec<ExpressiveTag>);
-    #[host(function)]
-    fn expression_attribute(tags: Vec<ExpressiveTag>) -> Option<BTreeMap<String, String>>;
-    #[host(function)]
-    fn drop_bracket_cues(texts: Vec<String>, end_of_stream: bool) -> (CuePlan, CuePlan);
-    #[host(function)]
-    fn match_mood(label: String, #[host(default = None)] fallback: Option<Mood>) -> Option<Mood>;
     #[host(function)]
     fn to_xml(
         tag_name: String,
@@ -51,8 +32,6 @@ pub trait MarkupFunctions {
         keep_last_turns: usize,
     ) -> Option<(usize, Vec<usize>, String, String, f64)>;
 }
-
-pub type CuePlan = Vec<(usize, Option<String>)>;
 
 /// The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write
 /// and how it is normalized and lowered before synthesis.

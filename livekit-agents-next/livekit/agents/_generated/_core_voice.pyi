@@ -323,13 +323,6 @@ async def wait_for_participant(
 
 async def wait_for_agent(room: _core_RoomSession, name: str | None) -> str: ...
 
-async def wait_for_participant_attribute(
-    room: _core_RoomSession,
-    identity: str,
-    attribute: str,
-    value: str,
-) -> None: ...
-
 async def wait_for_track_publication(
     room: _core_RoomSession,
     identity: str | None,
