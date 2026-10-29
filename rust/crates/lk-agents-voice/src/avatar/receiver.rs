@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
-use lk_agents_abi::voice::rtc::StreamInfo;
+use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
 use lk_agents_abi::{AudioByteStream, AudioFrame};
 
 use super::{
@@ -116,6 +116,7 @@ pub struct ReceiverState {
     reading: bool,
     cleared: bool,
     superseded: bool,
+    sender: Option<String>,
 }
 
 pub struct ReaderState {
@@ -128,6 +129,28 @@ pub struct ReaderState {
 }
 
 impl ReceiverState {
+    /// The participant whose streams are read: `sender_identity` when it is in the room, else
+    /// the first agent participant. None while there is none yet.
+    pub fn choose_sender<'a>(
+        &mut self,
+        sender_identity: Option<&str>,
+        remote: impl IntoIterator<Item = (&'a str, ParticipantKind)>,
+    ) -> Option<String> {
+        let mut remote = remote.into_iter();
+        self.sender = match sender_identity {
+            Some(wanted) => remote.find(|(identity, _)| *identity == wanted),
+            None => remote.find(|(_, kind)| *kind == ParticipantKind::Agent),
+        }
+        .map(|(identity, _)| identity.to_owned());
+        self.sender.clone()
+    }
+    pub fn sender(&self) -> Option<&str> {
+        self.sender.as_deref()
+    }
+    /// Only the chosen sender's streams are read; any other is closed unread.
+    pub fn admits(&self, stream_sender: &str) -> bool {
+        self.sender.as_deref() == Some(stream_sender)
+    }
     pub fn ended(&self) -> bool {
         self.end.is_some()
     }

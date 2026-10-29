@@ -22,7 +22,6 @@ struct RxInner {
     rpc_max_retries: u32,
     clock: Arc<dyn Clock>,
     on_clear: Option<Arc<dyn Fn() + Send + Sync>>,
-    remote: Mutex<Option<String>>,
     state: Mutex<ReceiverState>,
     out_ready: tokio::sync::Notify,
     streams: Mutex<std::collections::VecDeque<lk_agents_abi::voice::rtc::ByteStream>>,
@@ -131,8 +130,13 @@ impl RxInner {
         let Some(mut rx) = self.rpc_rx.lock().unwrap_or_else(|p| p.into_inner()).take() else {
             return Ok(());
         };
-        let remote =
-            self.remote.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_default();
+        let remote = self
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .sender()
+            .unwrap_or_default()
+            .to_owned();
         while let Some(report) = rx.recv().await {
             let mut attempts = report.attempts(self.rpc_max_retries);
             while attempts.pending() {
@@ -195,7 +199,6 @@ impl DataStreamAudioReceiver {
                 rpc_max_retries,
                 clock,
                 on_clear,
-                remote: Mutex::new(None),
                 state: Mutex::default(),
                 out_ready: tokio::sync::Notify::new(),
                 streams: Mutex::default(),
@@ -214,22 +217,16 @@ impl DataStreamAudioReceiver {
         let inner = &self.inner;
         let mut events = inner.room.events();
         let remote = loop {
-            let found = match &inner.sender_identity {
-                Some(id) => inner
-                    .room
-                    .participant(&ParticipantIdentity(id.clone()))
-                    .map_err(|error| ReceiverEnd::Failed(error.to_string()))?
-                    .map(|p| p.identity().0.clone()),
-                None => inner
-                    .room
-                    .remote_participants()
-                    .map_err(|error| ReceiverEnd::Failed(error.to_string()))?
-                    .into_iter()
-                    .find(|p| p.kind() == lk_agents_abi::voice::rtc::ParticipantKind::Agent)
-                    .map(|p| p.identity().0.clone()),
-            };
-            if let Some(found) = found {
-                break found;
+            let participants = inner
+                .room
+                .remote_participants()
+                .map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
+            let chosen = inner.state.lock().unwrap_or_else(|p| p.into_inner()).choose_sender(
+                inner.sender_identity.as_deref(),
+                participants.iter().map(|p| (p.identity().0.as_str(), p.kind())),
+            );
+            if let Some(chosen) = chosen {
+                break chosen;
             }
             if events
                 .next()
@@ -240,7 +237,6 @@ impl DataStreamAudioReceiver {
                 return Err(ReceiverEnd::Failed("the room closed".into()));
             }
         };
-        *inner.remote.lock().unwrap_or_else(|p| p.into_inner()) = Some(remote.clone());
 
         // `_register_clear_buffer_rpc`: routed by caller, as several receivers may share a room
         let room = inner.room.name().map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
@@ -288,7 +284,12 @@ impl DataStreamAudioReceiver {
                             return;
                         }
                     };
-                    if stream.sender.0 != remote {
+                    let admitted = inner
+                        .state
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .admits(&stream.sender.0);
+                    if !admitted {
                         let deadline =
                             inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
                         if stream.close(deadline).await != lk_agents_abi::Closed::Clean {
