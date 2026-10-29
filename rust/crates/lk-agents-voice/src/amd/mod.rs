@@ -4,9 +4,9 @@ pub mod classifier;
 
 use crate::agent_session::SystemTap;
 use crate::events::SessionEvent;
-use classifier::{AmdConfig, Human, In, TranscriptSource};
+use classifier::{AmdCategory, AmdConfig, AmdReason, Human, In, Start, TranscriptSource, Verdict};
 use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdPort};
-use lk_agents_abi::voice::rtc::RtcRoom;
+use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{HostRef, Llm, Stt};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, VadEventType};
 use std::{fmt, sync::Arc};
@@ -89,4 +89,34 @@ fn final_text(ev: &SpeechEvent) -> Option<String> {
         return None;
     }
     ev.best_alternative().map(|a| a.text.clone())
+}
+
+/// `AMD._setup`'s outcome: listening opens, or the call ended before detection could run. Without
+/// a room nothing is awaited and the callee counts as answered.
+pub enum Callee {
+    Answered,
+    Missing(String),
+}
+
+impl Callee {
+    /// A callee whose audio track is subscribed has answered, except a SIP callee, who has
+    /// answered once its `sip.callStatus` is active.
+    pub fn awaits_sip_answer(kind: ParticipantKind) -> bool {
+        kind == ParticipantKind::Sip
+    }
+
+    /// `_start_listening`: the detection budget from the answer, then the input gate. A missing
+    /// callee settles `uncertain` rather than listening for the whole no-speech threshold.
+    pub fn inputs(&self) -> Vec<In> {
+        match self {
+            Callee::Answered => {
+                vec![In::Start(Start::DetectionTimer), In::Start(Start::Listening)]
+            }
+            Callee::Missing(_) => vec![In::Verdict(Verdict::Settle {
+                category: AmdCategory::Uncertain,
+                reason: AmdReason::ParticipantMissing,
+                speech_duration: None,
+            })],
+        }
+    }
 }

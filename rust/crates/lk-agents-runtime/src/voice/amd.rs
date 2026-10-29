@@ -1,8 +1,8 @@
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{
-    AmdCategory, AmdReason, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
+    SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
 };
-use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
+use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpawnerExt, SpeechEvent, StreamSink, Stt, SttSink,
     SttSource, TimerSet, Ts,
@@ -12,9 +12,9 @@ use lk_agents_voice::agent_session::{
 };
 pub use lk_agents_voice::amd::AmdSetup;
 use lk_agents_voice::amd::classifier::{
-    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, In, Out, Start, Verdict,
+    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, In, Out,
 };
-use lk_agents_voice::amd::{feed_input, tap_input};
+use lk_agents_voice::amd::{Callee, feed_input, tap_input};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{
     ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
@@ -92,12 +92,6 @@ enum Msg {
     Transcript(SpeechEvent),
     /// What the room said of the callee ([`await_callee`]).
     Callee(Callee),
-}
-
-/// `AMD._setup`'s outcome: listening opens, or the call ended before detection could run.
-enum Callee {
-    Answered,
-    Missing(String),
 }
 
 enum SttLeg {
@@ -289,18 +283,15 @@ impl AmdSystem {
             }
             Msg::SttOpened(outcome) => self.on_tap_opened(outcome),
             Msg::Transcript(ev) => self.on_tap_transcript(now, ev),
-            // `_start_listening`: the detection budget from the answer, then the input gate.
-            Msg::Callee(Callee::Answered) => {
-                log::debug!(target: LOG, "AMD starts listening");
-                self.step(now, In::Start(Start::DetectionTimer));
-                self.step(now, In::Start(Start::Listening));
-            }
-            Msg::Callee(Callee::Missing(error)) => {
-                log::debug!(target: LOG, error = error.as_str();
-                    "AMD: call ended before detection could run, settling");
-                let (category, reason) = (AmdCategory::Uncertain, AmdReason::ParticipantMissing);
-                let settle = Verdict::Settle { category, reason, speech_duration: None };
-                self.step(now, In::Verdict(settle));
+            Msg::Callee(callee) => {
+                match &callee {
+                    Callee::Answered => log::debug!(target: LOG, "AMD starts listening"),
+                    Callee::Missing(error) => log::debug!(target: LOG, error = error.as_str();
+                        "AMD: call ended before detection could run, settling"),
+                }
+                for input in callee.inputs() {
+                    self.step(now, input);
+                }
             }
         }
     }
@@ -554,7 +545,7 @@ async fn await_callee(
         }
         Err(error) => return Callee::Missing(error.to_string()),
     };
-    if publisher.kind() != ParticipantKind::Sip {
+    if !Callee::awaits_sip_answer(publisher.kind()) {
         return Callee::Answered;
     }
     let (attribute, active) = (SIP_CALL_STATUS_ATTR.to_owned(), SIP_CALL_STATUS_ACTIVE.to_owned());
