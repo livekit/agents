@@ -59,28 +59,8 @@ impl SegmentDump {
 
     /// `rtc.combine_audio_frames(frames).to_wav_bytes()`.
     pub fn wav_bytes(&self) -> Vec<u8> {
-        let data_len: usize = self.frames.iter().map(|f| f.data.len()).sum();
-        let data_len = u32::try_from(data_len).unwrap_or(u32::MAX);
-        let channels = u32::from(self.num_channels);
-        let block_align = channels * 2;
-        let mut out = Vec::with_capacity(44 + data_len as usize);
-        out.extend_from_slice(b"RIFF");
-        out.extend_from_slice(&(36u32.saturating_add(data_len)).to_le_bytes());
-        out.extend_from_slice(b"WAVE");
-        out.extend_from_slice(b"fmt ");
-        out.extend_from_slice(&16u32.to_le_bytes());
-        out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        out.extend_from_slice(&self.num_channels.to_le_bytes());
-        out.extend_from_slice(&self.sample_rate.to_le_bytes());
-        out.extend_from_slice(&self.sample_rate.saturating_mul(block_align).to_le_bytes());
-        out.extend_from_slice(&(block_align as u16).to_le_bytes());
-        out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-        out.extend_from_slice(b"data");
-        out.extend_from_slice(&data_len.to_le_bytes());
-        for f in &self.frames {
-            out.extend_from_slice(&f.data);
-        }
-        out
+        let pcm: Vec<u8> = self.frames.iter().flat_map(|f| f.data.iter().copied()).collect();
+        crate::wav::encode(self.sample_rate, self.num_channels, &pcm)
     }
 }
 

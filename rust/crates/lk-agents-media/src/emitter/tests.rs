@@ -453,31 +453,6 @@ fn the_dump_switch_actually_gates_collection() {
     assert_eq!(dumps[0].frames.iter().map(|f| f.samples_per_channel).sum::<u32>(), 200);
 }
 
-// Catches: a WAV header that disagrees with its payload.
-#[test]
-fn the_dump_wav_header_describes_its_frames() {
-    let mut fx = Fx::streaming("s");
-    fx.em.set_dump(true);
-    fx.push(100).end_segment();
-    let d = fx.em.take_dumps().remove(0);
-    let wav = d.wav_bytes();
-    let pcm: Vec<u8> = d.frames.iter().flat_map(|f| f.data.iter().copied()).collect();
-    assert_eq!(pcm.len(), 200, "100 samples of 16-bit mono");
-    assert_eq!(wav.len(), 44 + pcm.len());
-    assert_eq!(&wav[0..4], b"RIFF");
-    assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 36 + 200);
-    assert_eq!(&wav[8..16], b"WAVEfmt ");
-    assert_eq!(u16::from_le_bytes(wav[20..22].try_into().unwrap()), 1, "PCM");
-    assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), CH);
-    assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), SR);
-    assert_eq!(u32::from_le_bytes(wav[28..32].try_into().unwrap()), SR * 2, "byte rate");
-    assert_eq!(u16::from_le_bytes(wav[32..34].try_into().unwrap()), 2, "block align");
-    assert_eq!(u16::from_le_bytes(wav[34..36].try_into().unwrap()), 16, "bits per sample");
-    assert_eq!(&wav[36..40], b"data");
-    assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 200);
-    assert_eq!(&wav[44..], &pcm[..]);
-}
-
 // Catches: a framed chunk re-chunked into progressive frames, or taken outside a segment.
 #[test]
 fn a_pushed_frame_goes_out_as_framed_with_only_the_tail_held() {

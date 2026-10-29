@@ -32,21 +32,7 @@ fn limits() -> DecoderLimits {
 }
 
 fn wav(channels: u16, samples: &[i16]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + samples.len() as u32 * 2).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&channels.to_le_bytes());
-    bytes.extend_from_slice(&24000u32.to_le_bytes());
-    bytes.extend_from_slice(&(48000 * u32::from(channels)).to_le_bytes());
-    bytes.extend_from_slice(&(2 * channels).to_le_bytes());
-    bytes.extend_from_slice(&16u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&(samples.len() as u32 * 2).to_le_bytes());
-    bytes.extend(lk_agents_media::pcm_bytes(samples));
-    bytes
+    lk_agents_media::wav::encode(24_000, channels, &lk_agents_media::pcm_bytes(samples))
 }
 
 struct AudioFile(std::path::PathBuf);

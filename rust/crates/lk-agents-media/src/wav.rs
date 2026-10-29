@@ -22,6 +22,27 @@ enum State {
 
 const RIFF_MAGIC: &[u8; 4] = b"RIFF";
 
+/// A canonical 16-bit PCM WAV file around interleaved little-endian `pcm` (`to_wav_bytes()`).
+pub fn encode(sample_rate: u32, num_channels: u16, pcm: &[u8]) -> Vec<u8> {
+    let data_len = u32::try_from(pcm.len()).unwrap_or(u32::MAX);
+    let block_align = num_channels * 2;
+    let mut out = Vec::with_capacity(44 + pcm.len());
+    out.extend_from_slice(RIFF_MAGIC);
+    out.extend_from_slice(&36u32.saturating_add(data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // WAVE_FORMAT_PCM
+    out.extend_from_slice(&num_channels.to_le_bytes());
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&sample_rate.saturating_mul(u32::from(block_align)).to_le_bytes());
+    out.extend_from_slice(&block_align.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(pcm);
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct WavDecoder {
     state: State,
@@ -283,13 +304,9 @@ pub(crate) mod tests {
         out
     }
 
-    fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
-        samples.iter().flat_map(|s| s.to_le_bytes()).collect()
-    }
-
     /// A canonical 16-bit PCM file; the decoder and ffmpeg tests build their inputs with it too.
     pub(crate) fn wav_file(rate: u32, channels: u16, samples: &[i16]) -> Vec<u8> {
-        wav(rate, channels, 16, 1, &[], &pcm_bytes(samples))
+        encode(rate, channels, &crate::pcm_bytes(samples))
     }
 
     fn simple(samples: &[i16]) -> Vec<u8> {
@@ -455,7 +472,7 @@ pub(crate) mod tests {
             16,
             1,
             &[(b"LIST", b"INFOISFTLavf58.29.100\0".to_vec()), (b"JUNK", vec![0xAA; 24])],
-            &pcm_bytes(&want),
+            &crate::pcm_bytes(&want),
         );
         let segs = decode_all(&[&f]).unwrap();
         assert_eq!(segs[0].format, AudioFormat::new(16_000, 1));
@@ -481,7 +498,7 @@ pub(crate) mod tests {
             b"INFOIART_odd_lengt_".to_vec(), // 19, odd: the reference emits nothing at all
         ] {
             let odd = payload.len() % 2 == 1;
-            let f = wav(48_000, 2, 16, 1, &[(b"LIST", payload)], &pcm_bytes(&want));
+            let f = wav(48_000, 2, 16, 1, &[(b"LIST", payload)], &crate::pcm_bytes(&want));
             assert_eq!(f.len() % 2, 0, "the file itself stays word-aligned");
             let segs = decode_all(&[&f]).unwrap();
             assert_eq!(segs.len(), 1, "the parser lost the data chunk (odd payload: {odd})");
@@ -514,7 +531,7 @@ pub(crate) mod tests {
         let b: Vec<i16> = vec![-1, -2, -3];
         let mut d = WavDecoder::new();
         let mut segs = d.push(&simple(&a)).unwrap();
-        segs.extend(d.push(&wav(16_000, 2, 16, 1, &[], &pcm_bytes(&b))).unwrap());
+        segs.extend(d.push(&wav(16_000, 2, 16, 1, &[], &crate::pcm_bytes(&b))).unwrap());
 
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0].format, AudioFormat::new(24_000, 1));
