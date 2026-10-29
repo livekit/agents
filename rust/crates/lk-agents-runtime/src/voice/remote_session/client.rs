@@ -51,11 +51,11 @@ pub enum ReadyError {
 }
 
 /// `RemoteSession` (`remote_session.py:826`), running.
-pub struct ClientRuntime {
-    pub(super) shared: Arc<ClientShared>,
+pub struct RemoteSession {
+    pub(super) shared: Arc<Client>,
 }
 
-pub(super) struct ClientShared {
+pub(super) struct Client {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
     state: Mutex<ClientState>,
@@ -97,7 +97,7 @@ impl IdMint {
 }
 
 struct Unregister<'a> {
-    shared: &'a ClientShared,
+    shared: &'a Client,
     id: String,
 }
 
@@ -109,10 +109,10 @@ impl Drop for Unregister<'_> {
 
 /// `voice/remote_session.py`'s `RemoteSession`, running in Rust: ids, correlation, timeouts and the
 /// ready poll.
-impl ClientRuntime {
+impl RemoteSession {
     pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
-        ClientRuntime {
-            shared: Arc::new(ClientShared {
+        RemoteSession {
+            shared: Arc::new(Client {
                 clock,
                 spawner,
                 state: Mutex::new(ClientState::default()),
@@ -260,7 +260,7 @@ impl ClientRuntime {
 }
 
 async fn client_recv_loop(
-    sh: Arc<ClientShared>,
+    sh: Arc<Client>,
     transport: Arc<dyn SessionTransport>,
     sink: Arc<dyn ClientSink>,
 ) {

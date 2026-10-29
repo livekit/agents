@@ -102,7 +102,7 @@ type Mounted = Arc<OnceLock<(Arc<Endpoints>, Arc<dyn AsgiApplication>)>>;
 
 /// The host server with what the runtime decides on its own.
 #[derive(Clone)]
-pub struct HostedServer {
+pub struct ServerCallbacks {
     pub(crate) proxy: Arc<dyn Host>,
     /// The user gave a `load_fnc` the worker may call (not on Cloud).
     user_load: bool,
@@ -111,9 +111,9 @@ pub struct HostedServer {
     mounted: Mounted,
 }
 
-impl HostedServer {
+impl ServerCallbacks {
     pub(crate) fn new(proxy: Arc<dyn Host>) -> Self {
-        HostedServer { proxy, user_load: true, has_rtc: false, mounted: Mounted::default() }
+        ServerCallbacks { proxy, user_load: true, has_rtc: false, mounted: Mounted::default() }
     }
 
     pub(crate) fn configured(&self, has_rtc: bool, user_load: bool) -> Self {
@@ -157,7 +157,7 @@ impl HostedServer {
 }
 
 #[async_trait]
-impl WorkerHost for HostedServer {
+impl WorkerHost for ServerCallbacks {
     async fn on_job_request(&self, req: JobRequest) -> JobDecision {
         server::job_decision(&req, self.has_rtc)
     }
@@ -204,7 +204,7 @@ impl WorkerHost for HostedServer {
 }
 
 #[async_trait]
-impl HealthProbe for HostedServer {
+impl HealthProbe for ServerCallbacks {
     async fn health(&self) -> usize {
         self.proxy.active_jobs().await.unwrap_or(0)
     }
@@ -248,7 +248,7 @@ fn manifest_entry(route: EndpointRoute) -> Result<protocol::AgentEndpoint, Worke
     })
 }
 
-pub struct AgentRuntime {
+pub struct AgentServerRuntime {
     settings: Arc<Mutex<ServerSettings>>,
     running: Arc<AtomicBool>,
     runtime: server::ServerRuntime,
@@ -256,13 +256,13 @@ pub struct AgentRuntime {
     io: BlockingIo,
 }
 
-impl AgentRuntime {
+impl AgentServerRuntime {
     fn settings(&self) -> ServerSettings {
         self.settings.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 }
 
-impl ServerRuntime for AgentRuntime {
+impl ServerRuntime for AgentServerRuntime {
     type Env = ProcessEnv;
 
     fn new(
@@ -275,7 +275,7 @@ impl ServerRuntime for AgentRuntime {
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
         let io = (env.blocking_io)().map_err(WorkerError::Failed)?;
-        let host = HostedServer::new(host);
+        let host = ServerCallbacks::new(host);
         let mounted = host.mounted.clone();
         Ok(Self {
             settings: config.settings.clone(),

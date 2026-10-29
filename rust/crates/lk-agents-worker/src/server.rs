@@ -3,7 +3,7 @@
 //! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
 //! processes and the user's callbacks.
 
-use crate::server_host::HostedServer;
+use crate::server_host::ServerCallbacks;
 use crate::{Worker, WorkerCommand, WorkerClient, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
@@ -157,7 +157,7 @@ type Outcome = watch::Sender<Option<Result<(), String>>>;
 
 #[derive(Clone)]
 pub struct ServerRuntime {
-    host: HostedServer,
+    host: ServerCallbacks,
     blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
     control: watch::Sender<Control>,
     receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
@@ -171,7 +171,7 @@ pub struct ServerRuntime {
 }
 
 impl ServerRuntime {
-    pub fn new(host: HostedServer, blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>) -> Self {
+    pub fn new(host: ServerCallbacks, blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
@@ -672,7 +672,7 @@ struct Resources {
 impl Resources {
     fn close(
         self,
-        host: HostedServer,
+        host: ServerCallbacks,
     ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), String>)>> {
         let closing = FuturesUnordered::new();
         closing.push(

@@ -19,7 +19,7 @@ use super::process::{ProcessControl, ProcessLaunch, ProcessResource, StartMethod
 use super::supervisor::{CleanupObservation, SignalFailure};
 use super::{
     Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, MemoryError, PROTOCOL_VERSION,
-    ProcHost, ProcSupervisor, SupervisorOptions, extra_fields, secs,
+    ProcessCallbacks, ProcSupervisor, SupervisorOptions, extra_fields, secs,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::blocking_io::BlockingIo;
@@ -403,7 +403,7 @@ pub(crate) fn queue_diagnostic(
     });
 }
 
-impl ProcHost for ProcessDiagnostics {
+impl ProcessCallbacks for ProcessDiagnostics {
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.emit(level, msg, extra, None);
     }

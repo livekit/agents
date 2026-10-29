@@ -38,7 +38,7 @@ pub use supervisor::secs;
 pub use supervisor::{
     Extra, ExtraValue, InitError, Level, StartJobError, SupervisorOptions, extra_fields,
 };
-pub use supervisor::{MemoryError, ProcHost, ProcSupervisor};
+pub use supervisor::{MemoryError, ProcessCallbacks, ProcSupervisor};
 pub use wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 
 use lk_agents_abi::lock;

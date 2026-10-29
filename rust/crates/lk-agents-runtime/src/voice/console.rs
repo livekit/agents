@@ -2,7 +2,7 @@
 //! and the TUI, and reaches the agent over one TCP socket carrying length-prefixed
 //! `AgentSessionMessage`s. [`ConsoleIo`] is that socket as the session sees it: the
 //! [`SessionTransport`] and [`ConsoleSink`] the session's remote session host
-//! ([`HostRuntime`](super::remote_session::driver::HostRuntime)) runs on, and the
+//! ([`SessionServer`](super::remote_session::driver::SessionServer)) runs on, and the
 //! session's audio input and output legs. What the legs account for is
 //! [`ConsolePlayback`]'s; only the socket is here.
 

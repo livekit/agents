@@ -45,7 +45,7 @@ struct Running {
 
 /// `_core.WarmTransfer`: the transfer's plan (its briefing instructions and tools, how it dials)
 /// and its run.
-pub struct HostWarmTransfer {
+pub struct TransferRun {
     plan: TransferPlan,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
@@ -56,9 +56,9 @@ pub struct HostWarmTransfer {
     tasks: Arc<TaskSet>,
 }
 
-impl HostWarmTransfer {
+impl TransferRun {
     pub fn new(plan: TransferPlan, clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
-        HostWarmTransfer {
+        TransferRun {
             plan,
             clock,
             spawner,
@@ -155,7 +155,7 @@ impl HostWarmTransfer {
 
 /// The run's `finally`: the human agent's session closed without drain if still open, the hold
 /// stopped, the io restored.
-struct Restore(Arc<HostWarmTransfer>);
+struct Restore(Arc<TransferRun>);
 
 impl Drop for Restore {
     fn drop(&mut self) {
@@ -172,7 +172,7 @@ impl Drop for Restore {
     }
 }
 
-impl HostWarmTransfer {
+impl TransferRun {
     fn lock(&self) -> std::sync::MutexGuard<'_, Running> {
         self.running.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -522,7 +522,7 @@ mod tests {
     use super::*;
     use lk_agents_abi::voice::workflows::IoEnableState;
     use lk_agents_voice::workflows::prompts::warm_transfer as p;
-    fn transfer() -> Arc<HostWarmTransfer> {
+    fn transfer() -> Arc<TransferRun> {
         let plan = TransferPlan::resolve(TransferConfig {
             sip_call_to: Some("+15550100".to_owned()),
             sip_trunk_id: Maybe::NotGiven,
@@ -538,7 +538,7 @@ mod tests {
             twilio: None,
         })
         .unwrap();
-        Arc::new(HostWarmTransfer::new(
+        Arc::new(TransferRun::new(
             plan,
             Arc::new(lk_agents_abi::VirtualClock::new()),
             Arc::new(lk_agents_net::task::TokioSpawner::current()),
@@ -727,7 +727,7 @@ mod tests {
     }
 }
 
-pub struct WarmTransfer(Arc<HostWarmTransfer>);
+pub struct WarmTransfer(Arc<TransferRun>);
 
 impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransfer {
     type Env = ProcessEnv;
@@ -762,7 +762,7 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
             twilio,
         })?;
         let spawner = (env.spawner)().map_err(HostError::new)?;
-        Ok(Self(Arc::new(HostWarmTransfer::new(plan, env.clock.clone(), spawner))))
+        Ok(Self(Arc::new(TransferRun::new(plan, env.clock.clone(), spawner))))
     }
 
     fn instructions(&self) -> String {

@@ -99,7 +99,7 @@ struct FakeHost {
     released: AtomicBool,
 }
 
-impl ProcHost for Arc<FakeHost> {
+impl ProcessCallbacks for Arc<FakeHost> {
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.logs.lock().unwrap().push((level, msg.to_owned(), extra));
         self.logged.notify_one();
@@ -461,7 +461,7 @@ async fn a_native_memory_sample_enforces_the_process_limit() {
 #[tokio::test]
 async fn kill_sends_sigusr1_then_kills() {
     struct ChildHost(Mutex<std::process::Child>, AtomicUsize);
-    impl ProcHost for Arc<ChildHost> {
+    impl ProcessCallbacks for Arc<ChildHost> {
         fn log(&self, _: Level, _: &str, _: Extra) {}
         fn log_exception(&self, _: &str, _: HostError) {}
         fn is_alive(&self) -> bool {

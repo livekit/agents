@@ -73,8 +73,8 @@ impl ServerHost for Host {
     }
 }
 
-fn hosted(host: &Host) -> HostedServer {
-    HostedServer::new(Arc::new(host.clone()))
+fn hosted(host: &Host) -> ServerCallbacks {
+    ServerCallbacks::new(Arc::new(host.clone()))
 }
 
 fn options() -> ServerStart {

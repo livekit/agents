@@ -18,7 +18,7 @@ use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::db::TaskQuery;
-use lk_agents_storage::host::HostStorage;
+use lk_agents_storage::host::Namespace;
 use lk_agents_storage::schema::TaskRow;
 use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
 use tokio::sync::{Mutex, mpsc};
@@ -46,7 +46,7 @@ pub struct Door {
 /// first use.
 enum Store {
     Open(Arc<dyn Storage>),
-    Namespace(Arc<HostStorage>),
+    Namespace(Arc<Namespace>),
 }
 
 struct Inner {
@@ -115,7 +115,7 @@ impl A2ADoor for Door {
         host: Arc<dyn TurnHost>,
     ) -> Result<Self, StorageError> {
         let storage: Arc<dyn Any + Send + Sync> = storage;
-        let storage = storage.downcast::<HostStorage>().map_err(|_| {
+        let storage = storage.downcast::<Namespace>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
         let runtime = env

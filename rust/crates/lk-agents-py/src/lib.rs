@@ -41,7 +41,7 @@ pub struct Selected;
 
 impl generated::Implementations for Selected {
     type BackgroundAudioPlayer =
-        lk_agents_runtime::voice::background_audio::HostBackgroundAudioPlayer;
+        lk_agents_runtime::voice::background_audio::BackgroundAudio;
     type PlayState = lk_agents_runtime::voice::background_audio::PlayState;
     type LanguageFunctions = lk_agents_runtime::cores::Languages;
     type ApiErrorFunctions = lk_agents_runtime::net::http::HttpErrors;
@@ -138,7 +138,7 @@ impl generated::Implementations for Selected {
     type AsgiReceive = lk_agents_runtime::worker::endpoint::host::ReceiveCall;
     type AsgiSend = lk_agents_runtime::worker::endpoint::host::SendCall;
     type ServerConfig = lk_agents_runtime::worker::server_host::Configuration;
-    type ServerRuntime = lk_agents_runtime::worker::server_host::AgentRuntime;
+    type ServerRuntime = lk_agents_runtime::worker::server_host::AgentServerRuntime;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;
@@ -175,7 +175,7 @@ impl generated::Implementations for Selected {
     type InferenceStt = lk_agents_runtime::inference::stt::GatewayStt;
     type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_runtime::inference::llm::parse::CompletionWire;
-    type Storage = lk_agents_runtime::storage::host::HostStorage;
+    type Storage = lk_agents_runtime::storage::host::Namespace;
 }
 
 #[pymodule]

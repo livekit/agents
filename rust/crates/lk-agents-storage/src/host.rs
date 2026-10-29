@@ -59,7 +59,7 @@ impl Backend {
 }
 
 /// A storage namespace: a local directory, or the Cloud project of a key pair.
-pub struct HostStorage {
+pub struct Namespace {
     config: Config,
     backend: OnceCell<Backend>,
     a2a_tasks: Arc<TaskSet>,
@@ -70,7 +70,7 @@ const READER: &str = "reader";
 /// A local items page when the caller names no limit.
 const LOCAL_PAGE: i64 = 100;
 
-impl HostStorage {
+impl Namespace {
     async fn backend(&self) -> Result<&Backend, StorageError> {
         self.backend
             .get_or_try_init(|| async {
@@ -105,7 +105,7 @@ impl HostStorage {
     }
 }
 
-impl host::StorageNamespace for HostStorage {}
+impl host::StorageNamespace for Namespace {}
 
 fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration, StorageError> {
     match value {
@@ -234,7 +234,7 @@ async fn local_tasks(
     }
 }
 
-impl HostStorageClass for HostStorage {
+impl HostStorageClass for Namespace {
     type Thread = Thread;
     type ContextActivation = ContextStore;
     type VoiceStore = VoiceStore;

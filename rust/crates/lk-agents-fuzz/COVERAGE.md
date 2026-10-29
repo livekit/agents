@@ -753,7 +753,7 @@ The justified gaps, outside the production-reachable figure:
 
 - `workflows/` (733 lines, 15%): what the text-mode rework left (result types, validation
   helpers); owned by that work.
-- The remote-session client (`ClientRuntime`, 180 lines, and its `event_name`, 17): the far
+- The remote-session client (`RemoteSession`, 180 lines, and its `event_name`, 17): the far
   end of the protocol, bound for Node and Python clients, never run by an agent.
 - `room_io/rooms.rs` (121, 0%): `_core.FakeRoom`, a Python test fixture, and `OfflineRoom`, a
   constructor on the wall clock.

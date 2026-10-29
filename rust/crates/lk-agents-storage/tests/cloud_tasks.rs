@@ -2,7 +2,7 @@
 
 use lk_agents_abi::storage::{Storage, StorageError, TaskState};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_storage::host::HostStorage;
+use lk_agents_storage::host::Namespace;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -67,7 +67,7 @@ impl Drop for Peer {
 #[tokio::test]
 async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_unknown_states() {
     let mut peer = Peer::tasks().await;
-    let storage = HostStorage::new(
+    let storage = Namespace::new(
         &ProcessEnv::current_runtime(),
         None,
         Some(peer.url.clone()),

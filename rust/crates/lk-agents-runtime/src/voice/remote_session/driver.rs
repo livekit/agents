@@ -23,7 +23,7 @@ const LOG: &str = "livekit.agents";
 
 /// `SessionHost` (`remote_session.py:321`), running. Events queue from construction and one writer
 /// drains them in order; each request is a task named by its type.
-pub struct HostRuntime {
+pub struct SessionServer {
     shared: Arc<HostShared>,
 }
 
@@ -46,10 +46,10 @@ struct HostState {
 }
 
 /// `voice/remote_session.py`'s `SessionHost`, running in Rust. Events queue from construction.
-impl HostRuntime {
+impl SessionServer {
     pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        HostRuntime {
+        SessionServer {
             shared: Arc::new(HostShared {
                 time,
                 spawner,
@@ -181,8 +181,8 @@ pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(3);
 /// A session's remote session protocol, as the session runs it: the host on its transport (the
 /// room's byte streams, or the console's socket), fed the session's events as they are emitted,
 /// started once the session is up and closed with it.
-pub struct Hosting {
-    host: Arc<HostRuntime>,
+pub struct RemoteSessionLink {
+    host: Arc<SessionServer>,
     spawner: Arc<dyn Spawner>,
     /// Set by the first close: a start after it (the session closed while opening) is a no-op.
     closing: std::sync::atomic::AtomicBool,
@@ -194,7 +194,7 @@ pub struct Hosting {
     tasks: Arc<TaskSet>,
 }
 
-impl Hosting {
+impl RemoteSessionLink {
     pub fn new(
         port: Arc<dyn SessionPort>,
         transport: Arc<dyn SessionTransport>,
@@ -202,9 +202,9 @@ impl Hosting {
         time: Timebase,
         spawner: Arc<dyn Spawner>,
     ) -> Self {
-        let host = Arc::new(HostRuntime::new(time, Arc::clone(&spawner)));
+        let host = Arc::new(SessionServer::new(time, Arc::clone(&spawner)));
         host.set_port(port);
-        Hosting {
+        RemoteSessionLink {
             host,
             spawner,
             closing: Default::default(),
@@ -336,7 +336,7 @@ async fn handle_request(
 mod tests {
     use tokio::sync::Notify;
 
-    use super::super::client::{ClientRuntime, ReadyError, RequestError};
+    use super::super::client::{RemoteSession, ReadyError, RequestError};
     use super::super::{
         AgentInfo, ClientSink, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict,
         VerdictOutcome,
@@ -473,13 +473,13 @@ mod tests {
         )
     }
 
-    async fn setup(release: Arc<Notify>) -> (HostRuntime, ClientRuntime, Arc<Pipe>, Arc<Events>) {
+    async fn setup(release: Arc<Notify>) -> (SessionServer, RemoteSession, Arc<Pipe>, Arc<Events>) {
         let (ht, ct) = pair();
         let (clock, spawner) = rt();
-        let host = HostRuntime::new(Timebase::of_clock(Arc::clone(&clock)), Arc::clone(&spawner));
+        let host = SessionServer::new(Timebase::of_clock(Arc::clone(&clock)), Arc::clone(&spawner));
         host.set_port(Arc::new(Port { release }));
         host.start(ht.clone(), None).await.unwrap();
-        let client = ClientRuntime::new(clock, spawner);
+        let client = RemoteSession::new(clock, spawner);
         let events = Arc::new(Events(Mutex::new(Vec::new())));
         client.start(ct, events.clone()).await.unwrap();
         (host, client, ht, events)
@@ -524,7 +524,7 @@ mod tests {
         }
         let (transport, _peer) = pair();
         let runtime =
-            HostRuntime::new(time.clone(), Arc::new(lk_agents_net::task::TokioSpawner::current()));
+            SessionServer::new(time.clone(), Arc::new(lk_agents_net::task::TokioSpawner::current()));
         let before = time.wall_secs();
         runtime
             .send_wire(
@@ -644,7 +644,7 @@ mod tests {
     async fn events_queue_before_start_leave_in_order_and_flush_at_close() {
         let (ht, _peer) = pair();
         let (clock, spawner) = rt();
-        let host = HostRuntime::new(Timebase::of_clock(clock), spawner);
+        let host = SessionServer::new(Timebase::of_clock(clock), spawner);
         let ev = |i: usize| proto::AgentSessionEvent {
             created_at: None,
             event: Some(proto::agent_session_event::Event::Error(
@@ -681,13 +681,13 @@ mod tests {
     async fn wait_for_ready_raises_the_latched_send_error_and_polls_through_a_late_transport() {
         let (ht, ct) = pair();
         let (clock, spawner) = rt();
-        let client = ClientRuntime::new(clock.clone(), spawner.clone());
+        let client = RemoteSession::new(clock.clone(), spawner.clone());
         ct.fail.store(true, Ordering::SeqCst);
         client.start(ct.clone(), Arc::new(Events(Mutex::new(vec![])))).await.unwrap();
         let err = client.wait_for_ready(secs(0.2), secs(0.05)).await.unwrap_err();
         assert_eq!(err, ReadyError::Transport(HostError::new("transport is down")));
 
-        let host = HostRuntime::new(Timebase::of_clock(clock), spawner);
+        let host = SessionServer::new(Timebase::of_clock(clock), spawner);
         host.set_port(Arc::new(Port { release: Arc::new(Notify::new()) }));
         host.start(ht, None).await.unwrap();
         let late = Arc::clone(&ct);
@@ -706,7 +706,7 @@ mod tests {
     async fn the_client_times_out_mints_distinct_ids_and_cancels_at_close() {
         let (_ht, ct) = pair();
         let (clock, spawner) = rt();
-        let client = Arc::new(ClientRuntime::new(clock, spawner));
+        let client = Arc::new(RemoteSession::new(clock, spawner));
         let events = Arc::new(Events(Mutex::new(vec![])));
         client.start(ct.clone(), events).await.unwrap();
         let ping = || proto::session_request::Request::Ping(Default::default());
@@ -738,24 +738,24 @@ mod tests {
     }
 }
 
-impl lk_agents_abi::worker::remote_session::SessionHosting for Hosting {
+impl lk_agents_abi::worker::remote_session::SessionHosting for RemoteSessionLink {
     fn forward(&self, event: &lk_agents_abi::voice::events::HostWire) {
-        Hosting::forward(self, event);
+        RemoteSessionLink::forward(self, event);
     }
 
     fn forward_error(&self, message: String) {
-        Hosting::forward_error(self, message);
+        RemoteSessionLink::forward_error(self, message);
     }
 
     fn forward_tools_executed(&self, event: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
-        Hosting::forward_tools_executed(self, event);
+        RemoteSessionLink::forward_tools_executed(self, event);
     }
 
     fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
-        Box::pin(Hosting::start(self))
+        Box::pin(RemoteSessionLink::start(self))
     }
 
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        Box::pin(Hosting::aclose(self))
+        Box::pin(RemoteSessionLink::aclose(self))
     }
 }

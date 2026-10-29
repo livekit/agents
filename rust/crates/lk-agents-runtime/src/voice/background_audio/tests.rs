@@ -92,7 +92,7 @@ async fn play_refuses_what_cannot_play() {
 // mid-fade), or a stop on a finished sound reopening it.
 #[tokio::test]
 async fn a_stop_waits_out_the_fade() {
-    let fading = PlaybackHandle::for_host(0.5);
+    let fading = PlaybackDone::for_host(0.5);
     assert!(!fading.stop());
     assert!(fading.stop_requested() && !fading.done());
     assert!(fading.finish());
@@ -100,7 +100,7 @@ async fn a_stop_waits_out_the_fade() {
     fading.wait().await;
     assert!(!fading.stop());
 
-    let abrupt = PlaybackHandle::new(0.0);
+    let abrupt = PlaybackDone::new(0.0);
     assert!(abrupt.stop());
     abrupt.wait().await;
 }

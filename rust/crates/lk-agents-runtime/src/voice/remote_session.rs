@@ -25,7 +25,7 @@ pub fn hosting(
             spawner.clone(),
         )) as Arc<dyn SessionTransport>,
     };
-    Arc::new(driver::Hosting::new(
+    Arc::new(driver::RemoteSessionLink::new(
         config.port,
         transport,
         config.console.map(|console| console.as_console()),

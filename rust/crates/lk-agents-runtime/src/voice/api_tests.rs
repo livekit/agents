@@ -841,7 +841,7 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
             started: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         });
-        let host = Arc::new(super::remote_session::driver::Hosting::new(
+        let host = Arc::new(super::remote_session::driver::RemoteSessionLink::new(
             Arc::new(UnusedRemotePort),
             transport.clone(),
             None,

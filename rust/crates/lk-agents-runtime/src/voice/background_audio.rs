@@ -28,7 +28,7 @@ pub use lk_agents_abi::voice::background_audio::{
 
 /// Completion and stop notification owned by voice, shared with the caller's handle
 /// (`PlayHandle`'s two write-once futures).
-pub struct PlaybackHandle {
+pub struct PlaybackDone {
     fade_out: f64,
 
     stopped: AtomicBool,
@@ -36,7 +36,7 @@ pub struct PlaybackHandle {
 }
 
 /// `_core.PlayState`: what `PlayHandle` wraps.
-impl PlaybackHandle {
+impl PlaybackDone {
     pub fn new(fade_out: f64) -> Arc<Self> {
         Arc::new(Self::with(fade_out, false))
     }
@@ -98,7 +98,7 @@ pub struct BackgroundAudioPlayer {
 
     output: tokio::sync::Mutex<Option<PublishedOutput>>,
 
-    thinking: Mutex<Option<Arc<PlaybackHandle>>>,
+    thinking: Mutex<Option<Arc<PlaybackDone>>>,
 
     closed: AtomicBool,
 
@@ -249,7 +249,7 @@ impl BackgroundAudioPlayer {
         looping: bool,
         ambient: bool,
         choose: bool,
-    ) -> Result<Arc<PlaybackHandle>, PlaybackError> {
+    ) -> Result<Arc<PlaybackDone>, PlaybackError> {
         self.play(sounds, choose, looping, ambient, draw)
     }
 
@@ -290,14 +290,14 @@ impl BackgroundAudioPlayer {
         looping: bool,
         ambient: bool,
         draw: f64,
-    ) -> Result<Arc<PlaybackHandle>, PlaybackError> {
+    ) -> Result<Arc<PlaybackDone>, PlaybackError> {
         let Some((index, looping)) =
             plan_play(self.phase(), &sounds, choose, looping, ambient, draw)?
         else {
-            return Ok(PlaybackHandle::already_done());
+            return Ok(PlaybackDone::already_done());
         };
         let sound = sounds.into_iter().nth(index).expect("the plan names one of the sounds");
-        let handle = PlaybackHandle::new(sound.fade_out);
+        let handle = PlaybackDone::new(sound.fade_out);
         let playback = Playback::new(&sound);
         let input = match sound.source {
             SoundSource::Stream(stream) => Input::Stream(stream),
@@ -466,7 +466,7 @@ struct Source {
     input: Input,
     pending: Option<PendingFrame>,
     playback: Playback,
-    handle: Arc<PlaybackHandle>,
+    handle: Arc<PlaybackDone>,
     spawner: Arc<dyn Spawner>,
     tasks: Arc<TaskSet>,
 }
@@ -687,11 +687,11 @@ impl FileInput {
 mod tests;
 
 /// The host class holds the same playback handle the mixer settles.
-pub struct PlayState(pub Arc<PlaybackHandle>);
+pub struct PlayState(pub Arc<PlaybackDone>);
 
 impl lk_agents_abi::voice::background_audio::PlayState for PlayState {
     fn new(fade_out: f64) -> Self {
-        Self(PlaybackHandle::new(fade_out))
+        Self(PlaybackDone::new(fade_out))
     }
     fn done(&self) -> bool {
         self.0.done()
@@ -711,9 +711,9 @@ impl lk_agents_abi::voice::background_audio::PlayState for PlayState {
 }
 
 /// Native class execution over the ABI-owned room capability.
-pub struct HostBackgroundAudioPlayer(Arc<BackgroundAudioPlayer>);
+pub struct BackgroundAudio(Arc<BackgroundAudioPlayer>);
 
-impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for HostBackgroundAudioPlayer {
+impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for BackgroundAudio {
     type State = PlayState;
     type Env = ProcessEnv;
 

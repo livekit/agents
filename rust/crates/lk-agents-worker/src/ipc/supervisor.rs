@@ -22,7 +22,7 @@ pub use timeline::JobTimeline;
 pub use types::*;
 
 /// What the supervisor needs from the host language: logging and the process handle.
-pub trait ProcHost: Send + Sync + 'static {
+pub trait ProcessCallbacks: Send + Sync + 'static {
     fn log(&self, level: Level, msg: &str, extra: Extra);
     /// An error log with the failure's traceback.
     fn log_exception(&self, msg: &str, err: HostError);
@@ -96,7 +96,7 @@ pub struct ProcSupervisor {
 }
 
 impl ProcSupervisor {
-    pub fn new<S: AsyncRead + AsyncWrite + Send + 'static, H: ProcHost>(
+    pub fn new<S: AsyncRead + AsyncWrite + Send + 'static, H: ProcessCallbacks>(
         stream: S,
         host: H,
         opts: SupervisorOptions,
@@ -246,7 +246,7 @@ impl ProcSupervisor {
 struct Driver {
     state: Supervision,
     origin: Instant,
-    host: Arc<dyn ProcHost>,
+    host: Arc<dyn ProcessCallbacks>,
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
     writes: mpsc::Sender<(u64, ToChild)>,
     init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
