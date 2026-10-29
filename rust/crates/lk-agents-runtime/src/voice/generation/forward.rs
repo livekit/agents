@@ -325,16 +325,18 @@ impl Pump<'_> {
                 return Err(error);
             }
         };
+        // The queued words reach the output first: a voice lost before activation activates the
+        // binding here, which re-targets it and opens its transcript chain.
+        if synthesis {
+            playback.flush_text(shared, self.handle).await?;
+        }
         // Both legs end every segment, one whose words went down the transcript leg with no
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
-        // off) included. The activated binding decides it: activation may have re-targeted it.
+        // off) included. The activated binding decides it.
         let leg_state = text_out.map(|leg| *leg.state());
         if plan(playback.binding).end_unvoiced(&heard, leg_state) {
             let audio = playback.binding.audio().expect("bound audio output");
             end_unvoiced(shared, self.handle.id(), audio.as_ref());
-        }
-        if synthesis {
-            playback.flush_text(shared, self.handle).await?;
         }
         if let Some(text) = binding.text() {
             let result = finish_text(text.as_ref(), self.handle, false).await;
