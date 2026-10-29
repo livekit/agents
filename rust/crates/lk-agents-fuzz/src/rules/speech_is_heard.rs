@@ -390,6 +390,41 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     if speaking == Some(true) {
         return Some("the person speaking");
     }
+    // Held at its launch, or paused, for the person the session's own detector hears, until the
+    // pause resolves: a realtime server doing turn detection need not have heard them (no user
+    // state change).
+    // Each cause pauses and resumes on its own: a launch released leaves an interruption's pause.
+    let mut gates: Vec<(GateCause, bool)> = Vec::new();
+    for (_, s) in &journal {
+        if let Step::Interrupt(InterruptStep::PlayoutGate { speech: sp, op, cause }) = s
+            && sp.0 == speech
+        {
+            gates.retain(|(c, _)| c != cause);
+            gates.push((*cause, *op == GateOp::Pause));
+        }
+    }
+    let paused = gates.iter().any(|(_, paused)| *paused);
+    // The detector's view of the person: speaking, or quiet since when.
+    let mut quiet_since: Option<u64> = None;
+    let mut vad_speaking = false;
+    for a in r.applied().iter().filter(|a| a.accepted && before(&a.at)) {
+        let speaking = match a.input {
+            Input::VadStart { .. } => true,
+            Input::VadInference { speaking, .. } => speaking,
+            Input::VadEnd { .. } => false,
+            _ => continue,
+        };
+        if vad_speaking && !speaking {
+            quiet_since = Some(a.at.at_ms);
+        }
+        vad_speaking = speaking;
+    }
+    let allowance = super::pause_resolves::allowance_ms(r.journal(), deadline);
+    if paused
+        && (vad_speaking || quiet_since.is_some_and(|quiet| deadline <= quiet + allowance))
+    {
+        return Some("paused for the person's speech");
+    }
     // The person stopped, and their turn's end is still being decided (seed 99458).
     let endpointing = last(&|s| match s {
         Step::Core(CoreStep::TimerArmed { timer: TimerName::Session(Timer::EndpointingDelay), .. }) => {
