@@ -4,7 +4,6 @@ use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_te
 use super::llm::{Retried, SegEvent, report_metrics, retry};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
@@ -347,8 +346,6 @@ pub(super) struct SynthesisPlayout<'a> {
     pub(super) tx: mpsc::UnboundedSender<SynthesisEvent>,
     pub(super) rx: mpsc::UnboundedReceiver<SynthesisEvent>,
     pub(super) gate: &'a mut PlaybackGate,
-    /// The segment's one processed transcript leg, shared with its completion receipt.
-    pub(super) text: Option<Arc<dyn TextOutput>>,
 }
 
 impl SynthesisPlayout<'_> {
@@ -392,13 +389,19 @@ impl SynthesisPlayout<'_> {
                 Err(error) => Err(SourceFailed::from(error)),
                 Ok(true) => {
                     let audio = self.binding.audio();
-                    let leg = TextLeg::new(self.text.clone(), None, shared, handle.id());
+                    let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());
                     let mut buffered = SynthesizedSegment {
                         rx: &mut self.rx,
                         text: String::new(),
                         leg: &leg,
                         started_at: None,
                     };
+                    // Activated with no audio output: the words start the turn speaking as they
+                    // show, and the synthesised audio is dropped unheard.
+                    if audio.is_none() {
+                        shared.report(GenEvent::FirstFrame { speech: handle.id() });
+                        buffered.started_at = Some(shared.time.wall_secs());
+                    }
                     let result =
                         perform_audio_forwarding(shared, handle, audio.as_deref(), &mut buffered)
                             .await;
@@ -427,7 +430,7 @@ impl SynthesisPlayout<'_> {
         if !self.gate.wait(shared, handle).await || !self.binding.activate().await? {
             return Ok(());
         }
-        let leg = TextLeg::new(self.text.clone(), None, shared, handle.id());
+        let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());
         while let Ok(event) = self.rx.try_recv() {
             leg.forward(event).await;
         }

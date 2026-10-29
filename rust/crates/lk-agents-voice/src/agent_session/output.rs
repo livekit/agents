@@ -1,4 +1,5 @@
-//! A segment retains the output selection it was admitted against until it settles.
+//! A segment takes the session's current outputs when it activates and keeps them until it
+//! settles.
 
 use super::effects::{AudioOp, Effect, Out};
 use super::{Driver, Outputs, RequestId};
@@ -11,6 +12,16 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct SegmentBinding {
     pub segment: PlaybackSegment,
     pub outputs: Outputs,
+}
+
+impl SegmentBinding {
+    fn new(segment: u64, outputs: &Outputs) -> Self {
+        let attachment = outputs.audio.as_ref().map_or(0, |a| a.id.0);
+        SegmentBinding {
+            segment: PlaybackSegment { attachment, segment },
+            outputs: outputs.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -58,30 +69,19 @@ impl OutputBindings {
             return Err(OutputBindingError::AlreadyBound);
         }
         self.next = self.next.checked_add(1).ok_or(OutputBindingError::IdsExhausted)?;
-        let binding = SegmentBinding {
-            segment: PlaybackSegment {
-                attachment: outputs.audio.as_ref().map_or(0, |a| a.id.0),
-                segment: self.next,
-            },
-            outputs: outputs.clone(),
-        };
+        let binding = SegmentBinding::new(self.next, outputs);
         self.bound.insert(request, Bound { speech, binding: binding.clone(), active: false });
         Ok(binding)
     }
 
+    /// Every output a binding names, so its resource outlives the binding.
     pub(crate) fn held(&self) -> impl Iterator<Item = ResourceId> + '_ {
-        self.bound.values().flat_map(|b| {
-            [
-                b.binding.outputs.audio.as_ref().map(|r| r.id),
-                b.binding.outputs.transcription.as_ref().map(|r| r.id),
-            ]
-            .into_iter()
-            .flatten()
-        })
+        self.bound.values().flat_map(|b| b.binding.outputs.ids())
     }
 
+    /// A speech not yet activated will take the session's current outputs.
     pub(crate) fn speech_outputs(&self, speech: SpeechId) -> Option<&Outputs> {
-        self.bound.values().find(|b| b.speech == speech).map(|b| &b.binding.outputs)
+        self.bound.values().find(|b| b.speech == speech && b.active).map(|b| &b.binding.outputs)
     }
 
     /// The captured selection becomes a physical sink only after activation.
@@ -98,8 +98,15 @@ impl OutputBindings {
         self.audio.iter().copied()
     }
 
+    /// An output stays attached while an activated segment plays on it. A segment not yet
+    /// activated holds nothing: it takes the current outputs at its activation.
     fn retire(&mut self, selected: &Outputs, out: &mut Out) {
-        let held: BTreeSet<_> = self.held().collect();
+        let held: BTreeSet<_> = self
+            .bound
+            .values()
+            .filter(|b| b.active)
+            .flat_map(|b| b.binding.outputs.ids())
+            .collect();
         let audio = selected.audio.as_ref().filter(|_| selected.audio_enabled).map(|r| r.id);
         let text = selected
             .transcription
@@ -136,16 +143,23 @@ impl OutputBindings {
         }
     }
 
-    fn activate(&mut self, request: RequestId, speech: SpeechId, out: &mut Out) -> bool {
+    /// The first activation re-targets the binding to `current`: outputs replaced since it was
+    /// bound apply to this segment, which has played nothing yet.
+    fn activate(
+        &mut self,
+        request: RequestId,
+        speech: SpeechId,
+        current: &Outputs,
+        out: &mut Out,
+    ) -> Option<SegmentBinding> {
         if self.bound.iter().any(|(id, b)| *id != request && b.active) {
-            return false;
+            return None;
         }
-        let Some(bound) = self.bound.get_mut(&request).filter(|b| b.speech == speech) else {
-            return false;
-        };
+        let bound = self.bound.get_mut(&request).filter(|b| b.speech == speech)?;
         if std::mem::replace(&mut bound.active, true) {
-            return true;
+            return Some(bound.binding.clone());
         }
+        bound.binding = SegmentBinding::new(bound.binding.segment.segment, current);
         let outputs = &bound.binding.outputs;
         if let Some(audio) = outputs.audio.as_ref().filter(|_| outputs.audio_enabled)
             && self.audio.insert(audio.id)
@@ -165,7 +179,7 @@ impl OutputBindings {
                 enabled: true,
             }));
         }
-        true
+        Some(bound.binding.clone())
     }
 }
 
@@ -210,8 +224,13 @@ impl Driver {
                 .speech_scheduler
                 .handle(speech)
                 .is_some_and(|h| !h.interrupted() && !h.done());
-        let activated = live && self.session.output_bindings.activate(binding, speech, out);
-        let result = if live && !activated {
+        let activated = live
+            .then(|| {
+                let current = &self.session.outputs;
+                self.session.output_bindings.activate(binding, speech, current, out)
+            })
+            .flatten();
+        let result = if live && activated.is_none() {
             let reason = OutputBindingError::ActivationUnavailable;
             out.trace(crate::trace::Step::Playout(crate::trace::PlayoutStep::OutputRefused {
                 speech,
@@ -296,7 +315,7 @@ mod tests {
         let mut bindings = OutputBindings::default();
         let grant = bindings.bind(request, speech, &original).unwrap();
         let mut out = Out::new(lk_agents_abi::FrameId::ROOT, false);
-        assert!(bindings.activate(request, speech, &mut out));
+        assert!(bindings.activate(request, speech, &original, &mut out).is_some());
         out.take();
         bindings.retire(&replacement, &mut out);
         assert!(out.take().is_empty(), "selection must not detach a playing segment");
@@ -325,7 +344,7 @@ mod tests {
         let speech = SpeechId(7);
         let mut out = Out::new(lk_agents_abi::FrameId::ROOT, false);
         let first = bindings.bind(RequestId(1), speech, &original).unwrap();
-        assert!(bindings.activate(RequestId(1), speech, &mut out));
+        assert!(bindings.activate(RequestId(1), speech, &original, &mut out).is_some());
         out.take();
         bindings.retire(&replacement, &mut out);
         assert!(out.take().is_empty());
@@ -333,7 +352,7 @@ mod tests {
         bindings.bound.remove(&RequestId(1));
         bindings.retire(&replacement, &mut out);
         let second = bindings.bind(RequestId(2), speech, &replacement).unwrap();
-        assert!(bindings.activate(RequestId(2), speech, &mut out));
+        assert!(bindings.activate(RequestId(2), speech, &replacement, &mut out).is_some());
         assert_ne!(first.segment, second.segment);
         assert!(matches!(
             &out.take()[..],
@@ -350,5 +369,36 @@ mod tests {
                 }))
             ]
         ));
+    }
+
+    #[test]
+    fn a_segment_activated_after_a_replacement_plays_on_the_replacement() {
+        let original = outputs(1, true);
+        let replacement = Outputs::new(None, None);
+        let mut bindings = OutputBindings::default();
+        let mut out = Out::new(lk_agents_abi::FrameId::ROOT, false);
+        bindings.bind(RequestId(1), SpeechId(1), &original).unwrap();
+        assert!(bindings.activate(RequestId(1), SpeechId(1), &original, &mut out).is_some());
+        bindings.bound.remove(&RequestId(1));
+        out.take();
+        // Synthesised ahead of its authorization, bound but not yet activated.
+        bindings.bind(RequestId(2), SpeechId(2), &original).unwrap();
+        bindings.retire(&replacement, &mut out);
+        assert!(
+            matches!(
+                &out.take()[..],
+                [Planned::Effect(Effect::Audio(AudioOp::SetAudioOutput {
+                    previous: Some(ResourceId(1)),
+                    next: None,
+                    ..
+                }))]
+            ),
+            "a segment not yet activated keeps no deselected output attached"
+        );
+        let activated =
+            bindings.activate(RequestId(2), SpeechId(2), &replacement, &mut out).unwrap();
+        assert!(activated.outputs.audio.is_none());
+        assert_eq!(activated.segment.attachment, 0);
+        assert!(out.take().is_empty());
     }
 }

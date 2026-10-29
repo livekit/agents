@@ -78,6 +78,7 @@ mod silent_audio_say;
 mod silent_segment;
 mod sink_reset_reports_cut;
 mod skip_reply_turn_no_hook;
+mod speculative_segment_takes_current_output;
 mod speech_announced_before_user_item;
 mod step_cut_text_conserved;
 mod stt_end_resumes_pause;

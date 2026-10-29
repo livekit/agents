@@ -534,6 +534,13 @@ impl Outputs {
         self.transcription.is_some() && self.transcription_enabled
     }
 
+    /// The resources the selection names.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = ResourceId> + use<> {
+        [self.audio.as_ref().map(|r| r.id), self.transcription.as_ref().map(|r| r.id)]
+            .into_iter()
+            .flatten()
+    }
+
     /// The pause facts: what the sink can do, and whether audio plays.
     pub(crate) fn pause_facts(&self) -> (AudioOutputCapabilities, bool) {
         let capabilities = self.audio.as_ref().map(|a| a.capabilities).unwrap_or_default();

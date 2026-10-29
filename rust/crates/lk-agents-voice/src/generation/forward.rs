@@ -43,13 +43,11 @@ impl TurnAccumulator {
 #[derive(Default)]
 pub struct PlaybackGate {
     pub at: Option<std::time::SystemTime>,
-    pub audio_enabled: bool,
-    pub text_enabled: bool,
 }
 
 pub enum PlaybackEvent {
     Observe { interrupted: bool },
-    Authorized { at: std::time::SystemTime, audio_enabled: bool, text_enabled: bool },
+    Authorized { at: std::time::SystemTime },
     Interrupted,
 }
 
@@ -72,10 +70,8 @@ impl PlaybackGate {
                     PlaybackEffect::Wait
                 }
             }
-            PlaybackEvent::Authorized { at, audio_enabled, text_enabled } => {
+            PlaybackEvent::Authorized { at } => {
                 self.at = Some(at);
-                self.audio_enabled = audio_enabled;
-                self.text_enabled = text_enabled;
                 PlaybackEffect::Play { consume_authorization: true }
             }
         }
@@ -178,6 +174,18 @@ pub enum SegmentRoute {
     Text,
 }
 
+impl SegmentRoute {
+    /// Only synthesis starts before activation; the other routes are decided again once the
+    /// activated binding names its outputs.
+    pub fn of(kind: VoiceKind, audio_output: bool) -> Self {
+        match (kind, audio_output) {
+            (VoiceKind::Synthesis, true) => SegmentRoute::Synthesis,
+            (VoiceKind::CallerFrames, true) => SegmentRoute::CallerFrames,
+            _ => SegmentRoute::Text,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct TranscriptPlan {
     /// The words queue behind the segment's activation, which attaches the transcription output:
@@ -202,11 +210,7 @@ impl SegmentPlan {
         aligned_requested: bool,
         aligned_provider: bool,
     ) -> Self {
-        let route = match (kind, audio_output) {
-            (VoiceKind::Synthesis, true) => SegmentRoute::Synthesis,
-            (VoiceKind::CallerFrames, true) => SegmentRoute::CallerFrames,
-            _ => SegmentRoute::Text,
-        };
+        let route = SegmentRoute::of(kind, audio_output);
         let synthesis = matches!(route, SegmentRoute::Synthesis);
         Self {
             route,

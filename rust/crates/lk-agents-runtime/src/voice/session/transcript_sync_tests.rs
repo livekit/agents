@@ -38,6 +38,9 @@ impl Chain {
             clock: Arc::new(lk_agents_abi::RealClock::new()),
             spawner: Arc::new(lk_agents_test_support::TokioSpawner::current()),
         });
+        // As the session's first activation does: both legs attached open the gate.
+        sync.audio_output().on_attached();
+        sync.text_output().on_attached();
         let shown = watch::Sender::new(Vec::new());
         sync.audio_output().tracker().observe(Arc::new(Shown(shown.clone())));
         Chain { sync, leaf, shown, output }

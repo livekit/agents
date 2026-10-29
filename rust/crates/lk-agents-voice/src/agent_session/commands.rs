@@ -137,7 +137,9 @@ pub enum Answer {
     Speech,
     ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
     OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
-    OutputActivated(Result<bool, super::output::OutputBindingError>),
+    OutputActivated(
+        Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>,
+    ),
     /// A tool call's next move.
     ToolGo(crate::tool_executor::ToolGo),
     /// A tool step's next step, decided by the driver.
@@ -170,7 +172,7 @@ macro_rules! answer_picks {
 answer_picks! {
     reply_plan: ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
     output_binding: OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
-    output_activated: OutputActivated(Result<bool, super::output::OutputBindingError>),
+    output_activated: OutputActivated(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
     tool_go: ToolGo(crate::tool_executor::ToolGo),
     tool_step: ToolStep(crate::tool_executor::StepNext),
     interrupt: Interrupt(Result<(), InterruptRefusal>),

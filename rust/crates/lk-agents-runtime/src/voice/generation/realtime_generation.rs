@@ -79,7 +79,10 @@ pub(crate) async fn realtime_generation_task(
         leg: None,
     };
     loop {
-        let Some(mut binding) = super::output::OutputBinding::acquire(shared, handle).await? else {
+        let nodes = &ctx.providers.output_nodes;
+        let Some(mut binding) =
+            super::output::OutputBinding::acquire(shared, handle, nodes).await?
+        else {
             generation.state.binding_refused();
             break;
         };
@@ -88,9 +91,7 @@ pub(crate) async fn realtime_generation_task(
             break;
         }
         let audio_out = binding.audio();
-        generation.text_out =
-            super::output::text_output(&ctx.providers.output_nodes, binding.text());
-        binding.retain_text_processing(generation.text_out.clone());
+        generation.text_out = binding.text();
         generation.state.bind(audio_out.is_some());
         // A node invocation belongs to this binding. Its configured transforms survive a tail
         // replacement; a pending invocation is ended before the next binding is acquired.
@@ -320,7 +321,8 @@ impl Generation<'_> {
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
         // Opened as the pipeline's synthesis is: a failed open is retried on the same budget.
-        let mut attempt = lk_agents_voice::generation::Attempt::new(self.shared.conn.tts.unwrap_or_default());
+        let mut attempt =
+            lk_agents_voice::generation::Attempt::new(self.shared.conn.tts.unwrap_or_default());
         let (sink, source) = loop {
             let error = match tts.stream().await {
                 Ok(pair) => break pair,

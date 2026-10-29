@@ -47,7 +47,9 @@ enum ClosePhase {
     Closed,
 }
 
-/// One owner for the transcript gate and its segment pacing state.
+/// One owner for the transcript gate and its segment pacing state. Both legs start detached: a
+/// session attaches an output when a segment first activates on it, and the gate opens only with
+/// both attached, so words with no synchronised audio pass straight through.
 pub struct SyncLifecycle {
     pub segments: SyncSegments,
     audio_attached: bool,
@@ -61,8 +63,8 @@ impl SyncLifecycle {
     pub fn new(options: PacerOptions) -> Self {
         Self {
             segments: SyncSegments::new(options),
-            audio_attached: true,
-            text_attached: true,
+            audio_attached: false,
+            text_attached: false,
             text_attachments: 0,
             capturing_text: false,
             close: ClosePhase::Open,

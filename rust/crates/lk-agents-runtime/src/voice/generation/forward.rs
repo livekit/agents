@@ -82,8 +82,6 @@ pub(super) async fn voice_leg(
         };
     }
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
-    let audio_enabled = shared.audio_enabled();
-    let text_enabled = shared.transcription_enabled();
     let mut pump = Pump {
         shared,
         handle,
@@ -92,8 +90,6 @@ pub(super) async fn voice_leg(
         aligned_transcript: ctx.speech.use_tts_aligned_transcript == Some(true),
         gate: &mut gate,
         acc: &mut acc,
-        text_enabled,
-        audio_enabled,
         rx,
     };
     let interrupted = pump.run().await?;
@@ -126,11 +122,9 @@ impl PlaybackGate {
             let event = tokio::select! {
                 biased;
                 () = handle.wait_for_interrupted() => PlaybackEvent::Interrupted,
-                _ = handle.wait_for_authorization() => PlaybackEvent::Authorized {
-                    at: shared.time.wall(),
-                    audio_enabled: shared.audio_enabled(),
-                    text_enabled: shared.transcription_enabled(),
-                },
+                _ = handle.wait_for_authorization() => {
+                    PlaybackEvent::Authorized { at: shared.time.wall() }
+                }
             };
             effect = self.state.handle(event);
         }
@@ -158,9 +152,6 @@ struct Pump<'a> {
     aligned_transcript: bool,
     gate: &'a mut PlaybackGate,
     acc: &'a mut TurnAccumulator,
-    /// Both flags are fixed for the speech, as of the voice leg.
-    text_enabled: bool,
-    audio_enabled: bool,
     rx: mpsc::UnboundedReceiver<SegEvent>,
 }
 
@@ -199,45 +190,41 @@ impl Pump<'_> {
         first: Visible,
     ) -> Result<Heard, DriverError> {
         let shared = self.shared;
-        // A swap since authorization re-targets this segment, audio and words together.
-        if self.gate.state.at.is_some() {
-            self.audio_enabled = self.gate.state.audio_enabled;
-            self.text_enabled = self.gate.state.text_enabled;
-        }
-        let Some(mut binding) = super::output::OutputBinding::acquire(shared, self.handle).await?
+        let Some(mut binding) =
+            super::output::OutputBinding::acquire(shared, self.handle, self.nodes).await?
         else {
             return Ok(unheard());
         };
-        let audio_out = binding.audio();
-        let text = binding.text();
-        let text = super::output::text_output(self.nodes, text);
-        binding.retain_text_processing(text.clone());
         let (kind, aligned_provider) = match &self.voice {
             Voice::Tts(tts) => (VoiceKind::Synthesis, tts.capabilities().aligned_transcript),
             Voice::Frames(_) => (VoiceKind::CallerFrames, false),
             Voice::Silent => (VoiceKind::Silent, false),
         };
-        let plan = SegmentPlan::new(
-            kind,
-            audio_out.is_some(),
-            text.is_some(),
-            self.aligned_transcript,
-            aligned_provider,
-        );
-        let synthesis = matches!(plan.route, SegmentRoute::Synthesis);
-        if !synthesis && (!self.gate.wait(shared, self.handle).await || !binding.activate().await?)
+        // Synthesis may run ahead of authorization; every other route waits for its activation,
+        // which re-targets the binding to the current outputs before the route is planned.
+        if !matches!(SegmentRoute::of(kind, binding.audio().is_some()), SegmentRoute::Synthesis)
+            && (!self.gate.wait(shared, self.handle).await || !binding.activate().await?)
         {
             return Ok(unheard());
         }
+        let aligned_requested = self.aligned_transcript;
+        let plan = |binding: &super::output::OutputBinding| {
+            let (audio, text) = (binding.audio().is_some(), binding.text().is_some());
+            SegmentPlan::new(kind, audio, text, aligned_requested, aligned_provider)
+        };
+        let opened = plan(&binding);
+        let synthesis = matches!(opened.route, SegmentRoute::Synthesis);
+        let audio_out = binding.audio();
         // One transcript leg per segment: its flush is once-only and the next segment gets its own.
         let (tx, rx) = mpsc::unbounded_channel();
-        let deferred = plan.transcript.filter(|plan| plan.deferred).map(|_| &tx);
-        let leg =
-            plan.transcript.map(|_| TextLeg::new(text.clone(), deferred, shared, self.handle.id()));
+        let deferred = opened.transcript.filter(|plan| plan.deferred).map(|_| &tx);
+        let leg = opened
+            .transcript
+            .map(|_| TextLeg::new(binding.text(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();
         // The aligned path: an audio output, the option on, and a TTS that aligns. The leg then
         // carries the synthesiser's stamped words instead of the deltas.
-        let aligned_path = plan.transcript.is_some_and(|plan| plan.aligned);
+        let aligned_path = opened.transcript.is_some_and(|plan| plan.aligned);
         let mut aligned =
             aligned_path.then(|| Aligned { leg: text_out, state: Default::default() });
         let deltas = if aligned_path { None } else { text_out };
@@ -254,14 +241,9 @@ impl Pump<'_> {
                 interrupted: self.handle.interrupted(),
             },
         );
-        let mut playback = SynthesisPlayout {
-            tx: tx.clone(),
-            rx,
-            gate: &mut *self.gate,
-            text: text.clone(),
-            binding: &mut binding,
-        };
-        let heard = match (plan.route, &mut self.voice, audio_out.as_deref()) {
+        let mut playback =
+            SynthesisPlayout { tx: tx.clone(), rx, gate: &mut *self.gate, binding: &mut binding };
+        let heard = match (opened.route, &mut self.voice, audio_out.as_deref()) {
             (SegmentRoute::Synthesis, Voice::Tts(tts), Some(_)) => {
                 let tts = Arc::clone(tts);
                 let rx = &mut self.rx;
@@ -332,19 +314,16 @@ impl Pump<'_> {
         }
         // Both legs end every segment, one whose words went down the transcript leg with no
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
-        // off) included.
+        // off) included. The activated binding decides it: activation may have re-targeted it.
         let leg_state = text_out.map(|leg| *leg.state());
-        if plan.end_unvoiced(&heard, leg_state) {
-            end_unvoiced(
-                shared,
-                self.handle.id(),
-                audio_out.as_deref().expect("bound audio output"),
-            );
+        if plan(playback.binding).end_unvoiced(&heard, leg_state) {
+            let audio = playback.binding.audio().expect("bound audio output");
+            end_unvoiced(shared, self.handle.id(), audio.as_ref());
         }
         if synthesis {
             playback.flush_text(shared, self.handle).await?;
         }
-        if let Some(text) = text {
+        if let Some(text) = binding.text() {
             let result = finish_text(text.as_ref(), self.handle, false).await;
             binding.text_drained();
             result?;

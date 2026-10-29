@@ -1,4 +1,5 @@
 //! A generation owns its admitted output binding even when it is cancelled while awaiting it.
+//! Its activation re-targets it to the session's current outputs and opens the transcript chain.
 
 use lk_agents_abi::TimedString;
 use lk_agents_abi::voice::io::Result as IoResult;
@@ -7,6 +8,7 @@ use lk_agents_abi::voice::io::{
     PlaybackSegment, TextOutput,
 };
 use lk_agents_abi::voice::nodes::TextNode;
+use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::agent_session::output::SegmentBinding;
 use lk_agents_voice::agent_session::{Answer, RequestId, SessionShared};
 use lk_agents_voice::generation::GenEvent;
@@ -19,7 +21,10 @@ pub(super) struct OutputBinding {
     request: RequestId,
     pub(super) binding: SegmentBinding,
     activated: bool,
-    text_processing: Option<Arc<dyn TextOutput>>,
+    nodes: OutputNodes,
+    /// The activated segment's transcript chain, the agent's `transcription_node` over the bound
+    /// output, until its delivery settles.
+    text: Option<Arc<dyn TextOutput>>,
 }
 
 /// Established before the grant is awaited, so cancellation still releases a late grant.
@@ -43,6 +48,7 @@ impl OutputBinding {
     pub(super) async fn acquire(
         shared: &Arc<SessionShared>,
         handle: &SpeechHandle,
+        nodes: &OutputNodes,
     ) -> Result<Option<Self>, lk_agents_voice::agent_session::DriverError> {
         let (call, answer) = shared.open_call(Answer::output_binding);
         let request = call.id;
@@ -64,7 +70,8 @@ impl OutputBinding {
             request,
             binding,
             activated: false,
-            text_processing: None,
+            nodes: nodes.clone(),
+            text: None,
         }))
     }
 
@@ -77,21 +84,13 @@ impl OutputBinding {
             .and_then(|r| self.shared.resources.audio_output(r.id))
     }
 
+    /// The transcript chain; `None` before activation.
     pub(super) fn text(&self) -> Option<Arc<dyn TextOutput>> {
-        self.binding
-            .outputs
-            .transcription
-            .as_ref()
-            .filter(|_| self.binding.outputs.transcription_enabled)
-            .and_then(|r| self.shared.resources.text_output(r.id))
-    }
-
-    pub(super) fn retain_text_processing(&mut self, text: Option<Arc<dyn TextOutput>>) {
-        self.text_processing = text;
+        self.text.clone()
     }
 
     pub(super) fn text_drained(&mut self) {
-        self.text_processing = None;
+        self.text = None;
     }
 
     pub(super) async fn activate(
@@ -105,12 +104,17 @@ impl OutputBinding {
             GenEvent::ActivateOutput { call: call.id, binding: self.request, speech: self.speech },
             call,
         );
-        if !answer
+        let Some(binding) = answer
             .await
             .map_err(|_| lk_agents_voice::agent_session::output::OutputBindingError::ReplyLost)??
-        {
+        else {
             return Ok(false);
-        }
+        };
+        self.binding = binding;
+        let sink = (self.binding.outputs.transcription.as_ref())
+            .filter(|_| self.binding.outputs.transcription_enabled)
+            .and_then(|r| self.shared.resources.text_output(r.id));
+        self.text = text_output(&self.nodes, sink);
         self.activated =
             self.audio().is_none_or(|audio| audio.begin_segment(self.binding.segment).is_ok());
         if !self.activated {
@@ -129,7 +133,7 @@ impl OutputBinding {
 
 impl Drop for OutputBinding {
     fn drop(&mut self) {
-        if let Some(text) = self.text_processing.take() {
+        if let Some(text) = self.text.take() {
             // An aborted generation cannot await. Its existing text receipt owns retirement.
             let retirement = Self {
                 shared: self.shared.clone(),
@@ -137,7 +141,8 @@ impl Drop for OutputBinding {
                 request: self.request,
                 binding: self.binding.clone(),
                 activated: self.activated,
-                text_processing: None,
+                nodes: OutputNodes::default(),
+                text: None,
             };
             text.retain_until_flushed(Box::new(retirement));
             text.cancel_flush();
@@ -203,8 +208,8 @@ impl PlaybackObserver for OutputSettlement {
 }
 
 /// Bind the agent's transcription node to this segment's admitted text output.
-pub(super) fn text_output(
-    nodes: &lk_agents_voice::agent_session::nodes::OutputNodes,
+fn text_output(
+    nodes: &OutputNodes,
     below: Option<Arc<dyn TextOutput>>,
 ) -> Option<Arc<dyn TextOutput>> {
     let below = below?;

@@ -193,7 +193,7 @@ pub struct SyncSegments {
 
 impl SyncSegments {
     pub fn new(opts: PacerOptions) -> SyncSegments {
-        SyncSegments { opts, enabled: true, segments: VecDeque::new() }
+        SyncSegments { opts, enabled: false, segments: VecDeque::new() }
     }
 
     pub fn enabled(&self) -> bool {
