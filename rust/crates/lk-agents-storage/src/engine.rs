@@ -141,12 +141,14 @@ impl Thread {
     }
 
     /// A competing initializer may have committed while this batch failed. Only an
-    /// authoritative supported schema permits retry; unrelated failures keep their error.
+    /// authoritative supported schema permits retry. A failed probe explains the failure better
+    /// than the batch's error, except an `Uncertain` batch, which may still have applied.
     async fn reconcile_schema(&self, original: StorageError) -> Result<(), StorageError> {
         match self.probe_schema().await {
             Ok(Some(_)) => Ok(()),
-            Err(error @ StorageError::Invalid(_)) => Err(error),
-            _ => Err(original),
+            Ok(None) => Err(original),
+            Err(_) if matches!(original, StorageError::Uncertain(_)) => Err(original),
+            Err(error) => Err(error),
         }
     }
 
