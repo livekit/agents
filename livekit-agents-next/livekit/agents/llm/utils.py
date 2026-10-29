@@ -47,6 +47,8 @@ if TYPE_CHECKING:
     from ..voice.events import RunContext
     from .chat_context import FunctionCall
 
+_ContextT = TypeVar("_ContextT")
+
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
 
@@ -134,7 +136,7 @@ async def serialize_image(image: ImageContent, *, use_cache: bool = True) -> Ser
     return serialized
 
 
-def tool_schema(tool: FunctionTool | RawFunctionTool) -> tuple[str, str, dict[str, Any]]:
+def tool_schema(tool: FunctionTool | RawFunctionTool) -> tuple[str, str, dict[str, object]]:
     """A tool's name, description and parameters' JSON schema: what every form of its schema
     (the providers', the tool search's) is built from."""
     from ..voice.agent_tool import _LocalAgentTool
@@ -150,7 +152,7 @@ def tool_schema(tool: FunctionTool | RawFunctionTool) -> tuple[str, str, dict[st
 
 def build_legacy_openai_schema(
     function_tool: FunctionTool, *, internally_tagged: bool = False
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
     return _core.build_legacy_openai_schema(
@@ -160,7 +162,7 @@ def build_legacy_openai_schema(
 
 def build_strict_openai_schema(
     function_tool: FunctionTool,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """strict mode tool description"""
     return _core.build_strict_openai_schema(*tool_schema(function_tool))
 
@@ -168,7 +170,7 @@ def build_strict_openai_schema(
 ResponseFormatT = TypeVar("ResponseFormatT", default=None)
 
 
-def is_typed_dict(cls: type | Any) -> bool:
+def is_typed_dict(cls: object) -> bool:
     return isinstance(cls, type) and issubclass(cls, dict) and hasattr(cls, "__annotations__")
 
 
@@ -177,8 +179,8 @@ def is_typed_dict(cls: type | Any) -> bool:
 
 
 def to_response_format_param(
-    response_format: type | dict[str, Any],
-) -> tuple[str, type[BaseModel] | TypeAdapter[Any]]:
+    response_format: type | dict[str, object],
+) -> tuple[str, type[BaseModel] | TypeAdapter[object]]:
     if isinstance(response_format, dict):
         raise TypeError("Unsupported response_format type")
 
@@ -188,7 +190,7 @@ def to_response_format_param(
             response_format.__name__,
             **{k: (v, ...) for k, v in response_format.__annotations__.items()},  # type: ignore
         )
-    json_schema_type: type[BaseModel] | TypeAdapter[Any] | None = None
+    json_schema_type: type[BaseModel] | TypeAdapter[object] | None = None
     if inspect.isclass(response_format) and issubclass(response_format, BaseModel):
         name = response_format.__name__
         json_schema_type = response_format
@@ -203,7 +205,7 @@ def to_response_format_param(
     return name, json_schema_type
 
 
-def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
+def to_openai_response_format(response_format: type | dict[str, object]) -> dict[str, object]:
     name, json_schema_type = to_response_format_param(response_format)
     raw = (
         json_schema_type.json_schema()
@@ -213,7 +215,7 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
     return _core.to_openai_response_format(name, raw)
 
 
-def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
+def function_arguments_to_pydantic_model(func: Callable[..., object]) -> type[BaseModel]:
     """Create a Pydantic model from a function's signature. (excluding context types)"""
 
     from docstring_parser import parse_from_object
@@ -251,14 +253,14 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     return create_model(model_name, **fields)
 
 
-def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
+def parse_function_arguments(json_arguments: str) -> dict[str, object]:
     """A tool call's raw JSON arguments as a dict, repaired when malformed (leaked chat-template
     tokens stripped, double encoding unwrapped). Raises ``ValueError`` when unrecoverable or not
     a dict."""
     return _core.parse_function_arguments(json_arguments)
 
 
-def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, Any] | None:
+def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, object] | None:
     """The arguments that hand ``answer`` to ``fnc`` as an ``InputRequired(tool=)`` names it:
     the tool's first string parameter. ``None`` for a tool without one: the model reads the
     answer and calls the tool itself."""
@@ -271,17 +273,17 @@ def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[s
     return {names[0]: answer} if names else None
 
 
-def _is_str(hint: Any) -> bool:
+def _is_str(hint: object) -> bool:
     return hint is str or (get_origin(hint) is Annotated and get_args(hint)[0] is str)
 
 
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str | dict[str, Any],
-    call_ctx: RunContext[Any] | None = None,
+    json_arguments: str | dict[str, object],
+    call_ctx: RunContext[_ContextT] | None = None,
     fnc_call: FunctionCall | None = None,
-) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
+) -> tuple[tuple[object, ...], dict[str, object]]:  # returns args, kwargs
     """Create the positional and keyword arguments to call a function tool from
     the raw function output from the LLM.
 
@@ -334,8 +336,8 @@ def prepare_function_arguments(
 
 
 def validated_arguments(
-    fnc: FunctionTool | RawFunctionTool, args_dict: dict[str, Any]
-) -> dict[str, Any]:
+    fnc: FunctionTool | RawFunctionTool, args_dict: dict[str, object]
+) -> dict[str, object]:
     """A tool call's arguments after schema validation, keyed by parameter name.
 
     Every declared parameter is present — an omitted one carries its default — and
@@ -365,17 +367,17 @@ def validated_arguments(
 def _prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    args_dict: dict[str, Any],
-    call_ctx: RunContext[Any] | None,
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    args_dict: dict[str, object],
+    call_ctx: RunContext[_ContextT] | None,
+) -> tuple[tuple[object, ...], dict[str, object]]:
     return bind_function_arguments(fnc, validated_arguments(fnc, args_dict), call_ctx)
 
 
 def bind_function_arguments(
     fnc: FunctionTool | RawFunctionTool,
-    fields: dict[str, Any],
-    call_ctx: RunContext[Any] | None,
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    fields: dict[str, object],
+    call_ctx: RunContext[_ContextT] | None,
+) -> tuple[tuple[object, ...], dict[str, object]]:
     """The positional and keyword arguments of a call of ``fnc``: its validated ``fields`` and
     the ``RunContext`` where the signature takes one."""
     signature = inspect.signature(fnc)
@@ -411,7 +413,7 @@ def bind_function_arguments(
     return bound.args, bound.kwargs
 
 
-def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
+def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, object]:
     result = {}
     for name, field_info in model.__class__.model_fields.items():
         key = field_info.alias if by_alias and field_info.alias else name
@@ -430,7 +432,7 @@ class ThinkingTokenFilter:
 
 
 def strip_thinking_tokens(
-    content: str | list[Any] | None, state: ThinkingTokenFilter, *, final: bool = False
+    content: str | list[object] | None, state: ThinkingTokenFilter, *, final: bool = False
 ) -> str | None:
     """The visible part of a streamed delta, the thinking spans removed; ``state`` carries a
     span or a partial tag across deltas."""
@@ -453,7 +455,7 @@ def strip_thinking_tokens(
     return visible
 
 
-def _is_valid_function_output(value: Any) -> bool:
+def _is_valid_function_output(value: object) -> bool:
     VALID_TYPES = (str, int, float, bool, complex, type(None))
 
     if isinstance(value, VALID_TYPES):
@@ -473,7 +475,7 @@ def _is_valid_function_output(value: Any) -> bool:
     return False
 
 
-def _value_text(value: Any) -> str | None:
+def _value_text(value: object) -> str | None:
     """What the model reads of a value: the value itself, a model or dataclass as its JSON;
     ``None`` when the model cannot be told about it."""
     if not _is_valid_function_output(value):
@@ -483,7 +485,7 @@ def _value_text(value: Any) -> str | None:
     return str(value) if _is_valid_function_output(value) else None
 
 
-def tool_report(output: Any, exception: BaseException | None = None) -> ToolReport:
+def tool_report(output: object, exception: BaseException | None = None) -> ToolReport:
     """What a tool returned or raised, classified for the core, which decides what the model
     reads and whether it replies."""
     from .tool_context import (
