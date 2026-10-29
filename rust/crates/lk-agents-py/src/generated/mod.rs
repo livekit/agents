@@ -94,6 +94,7 @@ pub trait Implementations: 'static {
     type FallbackTtsStream: ::lk_agents_abi::tts::streams::FallbackTtsStream;
     type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
     type EotStream: ::lk_agents_abi::turn::inference::EotStream;
+    type InterruptionDetector: ::lk_agents_abi::turn::inference::InterruptionDetector;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
     type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
@@ -272,6 +273,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tts::FallbackTtsStream>()?;
     m.add_class::<turn::InferenceEot>()?;
     m.add_class::<turn::EotStream>()?;
+    m.add_class::<turn::InterruptionDetector>()?;
     m.add_class::<types::_core_ProviderAttempts>()?;
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;

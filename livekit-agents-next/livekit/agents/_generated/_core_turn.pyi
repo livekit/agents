@@ -79,3 +79,31 @@ class EotStream:
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
     def end_input(self) -> None: ...
     async def aclose(self) -> None: ...
+
+class InterruptionDetector:
+    """`inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
+    backchannel while the agent speaks. Natively the session's interruption source.
+    """
+    def __init__(
+        self,
+        *,
+        threshold: float | None = None,
+        min_interruption_duration: float = 0.05,
+        max_audio_duration: float = 3.0,
+        audio_prefix_duration: float = 1.0,
+        detection_interval: float = 0.1,
+        inference_timeout: float = 0.7,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        conn_options: APIConnectOptions | None = None,
+        token_ttl_secs: int = 600,
+    ) -> None:
+        """Empty `base_url`, `api_key` or `api_secret` fall back to the environment."""
+    def update_options(
+        self,
+        *,
+        threshold: float | None = None,
+        min_interruption_duration: float | None = None,
+    ) -> None:
+        """Shared with live streams, which reconnect to pick the options up."""

@@ -1,10 +1,11 @@
-//! `inference.TurnDetector`'s native engine: the threshold table and the streams it opens, cloud
-//! with a fallback to the local mini model. The mini model is native when the build links one,
-//! else the host's.
+//! `inference`'s native turn-taking models: `TurnDetector`'s engine (the threshold table and the
+//! streams it opens, cloud with a fallback to the local mini model, native when the build links
+//! one, else the host's) and `AdaptiveInterruptionDetector`.
 
 use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
+use crate::inference::InvalidOption;
 use crate::metrics::base::EotInferenceMetrics;
 use crate::tokenize::language::{LanguageCode, ThresholdOverride, TurnDetectorModel};
 use crate::{ApiConnectOptions, AudioFrame, EotPrediction};
@@ -135,4 +136,37 @@ pub trait EotStream: Send + Sync + Sized + 'static {
 
     #[host(await)]
     async fn aclose(&self);
+}
+
+/// `inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
+/// backchannel while the agent speaks. Natively the session's interruption source.
+#[crate::host(class(
+    name = "InterruptionDetector",
+    native = crate::turn::interruption::InterruptionSource
+))]
+pub trait InterruptionDetector: Send + Sync + Sized + 'static {
+    /// Empty `base_url`, `api_key` or `api_secret` fall back to the environment.
+    #[host(new)]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        #[host(kw, default = None)] threshold: Option<f64>,
+        #[host(default = 0.05)] min_interruption_duration: f64,
+        #[host(default = 3.0)] max_audio_duration: f64,
+        #[host(default = 1.0)] audio_prefix_duration: f64,
+        #[host(default = 0.1)] detection_interval: f64,
+        #[host(default = 0.7)] inference_timeout: f64,
+        #[host(default = None)] base_url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
+        #[host(default = None)] conn_options: Option<ApiConnectOptions>,
+        #[host(default = 600)] token_ttl_secs: u64,
+    ) -> Result<Self, InvalidOption>;
+
+    /// Shared with live streams, which reconnect to pick the options up.
+    #[host(call)]
+    fn update_options(
+        &self,
+        #[host(kw, default = None)] threshold: Option<f64>,
+        #[host(default = None)] min_interruption_duration: Option<f64>,
+    );
 }

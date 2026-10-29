@@ -136,28 +136,9 @@ impl AdaptiveInterruptionDetector {
         self.open(false)
     }
 
-    /// A [`private_stream`](Self::private_stream) under the caller's own retry ladder (the host's
-    /// `_main_task`): the first failure ends it, reported once. `transport` replaces the
-    /// detector's socket for this stream (the host's `http_session`).
-    pub fn private_stream_once(
-        &self,
-        transport: Option<Arc<dyn WsTransport>>,
-    ) -> InterruptionStream {
-        let mut config = self.config.clone();
-        config.conn_options.max_retry = 0;
-        if let Some(transport) = transport {
-            config.transport = transport;
-        }
-        self.open_with(false, config)
-    }
-
-    fn open(&self, fan_out: bool) -> InterruptionStream {
-        self.open_with(fan_out, self.config.clone())
-    }
-
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn open_with(&self, fan_out: bool, config: ConnectionConfig) -> InterruptionStream {
+    fn open(&self, fan_out: bool) -> InterruptionStream {
         let reconnect = Arc::new(Notify::new());
         self.streams.lock().unwrap().push(Arc::downgrade(&reconnect));
 
@@ -168,7 +149,7 @@ impl AdaptiveInterruptionDetector {
 
         let ctx = StreamContext {
             opts: self.opts.clone(),
-            config,
+            config: self.config.clone(),
             clock: self.clock.clone(),
             detector_events: fan_out.then(|| self.events.clone()),
             stream_events: event_tx,
@@ -844,7 +825,11 @@ mod tests {
         .unwrap();
         AdaptiveInterruptionDetector::new(
             opts,
-            ConnectionConfig { transport, ..Default::default() },
+            ConnectionConfig {
+                transport,
+                conn_options: ApiConnectOptions { max_retry: 0, ..Default::default() },
+                ..Default::default()
+            },
             Arc::new(lk_agents_abi::RealClock::new()),
         )
         .0
@@ -867,7 +852,7 @@ mod tests {
         ];
         for (input, count) in cases {
             let detector = detector(Arc::new(FakeWs::hanging()));
-            let mut stream = detector.private_stream_once(None);
+            let mut stream = detector.private_stream();
             let refused = (0..count).any(|_| stream.push(input.clone()).is_err());
             if !refused {
                 stream.aclose().await.unwrap();
@@ -890,7 +875,7 @@ mod tests {
     async fn end_input_sends_accepted_audio_before_session_close() {
         let peer = Arc::new(FakeWs::new(Vec::new()).keep_open());
         let detector = detector(peer.clone());
-        let mut stream = detector.private_stream_once(None);
+        let mut stream = detector.private_stream();
         stream.push(InputEvent::AgentSpeechStarted).unwrap();
         stream
             .push(InputEvent::OverlapSpeechStarted(OverlapStart {

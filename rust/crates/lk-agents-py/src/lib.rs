@@ -167,6 +167,9 @@ impl generated::Implementations for Selected {
     type InferenceEot =
         lk_agents_runtime::inference::eot::NativeEot<lk_agents_runtime::process::Process>;
     type EotStream = lk_agents_runtime::inference::eot::DetectorStream;
+    type InterruptionDetector = lk_agents_runtime::inference::interruption::NativeInterruptionDetector<
+        lk_agents_runtime::process::Process,
+    >;
     type InferenceStt =
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;

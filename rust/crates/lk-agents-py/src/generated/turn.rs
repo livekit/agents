@@ -207,13 +207,78 @@ impl EotStream {
     }
 }
 
-// A `::lk_agents_abi::EotDetector` this class implements is handed to the host as an instance of it.
+// Declared in rust/crates/lk-agents-abi/src/turn/inference.rs.
+type InterruptionDetectorImpl = <crate::Selected as super::Implementations>::InterruptionDetector;
+
+fn _extract_interruption_detector_new_threshold(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "threshold")).map(Some) }
+}
+
+fn _extract_interruption_detector_new_min_interruption_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_interruption_duration")
+}
+
+fn _extract_interruption_detector_new_max_audio_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_audio_duration")
+}
+
+fn _extract_interruption_detector_new_audio_prefix_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "audio_prefix_duration")
+}
+
+fn _extract_interruption_detector_new_detection_interval(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "detection_interval")
+}
+
+fn _extract_interruption_detector_new_inference_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "inference_timeout")
+}
+
+fn _extract_interruption_detector_new_token_ttl_secs(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "token_ttl_secs")
+}
+
+fn _extract_interruption_detector_update_options_threshold(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "threshold")).map(Some) }
+}
+
+fn _extract_interruption_detector_update_options_min_interruption_duration(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_interruption_duration")).map(Some) }
+}
+
+/// `inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
+/// backchannel while the agent speaks. Natively the session's interruption source.
+#[pyclass(frozen, name = "InterruptionDetector", module = "livekit.agents._core")]
+pub struct InterruptionDetector(::std::sync::Arc<InterruptionDetectorImpl>);
+
+#[pymethods]
+impl InterruptionDetector {
+    /// Empty `base_url`, `api_key` or `api_secret` fall back to the environment.
+    #[new]
+    #[pyo3(signature = (*, threshold = None, min_interruption_duration = 0.05, max_audio_duration = 3.0, audio_prefix_duration = 1.0, detection_interval = 0.1, inference_timeout = 0.7, base_url = None, api_key = None, api_secret = None, conn_options = None, token_ttl_secs = 600))]
+    fn new(#[pyo3(from_py_with = _extract_interruption_detector_new_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_new_min_interruption_duration)] min_interruption_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_max_audio_duration)] max_audio_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_audio_prefix_duration)] audio_prefix_duration: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_detection_interval)] detection_interval: f64, #[pyo3(from_py_with = _extract_interruption_detector_new_inference_timeout)] inference_timeout: f64, base_url: ::std::option::Option<::std::string::String>, api_key: ::std::option::Option<::std::string::String>, api_secret: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>, #[pyo3(from_py_with = _extract_interruption_detector_new_token_ttl_secs)] token_ttl_secs: u64) -> PyResult<InterruptionDetector> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(InterruptionDetector(::std::sync::Arc::new(out)))
+    }
+
+    /// Shared with live streams, which reconnect to pick the options up.
+    #[pyo3(signature = (*, threshold = None, min_interruption_duration = None))]
+    fn update_options(&self, #[pyo3(from_py_with = _extract_interruption_detector_update_options_threshold)] threshold: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_interruption_detector_update_options_min_interruption_duration)] min_interruption_duration: ::std::option::Option<f64>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::update_options(&self.0, threshold, min_interruption_duration);
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::turn::interruption::InterruptionSource`, an instance of this class is itself.
 ::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNativeClass {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::EotDetector>(),
-        write: |py, native| {
-            let native = native.downcast::<EotStreamImpl>().ok()?;
-            Some(::pyo3::Py::new(py, EotStream(native)).map(::pyo3::Py::into_any))
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(),
+        read: |obj| {
+            let this = obj.cast::<InterruptionDetector>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::turn::interruption::InterruptionSource> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
     }
 }

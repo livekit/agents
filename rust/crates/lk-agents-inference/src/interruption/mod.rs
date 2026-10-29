@@ -5,17 +5,17 @@
 mod audio;
 mod cache;
 mod core;
+mod detector;
 mod event;
 // The session loop's `InterruptionPort`, over the detector below.
 mod leg;
 mod options;
 pub mod proto;
-#[cfg(feature = "python")]
-mod python;
 mod retry;
 pub mod transport;
 
 pub use audio::{AudioError, AudioFrame, AudioWindow};
+pub use detector::NativeInterruptionDetector;
 pub use core::{
     InputEvent, InputOutcome, InterruptionCore, InterruptionEffect, InterruptionEvent, OverlapEnd,
     OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,

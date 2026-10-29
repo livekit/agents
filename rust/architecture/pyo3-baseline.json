@@ -46,7 +46,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/markup/steering.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/timed.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/tts.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/turn/interruption.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/turn/keyterms.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/utils/audio.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/utils/byte_stream.rs",
@@ -63,7 +62,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/job.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/worker/worker.rs",
   "pyo3-file:rust/crates/lk-agents-inference/src/duplex/python.rs",
-  "pyo3-file:rust/crates/lk-agents-inference/src/interruption/python.rs",
   "pyo3-file:rust/crates/lk-agents-inference/src/python.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/images.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/tests/eot.rs"

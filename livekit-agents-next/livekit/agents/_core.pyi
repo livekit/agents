@@ -10,8 +10,6 @@ from ._core_handwritten import (
     AgentNodes as AgentNodes,
     DuplexRealtimeModel as DuplexRealtimeModel,
     FixedGate as FixedGate,
-    InterruptionDetector as InterruptionDetector,
-    InterruptionDetectorStream as InterruptionDetectorStream,
     ItemStream as ItemStream,
     Role as Role,
     Run as Run,
@@ -21,7 +19,6 @@ from ._core_handwritten import (
     Turn as Turn,
     chat_ctx_to_dict as chat_ctx_to_dict,
     init as init,
-    interruption_metrics as interruption_metrics,
     resolve_host_ref as resolve_host_ref,
     run_shutdown_callbacks as run_shutdown_callbacks,
     session_records as session_records,
@@ -336,6 +333,7 @@ from ._generated._core_tts import (
 from ._generated._core_turn import (
     EotStream as EotStream,
     InferenceEot as InferenceEot,
+    InterruptionDetector as InterruptionDetector,
 )
 from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,

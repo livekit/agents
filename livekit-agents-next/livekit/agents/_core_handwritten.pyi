@@ -236,53 +236,6 @@ def session_records(
 
 # --- inference -----------------------------------------------------------------------------------
 
-class InterruptionDetector:
-    def __init__(
-        self,
-        *,
-        threshold: float | None = None,
-        min_interruption_duration: float = ...,
-        max_audio_duration: float = ...,
-        audio_prefix_duration: float = ...,
-        detection_interval: float = ...,
-        inference_timeout: float = ...,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        headers: Any = None,
-        conn_options: Any = ...,
-        token_ttl_secs: int = 600,
-        http_session: Any = None,
-    ) -> None: ...
-    def update_options(
-        self, *, threshold: float | None = None, min_interruption_duration: float | None = None
-    ) -> None: ...
-    def recv_event(self) -> Awaitable[dict[str, Any] | None]: ...
-    def stream(self) -> Awaitable[InterruptionDetectorStream]: ...
-
-class InterruptionDetectorStream:
-    def push_audio(self, frame: Any) -> None:
-        """One audio frame; synchronous (50 fps)."""
-
-    def push_event(
-        self,
-        kind: str,
-        *,
-        started_at: float = 0.0,
-        ended_at: float = 0.0,
-        speech_duration: float = 0.0,
-        agent_ended: bool = False,
-        user_speaking_span: Any = None,
-    ) -> None: ...
-    def flush(self) -> None: ...
-    def end_input(self) -> None: ...
-    def recv(self) -> Awaitable[dict[str, Any] | SpanUpdateWire | None]:
-        """The next event (``overlapping_speech``, ``error`` or ``span_update``), ``None`` at the end."""
-
-    def aclose(self) -> Awaitable[None]: ...
-
-def interruption_metrics(event: Any, wall: float, model: str, provider: str) -> dict[str, Any]: ...
-
 class FixedGate:
     def __init__(
         self,

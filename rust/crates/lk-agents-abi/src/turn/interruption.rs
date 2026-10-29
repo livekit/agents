@@ -47,31 +47,11 @@ pub trait InterruptionPort: Send + Sync {
     fn next_event(&self) -> crate::BoxFuture<'_, LegEvent<OverlapVerdict>>;
 }
 
-/// Opened when the session starts (opening spawns), stamped on the session's anchor.
+/// Opened when the session starts (opening spawns), stamped on the session's anchor. Only a
+/// native detector crosses: there is no host protocol to proxy.
+#[crate::host(native(
+    refused = "interruption_detector must be an `inference.AdaptiveInterruptionDetector`"
+))]
 pub trait InterruptionSource: Send + Sync {
     fn open(&self, anchor: crate::WallAnchor) -> Arc<dyn InterruptionPort>;
-}
-
-/// Only a native detector crosses: there is no host protocol to proxy.
-#[cfg(feature = "python")]
-impl crate::python::HostProxy for dyn InterruptionSource {
-    fn from_host(
-        obj: &pyo3::Bound<'_, pyo3::PyAny>,
-        _clock: Option<Arc<dyn crate::Clock>>,
-    ) -> pyo3::PyResult<Arc<Self>> {
-        crate::python::native::<dyn InterruptionSource>(obj).ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err(
-                "interruption_detector must be a `_core.InterruptionDetector` -- the host's \
-                 `inference.AdaptiveInterruptionDetector` wraps one and that is the object to \
-                 pass (`detector._core`).",
-            )
-        })
-    }
-
-    fn view(
-        _handle: crate::python::HostHandle,
-        _clock: Option<Arc<dyn crate::Clock>>,
-    ) -> pyo3::PyResult<Box<Self>> {
-        Err(pyo3::exceptions::PyTypeError::new_err("an interruption detector is native only"))
-    }
 }
