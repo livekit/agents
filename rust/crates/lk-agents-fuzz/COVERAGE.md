@@ -495,7 +495,7 @@ Ranked by what a person on the call or a developer would hit:
 ## 6. Through the public API
 
 The fuzzer drives the core as its host does. `Run::start` (`src/drive/start.rs`) assembles the
-session with `SessionApi::host_new`, the `VoiceSession(...)` `lk-agents-py` binds, over a
+session with the runtime's `VoiceSession::new`, the `VoiceSession(...)` `lk-agents-py` binds, over a
 `FakeRoom` from `lk-agents-test-support` and the fakes, with the setup as `SessionOptions` kwargs, and
 awaits `start()`. Every input that is a host call (`src/drive/apply.rs`) is that method with its
 argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_reply`,
@@ -506,7 +506,7 @@ argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_rep
 the agent's `AgentHost` answering the marshal's report. People join and leave the fake room, and the
 real room io decides what the session hears of it.
 
-Observation is a test-only probe on `SessionApi` (feature `dst`, enabled by this crate only): it
+Observation is a test-only probe on `VoiceSession` (the runtime's `dst` feature, enabled by this crate only): it
 sees every journal step as it is written and every host event, typed, as the drain takes it, and
 hands the session's cores to the run, which stays their queue owner (so the queue policies,
 the panic catch and the livelock stop are unchanged). The host's own `on_event` sink still gets

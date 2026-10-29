@@ -18,7 +18,7 @@ Principles the suite holds to:
   socket drop) is an input the case sends, never something a fake derives.
 - **Inputs are the actual public API payloads, and the real interface is not bypassed.** Where
   the suite still goes around it (it builds the driver with `DriverBuilder` rather than the
-  public `SessionApi`), `COVERAGE.md` section 6 says so and what it costs.
+  runtime's `VoiceSession`), `COVERAGE.md` section 6 says so and what it costs.
 - **Correctness comes from contracts**, never from the Python reference or from what the current
   implementation happens to do. One observable guarantee per rule.
 - **Verdicts depend on no clock but the simulation's**, so a slow machine cannot change one.
