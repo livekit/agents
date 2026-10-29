@@ -567,9 +567,10 @@ impl PlaybackInfo {
     }
 }
 
-/// Header of an incoming byte or text stream: `rtc.ByteStreamInfo` / `rtc.TextStreamInfo`.
-
+/// Header of an incoming byte or text stream: read from `rtc.ByteStreamInfo` /
+/// `rtc.TextStreamInfo`, handed back as a dict of these fields (`TextInputWire.info`).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
+#[python(dataclass, module = "room_io", name = "_StreamInfo")]
 #[binding(extract, emit)]
 pub struct StreamInfo {
     #[binding(default)]

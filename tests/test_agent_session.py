@@ -96,6 +96,7 @@ async def test_close_waits_for_recording_before_a_late_close_event() -> None:
     from unittest.mock import AsyncMock
 
     from livekit.agents import _core
+    from livekit.agents._generated.session_wire import CloseWire
     from livekit.agents.voice.events import CloseReason
 
     session = VoiceSession(vad=None, turn_handling={"turn_detection": None})
@@ -118,7 +119,7 @@ async def test_close_waits_for_recording_before_a_late_close_event() -> None:
         await asyncio.sleep(0)
         assert not closing.done(), "close must wait for recording even before its close event"
         await asyncio.wait_for(finishing.wait(), timeout=1)
-        session._on_close({"reason": CloseReason.USER_INITIATED.value})
+        session._on_close(CloseWire(reason=CloseReason.USER_INITIATED, error=None))
         release.set()
         await closing
         assert calls == 1, "a late close event must join the already-owned finalization"

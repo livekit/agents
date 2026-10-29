@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
 #     rust/crates/lk-agents-abi/src/voice/room_io.rs
+#     rust/crates/lk-agents-abi/src/voice/rtc.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -81,10 +82,19 @@ class AudioOutputOptions:
 
 
 @dataclass
-class TextInputEvent:
-    text: str
-    info: rtc.TextStreamInfo | None = None
-    participant: rtc.RemoteParticipant | None = None
+class _StreamInfo:
+    """Header of an incoming byte or text stream: read from `rtc.ByteStreamInfo` /
+    `rtc.TextStreamInfo`, handed back as a dict of these fields (`TextInputWire.info`).
+    """
+
+    name: str | None
+    stream_id: str
+    topic: str
+    mime_type: str
+    size: int | None
+    attributes: dict[str, str]
+    timestamp: int
+    attachments: list[str]
 
 
 # --- the frozen public paths -----------------------------------------------------------------
@@ -100,4 +110,3 @@ NoiseCancellationParams.__module__ = "livekit.agents.voice.room_io"
 TextInputOptions.__module__ = "livekit.agents.voice.room_io"
 VideoInputOptions.__module__ = "livekit.agents.voice.room_io"
 AudioOutputOptions.__module__ = "livekit.agents.voice.room_io"
-TextInputEvent.__module__ = "livekit.agents.voice.room_io"

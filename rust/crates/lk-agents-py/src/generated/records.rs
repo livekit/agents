@@ -974,6 +974,25 @@ pub mod agent_run {
     }
 }
 
+pub mod amd {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+    static A_M_D_PREDICTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn a_m_d_prediction_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::amd::AmdPrediction) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::amd::AmdPrediction { speech_duration, category, reason, transcript, delay } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration.as_secs_f64(), py)?)?;
+            kwargs.set_item("category", ::pyo3::IntoPyObjectExt::into_bound_py_any(category, py)?)?;
+            kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason.as_str(), py)?)?;
+            kwargs.set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
+            kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay.as_secs_f64(), py)?)?;
+            crate::host::construct(A_M_D_PREDICTION_EVENT.import(py, "livekit.agents._generated.amd", "AMDPredictionEvent")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod avatar {
     use pyo3::prelude::*;
 
@@ -1184,6 +1203,156 @@ pub mod evals {
             kwargs.set_item("majority_passed", ::pyo3::IntoPyObjectExt::into_bound_py_any(majority_passed, py)?)?;
             kwargs.set_item("none_failed", ::pyo3::IntoPyObjectExt::into_bound_py_any(none_failed, py)?)?;
             crate::host::construct(EVALUATION_SCORE.import(py, "livekit.agents._generated.evals", "EvaluationScore")?.as_any(), (), Some(&kwargs))
+    }
+}
+
+pub mod events {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_STATE_CHANGED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_state_changed_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserStateChanged) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::UserStateChanged { old_state, new_state, created_at } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("old_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(old_state, py)?)?;
+            kwargs.set_item("new_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(new_state, py)?)?;
+            kwargs.set_item("created_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(created_at, py)?)?;
+            crate::host::construct(USER_STATE_CHANGED_EVENT.import(py, "livekit.agents._generated.events", "UserStateChangedEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static AGENT_STATE_CHANGED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn agent_state_changed_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::AgentStateChanged) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::AgentStateChanged { old_state, new_state, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("old_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(old_state, py)?)?;
+            kwargs.set_item("new_state", ::pyo3::IntoPyObjectExt::into_bound_py_any(new_state, py)?)?;
+            crate::host::construct(AGENT_STATE_CHANGED_EVENT.import(py, "livekit.agents._generated.events", "AgentStateChangedEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_INPUT_TRANSCRIBED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_input_transcribed_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserInputTranscribed) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::UserInputTranscribed { transcript, is_final, item_id, speaker_id, language, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
+            kwargs.set_item("is_final", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_final, py)?)?;
+            kwargs.set_item("item_id", match item_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("speaker_id", match speaker_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("language", match language { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(USER_INPUT_TRANSCRIBED_EVENT.import(py, "livekit.agents._generated.events", "UserInputTranscribedEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_TRANSCRIPTION_TIMEOUT_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_transcription_timeout_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserTranscriptionTimeout) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::UserTranscriptionTimeout { speech_duration, vad_speech_started_at, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("speech_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration, py)?)?;
+            kwargs.set_item("vad_speech_started_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(vad_speech_started_at, py)?)?;
+            crate::host::construct(USER_TRANSCRIPTION_TIMEOUT_EVENT.import(py, "livekit.agents._generated.events", "UserTranscriptionTimeoutEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static EOT_PREDICTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn eot_prediction_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::EotPrediction) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::EotPrediction { probability, threshold, inference_duration, delay, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
+            kwargs.set_item("threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(threshold, py)?)?;
+            kwargs.set_item("inference_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(inference_duration, py)?)?;
+            kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay, py)?)?;
+            crate::host::construct(EOT_PREDICTION_EVENT.import(py, "livekit.agents._generated.events", "EotPredictionEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static __AGENT_BACKCHANNEL_OPPORTUNITY_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn __agent_backchannel_opportunity_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::AgentBackchannelOpportunityEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::AgentBackchannelOpportunityEvent { probability, threshold, end_of_turn_probability, end_of_turn_threshold, language, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
+            kwargs.set_item("threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(threshold, py)?)?;
+            kwargs.set_item("end_of_turn_probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_of_turn_probability, py)?)?;
+            kwargs.set_item("end_of_turn_threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_of_turn_threshold, py)?)?;
+            kwargs.set_item("language", match language { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(__AGENT_BACKCHANNEL_OPPORTUNITY_EVENT.import(py, "livekit.agents._generated.events", "_AgentBackchannelOpportunityEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static AGENT_FALSE_INTERRUPTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn agent_false_interruption_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::AgentFalseInterruption) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::AgentFalseInterruption { resumed, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("resumed", ::pyo3::IntoPyObjectExt::into_bound_py_any(resumed, py)?)?;
+            crate::host::construct(AGENT_FALSE_INTERRUPTION_EVENT.import(py, "livekit.agents._generated.events", "AgentFalseInterruptionEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static TOOL_CALL_UPDATED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_call_updated_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolCallUpdated) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ToolCallUpdated { id, call_id, message } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
+            kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
+            kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+            crate::host::construct(TOOL_CALL_UPDATED.import(py, "livekit.agents._generated.events", "ToolCallUpdated")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static TOOL_CALL_ENDED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_call_ended_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolCallEnded) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ToolCallEnded { id, call_id, message, status } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
+            kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
+            kwargs.set_item("message", match message { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("status", ::pyo3::IntoPyObjectExt::into_bound_py_any(status, py)?)?;
+            crate::host::construct(TOOL_CALL_ENDED.import(py, "livekit.agents._generated.events", "ToolCallEnded")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static TOOL_REPLY_UPDATED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_reply_updated_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolReplyUpdated) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ToolReplyUpdated { update_ids, status, speech_id } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("update_ids", ::pyo3::types::PyList::new(py, update_ids.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("status", ::pyo3::IntoPyObjectExt::into_bound_py_any(status, py)?)?;
+            kwargs.set_item("speech_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_id, py)?)?;
+            crate::host::construct(TOOL_REPLY_UPDATED.import(py, "livekit.agents._generated.events", "ToolReplyUpdated")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_TURN_EXCEEDED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_turn_exceeded_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserTurnExceededEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::UserTurnExceededEvent { transcript, accumulated_transcript, accumulated_word_count, duration, created_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
+            kwargs.set_item("accumulated_transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(accumulated_transcript, py)?)?;
+            kwargs.set_item("accumulated_word_count", ::pyo3::IntoPyObjectExt::into_bound_py_any(accumulated_word_count, py)?)?;
+            kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration.as_secs_f64(), py)?)?;
+            crate::host::construct(USER_TURN_EXCEEDED_EVENT.import(py, "livekit.agents._generated.events", "UserTurnExceededEvent")?.as_any(), (), Some(&kwargs))
     }
 }
 
@@ -1520,6 +1689,480 @@ pub mod recorder {
             kwargs.set_item("dropped_input_samples", ::pyo3::IntoPyObjectExt::into_bound_py_any(dropped_input_samples, py)?)?;
             kwargs.set_item("dropped_output_samples", ::pyo3::IntoPyObjectExt::into_bound_py_any(dropped_output_samples, py)?)?;
             crate::host::construct(RECORDING_SUMMARY.import(py, "livekit.agents._generated.recorder", "RecordingSummary")?.as_any(), (), Some(&kwargs))
+    }
+}
+
+pub mod session_wire {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPEECH_CREATED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn speech_created_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SpeechCreated) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SpeechCreated { user_initiated, source, speech_handle } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("user_initiated", ::pyo3::IntoPyObjectExt::into_bound_py_any(user_initiated, py)?)?;
+            kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
+            kwargs.set_item("speech_handle", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_handle, py)?)?;
+            crate::host::construct(SPEECH_CREATED_WIRE.import(py, "livekit.agents._generated.session_wire", "SpeechCreatedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static TOOL_CALL_STARTED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_call_started_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolCallStarted) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ToolCallStarted { function_call } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("function_call", ::pyo3::IntoPyObjectExt::into_bound_py_any(function_call, py)?)?;
+            crate::host::construct(TOOL_CALL_STARTED_WIRE.import(py, "livekit.agents._generated.session_wire", "ToolCallStartedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn tool_update_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolUpdate) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::voice::events::ToolUpdate::Started(x) => crate::generated::records::session_wire::tool_call_started_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::ToolUpdate::Updated(x) => crate::generated::records::events::tool_call_updated_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::ToolUpdate::Ended(x) => crate::generated::records::events::tool_call_ended_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::ToolUpdate::Reply(x) => crate::generated::records::events::tool_reply_updated_to_py(py, x)?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static TOOL_EXECUTION_UPDATED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn tool_execution_updated_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolExecutionUpdated) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ToolExecutionUpdated { update } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("update", crate::generated::records::session_wire::tool_update_wire_to_py(py, update)?)?;
+            crate::host::construct(TOOL_EXECUTION_UPDATED_WIRE.import(py, "livekit.agents._generated.session_wire", "ToolExecutionUpdatedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static START_OF_SPEECH_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn start_of_speech_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::StartOfSpeechEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::StartOfSpeechEvent { at: _, speech_duration: _, from_vad: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            crate::host::construct(START_OF_SPEECH_EVENT.import(py, "livekit.agents._generated.session_wire", "StartOfSpeechEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static PREEMPTIVE_GENERATION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn preemptive_generation_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::PreemptiveGenerationEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::PreemptiveGenerationEvent { new_transcript: _, transcript_confidence: _, started_speaking_at: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            crate::host::construct(PREEMPTIVE_GENERATION_EVENT.import(py, "livekit.agents._generated.session_wire", "PreemptiveGenerationEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static BACKCHANNEL_CONFIRMED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn backchannel_confirmed_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::BackchannelConfirmedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::BackchannelConfirmedWire {  } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            crate::host::construct(BACKCHANNEL_CONFIRMED_WIRE.import(py, "livekit.agents._generated.session_wire", "BackchannelConfirmedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static OVERLAP_INTERRUPTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn overlap_interruption_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::OverlapInterruptionEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::OverlapInterruptionEvent { ignore_user_transcript_until: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            crate::host::construct(OVERLAP_INTERRUPTION_EVENT.import(py, "livekit.agents._generated.session_wire", "OverlapInterruptionEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static USER_TURN_COMPLETED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn user_turn_completed_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::UserTurnCompletedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::UserTurnCompletedWire { turn, new_transcript, transcript_confidence } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("turn", ::pyo3::IntoPyObjectExt::into_bound_py_any(turn, py)?)?;
+            kwargs.set_item("new_transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript, py)?)?;
+            kwargs.set_item("transcript_confidence", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence, py)?)?;
+            crate::host::construct(USER_TURN_COMPLETED_WIRE.import(py, "livekit.agents._generated.session_wire", "UserTurnCompletedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static END_OF_SPEECH_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn end_of_speech_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::EndOfSpeechEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::EndOfSpeechEvent { at: _, from_vad: _, silence_duration } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("silence_duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(silence_duration, py)?)?;
+            crate::host::construct(END_OF_SPEECH_EVENT.import(py, "livekit.agents._generated.session_wire", "EndOfSpeechEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static ITEM_ADDED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn item_added_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ItemAddedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ItemAddedWire { item, agent, visibility, run } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("item", ::pyo3::IntoPyObjectExt::into_bound_py_any(item, py)?)?;
+            kwargs.set_item("agent", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent, py)?)?;
+            kwargs.set_item("visibility", ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility, py)?)?;
+            kwargs.set_item("run", match run { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(ITEM_ADDED_WIRE.import(py, "livekit.agents._generated.session_wire", "ItemAddedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static FUNCTION_TOOLS_EXECUTED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn function_tools_executed_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ToolsExecutedEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ToolsExecutedEvent { function_calls: _, function_call_outputs: _, handoff_required: _ } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            crate::host::construct(FUNCTION_TOOLS_EXECUTED_WIRE.import(py, "livekit.agents._generated.session_wire", "FunctionToolsExecutedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static DIAGNOSTIC_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn diagnostic_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::DiagnosticWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::DiagnosticWire { level, message, fields } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("level", ::pyo3::IntoPyObjectExt::into_bound_py_any(level, py)?)?;
+            kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+            kwargs.set_item("fields", { let d = ::pyo3::types::PyDict::new(py); for (k, x) in fields { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() })?;
+            crate::host::construct(DIAGNOSTIC_WIRE.import(py, "livekit.agents._generated.session_wire", "DiagnosticWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static RUN_ITEM_ADDED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_item_added_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::RunItemAddedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::RunItemAddedWire { run, item } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("run", match run { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("item", ::pyo3::IntoPyObjectExt::into_bound_py_any(item, py)?)?;
+            crate::host::construct(RUN_ITEM_ADDED_WIRE.import(py, "livekit.agents._generated.session_wire", "RunItemAddedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static RUN_STARTED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_started_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::RunStartedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::RunStartedWire { run } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("run", match run { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(RUN_STARTED_WIRE.import(py, "livekit.agents._generated.session_wire", "RunStartedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static RUN_REFUSED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_refused_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::RunRefusedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::RunRefusedWire { run, cause } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("run", match run { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("cause", ::pyo3::IntoPyObjectExt::into_bound_py_any(cause, py)?)?;
+            crate::host::construct(RUN_REFUSED_WIRE.import(py, "livekit.agents._generated.session_wire", "RunRefusedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static RUN_SETTLED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_settled_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::RunSettledWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::RunSettledWire { run, outcome, final_output, question, run_error, speech_handle } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("run", match run { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+            kwargs.set_item("final_output", match final_output { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("question", match question { None => py.None().into_bound(py), Some(x) => crate::generated::records::session_wire::run_question_to_py(py, x)? })?;
+            kwargs.set_item("run_error", match run_error { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("speech_handle", match speech_handle { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(RUN_SETTLED_WIRE.import(py, "livekit.agents._generated.session_wire", "RunSettledWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static RUN_QUESTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_question_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::RunQuestion) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::RunQuestion { question, verbatim, answer_tool } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
+            kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+            kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(RUN_QUESTION.import(py, "livekit.agents._generated.session_wire", "RunQuestion")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPEECH_DONE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn speech_done_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SpeechDoneWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SpeechDoneWire { speech_id, outcome } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("speech_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_id, py)?)?;
+            kwargs.set_item("outcome", ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome, py)?)?;
+            crate::host::construct(SPEECH_DONE_WIRE.import(py, "livekit.agents._generated.session_wire", "SpeechDoneWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static FLOOR_CHANGED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn floor_changed_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::FloorChangedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::FloorChangedWire { speech_id } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(FLOOR_CHANGED_WIRE.import(py, "livekit.agents._generated.session_wire", "FloorChangedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPAN_STARTED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn span_started_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SpanStartedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SpanStartedWire { span_id, parent_id, name, start_time, attributes } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("span_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(span_id, py)?)?;
+            kwargs.set_item("parent_id", match parent_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+            kwargs.set_item("start_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time, py)?)?;
+            kwargs.set_item("attributes", ::lk_agents_abi::python::extra_to_py(py, &attributes)?.into_any())?;
+            crate::host::construct(SPAN_STARTED_WIRE.import(py, "livekit.agents._generated.session_wire", "SpanStartedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPAN_ENDED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn span_ended_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SpanEndedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SpanEndedWire { span_id, end_time, attributes, error, events, metrics } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("span_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(span_id, py)?)?;
+            kwargs.set_item("end_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_time, py)?)?;
+            kwargs.set_item("attributes", ::lk_agents_abi::python::extra_to_py(py, &attributes)?.into_any())?;
+            kwargs.set_item("error", match error { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("events", ::pyo3::types::PyList::new(py, events.into_iter().map(|x| PyResult::Ok(crate::generated::records::session_wire::span_event_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("metrics", ::pyo3::types::PyList::new(py, metrics.into_iter().map(|x| PyResult::Ok(crate::generated::records::session_wire::span_metric_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(SPAN_ENDED_WIRE.import(py, "livekit.agents._generated.session_wire", "SpanEndedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPAN_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn span_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SpanEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SpanEvent { name, time, attributes } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+            kwargs.set_item("time", ::pyo3::IntoPyObjectExt::into_bound_py_any(time, py)?)?;
+            kwargs.set_item("attributes", ::lk_agents_abi::python::extra_to_py(py, &attributes)?.into_any())?;
+            crate::host::construct(SPAN_EVENT.import(py, "livekit.agents._generated.session_wire", "SpanEvent")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SPAN_METRIC: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn span_metric_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SpanMetric) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SpanMetric { instrument, value, attributes } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("instrument", ::pyo3::IntoPyObjectExt::into_bound_py_any(instrument, py)?)?;
+            kwargs.set_item("value", ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)?)?;
+            kwargs.set_item("attributes", ::lk_agents_abi::python::extra_to_py(py, &attributes)?.into_any())?;
+            crate::host::construct(SPAN_METRIC.import(py, "livekit.agents._generated.session_wire", "SpanMetric")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static CONTEXT_CARRIED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn context_carried_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::ContextCarriedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::ContextCarriedWire { from_agent, to_agent, items } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("from_agent", ::pyo3::IntoPyObjectExt::into_bound_py_any(from_agent, py)?)?;
+            kwargs.set_item("to_agent", ::pyo3::IntoPyObjectExt::into_bound_py_any(to_agent, py)?)?;
+            kwargs.set_item("items", ::pyo3::types::PyList::new(py, items.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(CONTEXT_CARRIED_WIRE.import(py, "livekit.agents._generated.session_wire", "ContextCarriedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static CLOSE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn close_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::CloseWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::CloseWire { reason, error } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
+            kwargs.set_item("error", match error { None => py.None().into_bound(py), Some(x) => crate::generated::records::session_wire::session_error_wire_to_py(py, x)? })?;
+            crate::host::construct(CLOSE_WIRE.import(py, "livekit.agents._generated.session_wire", "CloseWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static METRICS_COLLECTED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn metrics_collected_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::MetricsCollectedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::MetricsCollectedWire { metrics, speech_id, leg } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("metrics", ::pyo3::IntoPyObjectExt::into_bound_py_any(metrics, py)?)?;
+            kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("leg", match leg { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(METRICS_COLLECTED_WIRE.import(py, "livekit.agents._generated.session_wire", "MetricsCollectedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SESSION_USAGE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn session_usage_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SessionUsageWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SessionUsageWire { model_usage } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("model_usage", ::pyo3::types::PyList::new(py, model_usage.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(SESSION_USAGE_WIRE.import(py, "livekit.agents._generated.session_wire", "SessionUsageWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static OVERLAPPING_SPEECH_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn overlapping_speech_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::OverlappingSpeechWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::OverlappingSpeechWire { event } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("event", ::pyo3::IntoPyObjectExt::into_bound_py_any(event, py)?)?;
+            crate::host::construct(OVERLAPPING_SPEECH_WIRE.import(py, "livekit.agents._generated.session_wire", "OverlappingSpeechWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static SESSION_ERROR_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn session_error_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::SessionErrorWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::SessionErrorWire { source, recoverable, label, error, speech_id } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
+            kwargs.set_item("recoverable", ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable, py)?)?;
+            kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
+            kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
+            kwargs.set_item("speech_id", match speech_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(SESSION_ERROR_WIRE.import(py, "livekit.agents._generated.session_wire", "SessionErrorWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static HISTORY_RELOADED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn history_reloaded_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::HistoryReloadedWire) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::events::HistoryReloadedWire { items } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("items", ::pyo3::types::PyList::new(py, items.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            crate::host::construct(HISTORY_RELOADED_WIRE.import(py, "livekit.agents._generated.session_wire", "HistoryReloadedWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn host_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::HostWire) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::voice::events::HostWire::HistoryReloaded(x) => crate::generated::records::session_wire::history_reloaded_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::UserTranscript(x) => crate::generated::records::events::user_input_transcribed_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::StartOfSpeech(x) => crate::generated::records::session_wire::start_of_speech_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::EndOfSpeech(x) => crate::generated::records::session_wire::end_of_speech_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::SpeechCreated(x) => crate::generated::records::session_wire::speech_created_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::Diagnostic(x) => crate::generated::records::session_wire::diagnostic_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::FunctionToolsExecuted(x) => crate::generated::records::session_wire::function_tools_executed_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::UserTurnCompleted(x) => crate::generated::records::session_wire::user_turn_completed_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::EotPrediction(x) => crate::generated::records::events::eot_prediction_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::AgentBackchannelOpportunity(x) => crate::generated::records::events::__agent_backchannel_opportunity_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::PreemptiveGeneration(x) => crate::generated::records::session_wire::preemptive_generation_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::UserTurnExceeded(x) => crate::generated::records::events::user_turn_exceeded_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::TranscriptionTimeout(x) => crate::generated::records::events::user_transcription_timeout_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::BackchannelConfirmed(x) => crate::generated::records::session_wire::backchannel_confirmed_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::OverlapInterruption(x) => crate::generated::records::session_wire::overlap_interruption_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::SpanStarted(x) => crate::generated::records::session_wire::span_started_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::SpanEnded(x) => crate::generated::records::session_wire::span_ended_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::AgentStateChanged(x) => crate::generated::records::events::agent_state_changed_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::UserStateChanged(x) => crate::generated::records::events::user_state_changed_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::AgentFalseInterruption(x) => crate::generated::records::events::agent_false_interruption_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::AmdResult(x) => crate::generated::records::amd::a_m_d_prediction_event_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::ItemAdded(x) => crate::generated::records::session_wire::item_added_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::ContextCarried(x) => crate::generated::records::session_wire::context_carried_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::RunStarted(x) => crate::generated::records::session_wire::run_started_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::RunItemAdded(x) => crate::generated::records::session_wire::run_item_added_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::RunRefused(x) => crate::generated::records::session_wire::run_refused_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::RunSettled(x) => crate::generated::records::session_wire::run_settled_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::SpeechDone(x) => crate::generated::records::session_wire::speech_done_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::FloorChanged(x) => crate::generated::records::session_wire::floor_changed_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::Close(x) => crate::generated::records::session_wire::close_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::MetricsCollected(x) => crate::generated::records::session_wire::metrics_collected_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::SessionUsageUpdated(x) => crate::generated::records::session_wire::session_usage_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::OverlappingSpeech(x) => crate::generated::records::session_wire::overlapping_speech_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::Error(x) => crate::generated::records::session_wire::session_error_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::ToolExecutionUpdated(x) => crate::generated::records::session_wire::tool_execution_updated_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::ParticipantLinked(x) => crate::generated::records::session_wire::participant_linked_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::ParticipantUnlinked(x) => crate::generated::records::session_wire::participant_unlinked_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::TextInput(x) => crate::generated::records::session_wire::text_input_wire_to_py(py, x)?,
+            ::lk_agents_abi::voice::events::HostWire::DeleteRoomRequested(x) => crate::generated::records::session_wire::delete_room_requested_to_py(py, x)?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
+    static PARTICIPANT_LINKED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn participant_linked_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::room_io::ParticipantLinked) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::room_io::ParticipantLinked { identity } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
+            crate::host::construct(PARTICIPANT_LINKED.import(py, "livekit.agents._generated.session_wire", "ParticipantLinked")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
+    static PARTICIPANT_UNLINKED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn participant_unlinked_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::room_io::ParticipantUnlinked) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::room_io::ParticipantUnlinked { identity, reason } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
+            kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
+            crate::host::construct(PARTICIPANT_UNLINKED.import(py, "livekit.agents._generated.session_wire", "ParticipantUnlinked")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
+    static TEXT_INPUT_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn text_input_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::room_io::TextInput) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::room_io::TextInput { text, participant, info } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+            kwargs.set_item("participant", ::pyo3::IntoPyObjectExt::into_bound_py_any(participant, py)?)?;
+            kwargs.set_item("info", ::pyo3::IntoPyObjectExt::into_bound_py_any(info, py)?)?;
+            crate::host::construct(TEXT_INPUT_WIRE.import(py, "livekit.agents._generated.session_wire", "TextInputWire")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
+    static DELETE_ROOM_REQUESTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn delete_room_requested_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::room_io::DeleteRoomRequested) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::room_io::DeleteRoomRequested { room } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("room", ::pyo3::IntoPyObjectExt::into_bound_py_any(room, py)?)?;
+            crate::host::construct(DELETE_ROOM_REQUESTED.import(py, "livekit.agents._generated.session_wire", "DeleteRoomRequested")?.as_any(), (), Some(&kwargs))
     }
 }
 

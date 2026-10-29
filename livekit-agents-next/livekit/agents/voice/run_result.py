@@ -37,6 +37,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 
 if TYPE_CHECKING:
+    from .._generated.session_wire import RunQuestion
     from ..metrics import AgentSessionUsage
     from .agent import Agent
     from .agent_session import VoiceSession
@@ -188,7 +189,7 @@ class _VoiceRun:
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Any = None
-        self._question: dict[str, Any] | None = None
+        self._question: RunQuestion | None = None
 
     @property
     def status(self) -> Literal["completed", "input_required"]:
@@ -211,14 +212,14 @@ class _VoiceRun:
     @property
     def question(self) -> str | None:
         """What an ``"input_required"`` run asks the person."""
-        return None if self._question is None else str(self._question["question"])
+        return None if self._question is None else self._question.question
 
     @property
     def verbatim(self) -> str | None:
         """The question, when it reaches the person exactly as written."""
-        if self._question is None or not self._question["verbatim"]:
+        if self._question is None or not self._question.verbatim:
             return None
-        return str(self._question["question"])
+        return self._question.question
 
     def new_messages(self) -> list[llm.ChatItem]:
         """What this run added to the history."""
@@ -262,7 +263,7 @@ class _VoiceRun:
             self._recorded_items.insert(index, event)
 
     def _settle(
-        self, *, output: Any, error: BaseException | None, question: dict[str, Any] | None = None
+        self, *, output: Any, error: BaseException | None, question: RunQuestion | None = None
     ) -> None:
         """The core settled the run: ``output`` is what a tool completed it with, if any;
         ``question`` what the run asks the person instead."""

@@ -5,10 +5,18 @@ import inspect
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    TypeAdapter,
+    field_serializer,
+    model_validator,
+)
 from typing_extensions import Self, TypeVar
 
 from .._generated.events import (
@@ -17,12 +25,8 @@ from .._generated.events import (
     AgentStateChangedEvent,
     CloseReason,
     EotPredictionEvent,
-    SessionUsageUpdatedEvent,
-    SpeechCreatedEvent,
     ToolCallEnded,
-    ToolCallStarted,
     ToolCallUpdated,
-    ToolExecutionUpdatedEvent,
     ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserState,
@@ -46,6 +50,7 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
 )
+from ..metrics import AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .speech_handle import SpeechHandle
@@ -86,6 +91,49 @@ __all__ = [
 
 # The public events whose fields hold host objects: written here, not generated, since no core
 # record crosses as them.
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SessionUsageUpdatedEvent:
+    usage: AgentSessionUsage
+    created_at: float = field(default_factory=time.time)
+    type: Literal["session_usage_updated"] = "session_usage_updated"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SpeechCreatedEvent:
+    __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)
+
+    user_initiated: bool
+    """True if the speech was created using public methods like `say` or `generate_reply`"""
+    source: Literal["say", "generate_reply"]
+    """Source indicating how the speech handle was created"""
+    speech_handle: Annotated[SpeechHandle, Field(exclude=True)] = field(repr=False)
+    """The speech handle that was created"""
+    created_at: float = field(default_factory=time.time)
+    type: Literal["speech_created"] = "speech_created"
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ToolCallStarted:
+    """A function tool call was dispatched."""
+
+    function_call: FunctionCall
+    type: Literal["tool_call_started"] = "tool_call_started"
+
+
+ToolUpdate = ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ToolExecutionUpdatedEvent:
+    """One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
+    → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``.
+    """
+
+    update: ToolUpdate
+    created_at: float = field(default_factory=time.time)
+    type: Literal["tool_execution_updated"] = "tool_execution_updated"
 
 
 class FunctionToolsExecutedEvent(BaseModel):
@@ -183,6 +231,16 @@ AgentEvent = Annotated[
     | OverlappingSpeechEvent,
     Field(discriminator="type"),
 ]
+
+_AGENT_EVENT: TypeAdapter[AgentEvent] = TypeAdapter(AgentEvent)
+
+
+def event_dict(event: AgentEvent, *, json: bool = False) -> dict[str, Any]:
+    """``event``'s fields as a dict, whether a dataclass or a model: what the session report
+    records."""
+    out: dict[str, Any] = _AGENT_EVENT.dump_python(event, mode="json" if json else "python")
+    return out
+
 
 Context_T = TypeVar("Context_T", default=Any)
 Userdata_T = TypeVar("Userdata_T", default=Any)
@@ -421,5 +479,3 @@ EventTypes = Literal[
     "close",
     "debug_message",
 ]
-
-SpeechCreatedEvent.model_rebuild(_types_namespace={"SpeechHandle": SpeechHandle})

@@ -17,10 +17,6 @@ if TYPE_CHECKING:
     from .._core import ChatItem
     from .usage import ModelUsage
 
-OtelValue: TypeAlias = int | float
-"""Token counts stay integers: the exported data point type follows the first value seen."""
-
-
 TelemetryValueKind: TypeAlias = Literal["scalar", "integer", "string", "bytes", "mapping", "sequence", "unsupported"]
 
 
@@ -141,3 +137,7 @@ class LogRecordWire:
     severity_number: int
     severity_text: str
     attributes: dict[str, object]
+
+
+OtelValue: TypeAlias = int | float
+"""Token counts stay integers: the exported data point type follows the first value seen."""

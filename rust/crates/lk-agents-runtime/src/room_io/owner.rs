@@ -520,7 +520,7 @@ impl RoomIo {
                     && let Err(error) = self.emit(RoomIoEvent::TextInput(TextInput {
                         text,
                         participant: sender,
-                        info: Box::new(info),
+                        info,
                     }))
                 {
                     self.fail(error);

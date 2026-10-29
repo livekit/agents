@@ -400,9 +400,12 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
         | Ty::Instance { .. }
         | Ty::HostSource(_)
         | Ty::HostDuplex { .. }
-        | Ty::Error(_)
         | Ty::Unit => {
             return Err(format!("{at}: `{}` is not a record field", ty.rust()));
+        }
+        // An emitted failure crosses as the exception it raises as; the host never hands one back.
+        Ty::Error(_) if extract => {
+            return Err(format!("{at}: `{}` is an emitted record field only", ty.rust()));
         }
         _ => {}
     }

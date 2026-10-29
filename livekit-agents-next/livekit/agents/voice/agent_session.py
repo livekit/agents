@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import copy
 import inspect
 import time
 import weakref
@@ -18,10 +19,11 @@ from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, Literal, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
 import numpy as np
 from opentelemetry import trace
+from opentelemetry.util.types import AttributeValue
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict, TypeVar
 
@@ -40,10 +42,31 @@ from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.keyterms import KeytermDetectionOptions, STTContextOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
+from .._generated.session_wire import (
+    CloseWire,
+    DeleteRoomRequested,
+    HistoryReloadedWire,
+    HostWire,
+    ItemAddedWire,
+    MetricsCollectedWire,
+    OverlappingSpeechWire,
+    RunItemAddedWire,
+    RunRefusedWire,
+    RunSettledWire,
+    SessionErrorWire,
+    SessionUsageWire,
+    SpanEndedWire,
+    SpanStartedWire,
+    SpeechCreatedWire,
+    SpeechDoneWire,
+    TextInputWire,
+    ToolCallStartedWire,
+    ToolExecutionUpdatedWire,
+)
 from .._generated.vad import VAD
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
-from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
+from ..llm import LLM, ChatContext, FunctionCall, RealtimeModel, StopResponse, function_tool
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
 from ..stt import STT
@@ -80,7 +103,9 @@ from .events import (
     RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    ToolCallStarted,
     ToolExecutionUpdatedEvent,
+    ToolUpdate,
     UserState,
     UserTurnExceededEvent,
 )
@@ -914,161 +939,167 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     # --- the core's events ---------------------------------------------------------------
 
-    def _core_event(self, wire: dict[str, Any]) -> None:
-        kind = wire["type"]
+    def _core_event(self, wire: HostWire) -> None:
+        kind = type(wire)
         if kind in IGNORED_EVENTS:
             return
-        if (public := PUBLIC_EVENTS.get(kind)) is not None:
-            cls, name = public
-            ev = cls(**{k: v for k, v in wire.items() if k != "type"})
+        if (name := PUBLIC_EVENTS.get(kind)) is not None:
             if (attr := MIRRORED_STATES.get(kind)) is not None:
-                setattr(self, attr, ev.new_state)
-            self.emit(name, ev)
+                setattr(self, attr, getattr(wire, "new_state"))  # noqa: B009
+            self.emit(cast(EventTypes, name), cast(AgentEvent, wire))
             return
         handler = _HANDLERS.get(kind)
         if handler is not None:
             handler(self, wire)
 
-    def _on_speech_created(self, wire: dict[str, Any]) -> None:
-        handle = SpeechHandle._of(wire["speech_handle"])
+    def _on_speech_created(self, wire: SpeechCreatedWire) -> None:
+        handle = SpeechHandle._of(cast(_core.SpeechHandle, wire.speech_handle))
         self._speech_handles[handle.id] = handle
         self.emit(
             "speech_created",
             SpeechCreatedEvent(
-                user_initiated=wire["user_initiated"], source=wire["source"], speech_handle=handle
+                user_initiated=wire.user_initiated,
+                source=cast(Literal["say", "generate_reply"], wire.source),
+                speech_handle=handle,
             ),
         )
 
-    def _on_speech_done(self, wire: dict[str, Any]) -> None:
-        if (handle := self._speech_handles.pop(wire["speech_id"], None)) is not None:
+    def _on_speech_done(self, wire: SpeechDoneWire) -> None:
+        if (handle := self._speech_handles.pop(wire.speech_id, None)) is not None:
             handle._mark_done()
 
-    def _on_history_reloaded(self, wire: dict[str, Any]) -> None:
-        self._chat_ctx = ChatContext([from_core_item(item) for item in wire["items"]])
+    def _on_history_reloaded(self, wire: HistoryReloadedWire) -> None:
+        self._chat_ctx = ChatContext([from_core_item(item) for item in wire.items])
 
-    def _on_item_added(self, wire: dict[str, Any]) -> None:
-        item = from_core_item(wire["item"])
+    def _on_item_added(self, wire: ItemAddedWire) -> None:
+        item = from_core_item(wire.item)
         # an output told again changed in place (an answered question's)
         idx = self._chat_ctx.index_by_id(item.id) if item.type == "function_call_output" else None
         if idx is not None:
             self._chat_ctx.items[idx] = item
         else:
             self._chat_ctx.insert(item)
-        if (run := wire["run"]) is not None and item.type != "agent_handoff":
+        if (run := _wire_run(wire.run)) is not None and item.type != "agent_handoff":
             run._item_added(item)
         if item.type in ("message", "agent_handoff"):
             self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
 
-    def _on_run_item(self, wire: dict[str, Any]) -> None:
-        if (run := wire["run"]) is not None:
-            run._item_added(from_core_item(wire["item"]))
+    def _on_run_item(self, wire: RunItemAddedWire) -> None:
+        if (run := _wire_run(wire.run)) is not None:
+            run._item_added(from_core_item(wire.item))
 
-    def _on_run_refused(self, wire: dict[str, Any]) -> None:
-        wire["run"]._settle(output=None, error=RuntimeError(f"run refused: {wire['cause']}"))
+    def _on_run_refused(self, wire: RunRefusedWire) -> None:
+        if (run := _wire_run(wire.run)) is not None:
+            run._settle(output=None, error=RuntimeError(f"run refused: {wire.cause}"))
 
-    def _on_run_settled(self, wire: dict[str, Any]) -> None:
-        if (run := wire["run"]) is None:
+    def _on_run_settled(self, wire: RunSettledWire) -> None:
+        if (run := _wire_run(wire.run)) is None:
             return
         error: BaseException | None = None
-        if (failure := wire["run_error"]) is not None:
+        if (failure := wire.run_error) is not None:
             error = run_error(failure)
-        if wire["outcome"] == "failed" and error is None and wire["speech_handle"] is not None:
-            error = wire["speech_handle"].exception()
-        if wire["outcome"] == "closed":
+        speech = cast("_core.SpeechHandle | None", wire.speech_handle)
+        if wire.outcome == "failed" and error is None and speech is not None:
+            error = speech.exception()
+        if wire.outcome == "closed":
             error = RuntimeError("the session closed before the run settled")
-        run._settle(output=wire["final_output"], error=error, question=wire["question"])
+        run._settle(output=wire.final_output, error=error, question=wire.question)
 
-    def _on_tool_update(self, wire: dict[str, Any]) -> None:
-        self.emit(
-            "tool_execution_updated",
-            ToolExecutionUpdatedEvent.model_validate(
-                {"update": {k: _host_value(v) for k, v in wire["update"].items()}}
-            ),
+    def _on_tool_update(self, wire: ToolExecutionUpdatedWire) -> None:
+        update: ToolUpdate = (
+            ToolCallStarted(function_call=FunctionCall.model_validate(wire.update.function_call))
+            if isinstance(wire.update, ToolCallStartedWire)
+            else wire.update
         )
+        self.emit("tool_execution_updated", ToolExecutionUpdatedEvent(update=update))
 
-    def _on_metrics(self, wire: dict[str, Any]) -> None:
-        record = _AGENT_METRICS.validate_python(wire["metrics"])
+    def _on_metrics(self, wire: MetricsCollectedWire) -> None:
+        record = _AGENT_METRICS.validate_python(wire.metrics)
         collect_usage(record)
         # a record the session metered for a provider (its VAD's) is that provider's event
-        if (leg := wire["leg"]) is not None and (
+        if (leg := wire.leg) is not None and (
             provider := getattr(_VoiceBinding(self, self.current_agent), leg)
         ) is not None:
             provider.emit("metrics_collected", record)
 
-    def _error_record(self, wire: dict[str, Any]) -> tuple[Any, Any]:
+    def _error_record(self, wire: SessionErrorWire) -> tuple[Any, Any]:
         """The reference's payload: the provider's error record, and the provider that failed."""
-        record, leg = _ERROR_RECORDS[wire["source"]]
+        record, leg = _ERROR_RECORDS[wire.source]
         source = getattr(_VoiceBinding(self, self.current_agent), leg)
         error = record(
             timestamp=time.time(),
-            label=getattr(source, "label", wire["label"]),
-            error=wire["error"],
-            recoverable=wire["recoverable"],
+            label=getattr(source, "label", wire.label),
+            error=wire.error,
+            recoverable=wire.recoverable,
         )
         return error, source
 
-    def _core_error_message(self, wire: dict[str, Any]) -> str:
+    def _core_error_message(self, wire: SessionErrorWire) -> str:
         return str(self._error_record(wire)[0])
 
-    def _on_span_started(self, wire: dict[str, Any]) -> None:
-        parent_id = wire["parent_id"]
+    def _on_span_started(self, wire: SpanStartedWire) -> None:
+        parent_id = wire.parent_id
         parent = self._spans.get(parent_id) if parent_id is not None else None
         context = trace.set_span_in_context(parent) if parent is not None else None
         span = tracer.start_span(
-            wire["name"],
+            wire.name,
             context=context
             if parent_id is None or context is not None
             else self._root_span_context,
-            attributes=wire["attributes"],
-            start_time=int(wire["start_time"] * 1e9),
+            attributes=cast("dict[str, AttributeValue]", wire.attributes),
+            start_time=int(wire.start_time * 1e9),
         )
-        self._spans[wire["span_id"]] = span
+        self._spans[wire.span_id] = span
         if parent_id is None:
             self._session_span = span
             self._root_span_context = trace.set_span_in_context(span)
 
-    def _on_span_ended(self, wire: dict[str, Any]) -> None:
-        if (span := self._spans.pop(wire["span_id"], None)) is None:
+    def _on_span_ended(self, wire: SpanEndedWire) -> None:
+        if (span := self._spans.pop(wire.span_id, None)) is None:
             return
-        span.set_attributes(wire["attributes"])
-        for event in wire["events"]:
-            span.add_event(event["name"], event["attributes"], timestamp=int(event["time"] * 1e9))
-        if (error := wire["error"]) is not None:
+        span.set_attributes(cast("dict[str, AttributeValue]", wire.attributes))
+        for event in wire.events:
+            span.add_event(
+                event.name,
+                cast("dict[str, AttributeValue]", event.attributes),
+                timestamp=int(event.time * 1e9),
+            )
+        if (error := wire.error) is not None:
             span.set_status(trace.Status(trace.StatusCode.ERROR, error))
-        for metric in wire["metrics"]:
-            record_span_metric(metric["instrument"], metric["value"], metric["attributes"])
-        span.end(end_time=int(wire["end_time"] * 1e9))
+        for metric in wire.metrics:
+            record_span_metric(
+                metric.instrument, metric.value, cast("dict[str, str]", metric.attributes)
+            )
+        span.end(end_time=int(wire.end_time * 1e9))
 
-    def _on_error(self, wire: dict[str, Any]) -> None:
-        logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})
+    def _on_error(self, wire: SessionErrorWire) -> None:
+        logger.error("session error", extra={"source": wire.source, "error": str(wire.error)})
         error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
 
-    def _on_usage(self, wire: dict[str, Any]) -> None:
-        usage = [_MODEL_USAGE.validate_python(u) for u in wire["model_usage"]]
+    def _on_usage(self, wire: SessionUsageWire) -> None:
+        usage = [_MODEL_USAGE.validate_python(u) for u in wire.model_usage]
         self.emit("session_usage_updated", SessionUsageUpdatedEvent(usage=AgentSessionUsage(usage)))
 
-    def _on_overlapping_speech(self, wire: dict[str, Any]) -> None:
-        ev = dict(wire["event"])
+    def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
+        ev = dict(wire.event)
         for key, dtype in (("speech_input", np.int16), ("probabilities", np.float32)):
             if ev[key] is not None:
                 ev[key] = np.asarray(ev[key], dtype=dtype)
         self.emit("overlapping_speech", OverlappingSpeechEvent(**ev))
 
-    def _on_amd_result(self, wire: dict[str, Any]) -> None:
+    def _on_amd_result(self, wire: AMDPredictionEvent) -> None:
         if self._amd is not None:
-            self._amd._on_prediction(
-                AMDPredictionEvent(**{k: v for k, v in wire.items() if k != "type"})
-            )
+            self._amd._on_prediction(wire)
 
-    def _on_text_input(self, wire: dict[str, Any]) -> None:
+    def _on_text_input(self, wire: TextInputWire) -> None:
         if (callback := self._text_input_cb) is None:
             return
         room = self._room
         participants = room.remote_participants if isinstance(room, rtc.Room) else {}
-        info = wire["info"]
+        info = cast("dict[str, Any]", wire.info)
         ev = TextInputEvent(
-            text=wire["text"],
+            text=wire.text,
             info=rtc.TextStreamInfo(
                 stream_id=info["stream_id"],
                 mime_type=info["mime_type"],
@@ -1078,7 +1109,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 attributes=info["attributes"],
                 attachments=info["attachments"],
             ),
-            participant=participants.get(wire["participant"]),
+            participant=participants.get(wire.participant),
         )
 
         async def _run() -> None:
@@ -1092,19 +1123,19 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _on_delete_room(self, wire: dict[str, Any]) -> None:
+    def _on_delete_room(self, wire: DeleteRoomRequested) -> None:
         if (job_ctx := get_job_context(required=False)) is None:
             return
         logger.info(
             "deleting room on agent session close "
             "(disable via `RoomOptions.delete_room_on_close=False`)",
-            extra={"room": wire["room"]},
+            extra={"room": wire.room},
         )
-        job_ctx.delete_room(room_name=wire["room"])
+        job_ctx.delete_room(room_name=wire.room)
 
-    def _on_close(self, wire: dict[str, Any]) -> None:
-        error = self._error_record(cause)[0] if (cause := wire.get("error")) else None
-        self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=error))
+    def _on_close(self, wire: CloseWire) -> None:
+        error = self._error_record(cause)[0] if (cause := wire.error) is not None else None
+        self.emit("close", CloseEvent(reason=CloseReason(wire.reason), error=error))
         if self._recording_finished is None and (recorder := self._recorder) is not None:
             self._recording_finished = asyncio.ensure_future(recorder.finish())
         audio_in = self._audio_input_options
@@ -1142,12 +1173,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @property
     def _recorded_events(self) -> list[AgentEvent]:
-        return [event.model_copy(deep=True) for event in self._report_event_snapshots()]
+        return [copy.deepcopy(event) for event in self._report_event_snapshots()]
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):
             charge = attribute_bytes(arg)
-            snapshot = arg.model_copy(deep=True) if charge <= policy().max_record_bytes else None
+            snapshot = copy.deepcopy(arg) if charge <= policy().max_record_bytes else None
             expired, admitted = self._event_retention.admit(charge, time.monotonic_ns())
             for _ in range(expired):
                 self._event_snapshots.popleft()
@@ -1200,8 +1231,9 @@ class VoiceTask(Generic[Output_T]):
             session._agent = binding.agent
 
 
-def _host_value(value: Any) -> Any:
-    return from_core_item(value) if isinstance(value, _core.ChatItem) else value
+def _wire_run(run: object | None) -> _VoiceRun | None:
+    """A wire's run: the `_VoiceRun` the host handed the core."""
+    return cast("_VoiceRun | None", run)
 
 
 class _DynamicInstructions:
@@ -1278,9 +1310,9 @@ class _AgentHooks:
         with _in_hook("on_exit", self._session, agent):
             await agent.on_exit()
 
-    async def _core_on_user_turn_exceeded(self, agent: Agent, ev: dict[str, Any]) -> None:
+    async def _core_on_user_turn_exceeded(self, agent: Agent, ev: UserTurnExceededEvent) -> None:
         with _in_hook("on_user_turn_exceeded", self._session, agent):
-            await agent.on_user_turn_exceeded(UserTurnExceededEvent.model_validate(ev))
+            await agent.on_user_turn_exceeded(ev)
 
     async def _core_close_toolsets(self, agent: Agent | None) -> None:
         """Release what ``agent``'s activation held, or, as the session closes, everything."""
@@ -1392,25 +1424,26 @@ class _AgentNodes:
         return self._agent.realtime_audio_output_node(audio, ModelSettings())
 
 
-_HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
-    "history_reloaded": VoiceSession._on_history_reloaded,
-    "speech_created": VoiceSession._on_speech_created,
-    "speech_done": VoiceSession._on_speech_done,
-    "conversation_item_added": VoiceSession._on_item_added,
-    "run_item_added": VoiceSession._on_run_item,
-    "run_refused": VoiceSession._on_run_refused,
-    "run_settled": VoiceSession._on_run_settled,
-    "tool_execution_updated": VoiceSession._on_tool_update,
-    "metrics_collected": VoiceSession._on_metrics,
-    "session_usage_updated": VoiceSession._on_usage,
-    "overlapping_speech": VoiceSession._on_overlapping_speech,
-    "error": VoiceSession._on_error,
-    "close": VoiceSession._on_close,
-    "amd_result": VoiceSession._on_amd_result,
-    "text_input": VoiceSession._on_text_input,
-    "delete_room_requested": VoiceSession._on_delete_room,
-    "span_started": VoiceSession._on_span_started,
-    "span_ended": VoiceSession._on_span_ended,
+# The `HostWire` members with host behaviour, by record class.
+_HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
+    HistoryReloadedWire: VoiceSession._on_history_reloaded,
+    SpeechCreatedWire: VoiceSession._on_speech_created,
+    SpeechDoneWire: VoiceSession._on_speech_done,
+    ItemAddedWire: VoiceSession._on_item_added,
+    RunItemAddedWire: VoiceSession._on_run_item,
+    RunRefusedWire: VoiceSession._on_run_refused,
+    RunSettledWire: VoiceSession._on_run_settled,
+    ToolExecutionUpdatedWire: VoiceSession._on_tool_update,
+    MetricsCollectedWire: VoiceSession._on_metrics,
+    SessionUsageWire: VoiceSession._on_usage,
+    OverlappingSpeechWire: VoiceSession._on_overlapping_speech,
+    SessionErrorWire: VoiceSession._on_error,
+    CloseWire: VoiceSession._on_close,
+    AMDPredictionEvent: VoiceSession._on_amd_result,
+    TextInputWire: VoiceSession._on_text_input,
+    DeleteRoomRequested: VoiceSession._on_delete_room,
+    SpanStartedWire: VoiceSession._on_span_started,
+    SpanEndedWire: VoiceSession._on_span_ended,
 }
 
 

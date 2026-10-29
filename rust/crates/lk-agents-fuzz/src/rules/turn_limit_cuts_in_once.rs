@@ -83,6 +83,7 @@ fn exceeded() -> Step {
         accumulated_transcript: "one two three four five".into(),
         accumulated_word_count: 5,
         duration: std::time::Duration::from_secs(2),
+        created_at: 0.0,
     }))
 }
 

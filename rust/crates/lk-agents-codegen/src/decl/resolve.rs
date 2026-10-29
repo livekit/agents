@@ -817,6 +817,7 @@ impl Resolver<'_> {
                 extract,
                 emit,
                 in_place: false,
+                literal: false,
             }));
         }
         if voc::find(&entries, "error").is_some() {
@@ -830,6 +831,7 @@ impl Resolver<'_> {
                 extract: true,
                 emit: true,
                 in_place: false,
+                literal: false,
             }));
         }
         // Beside a derive (for another binding's record), `host` says Python crosses it by its own
@@ -848,6 +850,7 @@ impl Resolver<'_> {
                 extract: has("extract"),
                 emit: has("emit"),
                 in_place: false,
+                literal: false,
             }));
         }
         if derives_host(attrs) && class_struct(it) {
@@ -857,6 +860,7 @@ impl Resolver<'_> {
                 extract: class_from_py_object(it),
                 emit: true,
                 in_place: false,
+                literal: false,
             }));
         }
         if derives_host(attrs) {
@@ -904,6 +908,7 @@ impl Resolver<'_> {
                 extract: unit || own_extract || words.iter().any(|w| w == "extract"),
                 emit: unit || words.iter().any(|w| w == "emit"),
                 in_place: false,
+                literal: unit,
             }));
         }
         for i in &k.modules[module].items {
@@ -926,6 +931,7 @@ impl Resolver<'_> {
                     extract: class_from_py_object(it),
                     emit: true,
                     in_place: false,
+                    literal: false,
                 }));
             }
             if let Some(object) = voc::find(&entries, "object")
@@ -944,6 +950,7 @@ impl Resolver<'_> {
                     extract: pyclass.iter().any(|w| w == "from_py_object"),
                     emit: !input,
                     in_place: false,
+                    literal: false,
                 }));
             }
         }
@@ -956,6 +963,7 @@ impl Resolver<'_> {
                 extract: false,
                 emit: true,
                 in_place: false,
+                literal: false,
             }));
         }
         Err(format!(

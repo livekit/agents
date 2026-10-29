@@ -160,7 +160,6 @@ impl SessionEvent {
                     user_initiated: *user_initiated,
                     source: kind.as_source_str().to_owned(),
                     speech_handle: speech.object(),
-                    created_at: host_stamp,
                 })
             }
             SessionEvent::Diagnostic(d) => HostWire::Diagnostic(d.wire()),
@@ -308,7 +307,6 @@ impl SessionEvent {
             SessionEvent::ToolExecutionUpdated(update) => {
                 HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated {
                     update: update.wire(),
-                    created_at: host_stamp,
                 })
             }
         }

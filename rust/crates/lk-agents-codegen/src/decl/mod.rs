@@ -586,6 +586,9 @@ pub struct Record {
     /// A declared record the in-place exports still convert: it keeps pyo3 trait impls in ABI
     /// (`crate::records::IN_PLACE`).
     pub in_place: bool,
+    /// A unit-only `#[derive(Host)]` enum: it crosses as its string (or `Enum` member), not as a
+    /// dict of fields.
+    pub literal: bool,
     /// Declared directions: the host may pass it in (`extract`) / receive it (`emit`).
     pub extract: bool,
     pub emit: bool,

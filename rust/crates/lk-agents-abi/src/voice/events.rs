@@ -1,8 +1,8 @@
-//! `voice/events.py`. Field types we do not own are spelled with `#[python(ty = .., import = ..)]`:
-//! the generator cannot see `ChatMessage` or `AgentMetrics` and must not invent a name for them.
+//! `voice/events.py`'s generated events, and the session-event wire the host routes by record
+//! class (`_generated/session_dispatch.py`). The public events are frozen dataclasses
+//! (`_generated/events.py`); the wire-only records are `_generated/session_wire.py`.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
@@ -52,82 +52,57 @@ pub enum AgentState {
 
 // --- the session events --------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
-#[python(pydantic, name = "UserStateChangedEvent", tag = "type", tag_value = "user_state_changed")]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "UserStateChangedEvent", emit, constant(type = "user_state_changed")))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserStateChanged {
     pub old_state: UserState,
     pub new_state: UserState,
     // Not skipped: the driver back-dates this to the speech boundary it reports, and the binding
     // converts that instant through the session's wall anchor.
-    #[python(default_factory = "time.time")]
+    #[host(default_factory = "time.time")]
     pub created_at: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
-    name = "AgentStateChangedEvent",
-    tag = "type",
-    tag_value = "agent_state_changed"
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "AgentStateChangedEvent", emit, constant(type = "agent_state_changed")))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentStateChanged {
     pub old_state: AgentState,
     pub new_state: AgentState,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
+    #[host(skip, default_factory = "time.time")]
     pub created_at: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "UserInputTranscribedEvent",
-    tag = "type",
-    tag_value = "user_input_transcribed"
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "UserInputTranscribedEvent", emit, constant(type = "user_input_transcribed")))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UserInputTranscribed {
     pub transcript: String,
     pub is_final: bool,
     /// Provider-specific ID for the transcribed input item, when available.
-    #[python(default = "None")]
+    #[host(default = None)]
     pub item_id: Option<String>,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub speaker_id: Option<String>,
-    #[python(ty = "LanguageCode | None", import = ".language:LanguageCode", default = "None")]
+    #[host(default = None)]
     pub language: Option<String>,
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
+    #[host(skip, default_factory = "time.time")]
     pub created_at: f64,
 }
 
-#[derive(Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
-    name = "UserTranscriptionTimeoutEvent",
-    tag = "type",
-    tag_value = "user_transcription_timeout"
-)]
-// The public discriminant is `user_transcription_timeout`; the wire kind the binding sends is
-// `transcription_timeout`. They differ on purpose.
-#[binding(emit, tag = "type", tag_value = "transcription_timeout")]
+#[crate::host(record(module = "events", name = "UserTranscriptionTimeoutEvent", emit, constant(type = "user_transcription_timeout")))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserTranscriptionTimeout {
     /// Total VAD-detected speech (s) in the turn that produced no transcript.
     pub speech_duration: f64,
     /// When VAD first detected speech for this (untranscribed) turn.
     pub vad_speech_started_at: f64,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
+    #[host(skip, default_factory = "time.time")]
     pub created_at: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(pydantic, name = "EotPredictionEvent", tag = "type", tag_value = "eot_prediction")]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "EotPredictionEvent", emit, constant(type = "eot_prediction")))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EotPrediction {
     pub probability: f64,
     pub threshold: f64,
@@ -137,8 +112,7 @@ pub struct EotPrediction {
     /// VAD-backdated last_speaking_time.
     pub delay: f64,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
+    #[host(skip, default_factory = "time.time")]
     pub created_at: f64,
 }
 
@@ -152,132 +126,65 @@ pub struct EotPrediction {
 /// backchannels (yeah/okay/right) are safe; a small margin (or a negative one, where
 /// ``end_of_turn_probability >= end_of_turn_threshold`` and a reply is imminent) calls
 /// for safe, less ambiguous ones (hmm/uh-huh) that won't collide with the reply.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "_AgentBackchannelOpportunityEvent",
-    tag = "type",
-    tag_value = "agent_backchannel_opportunity",
-    // The host stamps this; the core has no wall clock.
-    host_field(name = "created_at", ty = "float", default = "Field(default_factory=time.time)")
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "_AgentBackchannelOpportunityEvent", emit, constant(type = "agent_backchannel_opportunity")))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentBackchannelOpportunityEvent {
     pub probability: f64,
     pub threshold: f64,
     pub end_of_turn_probability: f64,
     pub end_of_turn_threshold: f64,
-    #[python(default = "None")]
+    #[host(default = None)]
     pub language: Option<String>,
+    // The host stamps this; the core has no wall clock.
+    #[host(skip, default_factory = "time.time")]
+    pub created_at: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "AgentFalseInterruptionEvent",
-    tag = "type",
-    tag_value = "agent_false_interruption"
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "AgentFalseInterruptionEvent", emit, constant(type = "agent_false_interruption")))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentFalseInterruption {
     /// Whether the false interruption was resumed automatically.
     pub resumed: bool,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
+    #[host(skip, default_factory = "time.time")]
     pub created_at: f64,
 }
 
-#[derive(Host, Serialize, Deserialize)]
-#[python(
-    pydantic,
-    name = "SessionUsageUpdatedEvent",
-    tag = "type",
-    tag_value = "session_usage_updated"
-)]
+/// `SessionUsageUpdatedEvent` as the session report reads it back. The host builds the event
+/// itself (`voice/events.py`) from the `session_usage_updated` wire.
+#[derive(Serialize, Deserialize)]
 pub struct SessionUsageUpdated {
-    #[python(ty = "AgentSessionUsage", import = "..metrics:AgentSessionUsage")]
     pub usage: crate::metrics::usage::AgentSessionUsage,
-    #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
 
-#[derive(Host)]
-#[python(
-    tag = "type",
-    tag_value = "speech_created",
-    pydantic,
-    name = "SpeechCreatedEvent",
-    config = "arbitrary_types_allowed=True"
-)]
-// The two `#[binding(py)]` fields are the call site's: the live `_core.SpeechHandle`, and `source`
-// from `SpeechKind::as_source_str`.
-#[binding(emit)]
+/// `speech_created`'s payload: the host wraps the `_core.SpeechHandle` in its `SpeechHandle` for
+/// the public `SpeechCreatedEvent` (`voice/events.py`).
+#[crate::host(record(module = "session_wire", name = "SpeechCreatedWire", emit))]
+#[derive(Clone)]
 pub struct SpeechCreated {
-    /// True if the speech was created using public methods like `say` or `generate_reply`
     pub user_initiated: bool,
-    /// Source indicating how the speech handle was created
-    #[python(ty = "Literal[\"say\", \"generate_reply\"]")]
+    /// `SpeechKind::as_source_str`: `"say"` or `"generate_reply"`.
     pub source: String,
-    /// The speech handle that was created
-    #[python(ty = "SpeechHandle", type_import = "..voice.speech_handle:SpeechHandle", exclude)]
     pub speech_handle: crate::CoreObject,
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
 }
 
 // --- the tool lifecycle ---------------------------------------------------------------------------
 //
-// The `update` dict's discriminators, not session event kinds: each carries a `TYPE` const, and
-// they generate into `tool_updates` so `session_events`' `KINDS` stays the dispatcher's list.
+// `ToolExecutionUpdatedEvent.update`'s members. A started call crosses as `ToolCallStartedWire`;
+// the host builds the public `ToolCallStarted` (`voice/events.py`) with its `llm.FunctionCall`.
 
-/// A function tool call was dispatched.
-#[derive(Clone, Host)]
-#[python(
-    pydantic,
-    name = "ToolCallStarted",
-    tag = "type",
-    tag_const = TYPE
-)]
+/// A function tool call was dispatched: the call's fields, which the host validates into its
+/// `llm.FunctionCall`.
+#[crate::host(record(module = "session_wire", name = "ToolCallStartedWire", emit))]
+#[derive(Clone)]
 pub struct ToolCallStarted {
-    // On the wire, the `_core.ChatItem` for the call; the host rebuilds its `llm.FunctionCall`.
-    #[python(ty = "FunctionCall", import = "..llm:FunctionCall")]
     pub function_call: crate::FunctionCall,
 }
 
-impl ToolCallStarted {
-    pub const TYPE: &'static str = "tool_call_started";
-}
-
-/// A function call crosses as the host's `_core.ChatItem`, not as its fields.
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &ToolCallStarted {
-    type Target = pyo3::types::PyDict;
-    type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(
-        self,
-        py: pyo3::Python<'py>,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
-        use pyo3::types::PyDictMethods as _;
-        let d = pyo3::types::PyDict::new(py);
-        d.set_item("type", ToolCallStarted::TYPE)?;
-        d.set_item("function_call", crate::ChatItem::FunctionCall(self.function_call.clone()))?;
-        Ok(d)
-    }
-}
-
 /// A progress update emitted via ``ctx.update()`` while a tool call runs.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "ToolCallUpdated",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "ToolCallUpdated", emit, constant(type = "tool_call_updated")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallUpdated {
     /// Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred.
     pub id: String,
@@ -285,62 +192,37 @@ pub struct ToolCallUpdated {
     pub message: String,
 }
 
-impl ToolCallUpdated {
-    pub const TYPE: &'static str = "tool_call_updated";
-}
-
 /// A tool call's single terminal entry.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "ToolCallEnded",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "ToolCallEnded", emit, constant(type = "tool_call_ended")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallEnded {
     /// Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred.
     pub id: String,
     pub call_id: String,
     /// Result or error text; None when there is nothing to voice.
-    #[python(default = "None")]
+    #[host(default = None)]
     pub message: Option<String>,
-    #[python(ty = "Literal[\"done\", \"error\", \"cancelled\"]")]
+    /// `"done"`, `"error"` or `"cancelled"`.
     pub status: String,
-}
-
-impl ToolCallEnded {
-    pub const TYPE: &'static str = "tool_call_ended";
 }
 
 /// Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
 /// when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
 /// several calls; an inline first update never gets one.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "ToolReplyUpdated",
-    tag = "type",
-    tag_const = TYPE
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "ToolReplyUpdated", emit, constant(type = "tool_reply_updated")))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolReplyUpdated {
     /// ``ToolCallUpdated.id`` values this reply covers.
     pub update_ids: Vec<String>,
-    #[python(ty = "Literal[\"scheduled\", \"completed\", \"interrupted\", \"skipped\"]")]
+    /// `"scheduled"`, `"completed"`, `"interrupted"` or `"skipped"`.
     pub status: String,
     /// Id of the reply speech; ``speech_created`` carries its handle.
     pub speech_id: String,
 }
 
-impl ToolReplyUpdated {
-    pub const TYPE: &'static str = "tool_reply_updated";
-}
-
-/// The four tool-lifecycle updates, as one discriminated union.
-#[derive(Clone, Host)]
-#[python(union, inline, discriminator = "type", name = "ToolUpdate")]
-#[binding(emit)]
+/// The four tool-lifecycle updates, each crossing as its own record.
+#[crate::host(record(module = "session_wire", name = "ToolUpdateWire", emit, transparent))]
+#[derive(Clone)]
 pub enum ToolUpdate {
     Started(ToolCallStarted),
     Updated(ToolCallUpdated),
@@ -348,36 +230,17 @@ pub enum ToolUpdate {
     Reply(ToolReplyUpdated),
 }
 
-/// One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
-/// → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``.
-#[derive(Host)]
-#[python(
-    pydantic,
-    name = "ToolExecutionUpdatedEvent",
-    tag = "type",
-    tag_value = "tool_execution_updated"
-)]
-#[binding(emit)]
+/// `tool_execution_updated`'s payload; the host emits `ToolExecutionUpdatedEvent` from it.
+#[crate::host(record(module = "session_wire", name = "ToolExecutionUpdatedWire", emit))]
 pub struct ToolExecutionUpdated {
     pub update: ToolUpdate,
-    #[binding(skip)]
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
 }
 
 // --- limits, errors and the close ------------------------------------------------------------------
 
 // The user turn passed a configured word or duration limit. No `///`: it would become a docstring.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "UserTurnExceededEvent",
-    tag = "type",
-    tag_value = "user_turn_exceeded",
-    // The host stamps this; the core has no wall clock.
-    host_field(name = "created_at", ty = "float", default = "Field(default_factory=time.time)")
-)]
-#[binding(emit)]
+#[crate::host(record(module = "events", name = "UserTurnExceededEvent", emit, constant(type = "user_turn_exceeded")))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UserTurnExceededEvent {
     /// Transcript from the current (uncommitted) user turn only.
     /// Previous turns in the accumulation window are already in the chat context.
@@ -388,8 +251,10 @@ pub struct UserTurnExceededEvent {
     /// Total word count since the start of user speaking.
     pub accumulated_word_count: usize,
     /// Duration of the user turn in seconds.
-    #[python(ty = "float")]
     pub duration: std::time::Duration,
+    // The host stamps this; the core has no wall clock.
+    #[host(skip, default_factory = "time.time")]
+    pub created_at: f64,
 }
 
 // `//`, not `///`: the reference has no docstring.
@@ -413,55 +278,52 @@ pub enum CloseReason {
 
 // --- the session-event wire payloads --------------------------------------------------------------
 //
-// The wire shape `_on_core_event` reads: no public model, so no `python` target. Tag-only kinds are
-// declared too, so each appears in the generated `KINDS` list the host tests its dispatcher against.
+// What `VoiceSession._core_event` routes by class; no public model.
 
-/// The user started speaking (`on_start_of_speech`). On the wire (`user_started_speaking`) the kind
-/// is the whole message.
-#[derive(Debug, Clone, Copy, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "user_started_speaking")]
+/// The user started speaking (`on_start_of_speech`): the record is the whole message.
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StartOfSpeechEvent {
     /// `speech_start_time`: back-dated by VAD, or the provider's onset stamp.
-    #[binding(skip)]
+    #[host(skip)]
     pub at: crate::Ts,
-    #[binding(skip)]
+    #[host(skip)]
     pub speech_duration: std::time::Duration,
     /// `false` for the STT-driven turn detection path, where the reference passes `ev=None`.
-    #[binding(skip)]
+    #[host(skip)]
     pub from_vad: bool,
 }
 
-/// A transcript stable enough to start generating against (`_PreemptiveGenerationInfo`). On the wire
-/// (`preemptive_generation`) the kind is the whole message.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "preemptive_generation")]
+/// A transcript stable enough to start generating against (`_PreemptiveGenerationInfo`): the record
+/// is the whole message.
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PreemptiveGenerationEvent {
-    #[binding(skip)]
+    #[host(skip)]
     pub new_transcript: String,
-    #[binding(skip)]
+    #[host(skip)]
     pub transcript_confidence: f64,
-    #[binding(skip)]
+    #[host(skip)]
     pub started_speaking_at: Option<crate::Ts>,
 }
 
-/// `backchannel_confirmed`: the kind is the whole message.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "backchannel_confirmed")]
+/// A backchannel was confirmed: the record is the whole message.
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BackchannelConfirmedWire {}
 
-/// The overlap was a real interruption (`on_interruption`). On the wire (`overlap_interruption`) the
-/// kind is the whole message.
-#[derive(Debug, Clone, Copy, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "overlap_interruption")]
+/// The overlap was a real interruption (`on_interruption`): the record is the whole message.
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OverlapInterruptionEvent {
     /// `ev.overlap_started_at or ev.detected_at`, resolved (a `0.0` falls through).
-    #[binding(skip)]
+    #[host(skip)]
     pub ignore_user_transcript_until: crate::Ts,
 }
 
 /// `user_turn_completed`'s payload.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "user_turn_completed")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct UserTurnCompletedWire {
     /// The turn's id: what `hook_done(turn, ..)` answers for.
     pub turn: u64,
@@ -469,13 +331,13 @@ pub struct UserTurnCompletedWire {
     pub transcript_confidence: f64,
 }
 
-/// The user stopped speaking (`on_end_of_speech`); `user_stopped_speaking` on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "user_stopped_speaking")]
+/// The user stopped speaking (`on_end_of_speech`).
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EndOfSpeechEvent {
-    #[binding(skip)]
+    #[host(skip)]
     pub at: crate::Ts,
-    #[binding(skip)]
+    #[host(skip)]
     pub from_vad: bool,
     /// Silence already elapsed when the event was raised, in seconds (`0.0` on the STT path). `at`
     /// includes it, but a host needs it: AMD's post-speech window runs from when speech ended.
@@ -483,8 +345,8 @@ pub struct EndOfSpeechEvent {
 }
 
 /// `conversation_item_added`'s payload.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "conversation_item_added")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ItemAddedWire {
     /// The `_core.ChatItem`; the host rebuilds its `llm.ChatMessage` with `ChatContext._from_core`.
     pub item: crate::ChatItem,
@@ -498,76 +360,44 @@ pub struct ItemAddedWire {
     pub run: Option<crate::HostRef>,
 }
 
-/// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. A twin
-/// of `FunctionToolsExecutedEvent` (`voice/events.py`): this dict keys `handoff_required`, the
-/// model `_handoff_required`.
+/// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. The
+/// host ignores it: its `FunctionToolsExecutedEvent` comes from the `function_tools_executed`
+/// hook, and the remote session forwards these lists.
+#[crate::host(record(module = "session_wire", name = "FunctionToolsExecutedWire", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolsExecutedEvent {
+    #[host(skip)]
     pub function_calls: Vec<crate::FunctionCall>,
+    #[host(skip)]
     pub function_call_outputs: Vec<crate::FunctionCallOutput>,
     /// `_handoff_required`; false when two tools returned an agent.
+    #[host(skip)]
     pub handoff_required: bool,
 }
 
 impl ToolsExecutedEvent {
-    pub const TYPE: &'static str = "function_tools_executed";
-
     /// `FunctionToolsExecutedEvent.has_tool_reply`.
     pub fn has_tool_reply(&self) -> bool {
         self.function_call_outputs.iter().any(|o| o.reply_required)
     }
 }
 
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &ToolsExecutedEvent {
-    type Target = pyo3::types::PyDict;
-    type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(
-        self,
-        py: pyo3::Python<'py>,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
-        use pyo3::types::PyDictMethods as _;
-        let d = pyo3::types::PyDict::new(py);
-        d.set_item("type", ToolsExecutedEvent::TYPE)?;
-        let calls: Vec<crate::ChatItem> =
-            self.function_calls.iter().cloned().map(crate::ChatItem::FunctionCall).collect();
-        let outputs: Vec<crate::ChatItem> = self
-            .function_call_outputs
-            .iter()
-            .cloned()
-            .map(crate::ChatItem::FunctionCallOutput)
-            .collect();
-        d.set_item("function_calls", calls)?;
-        d.set_item("function_call_outputs", outputs)?;
-        d.set_item("handoff_required", self.handoff_required)?;
-        Ok(d)
-    }
-}
-
-#[cfg(feature = "python")]
-impl crate::python::HostEmitTag for ToolsExecutedEvent {
-    const TAG: Option<&'static str> = Some(ToolsExecutedEvent::TYPE);
-}
-
 /// A sentence the core decided and the host logs. `fields` is the reference's `extra={...}`, so
 /// `lk.pii.*` entries go through the host's redaction filter.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "diagnostic")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct DiagnosticWire {
     /// `"debug"`, `"info"` or `"warning"` -- the name `logging` takes.
     pub level: String,
     pub message: String,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fields: HashMap<String, String>,
+    pub fields: BTreeMap<String, String>,
 }
 
 // The run: three host-only events `RunResult` is projected from; the call site fills each shape.
 
 /// `run_item_added`'s payload: an item that is the run's before it is committed (a started call).
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "run_item_added")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct RunItemAddedWire {
     /// The host's object for the run (its `RunResult`).
     pub run: Option<crate::HostRef>,
@@ -575,16 +405,16 @@ pub struct RunItemAddedWire {
 }
 
 /// `run_started`'s payload.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "run_started")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct RunStartedWire {
     /// The host's object for the run (its run recorder); `None` when the host passed none.
     pub run: Option<crate::HostRef>,
 }
 
 /// `run_refused`'s payload.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "run_refused")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct RunRefusedWire {
     /// The host's object for the refused run (its `RunResult`).
     pub run: Option<crate::HostRef>,
@@ -592,10 +422,9 @@ pub struct RunRefusedWire {
     pub cause: String,
 }
 
-/// `run_settled`'s payload: the outcome as `RunResult._mark_done` reads it. The `#[binding(py)]`
-/// keys are always written, `None` when absent.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "run_settled")]
+/// `run_settled`'s payload: the outcome as `RunResult._settle` reads it.
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct RunSettledWire {
     /// The host's object for the run (its `RunResult`).
     pub run: Option<crate::HostRef>,
@@ -613,8 +442,8 @@ pub struct RunSettledWire {
 
 /// The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's
 /// answer goes to `answer_tool` when one is named.
-#[derive(Debug, Clone, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct RunQuestion {
     pub question: String,
     pub verbatim: bool,
@@ -622,8 +451,8 @@ pub struct RunQuestion {
 }
 
 /// `speech_done`'s payload.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "speech_done")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct SpeechDoneWire {
     /// `speech_{n}`, the handle's id.
     pub speech_id: String,
@@ -632,16 +461,16 @@ pub struct SpeechDoneWire {
 }
 
 /// `floor_changed`'s payload. `speech_id` is `None` when the floor is free.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "floor_changed")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct FloorChangedWire {
     pub speech_id: Option<String>,
 }
 
 /// `span_started`: open the OTel span `span_id` under `parent_id` (`None`: the host's ambient
 /// context, the job's; only the session's root span has none). Times are wall seconds.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "span_started")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpanStartedWire {
     pub span_id: String,
     pub parent_id: Option<String>,
@@ -652,8 +481,8 @@ pub struct SpanStartedWire {
 
 /// `span_ended`: add `attributes` and `events`, set the error status when `error` is set, record
 /// each of `metrics`, end the span. An id the host does not hold is ignored.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "span_ended")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpanEndedWire {
     pub span_id: String,
     pub end_time: f64,
@@ -664,8 +493,8 @@ pub struct SpanEndedWire {
 }
 
 /// A timestamped event added to the span before it ends (wall seconds).
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpanEvent {
     pub name: String,
     pub time: f64,
@@ -673,8 +502,8 @@ pub struct SpanEvent {
 }
 
 /// A histogram measurement (seconds) recorded with the span's end, beside the job's attributes.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpanMetric {
     pub instrument: String,
     pub value: f64,
@@ -682,8 +511,8 @@ pub struct SpanMetric {
 }
 
 /// `context_carried`'s payload: item ids moved from `from_agent`'s context to `to_agent`'s.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "context_carried")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct ContextCarriedWire {
     pub from_agent: String,
     pub to_agent: String,
@@ -692,17 +521,16 @@ pub struct ContextCarriedWire {
 
 /// `close`'s wire payload: `error` is the unrecoverable `error` event that closed the session, the
 /// key absent when none did.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "close")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct CloseWire {
     pub reason: CloseReason,
-    #[binding(skip_if_none)]
     pub error: Option<SessionErrorWire>,
 }
 
 /// `metrics_collected`'s wire payload: the record plus the driver's `speech_id` correlation.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "metrics_collected")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct MetricsCollectedWire {
     /// The `AgentMetrics` record as the dict `TypeAdapter(AgentMetrics)` validates.
     pub metrics: crate::metrics::base::AgentMetrics,
@@ -714,24 +542,24 @@ pub struct MetricsCollectedWire {
 }
 
 /// `session_usage_updated`'s wire payload: the session's usage once a record was folded in.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "session_usage_updated")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct SessionUsageWire {
     /// `AgentSessionUsage.model_usage`.
     pub model_usage: Vec<crate::metrics::usage::ModelUsage>,
 }
 
 /// `overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "overlapping_speech")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct OverlappingSpeechWire {
     pub event: OverlappingSpeechEvent,
 }
 
 /// `error`'s wire payload: the ingredients of `ErrorEvent`; the host wraps `error` in the leg's
 /// class chosen by `source`.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "error")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct SessionErrorWire {
     /// `ErrorSource::as_str`.
     pub source: String,
@@ -782,72 +610,51 @@ impl OverlappingSpeechEvent {
     pub const TYPE: &'static str = "overlapping_speech";
 }
 
-/// `{"type": "overlapping_speech", "event": ..}`: the detector-side copy, which hosts skip.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "overlapping_speech")]
-pub struct DetectorOverlapWire {
-    /// The generated `OverlappingSpeechEventPy` dict.
-    #[binding(py)]
-    pub event: (),
-}
-
-/// `{"type": "error", "message": .., "recoverable": ..}`: the error rendered as a string.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "error")]
-pub struct DetectorErrorWire {
-    pub message: String,
-    /// `true` while the detector still intends to reconnect; `false` makes the session raise.
-    pub recoverable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "history_reloaded")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HistoryReloadedWire {
     pub items: Vec<crate::ChatItem>,
 }
 
 // --- the host event stream, as one union ------------------------------------------------------------
 
-/// Every event the session hands its host, as the record the host reads.
+/// Every event the session hands its host, as the record the host reads, routed by its class.
 ///
-/// `#[python(event)]` members are emitted as public session events (`mirror` keeps the event's
-/// `new_state` on the session) and `#[python(ignored)]` ones are dropped, both via
+/// `#[host(event)]` members are emitted as public session events (`mirror` keeps the event's
+/// `new_state` on the session) and `#[host(ignored)]` ones are dropped, both via
 /// `_generated/session_dispatch.py`; the rest have host behaviour.
-#[derive(Host)]
-#[binding(emit)]
-#[python(dispatch = "session_dispatch")]
+#[crate::host(record(module = "session_wire", emit, transparent, dispatch = "session_dispatch"))]
 pub enum HostWire {
     HistoryReloaded(HistoryReloadedWire),
-    #[python(event)]
+    #[host(event)]
     UserTranscript(UserInputTranscribed),
     StartOfSpeech(StartOfSpeechEvent),
     EndOfSpeech(EndOfSpeechEvent),
     SpeechCreated(SpeechCreated),
     Diagnostic(DiagnosticWire),
-    #[python(kind = "function_tools_executed")]
     FunctionToolsExecuted(ToolsExecutedEvent),
-    #[python(ignored)]
+    #[host(ignored)]
     UserTurnCompleted(UserTurnCompletedWire),
     EotPrediction(EotPrediction),
-    #[python(ignored)]
+    #[host(ignored)]
     AgentBackchannelOpportunity(AgentBackchannelOpportunityEvent),
-    #[python(ignored)]
+    #[host(ignored)]
     PreemptiveGeneration(PreemptiveGenerationEvent),
-    #[python(event)]
+    #[host(event)]
     UserTurnExceeded(UserTurnExceededEvent),
-    #[python(event)]
+    #[host(event)]
     TranscriptionTimeout(UserTranscriptionTimeout),
-    #[python(ignored)]
+    #[host(ignored)]
     BackchannelConfirmed(BackchannelConfirmedWire),
-    #[python(ignored)]
+    #[host(ignored)]
     OverlapInterruption(OverlapInterruptionEvent),
     SpanStarted(SpanStartedWire),
     SpanEnded(SpanEndedWire),
-    #[python(event, mirror = "_agent_state")]
+    #[host(event(mirror = "_agent_state"))]
     AgentStateChanged(AgentStateChanged),
-    #[python(event, mirror = "_user_state")]
+    #[host(event(mirror = "_user_state"))]
     UserStateChanged(UserStateChanged),
-    #[python(event)]
+    #[host(event)]
     AgentFalseInterruption(AgentFalseInterruption),
     AmdResult(AmdPrediction),
     ItemAdded(ItemAddedWire),
@@ -865,9 +672,9 @@ pub enum HostWire {
     Error(SessionErrorWire),
     ToolExecutionUpdated(ToolExecutionUpdated),
     // The session acts on the link's edges itself (the away timer, the close).
-    #[python(ignored)]
+    #[host(ignored)]
     ParticipantLinked(ParticipantLinked),
-    #[python(ignored)]
+    #[host(ignored)]
     ParticipantUnlinked(ParticipantUnlinked),
     TextInput(TextInput),
     DeleteRoomRequested(DeleteRoomRequested),

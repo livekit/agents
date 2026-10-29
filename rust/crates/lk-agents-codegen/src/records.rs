@@ -338,7 +338,9 @@ fn record_rust(r: &RecordDecl, as_trait: bool, decls: &Declarations) -> Result<S
         RecordBody::Struct(fields) => {
             classes.push(r.name.clone());
             let class = class_ref(&module, &r.name);
-            let reads = struct_reads(&r.name, fields, "obj")?;
+            // An emit-only record's fields need no reader (an emitted failure has none).
+            let reads =
+                if r.extract { struct_reads(&r.name, fields, "obj")? } else { String::new() };
             let check = format!(
                 "        if !obj.is_instance({class})? {{\n            return Err(super::not_a(obj, {name:?}));\n        }}\n",
                 name = r.name

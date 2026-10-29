@@ -1068,6 +1068,8 @@ class SessionReport:
         deadline: float | None = None,
         event_sink: Callable[[object], bool] | None = None,
     ) -> tuple[SessionReportSnapshot, list[ProjectedReportEvent]]:
+        from .voice.events import event_dict
+
         loop = asyncio.get_running_loop()
         deadline = (
             deadline if deadline is not None else loop.time() + policy().upload_timeout_seconds
@@ -1121,7 +1123,7 @@ class SessionReport:
             if not projection.accepts_event(retained_bytes, charge):
                 omitted += 1
                 return
-            projected = projection.project_event(event.model_dump(mode="json"), charge)
+            projected = projection.project_event(event_dict(event, json=True), charge)
             if projected is None or not projection.accepts_event(
                 retained_bytes, projected.retained_bytes
             ):
@@ -1141,7 +1143,9 @@ class SessionReport:
         return replace(snapshot, omitted_events=omitted), events
 
     def to_dict(self) -> dict:
-        events_dict = [event.model_dump() for event in self.events]
+        from .voice.events import event_dict
+
+        events_dict = [event_dict(event) for event in self.events]
 
         return {
             "job_id": self.job_id,

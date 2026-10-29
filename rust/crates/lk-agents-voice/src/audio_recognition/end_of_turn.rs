@@ -480,6 +480,8 @@ impl AudioRecognition {
             accumulated_transcript: self.turn_tracker.transcript.clone(),
             accumulated_word_count: self.turn_tracker.words,
             duration: now.saturating_duration_since(started_at),
+            // the host stamps it
+            created_at: 0.0,
         }));
         eff
     }
@@ -726,6 +728,8 @@ impl AudioRecognition {
                 end_of_turn_probability: probability,
                 end_of_turn_threshold: threshold,
                 language: language.map(|l| l.as_str().to_owned()),
+                // the host stamps it
+                created_at: 0.0,
             };
             if committing_now {
                 self.deferred_opportunity = Some(opportunity);

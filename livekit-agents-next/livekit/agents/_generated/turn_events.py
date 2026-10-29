@@ -13,10 +13,6 @@ from typing import Literal, TypeAlias
 TurnDetectorModel: TypeAlias = Literal["turn-detector-v1", "turn-detector-v1-mini"]
 
 
-ThresholdOverride: TypeAlias = float | dict[str, float]
-"""One threshold for every language, or thresholds per language merged over the defaults."""
-
-
 @dataclass(frozen=True, kw_only=True, slots=True)
 class EotPrediction:
     """One end-of-turn prediction. Optional timing and backchannel data depend on the detector.
@@ -33,3 +29,7 @@ class EotPrediction:
     """Server-side model inference time."""
     backchannel_probability: float | None = None
     """How appropriate it is to backchannel at this pause; `None` when the detector has none."""
+
+
+ThresholdOverride: TypeAlias = float | dict[str, float]
+"""One threshold for every language, or thresholds per language merged over the defaults."""

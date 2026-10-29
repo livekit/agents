@@ -3540,7 +3540,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let agent_arg = ::std::clone::Clone::clone(agent);
         let ev_arg = ::std::clone::Clone::clone(ev);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_user_turn_exceeded", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(ev_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, crate::generated::records::events::user_turn_exceeded_event_to_py(py, ev_arg)?];
                 Ok((host.bind(py).getattr("_core_on_user_turn_exceeded")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -3670,7 +3670,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
         let host = ::std::sync::Arc::clone(&self.host);
         let wire_arg = wire;
         ::lk_agents_runtime::host::notify(&self.notifier, "SessionEvents._core_event", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(wire_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::session_wire::host_wire_to_py(py, wire_arg)?];
                 Ok((host.bind(py).getattr("_core_event")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }
@@ -3679,7 +3679,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = ::std::clone::Clone::clone(error);
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::session_wire::session_error_wire_to_py(py, error_arg)?];
                 Ok((host.bind(py).getattr("_core_error_message")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {

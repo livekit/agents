@@ -8,12 +8,33 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Literal, TypedDict
 
-from pydantic import BaseModel
+# The declared records.
 
-from .. import _bindings
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class AMDPredictionEvent:
+    speech_duration: float
+    category: AMDCategory
+    reason: str
+    transcript: str
+    delay: float
+    type: Literal["amd_prediction"] = "amd_prediction"
+
+    @property
+    def is_human(self) -> bool:
+        from .. import _core
+
+        return _core.amd_prediction_is_human(self)
+
+    @property
+    def is_machine(self) -> bool:
+        from .. import _core
+
+        return _core.amd_prediction_is_machine(self)
 
 
 @unique
@@ -23,23 +44,6 @@ class AMDCategory(str, Enum):
     MACHINE_VM = "machine-vm"
     MACHINE_UNAVAILABLE = "machine-unavailable"
     UNCERTAIN = "uncertain"
-
-
-class AMDPredictionEvent(BaseModel):
-    type: Literal["amd_prediction"] = "amd_prediction"
-    speech_duration: float
-    category: AMDCategory
-    reason: str
-    transcript: str
-    delay: float
-
-    @property
-    def is_human(self) -> bool:
-        return _bindings.amd_prediction_is_human(self)
-
-    @property
-    def is_machine(self) -> bool:
-        return _bindings.amd_prediction_is_machine(self)
 
 
 # --- the user's tuning, as the host takes it --------------------------------------------------
@@ -62,5 +66,4 @@ class DetectionOptions(TypedDict, total=False):
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
 AMDCategory.__module__ = "livekit.agents.voice.amd"
-AMDPredictionEvent.__module__ = "livekit.agents.voice.amd"
 DetectionOptions.__module__ = "livekit.agents.voice.amd"

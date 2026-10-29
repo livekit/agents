@@ -289,38 +289,32 @@ impl Default for RoomIoConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "participant_linked")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParticipantLinked {
     pub identity: ParticipantIdentity,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "participant_unlinked")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParticipantUnlinked {
     pub identity: ParticipantIdentity,
     // Crosses as its name: the host only logs it.
     pub reason: DisconnectReason,
 }
 
-// Also the host's `TextInputEvent`, where the participant and `info` are host SDK objects.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    dataclass,
-    name = "TextInputEvent",
-    order = "text, info, participant"
-)]
-#[binding(emit, tag = "type", tag_value = "text_input")]
+/// `text_input`'s payload: the host builds its `TextInputEvent` from it, with the participant and
+/// `info` as its SDK objects.
+#[crate::host(record(module = "session_wire", name = "TextInputWire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextInput {
     pub text: String,
-    #[python(ty = "rtc.RemoteParticipant | None", import = "livekit:rtc", default = "None")]
     pub participant: ParticipantIdentity,
-    #[python(ty = "rtc.TextStreamInfo | None", import = "livekit:rtc", default = "None")]
-    pub info: Box<StreamInfo>,
+    pub info: StreamInfo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "delete_room_requested")]
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteRoomRequested {
     pub room: String,
 }

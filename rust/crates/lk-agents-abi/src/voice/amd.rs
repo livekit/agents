@@ -60,32 +60,24 @@ pub enum AmdReason {
 #[cfg(feature = "python")]
 crate::python::into_host_str!(AmdReason, |v| v.as_str());
 
-// `classifier.py:36`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
+// `classifier.py:36`. Also the `amd_result` session event.
+#[crate::host(record(
     module = "amd",
-    path = "livekit.agents.voice.amd",
     name = "AMDPredictionEvent",
-    tag = "type",
-    tag_value = "amd_prediction",
-    property(name = "is_human", ret = "bool"),
-    property(name = "is_machine", ret = "bool")
-)]
-// The `amd_result` session event, a wire kind distinct from the model's `amd_prediction` tag.
-#[binding(emit, tag = "type", tag_value = "amd_result")]
+    emit,
+    constant(type = "amd_prediction")
+))]
+#[python(property(name = "is_human", ret = "bool"), property(name = "is_machine", ret = "bool"))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AmdPrediction {
-    #[python(ty = "float")]
     pub speech_duration: Duration,
     pub category: AmdCategory,
     // `str` on the host: narrowing the reference's free-form `str` would be an API change.
-    #[python(ty = "str")]
     pub reason: AmdReason,
     // Empty for every fallback verdict (`classifier.py:373`), so only an `llm` verdict can be
     // `machine-ivr` downstream.
     pub transcript: String,
     // Zero when speech never ended.
-    #[python(ty = "float")]
     pub delay: Duration,
 }
 

@@ -1,14 +1,8 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
-
-from __future__ import annotations
-
-from typing import Any
 
 from .events import (
     AgentFalseInterruptionEvent,
@@ -17,80 +11,42 @@ from .events import (
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
+    _AgentBackchannelOpportunityEvent,
+)
+from .session_wire import (
+    BackchannelConfirmedWire,
+    OverlapInterruptionEvent,
+    ParticipantLinked,
+    ParticipantUnlinked,
+    PreemptiveGenerationEvent,
+    UserTurnCompletedWire,
 )
 
-
-# `HostWire` members the host emits as a public session event:
-# {wire kind: (event class, event name)}. The payload's keys are the class's fields.
-PUBLIC_EVENTS: dict[str, tuple[type[Any], str]] = {
-    "user_input_transcribed": (UserInputTranscribedEvent, "user_input_transcribed"),
-    "user_turn_exceeded": (UserTurnExceededEvent, "user_turn_exceeded"),
-    "transcription_timeout": (UserTranscriptionTimeoutEvent, "user_transcription_timeout"),
-    "agent_state_changed": (AgentStateChangedEvent, "agent_state_changed"),
-    "user_state_changed": (UserStateChangedEvent, "user_state_changed"),
-    "agent_false_interruption": (AgentFalseInterruptionEvent, "agent_false_interruption"),
+# `HostWire` members the host emits as public session events: {model class: event name}.
+PUBLIC_EVENTS: dict[type, str] = {
+    UserInputTranscribedEvent: "user_input_transcribed",
+    UserTurnExceededEvent: "user_turn_exceeded",
+    UserTranscriptionTimeoutEvent: "user_transcription_timeout",
+    AgentStateChangedEvent: "agent_state_changed",
+    UserStateChangedEvent: "user_state_changed",
+    AgentFalseInterruptionEvent: "agent_false_interruption",
 }
 
-# Public events whose `new_state` the host keeps on the session: {wire kind: attribute}.
-MIRRORED_STATES: dict[str, str] = {
-    "agent_state_changed": "_agent_state",
-    "user_state_changed": "_user_state",
+# Public events whose `new_state` the host keeps on the session: {model class: attribute}.
+MIRRORED_STATES: dict[type, str] = {
+    AgentStateChangedEvent: "_agent_state",
+    UserStateChangedEvent: "_user_state",
 }
 
 # `HostWire` members the host receives and does not act on.
-IGNORED_EVENTS: frozenset[str] = frozenset(
+IGNORED_EVENTS: frozenset[type] = frozenset(
     {
-        "user_turn_completed",
-        "agent_backchannel_opportunity",
-        "preemptive_generation",
-        "backchannel_confirmed",
-        "overlap_interruption",
-        "participant_linked",
-        "participant_unlinked",
-    }
-)
-
-# Every kind the stream carries: each `HostWire` member's, and the records it carries beside them.
-EVENT_KINDS: frozenset[str] = frozenset(
-    {
-        "history_reloaded",
-        "user_input_transcribed",
-        "user_started_speaking",
-        "user_stopped_speaking",
-        "speech_created",
-        "diagnostic",
-        "function_tools_executed",
-        "user_turn_completed",
-        "eot_prediction",
-        "agent_backchannel_opportunity",
-        "preemptive_generation",
-        "user_turn_exceeded",
-        "transcription_timeout",
-        "backchannel_confirmed",
-        "overlap_interruption",
-        "span_started",
-        "span_ended",
-        "agent_state_changed",
-        "user_state_changed",
-        "agent_false_interruption",
-        "amd_result",
-        "conversation_item_added",
-        "context_carried",
-        "run_started",
-        "run_item_added",
-        "run_refused",
-        "run_settled",
-        "speech_done",
-        "floor_changed",
-        "close",
-        "metrics_collected",
-        "session_usage_updated",
-        "overlapping_speech",
-        "error",
-        "tool_execution_updated",
-        "participant_linked",
-        "participant_unlinked",
-        "text_input",
-        "delete_room_requested",
+        UserTurnCompletedWire,
+        _AgentBackchannelOpportunityEvent,
+        PreemptiveGenerationEvent,
+        BackchannelConfirmedWire,
+        OverlapInterruptionEvent,
+        ParticipantLinked,
+        ParticipantUnlinked,
     }
 )

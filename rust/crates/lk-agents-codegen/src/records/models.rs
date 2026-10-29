@@ -169,7 +169,10 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
                 _ => vec![r.name.clone()],
             })
             .collect();
-        for r in records.iter().filter(|r| !r.name.contains('.')) {
+        // A union alias is evaluated where it stands: after every class (annotations are lazy).
+        let (aliases, classes): (Vec<&&RecordDecl>, Vec<&&RecordDecl>) =
+            records.iter().filter(|r| !r.name.contains('.')).partition(|r| r.transparent);
+        for r in classes.into_iter().chain(aliases) {
             body.push_str(&model_tree(r, &records, module, &own, &mut runtime, &mut typing));
         }
         for r in records.iter().filter(|r| r.name.contains('.')) {
@@ -548,6 +551,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
             annotation(t, module, own, out, typing)
         ),
         Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, out, typing)),
+        Ty::Error(_) => "BaseException".into(),
         Ty::Proxy { host, .. } => {
             let (m, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
             typing.add(m, name);
@@ -562,13 +566,15 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
             })
             .collect::<Vec<_>>()
             .join(" | "),
-        Ty::Record(r) if out && matches!(r.host, HostForm::Model { .. }) => {
+        Ty::Record(r) if out && !r.literal && matches!(r.host, HostForm::Model { .. }) => {
             "dict[str, object]".into()
         }
         Ty::Record(r) => match &r.host {
             HostForm::Record { module: m, name } if m == module && own.contains(name) => {
                 name.clone()
             }
+            // A legacy model of the same module is defined beside it (`merge`).
+            HostForm::Model { module: m, name } if m == module => name.clone(),
             HostForm::Record { module: m, name } | HostForm::Model { module: m, name } => {
                 typing.add(&format!(".{m}"), name);
                 name.clone()
