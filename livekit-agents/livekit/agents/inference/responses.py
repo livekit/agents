@@ -56,7 +56,9 @@ from .llm import LLMModels, supports_prompt_cache_breakpoints
 # pool checks age only at get(), so leave room for a turn to finish before that
 _GATEWAY_WS_MAX_SESSION = 50 * 60
 
-# status and retryability per gateway.error code; agent-gateway's GatewayErrCode* constants
+# status and retryability per gateway.error code; agent-gateway's GatewayErrCode* constants.
+# upstream_timeout (the gateway's upstream stall bound, agent-gateway#1823) is not here:
+# _handle_error raises it as a retryable APITimeoutError instead of a status error
 _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "upstream_connect_failed": (502, True),
     "quota_exceeded": (429, None),
