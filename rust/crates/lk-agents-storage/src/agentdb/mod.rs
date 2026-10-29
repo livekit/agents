@@ -132,7 +132,7 @@ pub struct AgentDbStorage {
     streams: Streams,
     api: Arc<LiveKitApi>,
     pool: Arc<DbPool>,
-    /// The runtime the process lends: its connections and stream queues run there.
+    /// The runtime the process lends: its connections run there.
     runtime: tokio::runtime::Handle,
 }
 
@@ -154,7 +154,7 @@ impl AgentDbStorage {
             .build()
             .map_err(|e| StorageError::Invalid(format!("http client: {e}")))?;
         let base = format!("{url}/v0/agentstore/streams");
-        let streams = Streams::new(http, base, minter.clone(), runtime.clone());
+        let streams = Streams::new(http, base, minter.clone());
         let api =
             Arc::new(LiveKitApi::with_api_key(&opts.url, minter.api_key(), minter.api_secret()));
         Ok(Self { data_plane, opts, minter, streams, api, pool: Arc::default(), runtime })

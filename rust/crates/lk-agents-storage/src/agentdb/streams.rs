@@ -2,17 +2,14 @@
 //! records.
 //!
 //! * `POST /streams` creates one (`AST_..`, a day's TTL); `POST /streams/{id}` appends, and
-//!   `Stream-Closed: true` closes. Appends are queued and sent in order; a failed one is logged.
+//!   `Stream-Closed: true` closes.
 //! * `GET /streams/{id}?offset=` reads from an offset (`-1` the beginning); `&live=sse` follows
 //!   the tail and rotates about every minute, so the reader reconnects from its offset.
 
-use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
-use tokio::sync::{mpsc, watch};
 
 use crate::StorageError;
 use crate::streams::{CONTENT_TYPE, DEFAULT_TTL, START, StreamInfo};
@@ -31,37 +28,17 @@ struct Created {
     expires_at: i64,
 }
 
-struct Queue {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-    /// Appends handed over and not yet answered.
-    pending: watch::Sender<usize>,
-}
-
 /// The streams client, shared by every session a worker serves.
 #[derive(Clone)]
 pub struct Streams {
     http: reqwest::Client,
     base: String,
     minter: TokenMinter,
-    /// The runtime each stream's append queue runs on.
-    runtime: tokio::runtime::Handle,
-    queues: Arc<Mutex<HashMap<String, Arc<Queue>>>>,
 }
 
 impl Streams {
-    pub fn new(
-        http: reqwest::Client,
-        base: impl Into<String>,
-        minter: TokenMinter,
-        runtime: tokio::runtime::Handle,
-    ) -> Self {
-        Self {
-            http,
-            base: base.into().trim_end_matches('/').to_owned(),
-            minter,
-            runtime,
-            queues: Arc::new(Mutex::new(HashMap::new())),
-        }
+    pub fn new(http: reqwest::Client, base: impl Into<String>, minter: TokenMinter) -> Self {
+        Self { http, base: base.into().trim_end_matches('/').to_owned(), minter }
     }
 
     fn url(&self, id: &str) -> String {
@@ -98,47 +75,6 @@ impl Streams {
         Ok(StreamInfo { stream_id: created.stream_id, expires_at: created.expires_at })
     }
 
-    /// Hands one record to the stream's queue; sent in order, failures logged.
-    pub fn append(&self, stream_id: &str, record: Vec<u8>) {
-        let queue = self.queue(stream_id);
-        queue.pending.send_modify(|n| *n += 1);
-        if queue.tx.send(record).is_err() {
-            queue.pending.send_modify(|n| *n = n.saturating_sub(1));
-        }
-    }
-
-    fn queue(&self, stream_id: &str) -> Arc<Queue> {
-        let mut queues = self.queues.lock().expect("queues");
-        if let Some(q) = queues.get(stream_id) {
-            return q.clone();
-        }
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (pending, _) = watch::channel(0usize);
-        let queue = Arc::new(Queue { tx, pending });
-        queues.insert(stream_id.to_owned(), queue.clone());
-        let this = self.clone();
-        let id = stream_id.to_owned();
-        let q = queue.clone();
-        self.runtime.spawn(async move {
-            while let Some(record) = rx.recv().await {
-                if let Err(e) = this.append_now(&id, &record).await {
-                    log::warn!(target: "livekit.agents", streamId = id.as_str(); "stream append failed: {e}");
-                }
-                q.pending.send_modify(|n| *n = n.saturating_sub(1));
-            }
-        });
-        queue
-    }
-
-    /// Waits until every queued append of the stream was answered.
-    pub async fn flush(&self, stream_id: &str) {
-        let queue = self.queues.lock().expect("queues").get(stream_id).cloned();
-        if let Some(q) = queue {
-            let mut rx = q.pending.subscribe();
-            let _ = rx.wait_for(|n| *n == 0).await;
-        }
-    }
-
     /// One append, awaited: the resume cursor immediately after the record.
     pub async fn append_now(&self, stream_id: &str, record: &[u8]) -> Result<String, StorageError> {
         let resp = self
@@ -154,10 +90,8 @@ impl Streams {
         Ok(Position::at(required_next(&resp)?)?.encode())
     }
 
-    /// Flushes the queue, then closes the stream: its terminal frame marks the commit.
+    /// Closes the stream: its terminal frame marks the commit.
     pub async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
-        self.flush(stream_id).await;
-        self.queues.lock().expect("queues").remove(stream_id);
         let resp = self
             .http
             .post(self.url(stream_id))
@@ -254,10 +188,6 @@ impl StreamReader {
     /// The offset to resume from after the records returned so far.
     pub fn next_offset(&self) -> &str {
         &self.cursor
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.closed
     }
 
     /// The next record, or `None` at the end: the tail for a catch-up read, the close for a live one.
@@ -512,7 +442,6 @@ mod framing_tests {
             reqwest::Client::new(),
             "http://unused/streams",
             TokenMinter::new("key", "secret").unwrap(),
-            tokio::runtime::Handle::current(),
         );
         let mut reader = streams.read("AST_test", None, true);
         let body = "event: data\r\ndata: [\"café\"]\r\n\r\n".as_bytes();
