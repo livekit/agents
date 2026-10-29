@@ -489,7 +489,7 @@ async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
     assert_eq!(failed.task.status, TaskState::Failed);
     let lane = s.lane(LANE);
     assert!(lane.history().await.unwrap().is_empty());
-    let events = s.events(0, 100).await.unwrap();
+    let events = s.journal(0, 100).await.unwrap();
     assert_eq!(
         events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
         vec!["run_started", "run_ended"]

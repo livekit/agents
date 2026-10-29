@@ -126,7 +126,7 @@ async def run_outcomes(storage: Storage, thread_id: str) -> list[str]:
     """What ``run_ended`` recorded, oldest first."""
     core = await storage._open(thread_id)
     try:
-        events = await core.events()
+        events = await core.journal()
     finally:
         core.close()
     return [str(e.payload["outcome"]) for e in events if e.type == "run_ended"]

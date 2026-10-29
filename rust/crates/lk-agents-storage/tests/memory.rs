@@ -22,7 +22,7 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
         reopened.lane("desk").info().await.unwrap().unwrap().state,
         Some(json!({"reservation": "R1"}))
     );
-    assert!(reopened.events(0, 100).await.unwrap().iter().any(|e| e.r#type == "run_ended"));
+    assert!(reopened.journal(0, 100).await.unwrap().iter().any(|e| e.r#type == "run_ended"));
     reopened.close().await;
 
     let other = SqliteStorage::in_memory(LeaseTiming::default()).await.unwrap();

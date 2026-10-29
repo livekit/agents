@@ -87,7 +87,7 @@ impl PyThread {
 
     /// The journal, every lane, after `after_id`: `EventRow`s. Awaitable.
     #[pyo3(signature = (after_id=0, limit=100))]
-    fn events<'py>(
+    fn journal<'py>(
         &self,
         py: Python<'py>,
         after_id: i64,
@@ -96,7 +96,7 @@ impl PyThread {
         check_pid()?;
         let thread = self.inner.clone();
         crate::host::future_into_py(py, async move {
-            let events = thread.events(after_id, limit).await.map_err(to_py_err)?;
+            let events = thread.journal(after_id, limit).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, events, crate::generated::records::storage_class::event_row_to_py)
             })

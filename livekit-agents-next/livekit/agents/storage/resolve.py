@@ -124,7 +124,7 @@ class Thread:
         pass the last ``id`` to read the next."""
         core = await self._open()
         try:
-            return await core.events(after_id, limit)
+            return await core.journal(after_id, limit)
         finally:
             core.close()
 

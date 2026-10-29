@@ -208,7 +208,7 @@ impl Thread {
     }
 
     /// The journal, every lane, after the event `after_id`.
-    pub async fn events(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
+    pub async fn journal(&self, after_id: i64, limit: i64) -> Result<Vec<EventRow>, StorageError> {
         self.read(db::events(after_id, limit)).await
     }
 
@@ -370,14 +370,14 @@ impl Lane {
     }
 
     /// The lane's journal after the event `after_id`.
-    pub async fn events(&self, after_id: i64) -> Result<Vec<EventRow>, StorageError> {
+    pub async fn journal(&self, after_id: i64) -> Result<Vec<EventRow>, StorageError> {
         self.thread.read(db::lane_events(&self.name, after_id)).await
     }
 
     /// The last `limit` runs, newest first; the `submitted` insert before a lease is
     /// bookkeeping, not a turn.
     pub async fn runs(&self, limit: usize) -> Result<Vec<RunSummary>, StorageError> {
-        let rows = self.events(0).await?;
+        let rows = self.journal(0).await?;
         let mut runs: Vec<RunSummary> = RunSummary::from_events(&rows)
             .into_iter()
             .filter(|r| r.channel.as_deref() != Some(SUBMIT_CHANNEL))

@@ -48,7 +48,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(!run1.closed && run1.lease().is_some());
     assert!(run1.history.is_empty());
     assert_eq!(run1.state, None);
-    let journal = s1.events(0, 100).await.unwrap();
+    let journal = s1.journal(0, 100).await.unwrap();
     assert_eq!(journal.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), vec!["run_started"]);
     assert!(run1.lease().is_some_and(|h| !h.is_lost()));
     assert_eq!(waiter(&s1).await, None);
@@ -122,7 +122,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert_eq!(run2.history[0], first);
     assert_eq!(run2.state, Some(json!({"patient": "Ann"})));
     assert_eq!(waiter(&s2).await, None, "the waiter that won cleared its own mark");
-    assert!(s2.events(0, 100).await.unwrap().iter().any(|e| e.r#type == "usage"));
+    assert!(s2.journal(0, 100).await.unwrap().iter().any(|e| e.r#type == "usage"));
 
     // An unchanged history writes no item; a changed state is written.
     assert!(run2.writes(CommitOptions::default()).unwrap().items.is_empty());
@@ -148,7 +148,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     let info = lane.info().await.unwrap().expect("a lane row");
     assert_eq!((info.version, info.drained_id, info.lease_until), (2, 0, 0));
     assert_eq!(s2.lanes().await.unwrap().len(), 1);
-    assert!(s2.events(0, 100).await.unwrap().len() >= 5);
+    assert!(s2.journal(0, 100).await.unwrap().len() >= 5);
     assert!(lane.inbox(true).await.unwrap().is_empty());
     fx.cleanup(&[&s1, &s2]).await;
 }
@@ -175,7 +175,7 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
     assert!(lane.tasks(None, 50).await.unwrap().is_empty());
     let info = lane.info().await.unwrap().unwrap();
     assert_eq!((info.version, info.lease_until), (0, 0), "released, not bumped");
-    let events = s.events(0, 100).await.unwrap();
+    let events = s.journal(0, 100).await.unwrap();
     assert_eq!(
         events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
         vec!["run_started", "run_ended"]
@@ -210,7 +210,7 @@ async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
     assert_eq!(committed.version, 1, "no bump");
     assert_eq!(lane.info().await.unwrap().unwrap().version, 1);
     assert_eq!(lane.history().await.unwrap().len(), 1, "a closed run writes nothing");
-    let events = s.events(0, 100).await.unwrap();
+    let events = s.journal(0, 100).await.unwrap();
     assert_eq!(events.iter().filter(|e| e.r#type == "run_started").count(), 1, "not again");
     assert_eq!(events.iter().filter(|e| e.r#type == "run_ended").count(), 1);
     // Released: a third open takes the lane without waiting.
@@ -294,7 +294,7 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     // A concurrent run has nothing to abandon.
     let mut c = open(&s1, "r3", "AST_3").await;
     c.abandon(RunOutcome::Canceled, "CancelledError").await.unwrap();
-    assert_eq!(s1.events(0, 100).await.unwrap().len(), 8, "two items entered the history");
+    assert_eq!(s1.journal(0, 100).await.unwrap().len(), 8, "two items entered the history");
     fx.cleanup(&[&s1, &s2]).await;
 }
 
@@ -676,7 +676,7 @@ async fn commit_through(
 }
 
 async fn run_ended_count(s: &Thread) -> usize {
-    s.events(0, 100).await.unwrap().iter().filter(|e| e.r#type == "run_ended").count()
+    s.journal(0, 100).await.unwrap().iter().filter(|e| e.r#type == "run_ended").count()
 }
 
 #[tokio::test]
