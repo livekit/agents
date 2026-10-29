@@ -1,4 +1,5 @@
 use super::*;
+use crate::ipc::wire::{Hello, StartJob};
 
 fn broken_pipe() -> WireError {
     WireError::Io {
