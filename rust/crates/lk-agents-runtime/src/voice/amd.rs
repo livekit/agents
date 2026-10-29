@@ -306,17 +306,12 @@ impl AmdSystem {
 
     pub fn step(&mut self, now: Ts, input: In) {
         let Some(machine) = self.machine.take() else { return };
-        let skipped = machine.skips_turn_reply();
         let (next, out) = machine.step(now, input);
         self.machine = Some(next);
         self.perform(now, out);
         self.sync_tap();
         let listening = self.machine.as_ref().is_some_and(Amd::listening);
         self.listening.store(listening, Ordering::Relaxed);
-        let skips = self.machine.as_ref().is_some_and(Amd::skips_turn_reply);
-        if skips != skipped {
-            let _ = self.peer.send(Origin::Amd, TurnCommand::SkipReplies(skips));
-        }
     }
 
     fn perform(&mut self, now: Ts, out: Out) {
@@ -353,6 +348,9 @@ impl AmdSystem {
                 }
                 Effect::Authorization(Authorization::Resume) => {
                     let _ = self.peer.send(Origin::Amd, SpeechCommand::ResumeAuthorization);
+                }
+                Effect::SkipReplies(skips) => {
+                    let _ = self.peer.send(Origin::Amd, TurnCommand::SkipReplies(skips));
                 }
                 // `interrupt(force=True)`: the greeting is being spoken over.
                 Effect::Interrupt { force } => {

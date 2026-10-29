@@ -215,6 +215,8 @@ pub enum Effect {
     Interrupt {
         force: bool,
     },
+    /// [`Amd::skips_turn_reply`] changed: the session's turns skip their reply, or reply again.
+    SkipReplies(bool),
 }
 
 #[must_use = "the effects must be performed: an unperformed Arm is a deadline that never fires"]
@@ -330,6 +332,7 @@ impl Amd {
     pub fn step(self, now: Ts, input: In) -> (Amd, Out) {
         let mut out = Out::default();
         let listening = self.listening();
+        let skipped = self.skips_turn_reply();
         let next = match (self, input) {
             (Amd::Closed(c), _) => Amd::Closed(c),
             (Amd::Dormant(mut c) | Amd::Listening(mut c) | Amd::Emitted(mut c), In::Close) => {
@@ -431,6 +434,10 @@ impl Amd {
                 Amd::Emitted(c)
             }
         };
+        let skips = next.skips_turn_reply();
+        if skips != skipped {
+            out.push(Effect::SkipReplies(skips));
+        }
         (next, out)
     }
 }
