@@ -359,9 +359,10 @@ impl Turn {
                 Completion::Done
             }
             Operation::CloseRun => {
-                if let Some(mut run) = call.run.take() {
+                if let Some(run) = call.run.as_mut() {
                     run.commit(CommitOptions::default()).await?;
                 }
+                call.run = None;
                 Completion::Done
             }
             Operation::ReleaseDrained => {

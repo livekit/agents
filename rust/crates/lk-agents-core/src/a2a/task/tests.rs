@@ -364,7 +364,7 @@ fn row_of(status: TaskState) -> TaskRow {
 fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() {
     for error in [
         StorageError::VersionConflict { lane: "lane".into(), expected: 1 },
-        StorageError::Invalid("sqlite: disk I/O error".into()),
+        StorageError::Unavailable("sqlite: disk I/O error".into()),
     ] {
         let mut m = continuing(Policy::Queue, Some("waiting"));
         let commit = turn(&mut m, Some(question()), answered("Tuesday"));
@@ -382,6 +382,26 @@ fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() 
         let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
         assert_eq!(answer.task_id, "receipt");
     }
+}
+
+/// A2A_SEED=1 8 9 (answer_is_an_outcome, Queue): a run closed with nothing of its own whose
+/// commit the database refused reached the client as the raw storage error. A refused close
+/// settles like a refused turn commit: the message's task fails `storage-unavailable`.
+#[test]
+fn a_refused_close_fails_the_task_storage_unavailable() {
+    let mut m = machine(Policy::Queue);
+    m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
+    m.pending = Some(1);
+    assert!(matches!(step(&mut m, opened(true, false)), Operation::CloseRun));
+    let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
+    let pickup = operation(at(&mut m, Duration::ZERO, Err(refused)));
+    assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
+    assert!(matches!(
+        step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
+        Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
+            if failed.len() == 1 && failed[0].0 == "receipt"
+    ));
+    assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
 }
 
 /// A2A_SEED=68 88 130 (one_question_pending, Lane): a reply naming a question that a turn ahead

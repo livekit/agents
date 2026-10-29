@@ -1027,18 +1027,24 @@ impl TaskMachine {
                 let answer = Answer::row(self.answering(), None, reason);
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
             }
-            (Phase::Run { step: RunStep::Commit, .. }, StorageError::Uncertain(_)) => {
-                // a lost acknowledgment is not a failure: the message's task stays as it is while
-                // the resolver finds the run; once applied, it names its answer
+            // a commit: the turn's, a drain's, or the close of a run with nothing of its own
+            (Phase::Run { step: RunStep::Commit, .. } | Phase::Closing(_), _) => {
                 self.answer = None;
-                self.resolve_later()
-            }
-            (Phase::Run { step: RunStep::Commit, .. }, _) => {
-                // a rejected save fails the message's own task; its staged changes are absent,
-                // so a question it answered still waits
-                self.answer = None;
-                let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
-                self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
+                match error {
+                    // a lost acknowledgment is not a failure: the message's task stays as it is
+                    // while the resolver finds the run; once applied, it names its answer
+                    StorageError::Uncertain(_) => self.resolve_later(),
+                    // the database refused the save: the message's own task fails; its staged
+                    // changes are absent, so a question it answered still waits
+                    StorageError::Unavailable(_)
+                    | StorageError::LeaseLost(_)
+                    | StorageError::VersionConflict { .. } => {
+                        let then = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
+                        self.fail_task(self.task_id.clone(), REASON_STORAGE_UNAVAILABLE, then)
+                    }
+                    // what the run asked wrongly is not the database's failure
+                    error => return Err(Finish::Error(error)),
+                }
             }
             _ => return Err(Finish::Error(error)),
         };
