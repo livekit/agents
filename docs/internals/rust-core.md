@@ -1304,6 +1304,22 @@ outcome. Cancelling an owner propagates to its owned work; borrowed resources
 retain their owner's lifetime. Detached work requires another explicit owner.
 Stopping an await is separate from cancelling the operation it observes.
 
+Rust has one task-ownership primitive. The injected `Spawner` (ABI) hands back an
+`OwnedTask<T>`: dropping it requests cancellation and never detaches; awaiting it
+yields the value, or `TaskError::Cancelled`/`Panicked`, only after the work and
+everything it owned were dropped; an optional settle step runs with the
+`TaskOutcome` either way. ABI declares only this contract. Its implementation
+(`lk_agents_net::task::launch`) is executor-agnostic, so Tokio, the host loop's
+virtual time and the DST's scheduler run tasks the same way, and a panic still
+reaches the executor after its outcome is reported. A group of tasks is a
+`TaskSet` of owned tasks: named, cancellable by id, drained under a deadline;
+tasks that end on their own (a pump until its input closes, a close that must
+outlive its waiter) live in their owner's set, which the owner drains at its end.
+Work nobody owns by choice goes through `spawn_detached`, with the reason at the
+call site. Tokio's `JoinHandle` remains only inside executors and for the
+blocking pool (`spawn_blocking` work cannot be cancelled); no `JoinSet` or
+`TaskTracker` is used.
+
 Cancellation is idempotent and correlated. It can arrive before launch, during
 an await/pull, after partial output or alongside completion. The owner records
 which outcome won; stale completions cannot revive the operation. Completion
