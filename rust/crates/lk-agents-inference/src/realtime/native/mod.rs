@@ -2,7 +2,6 @@
 
 mod encode;
 mod event_retention;
-pub mod fallback;
 #[cfg(test)]
 mod machine_tests;
 mod model;

@@ -8,10 +8,8 @@ use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
 use lk_agents_abi::python::native;
 use lk_agents_abi::{HostRef, Realtime, RealtimeSession, WallAnchor};
+use lk_agents_runtime::inference::fallback::realtime::{RealtimeChild, RealtimeFallbackModel};
 use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
-use lk_agents_runtime::inference::realtime::native::fallback::{
-    RealtimeChild, RealtimeFallbackModel,
-};
 use lk_agents_runtime::net::env::ProcessEnv;
 use pyo3::prelude::*;
 
