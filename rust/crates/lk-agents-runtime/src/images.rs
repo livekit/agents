@@ -10,16 +10,20 @@ use lk_agents_abi::media::images::{
 use lk_agents_media::images::Images;
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
 
-use crate::process::{Process, workers};
+use crate::process::Process;
+use lk_agents_net::env::ProcessEnv;
 
 pub struct ImageFunctions;
 
 impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
+    type Env = ProcessEnv;
+
     fn install_frame_reader(reader: Arc<dyn FrameReader>) {
         Process::install_frame_reader(reader);
     }
 
     async fn encode_image(
+        env: &ProcessEnv,
         frame: MediaRef,
         format: String,
         quality: Option<u8>,
@@ -29,11 +33,12 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     ) -> Result<Vec<u8>, ImageError> {
         let options =
             ImageEncodeOptions { format, quality, resize_width, resize_height, resize_strategy };
-        let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
+        let prepared = prepare(env, ImageInput::HostFrame(frame), options).await?;
         prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))
     }
 
     async fn serialize_image_frame(
+        env: &ProcessEnv,
         frame: MediaRef,
         inference_width: Option<u32>,
         inference_height: Option<u32>,
@@ -46,21 +51,27 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
             resize_height: resize.map(|(_, h)| h),
             resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
         };
-        let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
-        let bytes = prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))?;
+        let prepared = prepare(env, ImageInput::HostFrame(frame), options).await?;
+        let bytes =
+            prepared.0.ok_or_else(|| ImageError("image encoder returned no bytes".into()))?;
         Ok((bytes, "image/jpeg".into()))
     }
 
     async fn serialize_image_url(
+        env: &ProcessEnv,
         url: String,
         mime_type: Option<String>,
     ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError> {
-        prepare(ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await
+        prepare(env, ImageInput::Url { url, mime_type }, ImageEncodeOptions::default()).await
     }
 }
 
-async fn prepare(input: ImageInput, options: ImageEncodeOptions) -> Result<PreparedImage, ImageError> {
-    let workers = workers().map_err(|e| ImageError(e.to_string()))?;
+async fn prepare(
+    env: &ProcessEnv,
+    input: ImageInput,
+    options: ImageEncodeOptions,
+) -> Result<PreparedImage, ImageError> {
+    let workers = (env.workers)().map_err(ImageError)?;
     prepare_on(&workers, Process::images(), input, options).await.map_err(ImageError)
 }
 
@@ -103,7 +114,7 @@ mod tests {
             buffer_type: 0,
             data: vec![127; 1920 * 1080 * 4].into(),
         };
-        let workers = workers().unwrap();
+        let workers = crate::process::workers().unwrap();
         let mut encoding = Box::pin(prepare_on(
             &workers,
             Images::default(),

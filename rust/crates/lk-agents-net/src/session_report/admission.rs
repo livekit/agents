@@ -1,6 +1,6 @@
 //! The session report's process admission (decision 88): transcripts in preparation, recordings
 //! in flight and the retained session events of every session. The hosting process owns one and
-//! lends it through [`Env::report_admission`](crate::env::Env::report_admission); clones share it.
+//! lends it through [`ProcessEnv::report_admission`](crate::env::ProcessEnv::report_admission); clones share it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

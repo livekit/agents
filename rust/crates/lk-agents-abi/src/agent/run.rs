@@ -215,12 +215,17 @@ pub struct InvalidRun(pub String);
 /// result; closing the stream cancels the invocation, whose work still settles.
 #[crate::host(class(name = "AgentRunner"))]
 pub trait AgentRunner: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(source(item = RunUpdate, class = "AgentRunUpdates"))]
     type Updates: StreamSource<RunUpdate> + 'static;
 
     /// The runner of `definition` on `llm`, its callbacks run by `host`.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         definition: AgentDefinition,
         llm: Arc<dyn Llm>,
         host: Arc<dyn AgentHost>,

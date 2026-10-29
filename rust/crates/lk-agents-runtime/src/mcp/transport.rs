@@ -18,6 +18,7 @@ use tokio::sync::Notify;
 use super::http::CleanupClient;
 use super::{McpError, McpTransport, conn};
 use lk_agents_abi::llm::mcp::McpInvocation;
+use lk_agents_net::env::ProcessEnv;
 
 /// The transport's settlement (`lk_agents_core::mcp::TransportSettlement`) and its waiters.
 #[derive(Default)]
@@ -309,6 +310,7 @@ impl Transport<RoleClient> for HttpConnection {
 }
 
 pub(super) async fn connect_http(
+    env: &ProcessEnv,
     url: String,
     headers: Vec<(String, String)>,
     transport: &str,
@@ -316,7 +318,6 @@ pub(super) async fn connect_http(
     read_timeout: Duration,
     receipt: Arc<TransportReceipt>,
 ) -> Result<HttpConnection, McpError> {
-    use lk_agents_net::env::Env;
     let headers = headers
         .into_iter()
         .map(|(name, value)| {
@@ -327,8 +328,7 @@ pub(super) async fn connect_http(
         })
         .collect::<Result<reqwest::header::HeaderMap, McpError>>()?;
     let client = CleanupClient {
-        http: crate::process::Process::http()
-            .map_err(|error| conn(std::io::Error::other(error)))?,
+        http: (env.http)().map_err(|error| conn(std::io::Error::other(error)))?,
         headers,
         options: lk_agents_abi::ApiConnectOptions {
             max_retry: 0,
@@ -337,7 +337,7 @@ pub(super) async fn connect_http(
             read_timeout: Some(read_timeout.as_secs_f64()),
             ..Default::default()
         },
-        clock: crate::process::host_clock(),
+        clock: env.clock.clone(),
         receipt: receipt.clone(),
     };
     match lk_agents_core::mcp::http_transport(&url, Some(transport))? {

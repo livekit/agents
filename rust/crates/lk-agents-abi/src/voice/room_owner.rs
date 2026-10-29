@@ -129,8 +129,12 @@ impl RoomSession {
 
 #[crate::host(functions)]
 pub trait RoomRuntime {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(function, name = "_core_create_room_session")]
-    fn create_room_session(room: Option<Arc<dyn RtcRoom>>) -> RoomSession;
+    fn create_room_session(env: &Self::Env, room: Option<Arc<dyn RtcRoom>>) -> RoomSession;
 
     /// Wait for the supplied room's connection, avatar participant and subscribed video track.
     #[host(function, name = "wait_avatar_join")]

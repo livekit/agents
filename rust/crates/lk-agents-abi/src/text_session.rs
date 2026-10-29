@@ -250,11 +250,16 @@ pub struct TextSessionDelivery {
 
 #[crate::host(class(name = "TextSessionRunner"))]
 pub trait TextSessionRunner: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(source(item = TextSessionUpdate, class = "TextSessionUpdates"))]
     type Updates: StreamSource<TextSessionUpdate> + 'static;
 
     #[host(new)]
     fn new(
+        env: &Self::Env,
         root_agent: String,
         agents: Vec<TextSessionAgent>,
         max_depth: usize,

@@ -329,7 +329,12 @@ fn setup(
     };
     let input = RunInput {
         invocation_id: "run_1".into(),
-        opening: lk_agents_core::agent_run::Opening::Message(ChatMessage::text("m1", Role::User, "Monday?", std::time::UNIX_EPOCH)),
+        opening: lk_agents_core::agent_run::Opening::Message(ChatMessage::text(
+            "m1",
+            Role::User,
+            "Monday?",
+            std::time::UNIX_EPOCH,
+        )),
         history: vec![],
         answer_tool: None,
         delegated: false,
@@ -582,10 +587,23 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
         retries: Retries::default(),
     };
     let invalid = definition(vec![tool("find_slot"), tool("find_slot")]);
-    let refused = super::Runner::new(invalid, llm(), host.clone()).err().expect("refused");
+    let refused = super::Runner::new(
+        &lk_agents_net::env::ProcessEnv::current_runtime(),
+        invalid,
+        llm(),
+        host.clone(),
+    )
+    .err()
+    .expect("refused");
     assert!(refused.0.contains("find_slot"), "{refused}");
 
-    let runner = super::Runner::new(definition(vec![]), llm(), host).unwrap();
+    let runner = super::Runner::new(
+        &lk_agents_net::env::ProcessEnv::current_runtime(),
+        definition(vec![]),
+        llm(),
+        host,
+    )
+    .unwrap();
     let mut updates = runner
         .run(RunRequest {
             tools_host: None,

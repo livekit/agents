@@ -43,7 +43,8 @@ impl SessionRecorder {
     #[pyo3(signature = (path, *, sample_rate = 48000, t0 = None, bitrate = 64000))]
     fn new(path: ::std::string::String, #[pyo3(from_py_with = _extract_session_recorder_new_sample_rate)] sample_rate: u32, #[pyo3(from_py_with = _extract_session_recorder_new_t0)] t0: ::std::option::Option<f64>, #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)] bitrate: u32) -> PyResult<SessionRecorder> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(path, sample_rate, t0, bitrate).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(&env, path, sample_rate, t0, bitrate).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(SessionRecorder(::std::sync::Arc::new(out)))
     }
 

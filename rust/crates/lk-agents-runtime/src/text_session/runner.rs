@@ -7,6 +7,7 @@ use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
 use lk_agents_abi::utils::clock::RealClock;
 use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
 use lk_agents_core::text_session::SessionAgent;
+use lk_agents_net::env::ProcessEnv;
 use std::sync::Mutex;
 
 #[derive(Clone)]
@@ -19,12 +20,15 @@ pub struct Runner {
     config: TextSessionConfig,
     agents: BTreeMap<String, TextSessionAgent>,
     control: Mutex<Option<Control>>,
+    runtime: fn() -> Result<tokio::runtime::Handle, String>,
 }
 
 impl TextSessionRunner for Runner {
     type Updates = Updates;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         root_agent: String,
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
@@ -42,11 +46,11 @@ impl TextSessionRunner for Runner {
         .map_err(|e| InvalidRun(e.to_string()))?;
         let resources =
             agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
-        Ok(Self { config, agents: resources, control: Mutex::new(None) })
+        Ok(Self { config, agents: resources, control: Mutex::new(None), runtime: env.runtime })
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
-        let runtime = crate::process::handle().map_err(|e| InvalidRun(e.to_string()))?;
+        let runtime = (self.runtime)().map_err(InvalidRun)?;
         let mut current = self.control.lock().unwrap_or_else(|e| e.into_inner());
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
             return Err(InvalidRun("this runner already has an active request".into()));

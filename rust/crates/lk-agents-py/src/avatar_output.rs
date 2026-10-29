@@ -3,12 +3,16 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, HostRef, TokioSpawner};
+use lk_agents_runtime::net::env::ProcessEnv;
 use std::sync::Arc;
 
 pub struct DataStreamAudioOutput(lk_agents_runtime::avatar::output::DataStreamAudioOutput);
 
 impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutput {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         room: HostRef,
         destination_identity: String,
         sample_rate: Option<u32>,
@@ -33,9 +37,8 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
         })
         .map_err(|error| Python::attach(|py| ProviderError::from_host(py, &error)))?;
         let room = lk_agents_runtime::rtc::room::Room::wrap(room);
-        let handle = lk_agents_runtime::process::handle().map_err(|error| {
-            ProviderError::from(lk_agents_abi::errors::ApiError::new(error.to_string()))
-        })?;
+        let handle = (env.runtime)()
+            .map_err(|error| ProviderError::from(lk_agents_abi::errors::ApiError::new(error)))?;
         let spawner = TokioSpawner::new(handle);
         Ok(Self(lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
             room,
@@ -44,7 +47,7 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
             wait_remote_track,
             timeout,
             wait_playback_start,
-            lk_agents_runtime::process::host_clock(),
+            env.clock.clone(),
             Arc::new(spawner),
         )))
     }

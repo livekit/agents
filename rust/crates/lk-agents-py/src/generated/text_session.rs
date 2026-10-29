@@ -30,8 +30,9 @@ impl TextSessionRunner {
     #[pyo3(signature = (root_agent, agents, max_depth))]
     fn new(root_agent: ::std::string::String, agents: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_text_session_runner_new_max_depth)] max_depth: usize) -> PyResult<TextSessionRunner> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let agents = agents.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::text_session::text_session_agent_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
-        let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(root_agent, agents, max_depth).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(&env, root_agent, agents, max_depth).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(TextSessionRunner(::std::sync::Arc::new(out)))
     }
 

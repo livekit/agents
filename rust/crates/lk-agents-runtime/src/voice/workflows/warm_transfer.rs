@@ -4,7 +4,6 @@
 //! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
 //! makes the LiveKit and Twilio requests.
 
-use crate::process::Process;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
@@ -12,7 +11,6 @@ pub use lk_agents_abi::voice::workflows::warm_transfer::{
 };
 use lk_agents_abi::voice::workflows::{InstructionsArg, SipParticipantRequest, TwilioDial};
 use lk_agents_abi::{AbortHandle, Clock, HostRef, Spawner, SpawnerExt};
-use lk_agents_net::env::Env;
 use serde_json::Value;
 
 use std::collections::BTreeMap;
@@ -746,8 +744,9 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
             env_sip_number,
             twilio,
         })?;
-        let clock = Process::clock();
-        let spawner = Process::spawner().map_err(HostError::new)?;
+        let env = crate::process::env();
+        let spawner = (env.spawner)().map_err(HostError::new)?;
+        let clock = env.clock;
         Ok(Self(Arc::new(HostWarmTransfer::new(plan, clock, spawner))))
     }
 

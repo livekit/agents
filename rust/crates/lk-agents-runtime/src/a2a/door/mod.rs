@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::a2a::Turn;
+use lk_agents_net::env::ProcessEnv;
 use stream::Sender;
 
 const RESPONSE_CAPACITY: usize = 64;
@@ -53,6 +54,7 @@ struct Inner {
     host: Arc<dyn TurnHost>,
     options: lk_agents_core::a2a::TurnOptions,
     owner: TaskTracker,
+    clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
 impl Door {
@@ -65,7 +67,8 @@ impl Door {
     ) -> Result<Self, StorageError> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
-        Self::over(Store::Open(storage), config, host, owner, runtime)
+        let clock = Arc::new(lk_agents_abi::RealClock::new());
+        Self::over(Store::Open(storage), config, host, owner, runtime, clock)
     }
 
     fn over(
@@ -74,6 +77,7 @@ impl Door {
         host: Arc<dyn TurnHost>,
         owner: TaskTracker,
         runtime: tokio::runtime::Handle,
+        clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Result<Self, StorageError> {
         lk_agents_core::a2a::card::agent_card(config.endpoint)
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
@@ -88,6 +92,7 @@ impl Door {
                 host,
                 options: config.options,
                 owner: owner.clone(),
+                clock,
             }),
             tasks: TaskTracker::new(),
             runtime,
@@ -99,8 +104,10 @@ impl Door {
 
 impl A2ADoor for Door {
     type Response = Response;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         storage: Arc<dyn StorageNamespace>,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,
@@ -109,10 +116,11 @@ impl A2ADoor for Door {
         let storage = storage.downcast::<HostStorage>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
-        let runtime = crate::process::caller_handle()
+        let runtime = env
+            .caller_runtime()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
         let owner = storage.a2a_tasks();
-        Self::over(Store::Namespace(storage), config, host, owner, runtime)
+        Self::over(Store::Namespace(storage), config, host, owner, runtime, env.clock.clone())
     }
 
     fn max_payload_bytes(&self) -> usize {
@@ -406,7 +414,7 @@ impl Inner {
             thread.clone(),
             &self.lane,
             self.host.clone(),
-            crate::process::host_clock(),
+            self.clock.clone(),
             self.options.clone(),
         )
         .with_stream(created.clone())

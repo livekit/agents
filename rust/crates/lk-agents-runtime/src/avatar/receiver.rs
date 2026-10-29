@@ -7,7 +7,7 @@ use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListene
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
 use lk_agents_abi::{AbortHandle, BoxFuture, Clock, Spawner, SpawnerExt};
-use lk_agents_net::env::Env;
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportStep, frame_size};
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
@@ -376,7 +376,10 @@ fn failure(error: ReceiverEnd) -> ProviderError {
 }
 
 impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         room: Arc<dyn RtcRoom>,
         sender_identity: Option<String>,
         frame_size_ms: u32,
@@ -384,7 +387,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
         on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
     ) -> Result<Self, ProviderError> {
         let frame_size = frame_size(frame_size_ms).map_err(failure)?;
-        let spawner = crate::process::Process::spawner().map_err(ApiError::new)?;
+        let spawner = (env.spawner)().map_err(ApiError::new)?;
         let on_clear = on_clear_buffer.map(|listener| {
             Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
         });
@@ -394,7 +397,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
             frame_size,
             rpc_max_retries,
             on_clear,
-            crate::process::Process::clock(),
+            env.clock.clone(),
             spawner,
         ))
     }

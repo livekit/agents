@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort};
-use lk_agents_core::mcp::timeout_duration;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
+use lk_agents_core::mcp::timeout_duration;
 use lk_agents_core::mcp::{
     ConnectionSettlement, ListStep, ToolListing, TransportSettlement, progress_message,
 };
+use lk_agents_net::env::ProcessEnv;
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams,
@@ -130,6 +131,8 @@ pub struct McpSession {
 }
 
 impl McpSessionPort for McpSession {
+    type Env = ProcessEnv;
+
     fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError> {
         Ok(Self {
             timeout: timeout_duration(
@@ -160,6 +163,7 @@ impl McpSessionPort for McpSession {
 
     async fn connect_http(
         &self,
+        env: &ProcessEnv,
         url: String,
         headers: Vec<(String, String)>,
         transport: String,
@@ -176,7 +180,7 @@ impl McpSessionPort for McpSession {
         let receipt = Arc::new(TransportReceipt::default());
         let transport = tokio::select! {
             _ = cancel.cancelled() => return Err(cancelled()),
-            transport = connect_http(url, headers, &transport, timeout, sse_read_timeout, receipt.clone()) => transport?,
+            transport = connect_http(env, url, headers, &transport, timeout, sse_read_timeout, receipt.clone()) => transport?,
         };
         self.serve(transport, receipt, cancel).await
     }

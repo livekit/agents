@@ -12,12 +12,16 @@ use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
 use lk_agents_runtime::inference::realtime::native::fallback::{
     RealtimeChild, RealtimeFallbackModel,
 };
+use lk_agents_runtime::net::env::ProcessEnv;
 use pyo3::prelude::*;
 
 pub struct RealtimeFallback(RealtimeFallbackModel);
 
 impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFallback {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         models: Vec<HostRef>,
         cooldown: f64,
         regenerate_on_swap: bool,
@@ -31,20 +35,22 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
                     match native::<dyn Realtime>(&model) {
                         Some(native) => Ok(RealtimeChild::Native(native)),
                         None => crate::generated::llm::HostRealtimeProxy::from_host(&model)
-                            .and_then(|host| Ok(RealtimeChild::Host(host, crate::host::host_spawner()?))),
+                            .and_then(|host| {
+                                Ok(RealtimeChild::Host(host, crate::host::host_spawner()?))
+                            }),
                     }
                 })
                 .collect::<PyResult<Vec<_>>>()?;
             let observer: Arc<dyn ChainObserver> = match on_availability {
-                Some(observer) => {
-                    crate::generated::llm::ChainObserverProxy::from_host(&observer.into_pyobject(py)?)?
-                }
+                Some(observer) => crate::generated::llm::ChainObserverProxy::from_host(
+                    &observer.into_pyobject(py)?,
+                )?,
                 None => Arc::new(IgnoreEvents),
             };
             Ok((children, observer))
         })
         .map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))?;
-        let clock = lk_agents_runtime::process::host_clock();
+        let clock = env.clock.clone();
         RealtimeFallbackModel::new(
             children,
             cooldown,

@@ -43,6 +43,10 @@ pub trait FrameReader: Send + Sync {
 /// Frames as portable images, encoded on an admitted image worker.
 #[crate::host(functions)]
 pub trait ImageFunctions {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     /// Hands the runtime the host's frame reader; images of host frames need it.
     #[host(function, name = "_core_install_frame_reader", pid = false)]
     fn install_frame_reader(reader: std::sync::Arc<dyn FrameReader>);
@@ -50,6 +54,7 @@ pub trait ImageFunctions {
     #[host(function)]
     #[allow(clippy::too_many_arguments)]
     async fn encode_image(
+        env: &Self::Env,
         frame: MediaRef,
         #[host(kw, default = "JPEG")] format: String,
         #[host(default = None)] quality: Option<u8>,
@@ -61,6 +66,7 @@ pub trait ImageFunctions {
     /// A frame as JPEG bytes, resized to its inference size when it has one.
     #[host(function)]
     async fn serialize_image_frame(
+        env: &Self::Env,
         frame: MediaRef,
         #[host(default = None)] inference_width: Option<u32>,
         #[host(default = None)] inference_height: Option<u32>,
@@ -69,6 +75,7 @@ pub trait ImageFunctions {
     /// A URL's inline bytes and MIME type, or the URL itself when it is external.
     #[host(function)]
     async fn serialize_image_url(
+        env: &Self::Env,
         url: String,
         mime_type: Option<String>,
     ) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), ImageError>;

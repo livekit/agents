@@ -38,6 +38,10 @@ pub enum DoorError {
 
 #[crate::host(class(name = "_core_A2ADoor"))]
 pub trait A2ADoor: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(class(name = "_core_A2AResponse"))]
     type Response: Send + Sync + 'static;
 
@@ -45,6 +49,7 @@ pub trait A2ADoor: Send + Sync + Sized + 'static {
     /// is settled by the storage's `aclose`.
     #[host(new)]
     fn new(
+        env: &Self::Env,
         storage: Arc<dyn StorageNamespace>,
         config: DoorConfig,
         host: Arc<dyn TurnHost>,

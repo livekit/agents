@@ -7,7 +7,7 @@ use lk_agents_abi::voice::avatar::{
 use lk_agents_abi::voice::room_owner::RoomSession;
 use lk_agents_abi::voice::rtc::{RoomEvent, RtcError, RtcRoom};
 use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet};
-use lk_agents_net::env::Env;
+use lk_agents_net::env::ProcessEnv;
 pub use lk_agents_voice::avatar_runner::Event;
 use lk_agents_voice::avatar_runner::{CallId, Effect, IoOp, RunnerCore};
 use std::collections::HashMap;
@@ -161,9 +161,12 @@ impl AvatarRunner {
     }
 }
 impl avatar::AvatarRunner for AvatarRunner {
+    type Env = ProcessEnv;
+
     /// `room` is the avatar worker's `rtc.Room`; `media` the SDK half (`rtc.AVSynchronizer` and
     /// the tracks); `lazy_publish` holds the tracks back until the first frame.
     fn new(
+        env: &ProcessEnv,
         room: RoomSession,
         receiver: Arc<dyn AvatarAudioReceiver>,
         generator: Arc<dyn AvatarVideoGenerator>,
@@ -171,9 +174,9 @@ impl avatar::AvatarRunner for AvatarRunner {
         lazy_publish: bool,
     ) -> Result<Self, RtcError> {
         let room = room.0.rtc().ok_or(RtcError::NotConnected)?;
-        let spawner = crate::process::Process::spawner().map_err(RtcError::host)?;
+        let spawner = (env.spawner)().map_err(RtcError::host)?;
         let io = AvatarIo { receiver, generator, media };
-        let clock = crate::process::Process::clock();
+        let clock = env.clock.clone();
         Ok(AvatarRunner::scheduled(room, io, lazy_publish, clock, spawner, |_| 0))
     }
 

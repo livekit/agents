@@ -10,6 +10,7 @@ use lk_agents_abi::voice::room_io::RoomIoConfig;
 use lk_agents_abi::voice::room_owner;
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::{Clock, Spawner};
+use lk_agents_net::env::ProcessEnv;
 use std::sync::Arc;
 
 pub use owner::RoomIo;
@@ -67,6 +68,8 @@ impl room_owner::SessionRoom for FixedRoom {
 pub struct RoomFactory;
 
 impl room_owner::RoomRuntime for RoomFactory {
+    type Env = ProcessEnv;
+
     async fn wait_avatar_join(
         room: room_owner::RoomSession,
         identity: String,
@@ -76,11 +79,14 @@ impl room_owner::RoomRuntime for RoomFactory {
         crate::avatar::receiver::wait_avatar_join_room(room, identity, clock).await
     }
 
-    fn create_room_session(room: Option<Arc<dyn RtcRoom>>) -> room_owner::RoomSession {
+    fn create_room_session(
+        env: &ProcessEnv,
+        room: Option<Arc<dyn RtcRoom>>,
+    ) -> room_owner::RoomSession {
         let time = lk_agents_voice::agent_session::Timebase::real();
         match room {
             Some(room) => {
-                let pool = crate::process::workers().ok();
+                let pool = (env.workers)().ok();
                 room_owner::RoomSession(Arc::new(FixedRoom { rtc: room, time, pool }))
             }
             None => room_owner::RoomSession(Arc::new(DetachedSession(time))),

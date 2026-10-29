@@ -697,10 +697,9 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for HostBackg
         blocksize: usize,
         stream_timeout_ms: u64,
     ) -> Result<Self, ProviderError> {
-        use lk_agents_net::env::Env;
-        let spawner =
-            crate::process::Process::spawner().map_err(lk_agents_abi::errors::ApiError::new)?;
-        let clock = crate::process::Process::clock();
+        let env = crate::process::env();
+        let spawner = (env.spawner)().map_err(lk_agents_abi::errors::ApiError::new)?;
+        let clock = env.clock;
         Ok(Self(Arc::new(BackgroundAudioPlayer::for_host(
             sample_rate,
             num_channels,

@@ -177,6 +177,10 @@ pub trait McpProgress: Send + Sync {
 /// An SDK session whose owner cancels and joins independently of request borrowers.
 #[crate::host(class(name = "McpSession"))]
 pub trait McpSession: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError>;
     #[host(getter)]
@@ -188,6 +192,7 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn connect_http(
         &self,
+        env: &Self::Env,
         url: String,
         headers: Vec<(String, String)>,
         transport: String,

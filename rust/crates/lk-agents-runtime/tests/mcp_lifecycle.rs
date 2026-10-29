@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::llm::mcp::{McpCleanupStatus, McpError, McpSession as _};
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_runtime::mcp::McpSession;
 use serde_json::Map;
 
@@ -118,7 +119,16 @@ async fn mcp_real_server_lifecycle_http() -> Result {
     let session = Arc::new(McpSession::new(30.0)?);
     let result = async {
         let url = peer.receipt("url").await?;
-        session.connect_http(url, Vec::new(), "streamable_http".into(), 5.0, 30.0).await?;
+        session
+            .connect_http(
+                &ProcessEnv::current_runtime(),
+                url,
+                Vec::new(),
+                "streamable_http".into(),
+                5.0,
+                30.0,
+            )
+            .await?;
         exercise(session.clone(), &peer).await
     }
     .await;
@@ -139,6 +149,7 @@ async fn mcp_http_failed_session_delete_is_incomplete_cleanup() -> Result {
     let result = async {
         session
             .connect_http(
+                &ProcessEnv::current_runtime(),
                 peer.receipt("url").await?,
                 Vec::new(),
                 "streamable_http".into(),

@@ -10,11 +10,12 @@ use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::utils::clock::RealClock;
 use lk_agents_abi::utils::stream::StreamSource;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
-use lk_agents_core::{Opening, RunInput};
 use lk_agents_core::tool_outcome::Mode;
+use lk_agents_core::{Opening, RunInput};
 use tokio::sync::mpsc;
 
 use super::{AgentRunHandle, PROGRESS_QUEUE, Ports, Progress, ProgressRefused, start};
+use lk_agents_net::env::ProcessEnv;
 
 /// Updates the consumer may lag behind by before the run waits for it.
 const UPDATE_QUEUE: usize = 16;
@@ -26,12 +27,15 @@ pub struct Runner {
     clock: Arc<dyn Clock>,
     /// Each running invocation's progress port, by invocation id; ended ones are pruned.
     running: Mutex<Vec<(String, Progress)>>,
+    runtime: fn() -> Result<tokio::runtime::Handle, String>,
 }
 
 impl AgentRunner for Runner {
     type Updates = Updates;
+    type Env = ProcessEnv;
 
     fn new(
+        env: &ProcessEnv,
         definition: AgentDefinition,
         llm: Arc<dyn Llm>,
         host: Arc<dyn AgentHost>,
@@ -43,6 +47,7 @@ impl AgentRunner for Runner {
             host,
             clock: Arc::new(RealClock::new()),
             running: Mutex::new(Vec::new()),
+            runtime: env.runtime,
         })
     }
 
@@ -50,7 +55,7 @@ impl AgentRunner for Runner {
         let ChatItem::Message(mut message) = request.message else {
             return Err(InvalidRun("a run's message is a chat message".into()));
         };
-        let runtime = crate::process::handle().map_err(|e| InvalidRun(e.to_string()))?;
+        let runtime = (self.runtime)().map_err(InvalidRun)?;
         let execution_id = lk_agents_core::agent_run::execution::bind(
             &mut message,
             &request.history,

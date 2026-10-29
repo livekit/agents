@@ -85,8 +85,13 @@ pub trait AvatarMedia: Send + Sync {
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
 #[crate::host(class(name = "DataStreamAudioOutput", native = crate::voice::io::AudioOutput))]
 pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         room: crate::HostRef,
         #[host(kw)] destination_identity: String,
         #[host(default = None)] sample_rate: Option<u32>,
@@ -108,8 +113,13 @@ pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
 /// The worker's receiver keeps stream identity with each delivered frame and playback report.
 #[crate::host(class(name = "DataStreamAudioReceiver", native = AvatarAudioReceiver))]
 pub trait DataStreamAudioReceiver: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         room: std::sync::Arc<dyn crate::voice::rtc::RtcRoom>,
         #[host(kw, default = None)] sender_identity: Option<String>,
         #[host(default = 100)] frame_size_ms: u32,
@@ -169,8 +179,13 @@ pub enum ReceiverEnd {
 /// The avatar worker's native queue owner. Its decisions remain in RunnerCore.
 #[crate::host(class(name = "AvatarRunner"))]
 pub trait AvatarRunner: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         room: crate::voice::room_owner::RoomSession,
         #[host(kw)] receiver: std::sync::Arc<dyn AvatarAudioReceiver>,
         generator: std::sync::Arc<dyn AvatarVideoGenerator>,

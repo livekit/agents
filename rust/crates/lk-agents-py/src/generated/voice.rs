@@ -35,7 +35,8 @@ impl DataStreamAudioOutput {
     #[pyo3(signature = (room, *, destination_identity, sample_rate = None, wait_remote_track = None, clear_buffer_timeout = Some(2.0), wait_playback_start = false))]
     fn new(room: ::lk_agents_abi::HostRef, destination_identity: ::std::string::String, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_sample_rate)] sample_rate: ::std::option::Option<u32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_wait_remote_track)] wait_remote_track: ::std::option::Option<i32>, #[pyo3(from_py_with = _extract_data_stream_audio_output_new_clear_buffer_timeout)] clear_buffer_timeout: ::std::option::Option<f64>, wait_playback_start: bool) -> PyResult<DataStreamAudioOutput> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::new(room, destination_identity, sample_rate, wait_remote_track, clear_buffer_timeout, wait_playback_start).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::new(&env, room, destination_identity, sample_rate, wait_remote_track, clear_buffer_timeout, wait_playback_start).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(DataStreamAudioOutput(::std::sync::Arc::new(out)))
     }
 
@@ -102,9 +103,10 @@ impl DataStreamAudioReceiver {
     #[pyo3(signature = (room, *, sender_identity = None, frame_size_ms = 100, rpc_max_retries = 3, on_clear_buffer = None))]
     fn new(room: Bound<'_, PyAny>, sender_identity: ::std::option::Option<::std::string::String>, #[pyo3(from_py_with = _extract_data_stream_audio_receiver_new_frame_size_ms)] frame_size_ms: u32, #[pyo3(from_py_with = _extract_data_stream_audio_receiver_new_rpc_max_retries)] rpc_max_retries: u32, on_clear_buffer: Option<Bound<'_, PyAny>>) -> PyResult<DataStreamAudioReceiver> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let room = crate::generated::voice::RtcRoomProxy::from_host(&room)?;
         let on_clear_buffer = on_clear_buffer.map(|v| crate::generated::voice::ClearBufferListenerProxy::from_host(&v)).transpose()?;
-        let out = <DataStreamAudioReceiverImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver>::new(room, sender_identity, frame_size_ms, rpc_max_retries, on_clear_buffer).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <DataStreamAudioReceiverImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver>::new(&env, room, sender_identity, frame_size_ms, rpc_max_retries, on_clear_buffer).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(DataStreamAudioReceiver(::std::sync::Arc::new(out)))
     }
 
@@ -180,10 +182,11 @@ impl AvatarRunner {
     #[pyo3(signature = (room, *, receiver, generator, media, lazy_publish))]
     fn new(room: ::lk_agents_abi::voice::room_owner::RoomSession, receiver: Bound<'_, PyAny>, generator: Bound<'_, PyAny>, media: Bound<'_, PyAny>, lazy_publish: bool) -> PyResult<AvatarRunner> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let receiver = crate::generated::voice::AvatarAudioReceiverProxy::from_host(&receiver)?;
         let generator = crate::generated::voice::AvatarVideoGeneratorProxy::from_host(&generator)?;
         let media = crate::generated::voice::AvatarMediaProxy::from_host(&media)?;
-        let out = <AvatarRunnerImpl as ::lk_agents_abi::voice::avatar::AvatarRunner>::new(room, receiver, generator, media, lazy_publish).map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <AvatarRunnerImpl as ::lk_agents_abi::voice::avatar::AvatarRunner>::new(&env, room, receiver, generator, media, lazy_publish).map_err(|e: ::lk_agents_abi::voice::rtc::RtcError| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AvatarRunner(::std::sync::Arc::new(out)))
     }
 
@@ -817,8 +820,9 @@ fn _extract_room_runtime_wait_for_track_publication_kinds(obj: &Bound<'_, PyAny>
 #[pyo3(signature = (room))]
 pub fn _core_create_room_session(room: Option<Bound<'_, PyAny>>) -> PyResult<::lk_agents_abi::voice::room_owner::RoomSession> {
     ::lk_agents_abi::python::check_pid()?;
+    let env = crate::process::env();
     let room = room.map(|v| crate::generated::voice::RtcRoomProxy::from_host(&v)).transpose()?;
-    let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::create_room_session(room);
+    let out = <RoomRuntimeImpl as ::lk_agents_abi::voice::room_owner::RoomRuntime>::create_room_session(&env, room);
     Ok(out)
 }
 

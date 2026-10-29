@@ -16,6 +16,7 @@ use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
 use lk_agents_media::recorder::{RecordingCommand, RecordingLimits};
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
+use lk_agents_net::env::ProcessEnv;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
@@ -91,13 +92,14 @@ impl SessionRecorder {
     #[cfg(feature = "media-ffmpeg")]
     fn start(
         workers: &MediaWorkers,
+        runtime: tokio::runtime::Handle,
         path: PathBuf,
         sample_rate: u32,
         t0: Option<f64>,
         bitrate: u32,
         limits: RecordingLimits,
     ) -> Result<Self, RecordingFailure> {
-        Self::start_with(workers, sample_rate, t0, limits, move |file| {
+        Self::start_with(workers, runtime, sample_rate, t0, limits, move |file| {
             RecordingFile::create(&path, sample_rate, bitrate, t0, file)
         })
     }
@@ -114,10 +116,12 @@ impl SessionRecorder {
         E: OggOpusEncoder + Send + 'static,
         W: Write + Send + 'static,
     {
-        let recorder = Arc::new(Self::start_with(workers, sample_rate, t0, limits, move |file| {
-            let (encoder, writer) = open()?;
-            Ok(RecordingFile::new(encoder, writer, sample_rate, t0, file))
-        })?);
+        let runtime = tokio::runtime::Handle::current();
+        let recorder =
+            Arc::new(Self::start_with(workers, runtime, sample_rate, t0, limits, move |file| {
+                let (encoder, writer) = open()?;
+                Ok(RecordingFile::new(encoder, writer, sample_rate, t0, file))
+            })?);
         recorder.ready().await?;
         Ok(recorder)
     }
@@ -125,6 +129,7 @@ impl SessionRecorder {
     #[cfg(any(test, feature = "media-ffmpeg"))]
     fn start_with<E, W>(
         workers: &MediaWorkers,
+        runtime: tokio::runtime::Handle,
         sample_rate: u32,
         t0: Option<f64>,
         limits: RecordingLimits,
@@ -156,8 +161,6 @@ impl SessionRecorder {
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
-        let runtime = crate::process::caller_handle()
-            .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
         let recorder = Self { tx, shared: shared.clone(), runtime: runtime.clone() };
         let worker_shared = shared.clone();
         let worker = workers
@@ -469,7 +472,10 @@ fn process<E: OggOpusEncoder, W: Write>(
 mod tests;
 
 impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
+    type Env = ProcessEnv;
+
     fn new(
+        env: &ProcessEnv,
         path: String,
         sample_rate: u32,
         t0: Option<f64>,
@@ -477,13 +483,21 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     ) -> Result<Self, RecordingFailure> {
         #[cfg(feature = "media-ffmpeg")]
         {
-            let workers =
-                crate::process::workers().map_err(|e| RecordingFailure::Worker(e.to_string()))?;
-            Self::start(&workers, path.into(), sample_rate, t0, bitrate, RecordingLimits::default())
+            let workers = (env.workers)().map_err(RecordingFailure::Worker)?;
+            let runtime = env.caller_runtime().map_err(RecordingFailure::Worker)?;
+            Self::start(
+                &workers,
+                runtime,
+                path.into(),
+                sample_rate,
+                t0,
+                bitrate,
+                RecordingLimits::default(),
+            )
         }
         #[cfg(not(feature = "media-ffmpeg"))]
         {
-            let _ = (path, sample_rate, t0, bitrate);
+            let _ = (env, path, sample_rate, t0, bitrate);
             Err(RecordingFailure::Worker("recording requires the ffmpeg build".into()))
         }
     }

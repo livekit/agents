@@ -162,31 +162,8 @@ fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send
     Arc::new(lk_agents_net::env::NoImagePreparation)
 }
 
-/// The process services selected by host-constructed clients through the shared environment.
-#[derive(Clone)]
+/// The process the runtime owns: its host ports and image preparation.
 pub struct Process;
-
-impl lk_agents_net::env::Env for Process {
-    fn http() -> Result<Arc<lk_agents_net::http::GatewayHttp>, String> {
-        with_started(|started| started.http.clone()).map_err(|error| error.to_string())
-    }
-
-    fn runtime() -> Result<tokio::runtime::Handle, String> {
-        handle().map_err(|error| error.to_string())
-    }
-
-    fn spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
-        host_spawner()
-    }
-
-    fn clock() -> Arc<dyn Clock> {
-        host_clock()
-    }
-
-    fn report_admission() -> Result<lk_agents_net::session_report::ReportAdmission, String> {
-        with_started(|started| started.report_admission.clone()).map_err(|error| error.to_string())
-    }
-}
 
 impl Process {
     /// Takes the host's frame reader as the host starts; the first one installed stays.

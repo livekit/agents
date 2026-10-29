@@ -124,8 +124,13 @@ pub trait NativeRealtimeModel: Send + Sync + Sized + 'static {
 /// The generated facade holds native resources; host provider objects use the shared bridge.
 #[crate::host(class(name = "RealtimeFallbackModel", native = crate::llm::realtime::Realtime))]
 pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         models: Vec<HostRef>,
         #[host(kw, default = 10.0)] cooldown: f64,
         #[host(default = true)] regenerate_on_swap: bool,

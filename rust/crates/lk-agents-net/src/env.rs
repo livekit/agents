@@ -1,7 +1,7 @@
-//! What the hosting process lends the async crates' clients (decision 88): its Tokio runtime, the
-//! executor its host awaits on, the host's clock and process admissions. Every client takes these
-//! values in its constructor; a class the host constructs (a declared `new`) reads them through
-//! its [`Env`] type parameter, which `lk-agents-runtime` binds to its process.
+//! What the hosting process lends the async crates' clients (decisions 88, 100): its Tokio runtime,
+//! the executor its host awaits on, the host's clock, its pools and admissions and the voice core's
+//! text algorithms, as one [`ProcessEnv`] value. Internal constructors take the handles they need;
+//! a class the host constructs receives the runtime's value from the generated bindings.
 
 use std::sync::{Arc, LazyLock, OnceLock};
 
@@ -90,49 +90,5 @@ pub struct NoImagePreparation;
 impl ImageResolver for NoImagePreparation {
     fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
         Err(format!("image {}: no image preparation in this process", image.id))
-    }
-}
-
-pub trait Env: Send + Sync + 'static {
-    /// The process's shared connection pool, supplied to each client constructor.
-    fn http() -> Result<Arc<GatewayHttp>, String>;
-
-    /// The runtime this crate's tasks and sockets run on.
-    fn runtime() -> Result<tokio::runtime::Handle, String>;
-    /// The runtime the caller is on, else [`Env::runtime`].
-    fn caller_runtime() -> Result<tokio::runtime::Handle, String> {
-        tokio::runtime::Handle::try_current().or_else(|_| Self::runtime())
-    }
-    /// The executor the host awaits a chain's futures on.
-    fn spawner() -> Result<Arc<dyn Spawner>, String> {
-        Ok(Arc::new(lk_agents_abi::TokioSpawner::new(Self::runtime()?)))
-    }
-    /// The host's clock (virtual in a virtual-time test).
-    fn clock() -> Arc<dyn Clock>;
-    /// The process's session report admission.
-    fn report_admission() -> Result<ReportAdmission, String>;
-}
-
-/// A Rust caller with no host: the current Tokio runtime and the wall clock.
-pub struct Standalone;
-
-impl Env for Standalone {
-    /// A pool per client: a pool's connections belong to the runtime that opened them, and a
-    /// standalone caller's runtime may not outlive the client (a test's).
-    fn http() -> Result<Arc<GatewayHttp>, String> {
-        GatewayHttp::new().map(Arc::new)
-    }
-
-    fn runtime() -> Result<tokio::runtime::Handle, String> {
-        tokio::runtime::Handle::try_current().map_err(|error| error.to_string())
-    }
-
-    fn clock() -> Arc<dyn Clock> {
-        Arc::new(lk_agents_abi::RealClock::new())
-    }
-
-    fn report_admission() -> Result<ReportAdmission, String> {
-        static ADMISSION: LazyLock<ReportAdmission> = LazyLock::new(ReportAdmission::default);
-        Ok(ADMISSION.clone())
     }
 }

@@ -56,8 +56,13 @@ pub trait AudioRecorder: Send + Sync {
 /// One admitted runtime worker owns opening, encoding, writes and finalization.
 #[crate::host(class(name = "SessionRecorder", native = AudioRecorder))]
 pub trait SessionRecorder: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
     #[host(new)]
     fn new(
+        env: &Self::Env,
         path: String,
         #[host(kw, default = 48_000)] sample_rate: u32,
         #[host(default = None)] t0: Option<f64>,

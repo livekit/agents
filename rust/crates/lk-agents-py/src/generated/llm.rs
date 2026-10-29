@@ -666,9 +666,10 @@ impl McpSession {
     #[pyo3(signature = (url, headers, transport, timeout, sse_read_timeout))]
     fn connect_http<'py>(&self, py: Python<'py>, url: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, transport: ::std::string::String, #[pyo3(from_py_with = _extract_mcp_session_connect_http_timeout)] timeout: f64, #[pyo3(from_py_with = _extract_mcp_session_connect_http_sse_read_timeout)] sse_read_timeout: f64) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let env = crate::process::env();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(&this, url, headers, transport, timeout, sse_read_timeout)
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(&this, &env, url, headers, transport, timeout, sse_read_timeout)
                 .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
@@ -1044,7 +1045,8 @@ impl RealtimeFallbackModel {
     #[pyo3(signature = (models, *, cooldown = 10.0, regenerate_on_swap = true, on_availability = None))]
     fn new(models: ::std::vec::Vec<::lk_agents_abi::HostRef>, #[pyo3(from_py_with = _extract_realtime_fallback_model_new_cooldown)] cooldown: f64, regenerate_on_swap: bool, on_availability: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<RealtimeFallbackModel> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(models, cooldown, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let env = crate::process::env();
+        let out = <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel>::new(&env, models, cooldown, regenerate_on_swap, on_availability).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
     }
 
