@@ -630,6 +630,7 @@ impl Resolver<'_> {
                     (["u16"], []) => Ty::Int(Int::U16),
                     (["u32"], []) => Ty::Int(Int::U32),
                     (["u64"], []) => Ty::Int(Int::U64),
+                    (["u128"], []) => Ty::Int(Int::U128),
                     (["usize"], []) => Ty::Int(Int::Usize),
                     (["i16"], []) => Ty::Int(Int::I16),
                     (["i32"], []) => Ty::Int(Int::I32),
