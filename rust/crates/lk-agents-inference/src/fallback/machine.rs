@@ -8,12 +8,67 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
 
-use super::policy::ChainPolicy;
+use lk_agents_abi::ApiConnectOptions;
+pub use lk_agents_abi::llm::fallback::{AvailabilityChange, ErrorPlan};
 use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 
+/// The `conn_options` fields the chain rewrites before handing a request to a child.
+/// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
+/// are [`caller_default`] and [`conn_options_for_attempt`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChainPolicy {
+    pub max_retry_per_backend: u32,
+    /// Caps each phase of an attempt; `None` keeps the caller's limits, as TTS does (`tts/fallback_adapter.py:193`).
+    pub attempt_timeout: Option<f64>,
+    /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
+    pub retry_interval: Option<f64>,
+    /// LLM only: keep the entry that last served until it fails, even once a preferred one
+    /// recovers; on failure the rest are tried in order (`llm/fallback_adapter.py:96-105`).
+    pub sticky: bool,
+}
+
+impl ChainPolicy {
+    /// `llm/fallback_adapter.py:45-49`: `attempt_timeout=5.0`, `max_retry_per_llm=0`,
+    /// `retry_interval=0.5`.
+    pub fn llm_defaults() -> Self {
+        ChainPolicy {
+            max_retry_per_backend: 0,
+            attempt_timeout: Some(5.0),
+            retry_interval: Some(0.5),
+            sticky: false,
+        }
+    }
+
+    /// `stt/fallback_adapter.py:57-59`: `attempt_timeout=10.0`, `max_retry_per_stt=1`,
+    /// `retry_interval=5`. Visible transcripts forbid replay.
+    pub fn stt_defaults() -> Self {
+        ChainPolicy {
+            max_retry_per_backend: 1,
+            attempt_timeout: Some(10.0),
+            retry_interval: Some(5.0),
+            sticky: false,
+        }
+    }
+
+    /// `tts/fallback_adapter.py:64`: `max_retry_per_tts=2` and nothing else -- the caller's
+    /// timeout and retry interval are passed through untouched.
+    pub fn tts_defaults() -> Self {
+        ChainPolicy {
+            max_retry_per_backend: 2,
+            attempt_timeout: None,
+            retry_interval: None,
+            sticky: false,
+        }
+    }
+}
+
+/// Availability, ordering and recovery authorization shared by every provider family.
+/// Streaming adapters own this per plugin; realtime owns it per session.
 #[derive(Debug, Default)]
-pub struct FallbackHealth {
+pub struct FallbackPolicy {
     entries: BTreeMap<ResourceId, Health>,
+    active_index: usize,
+    cooldown: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -21,31 +76,42 @@ struct Health {
     available: bool,
     generation: u64,
     selected: u64,
+    cooldown_until: Option<Ts>,
 }
 
-impl FallbackHealth {
+impl Default for Health {
+    fn default() -> Self {
+        Self { available: true, generation: 0, selected: 0, cooldown_until: None }
+    }
+}
+
+impl FallbackPolicy {
+    pub fn realtime(model_count: usize, cooldown: Duration) -> Self {
+        Self {
+            entries: (0..model_count).map(|i| (ResourceId(i as u64), Health::default())).collect(),
+            cooldown: Some(cooldown),
+            ..Self::default()
+        }
+    }
+
     pub fn is_available(&self, backend: ResourceId) -> bool {
         self.entries.get(&backend).is_none_or(|entry| entry.available)
     }
 
     /// Every observation supersedes probes authorized before it, even a repeated failure.
     pub fn observe(&mut self, backend: ResourceId, available: bool) -> bool {
-        let entry = self.entries.entry(backend).or_insert(Health {
-            available: true,
-            generation: 0,
-            selected: 0,
-        });
+        let entry = self.entries.entry(backend).or_default();
         entry.generation += 1;
         let changed = entry.available != available;
         entry.available = available;
+        if available {
+            entry.cooldown_until = None;
+        }
         changed
     }
 
     pub fn select(&mut self, backend: ResourceId, selection: u64) {
-        self.entries
-            .entry(backend)
-            .or_insert(Health { available: true, generation: 0, selected: 0 })
-            .selected = selection;
+        self.entries.entry(backend).or_default().selected = selection;
     }
 
     pub fn order(&self, backends: &[ResourceId], sticky: bool) -> Vec<usize> {
@@ -77,6 +143,90 @@ impl FallbackHealth {
         }
         self.observe(backend, true)
     }
+
+    pub fn active_index(&self) -> usize {
+        self.active_index
+    }
+
+    pub fn set_active_index(&mut self, index: usize) {
+        self.active_index = index;
+    }
+
+    /// Repeated failure does not re-arm the realtime cooldown or announce another transition.
+    pub fn set_available(
+        &mut self,
+        index: usize,
+        available: bool,
+        now: Ts,
+    ) -> Option<AvailabilityChange> {
+        let backend = ResourceId(index as u64);
+        let entry = self.entries.get(&backend)?;
+        if entry.available == available {
+            return None;
+        }
+        self.observe(backend, available);
+        if !available {
+            self.entries.get_mut(&backend).expect("known backend").cooldown_until =
+                self.cooldown.map(|cooldown| now.saturating_add(cooldown));
+        }
+        Some(AvailabilityChange { index, available })
+    }
+
+    fn sweep(&mut self, now: Ts) -> Vec<AvailabilityChange> {
+        let expired: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.cooldown_until.is_some_and(|at| at <= now))
+            .map(|(id, _)| id.0 as usize)
+            .collect();
+        expired.into_iter().filter_map(|index| self.set_available(index, true, now)).collect()
+    }
+
+    fn next_available(&self, exclude_current: bool) -> Option<usize> {
+        self.entries
+            .iter()
+            .find(|(id, entry)| {
+                entry.available && !(exclude_current && id.0 as usize == self.active_index)
+            })
+            .map(|(id, _)| id.0 as usize)
+    }
+
+    pub fn next_available_index(
+        &mut self,
+        now: Ts,
+        exclude_current: bool,
+    ) -> (Option<usize>, Vec<AvailabilityChange>) {
+        let changes = self.sweep(now);
+        (self.next_available(exclude_current), changes)
+    }
+
+    /// Child reconnects retain ownership of recoverable errors. A terminal failure starts one
+    /// fallback pass; even zero cooldown cannot resurrect that child in the same pass.
+    pub fn on_child_error(&mut self, recoverable: bool, swap_busy: bool, now: Ts) -> ErrorPlan {
+        if recoverable {
+            return ErrorPlan { changes: vec![], rewrite_recoverable: false, swap_to: None };
+        }
+        let mut changes = self.sweep(now);
+        changes.extend(self.set_available(self.active_index, false, now));
+        let target = self.next_available(false);
+        ErrorPlan {
+            changes,
+            rewrite_recoverable: target.is_some(),
+            swap_to: target.filter(|_| !swap_busy),
+        }
+    }
+
+    pub fn restart_target(
+        &mut self,
+        switch_model: bool,
+        now: Ts,
+    ) -> (usize, Vec<AvailabilityChange>) {
+        if !switch_model {
+            return (self.active_index, vec![]);
+        }
+        let changes = self.sweep(now);
+        (self.next_available(true).unwrap_or(self.active_index), changes)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,6 +234,7 @@ pub enum Modality {
     Llm,
     Stt,
     Tts,
+    Realtime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +242,7 @@ pub enum ChainEffect {
     LlmRequestStart { attempt: u64, index: usize, llm: ResourceId },
     SttStreamOpen { attempt: u64, index: usize, stt: ResourceId },
     TtsSynthesisStart { attempt: u64, index: usize, tts: ResourceId },
+    RealtimeSessionOpen { attempt: u64, index: usize, model: ResourceId },
     Cancel { attempt: u64 },
     WakeAt(Ts),
     Finished(Result<(), ProviderError>),
@@ -132,7 +284,7 @@ impl ChainRequest {
         mut entries: Vec<(usize, ResourceId, String)>,
         policy: ChainPolicy,
         deadline: Option<Ts>,
-        health: &FallbackHealth,
+        health: &FallbackPolicy,
     ) -> Self {
         let all_unavailable = entries.iter().all(|(_, id, _)| !health.is_available(*id));
         if !all_unavailable {
@@ -295,6 +447,9 @@ impl ChainRequest {
             Modality::Llm => ChainEffect::LlmRequestStart { attempt, index, llm: backend },
             Modality::Stt => ChainEffect::SttStreamOpen { attempt, index, stt: backend },
             Modality::Tts => ChainEffect::TtsSynthesisStart { attempt, index, tts: backend },
+            Modality::Realtime => {
+                ChainEffect::RealtimeSessionOpen { attempt, index, model: backend }
+            }
         }]
     }
 }

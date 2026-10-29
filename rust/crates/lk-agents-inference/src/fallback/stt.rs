@@ -23,12 +23,12 @@ use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_net::env::{Env, Standalone};
 use tokio::sync::mpsc;
 
+use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next, teardown_deadline};
-use crate::fallback::policy::ChainPolicy;
 
 // ---------------------------------------------------------------------------------------------
 // The live input tee
@@ -410,7 +410,7 @@ impl<E: Env> FallbackStt<E> {
             chain: Arc::new(chain),
             spawner,
             capabilities,
-            caller_conn: crate::fallback::policy::caller_default(),
+            caller_conn: crate::fallback::caller_default(),
             env: PhantomData,
         })
     }

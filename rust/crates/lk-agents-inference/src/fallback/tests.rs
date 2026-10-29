@@ -16,11 +16,11 @@ use lk_agents_abi::{BoxFuture, Spawner, TokioSpawner};
 use lk_agents_abi::{Clock, VirtualClock};
 use tokio::sync::Semaphore;
 
+use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, AvailabilityChanged, Backend, ChainObserver, ChainOutcome, FallbackChain, Recovery,
     RecoverySlot,
 };
-use crate::fallback::policy::ChainPolicy;
 
 const LIMIT: Duration = Duration::from_secs(5);
 
@@ -533,7 +533,7 @@ async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
 #[tokio::test]
 async fn cancellation_is_not_a_backend_health_penalty() {
     let primary = Fake::new("primary", &[Step::Serve]);
-    let rig = rig(vec![primary], ChainPolicy::llm_defaults());
+    let rig = rig(vec![primary.clone()], ChainPolicy::llm_defaults());
     let out: Result<ChainOutcome<()>, _> = rig
         .chain
         .run(&"req".to_string(), &caller(), RecoverySlot::OneShot, &mut (), |_, _, _, _| {
@@ -548,6 +548,12 @@ async fn cancellation_is_not_a_backend_health_penalty() {
     assert!(out.is_err());
     assert!(rig.chain.is_available(0));
     assert!(rig.rec.transitions().is_empty());
+    tokio::task::yield_now().await;
+    assert_eq!(
+        primary.probes_entered.load(Ordering::SeqCst),
+        0,
+        "provider cancellation must not launch recovery work"
+    );
 }
 
 #[tokio::test]

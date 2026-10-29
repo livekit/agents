@@ -1,5 +1,5 @@
 //! `llm/realtime_fallback_adapter.py`'s capability merge. The adapter's decisions are
-//! [`super::realtime_policy`]; the host owns the model objects and the swap task.
+//! [`super::machine`]; the host owns the model objects and the swap task.
 
 /// The provider record, from the crate that declares it.
 pub use lk_agents_abi::llm::realtime::RealtimeCapabilities;

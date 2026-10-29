@@ -15,8 +15,10 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
+use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest, Modality};
 use crate::fallback::realtime::{FallbackBacklog, RealtimeCapabilities, merge_capabilities};
-use crate::fallback::{ChainObserver, RealtimePolicy};
+use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy};
+use lk_agents_abi::resources::ResourceId;
 
 /// One model of the chain: the core's own, or a plugin's seen through its host view. A host model
 /// is wrapped afresh at each open: `HostRealtimeModel` keeps the session it opened.
@@ -69,6 +71,7 @@ pub struct RealtimeFallbackModel {
     regenerate_on_swap: bool,
     observer: Arc<dyn ChainObserver>,
     anchor: WallAnchor,
+    clock: Arc<dyn lk_agents_abi::Clock>,
     sessions: Mutex<Vec<std::sync::Weak<FallbackSession>>>,
     /// The model serving the newest session, for the metrics label.
     active: Arc<std::sync::atomic::AtomicUsize>,
@@ -102,6 +105,7 @@ impl RealtimeFallbackModel {
             regenerate_on_swap,
             observer,
             anchor,
+            clock: Arc::new(lk_agents_abi::RealClock::new()),
             sessions: Mutex::new(Vec::new()),
             active: Arc::default(),
         })
@@ -151,11 +155,12 @@ impl Realtime for RealtimeFallbackModel {
                 regenerate_on_swap: self.regenerate_on_swap,
                 observer: Arc::clone(&self.observer),
                 anchor: self.anchor,
+                clock: Arc::clone(&self.clock),
                 turn_detection_disabled,
                 model_active: Arc::clone(&self.active),
                 state: Mutex::new(SessionState {
                     active: first,
-                    policy: RealtimePolicy::new(
+                    policy: FallbackPolicy::realtime(
                         self.children.len(),
                         std::time::Duration::from_secs_f64(self.cooldown),
                     ),
@@ -186,7 +191,7 @@ struct OpenGeneration {
 
 struct SessionState {
     active: Arc<dyn RealtimeSession>,
-    policy: RealtimePolicy,
+    policy: FallbackPolicy,
     /// The old session is closing and the new one opening: everything sent names the old one, or
     /// is superseded by the frame the driver gives the new one, and is dropped (audio would lag).
     swapping: bool,
@@ -205,6 +210,7 @@ pub struct FallbackSession {
     regenerate_on_swap: bool,
     observer: Arc<dyn ChainObserver>,
     anchor: WallAnchor,
+    clock: Arc<dyn lk_agents_abi::Clock>,
     turn_detection_disabled: bool,
     model_active: Arc<std::sync::atomic::AtomicUsize>,
     state: Mutex<SessionState>,
@@ -213,9 +219,6 @@ pub struct FallbackSession {
     /// Polled by `next_event` only (one consumer).
     restart_rx: tokio::sync::Mutex<tokio::sync::watch::Receiver<bool>>,
 }
-
-// `time.time()`: the policy's cooldowns compare these with each other only.
-use lk_agents_abi::unix_now as now;
 
 impl FallbackSession {
     fn lock(&self) -> std::sync::MutexGuard<'_, SessionState> {
@@ -265,7 +268,7 @@ impl FallbackSession {
 
     /// `_swap`: close the active child, bring up `target` (cascading to the next available model
     /// on failure), hand it what was sent meanwhile, and report the reconnect.
-    async fn swap(&self, mut target: usize) {
+    async fn swap(&self, target: usize) {
         let old = {
             let mut st = self.lock();
             st.swapping = true;
@@ -275,27 +278,62 @@ impl FallbackSession {
             Arc::clone(&st.active)
         };
         old.aclose().await;
-        let opened = loop {
-            match self.children[target].open(self.turn_detection_disabled, self.anchor).await {
-                Ok(s) => break Ok(s),
-                Err(e) => {
-                    log::error!(target: "livekit.agents", "failed to start realtime model on swap, trying next: {e}");
-                    let (next, changes) = {
-                        let mut st = self.lock();
-                        let mut changes: Vec<_> =
-                            st.policy.set_available(target, false, now()).into_iter().collect();
-                        let (next, swept) = st.policy.next_available_index(now(), false);
-                        changes.extend(swept);
-                        (next, changes)
-                    };
-                    self.announce(changes);
-                    match next {
-                        Some(n) => target = n,
-                        None => break Err(e),
+        let mut request = {
+            let st = self.lock();
+            let mut order: Vec<_> = (0..self.children.len()).collect();
+            order.remove(target);
+            order.insert(0, target);
+            let entries = order
+                .into_iter()
+                .map(|index| (index, ResourceId(index as u64), self.children[index].label()))
+                .collect();
+            ChainRequest::new(
+                Modality::Realtime,
+                entries,
+                ChainPolicy::llm_defaults(),
+                None,
+                &st.policy,
+            )
+        };
+        let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, self.clock.now()).into();
+        let mut opened = None;
+        let mut target = target;
+        let outcome = loop {
+            let Some(effect) = effects.pop_front() else { unreachable!("fallback must settle") };
+            match effect {
+                ChainEffect::RealtimeSessionOpen { attempt, index, .. } => {
+                    if self.lock().closed {
+                        effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
+                        continue;
                     }
+                    let event = match self.children[index]
+                        .open(self.turn_detection_disabled, self.anchor)
+                        .await
+                    {
+                        Ok(session) => {
+                            target = index;
+                            opened = Some(session);
+                            ChainEvent::Succeeded { attempt }
+                        }
+                        Err(error) => {
+                            let changes =
+                                self.lock().policy.set_available(index, false, self.clock.now());
+                            self.announce(changes.into_iter().collect());
+                            ChainEvent::Failed { attempt, error, produced_output: false }
+                        }
+                    };
+                    effects.extend(request.handle(event, self.clock.now()));
                 }
+                ChainEffect::WakeAt(_) => {
+                    effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
+                }
+                ChainEffect::Finished(outcome) => break outcome,
+                // Opens settle before observations; there is no running attempt at cancellation.
+                ChainEffect::Cancel { .. } => {}
+                _ => unreachable!("realtime fallback only opens realtime sessions"),
             }
         };
+        let opened = outcome.map(|()| opened.expect("successful realtime open"));
         // Closed while the new model opened: it is closed too, never adopted.
         if let Ok(session) = &opened
             && self.lock().closed
@@ -468,7 +506,7 @@ impl RealtimeSession for FallbackSession {
                     changed = restart_rx.changed() => {
                         if changed.is_err() { continue; }
                         let switch_model = *restart_rx.borrow_and_update();
-                        let (target, changes) = self.lock().policy.restart_target(switch_model, now());
+                        let (target, changes) = self.lock().policy.restart_target(switch_model, self.clock.now());
                         self.announce(changes);
                         self.swap(target).await;
                         continue;
@@ -482,7 +520,8 @@ impl RealtimeSession for FallbackSession {
                         return None;
                     }
                     Some(Event::Error(e)) if !e.recoverable => {
-                        let plan = self.lock().policy.on_child_error(false, false, now());
+                        let plan =
+                            self.lock().policy.on_child_error(false, false, self.clock.now());
                         self.announce(plan.changes);
                         match plan.swap_to {
                             Some(target) => {
@@ -698,6 +737,54 @@ mod fallback_session_tests {
             ["UpdateInstructions", "UpdateTools", "generate_reply:early", "generate_reply:late"]
         );
     }
+    // A failed open is attempted once in one failover, even when it is immediately eligible
+    // for a later request. The cap turns an accidental infinite swap loop into a test failure.
+    #[tokio::test]
+    async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_children() {
+        struct FailsToOpen(std::sync::atomic::AtomicUsize);
+        impl Realtime for FailsToOpen {
+            fn label(&self) -> String {
+                "failed-open".into()
+            }
+            fn capabilities(&self) -> RealtimeCapabilities {
+                RealtimeCapabilities { audio_output: true, ..Default::default() }
+            }
+            fn session(
+                &self,
+                _: bool,
+            ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>>
+            {
+                Box::pin(async move {
+                    assert_eq!(
+                        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                        0,
+                        "the same failover must not reopen a failed child"
+                    );
+                    Err(lk_agents_abi::errors::ApiError::connection(Some("open failed".into()))
+                        .into())
+                })
+            }
+        }
+        let primary = scripted(vec![fatal()]);
+        let backup = Arc::new(FailsToOpen(Default::default()));
+        let model = RealtimeFallbackModel::new(
+            vec![
+                RealtimeChild::Native(Arc::new(Model(primary))),
+                RealtimeChild::Native(backup.clone()),
+            ],
+            0.0,
+            false,
+            Arc::new(crate::fallback::IgnoreEvents),
+            WallAnchor::of(&lk_agents_abi::RealClock::default()),
+        )
+        .unwrap();
+        let session = model.session(false).await.unwrap();
+        assert!(matches!(session.next_event().await, Some(Event::Error(e)) if e.recoverable));
+        assert!(matches!(session.next_event().await, Some(Event::Error(e)) if !e.recoverable));
+        assert_eq!(backup.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        session.aclose().await;
+    }
+
     #[tokio::test]
     async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
         let primary = scripted(vec![fatal()]);

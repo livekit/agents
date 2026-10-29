@@ -24,7 +24,7 @@ use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
-use crate::fallback::policy::{ChainPolicy, resampling_plan};
+use crate::fallback::{ChainPolicy, resampling_plan};
 
 fn send(sink: &TtsSink, token: &Token) {
     let _ = match token {
@@ -373,7 +373,7 @@ impl<P: TtsTextProcessorFactory> FallbackTts<P> {
             num_channels,
             needs_resampling: Arc::new(needs_resampling),
             entry_rates: Arc::new(entry_rates),
-            caller_conn: crate::fallback::policy::caller_default(),
+            caller_conn: crate::fallback::caller_default(),
         })
     }
 

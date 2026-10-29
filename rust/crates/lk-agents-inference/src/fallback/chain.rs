@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use super::machine::{ChainEffect, ChainEvent, ChainRequest, FallbackHealth, Modality};
+use super::machine::{ChainEffect, ChainEvent, ChainRequest, FallbackPolicy, Modality};
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::ApiConnectOptions;
@@ -22,7 +22,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use tokio::sync::{oneshot, watch};
 
-use crate::fallback::policy::{ChainPolicy, conn_options_for_attempt};
+use crate::fallback::{ChainPolicy, conn_options_for_attempt};
 
 #[async_trait]
 pub trait Backend: Send + Sync + 'static {
@@ -104,7 +104,7 @@ struct Status {
 }
 
 struct ChainState {
-    health: FallbackHealth,
+    health: FallbackPolicy,
     backends: Vec<Status>,
 }
 
@@ -176,7 +176,7 @@ impl<B: Backend> FallbackChain<B> {
             entries,
             labels,
             status: Arc::new(Mutex::new(ChainState {
-                health: FallbackHealth::default(),
+                health: FallbackPolicy::default(),
                 backends: status,
             })),
             policy,
@@ -386,7 +386,8 @@ impl<B: Backend> FallbackChain<B> {
                                     self.select(*index, 0);
                                     self.set_available(*index, false);
                                 }
-                                if !produced_output
+                                if error.api_kind() != Some(ApiErrorKind::Cancelled)
+                                    && !produced_output
                                     && !self.closed.load(Ordering::SeqCst)
                                     && !*cancel.borrow()
                                 {
@@ -502,6 +503,9 @@ impl<B: Backend> FallbackChain<B> {
                         attempt_id,
                         RunningAttempt { result: result_rx, stop: stop_tx },
                     ));
+                }
+                ChainEffect::RealtimeSessionOpen { .. } => {
+                    unreachable!("realtime owns its sessions")
                 }
                 ChainEffect::Cancel { attempt } => {
                     if let Some((id, _, _, running)) = active.as_mut()

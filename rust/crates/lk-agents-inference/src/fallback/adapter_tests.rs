@@ -19,8 +19,8 @@ use lk_agents_abi::{
 };
 use tokio::sync::mpsc;
 
+use crate::fallback::ChainPolicy;
 use crate::fallback::llm::FallbackLlm;
-use crate::fallback::policy::ChainPolicy;
 use crate::fallback::stt::{FallbackStt, SttChainError};
 use lk_agents_net::env::Standalone;
 

@@ -16,12 +16,12 @@ use lk_agents_abi::{
 };
 use tokio::sync::mpsc;
 
+use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
-use crate::fallback::policy::ChainPolicy;
 use lk_agents_net::env::{Env, Standalone};
 
 pub struct LlmBackend {
