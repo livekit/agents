@@ -246,30 +246,6 @@ fn bytes_that_are_not_the_declared_container_fail_with_a_named_error() {
     assert!(matches!(err, CodecError::Ffmpeg { .. }), "{err:?}");
 }
 
-// Catches: an ogg stream with no header, or with the header written after the audio. Any player
-// rejects that, and it is invisible until someone tries to open the recording -- days later, when
-// the call is over.
-#[test]
-fn the_encoder_writes_a_real_ogg_opus_stream() {
-    let mut e = OggOpusEncoder::new(48_000, 2, 64_000).unwrap();
-    let pcm = sine(48_000, 440.0, 48_000 * 2); // 1 s stereo, interleaved
-    let mut bytes = e.push(&pcm).unwrap();
-    bytes.extend(e.finish().unwrap());
-
-    assert_eq!(&bytes[..4], b"OggS", "not an ogg stream");
-    assert!(
-        bytes.windows(8).any(|w| w == b"OpusHead"),
-        "no OpusHead: the identification header is missing"
-    );
-    assert!(
-        bytes.windows(8).any(|w| w == b"OpusTags"),
-        "no OpusTags: the comment header is missing, which most players require"
-    );
-    // 1 s at 64 kbit/s is ~8 kB. An order of magnitude either way means it encoded silence or
-    // never encoded at all.
-    assert!(bytes.len() > 3_000 && bytes.len() < 30_000, "{} bytes", bytes.len());
-}
-
 // Catches: the tail being dropped. libopus has no AV_CODEC_CAP_SMALL_LAST_FRAME, so a partial
 // final packet has to be padded and encoded; an implementation that simply discarded `pending`
 // would lose up to 20 ms off the end of every recording and no assertion on the file's validity

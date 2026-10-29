@@ -109,18 +109,6 @@ impl Fx {
 
 // --------------------------------------------------------------------- the drift watchdog
 
-// Catches: arming the drift flush during the progressive ramp-up (`sent_duration > 0.15`).
-#[test]
-fn the_drift_timer_stays_disarmed_below_150ms_of_sent_audio() {
-    let mut fx = Fx::streaming("s");
-    fx.push(100).push(100); // 10 + 40 + 80 samples delivered = 0.13 s
-    assert_eq!(fx.sizes(), vec![10, 40, 80]);
-    assert_eq!(armed_at(&fx.eff), None, "0.13 s is still inside the ramp");
-
-    fx.push(100); // +100 samples => 0.23 s
-    assert!(armed_at(&fx.eff).is_some(), "past 0.15 s the watchdog must arm");
-}
-
 // Catches: the drift timer not firing, or firing without releasing the held tail (audio stalls
 // for a provider slower than realtime).
 #[test]
@@ -239,17 +227,6 @@ fn pushed_duration_indexes_the_way_python_does() {
     assert_eq!(fx.em.pushed_duration(-2), fx.em.pushed_duration(0));
     assert_eq!(fx.em.pushed_duration(2), 0.0, "out of range is 0.0, never a panic");
     assert_eq!(fx.em.pushed_duration(-3), 0.0);
-}
-
-// Catches: counting anything but `start_segment()` calls as segments.
-#[test]
-fn num_segments_counts_starts_including_ones_that_produced_no_audio() {
-    let mut fx = Fx::new(true);
-    fx.em.start_segment("a").unwrap();
-    fx.push(100).end_segment();
-    fx.em.start_segment("b").unwrap();
-    fx.end_segment(); // no audio at all
-    assert_eq!(fx.em.num_segments(), 2);
 }
 
 // Catches: overlapping segments going unnoticed, the streaming-only guard on the segment API

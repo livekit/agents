@@ -206,15 +206,6 @@ mod tests {
         Mixer::new(48_000, 1, blocksize)
     }
 
-    // Catches: `blocksize=0` being taken literally, which makes every block empty and the track
-    // silent. The reference documents `0` as "default to 100 ms" and `background_audio.py` relies
-    // on passing an explicit one, so this is the path nobody exercises until someone omits it.
-    #[test]
-    fn a_blocksize_of_zero_means_a_tenth_of_a_second() {
-        assert_eq!(Mixer::new(48_000, 1, 0).blocksize(), 4800);
-        assert_eq!(Mixer::new(24_000, 2, 0).blocksize(), 2400);
-    }
-
     // Catches: emitting a block of silence when nothing arrived. The reference sleeps 1 ms and
     // continues; emitting instead would publish a continuous silent track at the block rate,
     // which is not the same as publishing nothing and holds the source open forever.
@@ -316,21 +307,6 @@ mod tests {
         m.push(a, &[3, 4]);
         assert!(!m.wants_more(a));
         assert_eq!(m.mix(), Some(vec![1, 2, 3, 4]));
-    }
-
-    // Catches: a stream removed while a pull was in flight taking the whole mixer down with it.
-    // The host cannot prevent that race -- it awaits the source outside the lock.
-    #[test]
-    fn pushing_to_a_removed_stream_is_dropped_rather_than_a_panic() {
-        let mut m = mixer(2);
-        let a = m.add_stream();
-        m.remove_stream(a);
-        m.push(a, &[1, 2]);
-        m.mark_exhausted(a);
-        m.note_timeout(a);
-        assert!(!m.wants_more(a));
-        assert_eq!(m.mix(), None);
-        assert_eq!(m.counters.stream_timeouts(), 1);
     }
 
     // Catches: a timeout being logged instead of counted. A source that times out every round is

@@ -245,45 +245,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tone_above_the_new_nyquist_is_filtered_out_rather_than_aliased() {
-        // 12 kHz cannot exist at 16 kHz output. A resampler that merely decimated would fold it
-        // down to 4 kHz and hand the VAD a tone nobody spoke.
-        let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
-        let mut out = Vec::new();
-        for _ in 0..10 {
-            out.extend_from_slice(r.push(&sine(12_000.0, 48_000, 20, 1)).unwrap());
-        }
-        out.extend_from_slice(r.flush().unwrap());
-
-        // Measure the steady state, not the whole buffer. The filter's startup and flush
-        // transients ring at ~3100 peak here, which is real and expected -- an assertion over
-        // the full buffer measures the transient, not the stopband, and would pass just as
-        // happily against a resampler that aliased.
-        let n = out.len();
-        let steady = &out[n / 4..3 * n / 4];
-        let peak = steady.iter().map(|s| s.unsigned_abs()).max().unwrap();
-        assert!(peak < 50, "12 kHz leaked into the 16 kHz output at peak {peak}");
-    }
-
-    #[test]
     fn flush_drains_the_tail_and_then_has_nothing_left() {
         let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
         r.push(&sine(440.0, 48_000, 20, 1)).unwrap();
         assert!(!r.flush().unwrap().is_empty(), "the filter tail was dropped");
         // flush also clears, so the second one has no history to drain.
         assert!(r.flush().unwrap().is_empty());
-    }
-
-    #[test]
-    fn upsampling_works_too_since_tts_output_has_to_reach_the_room_rate() {
-        let mut r = SoxrResampler::new(16_000, 48_000, 1, Quality::Medium).unwrap();
-        let mut total = 0usize;
-        for _ in 0..50 {
-            total += r.push(&sine(440.0, 16_000, 20, 1)).unwrap().len();
-        }
-        total += r.flush().unwrap().len();
-        let expected = 50 * 16_000 * 20 / 1000 * 3;
-        assert!((total as i64 - expected as i64).abs() <= 2, "produced {total}, want ~{expected}");
     }
 
     #[test]

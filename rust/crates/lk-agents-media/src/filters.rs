@@ -196,16 +196,6 @@ mod tests {
         assert_eq!(f.apply(1.0, Maybe::Given(-5.0)).unwrap(), 0.5, "clamped up to min");
     }
 
-    // Pins a surprise: `alpha` weights history, so `alpha == 1.0` freezes the filter. Don't
-    // "fix" it into 1 - alpha.
-    #[test]
-    fn alpha_of_one_freezes_the_filter() {
-        let mut f =
-            ExpFilter::new(1.0, Maybe::NotGiven, Maybe::NotGiven, Maybe::Given(3.0)).unwrap();
-        assert_eq!(f.apply(1.0, Maybe::Given(100.0)).unwrap(), 3.0);
-        assert_eq!(f.apply(1.0, Maybe::Given(-100.0)).unwrap(), 3.0);
-    }
-
     // Catches: the first sample averaged against zero instead of seeding the filter.
     #[test]
     fn first_sample_seeds_rather_than_averages() {

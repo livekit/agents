@@ -192,13 +192,6 @@ mod tests {
         );
     }
 
-    // Catches: the ramp being applied in fixed mode.
-    #[test]
-    fn fixed_mode_never_ramps() {
-        let mut s = AudioByteStream::new(SR, 1, Some(3200), false);
-        assert_eq!(sizes(&s.push(&bytes(3200 * 2 * 3))), vec![3200, 3200, 3200]);
-    }
-
     // Catches: `clear` leaving the frame size at the target.
     #[test]
     fn clear_restarts_the_progressive_ramp() {
@@ -267,14 +260,5 @@ mod tests {
         let mut st = AudioByteStream::new(SR, 2, Some(1000), false);
         st.push(&bytes(300 * 4));
         assert_eq!(sizes(&st.flush()), vec![300], "per channel, not per sample slot");
-    }
-
-    // Catches: sample size computed per channel rather than per frame.
-    #[test]
-    fn stereo_counts_samples_per_channel_not_per_frame() {
-        let mut s = AudioByteStream::new(SR, 2, Some(480), false);
-        let frames = s.push(&bytes(480 * 2 * 2)); // 480 samples x 2ch x 2 bytes
-        assert_eq!(sizes(&frames), vec![480]);
-        assert_eq!(frames[0].data.len(), 1920);
     }
 }

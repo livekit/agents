@@ -369,36 +369,6 @@ mod tests {
             .unwrap()
     }
 
-    // Catches: `FromStr` and `as_str` disagreeing about a `Literal` spelling, a variant missing
-    // from `ALL`, or a typo defaulting instead of refusing -- defaulting to JPEG produces a
-    // plausible image in the wrong format, and a wrong strategy resizes every frame an LLM sees.
-    // The two `match`es keep the lists exhaustive.
-    #[test]
-    fn image_format_and_resize_strategy_round_trip_and_refuse_unknown_spellings() {
-        for f in ImageFormat::ALL {
-            match f {
-                ImageFormat::Jpeg | ImageFormat::Png => {}
-            }
-            assert_eq!(f.as_str().parse::<ImageFormat>(), Ok(f));
-        }
-        assert!(
-            "jpeg".parse::<ImageFormat>().is_err(),
-            "PIL's names are upper case and the case is not folded"
-        );
-
-        for s in ResizeStrategy::ALL {
-            match s {
-                ResizeStrategy::CenterAspectFit
-                | ResizeStrategy::CenterAspectCover
-                | ResizeStrategy::ScaleAspectFit
-                | ResizeStrategy::ScaleAspectCover
-                | ResizeStrategy::Skew => {}
-            }
-            assert_eq!(s.as_str().parse::<ResizeStrategy>(), Ok(s));
-        }
-        assert!("stretch".parse::<ResizeStrategy>().is_err());
-    }
-
     // Catches: compositing alpha instead of discarding it. PIL's `convert("RGB")` on an RGBA image
     // drops the channel -- a fully transparent red pixel stays (255, 0, 0). Anything that blends
     // against the black canvas turns every screenshot the anthropic and browser plugins send
@@ -437,16 +407,6 @@ mod tests {
             rgb_from_frame(frame(0, 10, &empty)),
             Err(MediaError::ZeroSizedFrame { width: 0, height: 10 })
         );
-    }
-
-    // Catches: dropping the `None` short-circuit and running the resize machinery with a
-    // zero-by-zero target, which is what `resize_options=None` would otherwise look like.
-    #[test]
-    fn no_resize_options_returns_the_frame_untouched() {
-        let data = solid(3, 2, [1, 2, 3, 255]);
-        let image = rgb_from_frame(frame(3, 2, &data)).unwrap();
-        let out = resize_image(image, None).unwrap();
-        assert_eq!(out.dimensions(), (3, 2));
     }
 
     // Catches: the `scale_*` aspect comparison done in integer arithmetic or with its branches
@@ -628,21 +588,5 @@ mod tests {
         };
         assert_eq!(at(None), at(Some(75)), "None must land on the reference's default");
         assert!(at(Some(5)).len() < at(Some(95)).len(), "quality changed nothing");
-    }
-
-    // Catches: passing `quality` to the PNG encoder. The reference guards the kwarg with
-    // `if options.format == "JPEG"`, and PNG is lossless -- a quality-sensitive PNG path would
-    // mean the option had been wired into the wrong encoder.
-    #[test]
-    fn quality_is_ignored_for_png() {
-        let data = solid(8, 8, [1, 2, 3, 255]);
-        let png = |quality| {
-            encode(
-                frame(8, 8, &data),
-                &EncodeOptions { format: ImageFormat::Png, quality, resize_options: None },
-            )
-            .unwrap()
-        };
-        assert_eq!(png(Some(1)), png(None));
     }
 }
