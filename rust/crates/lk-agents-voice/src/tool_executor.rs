@@ -408,15 +408,6 @@ pub(crate) fn pair_for(
 
 pub use lk_agents_abi::llm::tool_executor::{ToolOutcome, ToolReport};
 
-/// `make_function_call_output`'s answer for a classified outcome, `(output, is_error,
-/// reply_required)`: the table a call reads too.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn tool_call_output(outcome: ToolOutcome) -> (String, bool, bool) {
-    let lk_agents_core::tool_outcome::ToolShape { text, is_error, reply_required } =
-        lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
-    (text, is_error, reply_required)
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolExecution {
     pub call: FunctionCall,

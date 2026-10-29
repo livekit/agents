@@ -1025,6 +1025,27 @@ pub mod amd {
             kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay.as_secs_f64(), py)?)?;
             crate::host::construct(A_M_D_PREDICTION_EVENT.import(py, "livekit.agents._generated.amd", "AMDPredictionEvent")?.as_any(), (), Some(&kwargs))
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+
+    pub fn amd_constants_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::amd::AmdConstants) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::amd::AmdConstants { default_llm_model, default_stt_model, prompt, evaluated_llm_models, evaluated_stt_models, human_speech_threshold, human_silence_threshold, machine_silence_threshold, no_speech_threshold, detection_timeout, max_endpointing_delay, max_extensions, max_extension_secs } = value;
+            let dict = ::pyo3::types::PyDict::new(py);
+            dict.set_item("default_llm_model", ::pyo3::IntoPyObjectExt::into_bound_py_any(default_llm_model, py)?)?;
+            dict.set_item("default_stt_model", ::pyo3::IntoPyObjectExt::into_bound_py_any(default_stt_model, py)?)?;
+            dict.set_item("prompt", ::pyo3::IntoPyObjectExt::into_bound_py_any(prompt, py)?)?;
+            dict.set_item("evaluated_llm_models", ::pyo3::types::PyList::new(py, evaluated_llm_models.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            dict.set_item("evaluated_stt_models", ::pyo3::types::PyList::new(py, evaluated_stt_models.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            dict.set_item("human_speech_threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(human_speech_threshold, py)?)?;
+            dict.set_item("human_silence_threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(human_silence_threshold, py)?)?;
+            dict.set_item("machine_silence_threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(machine_silence_threshold, py)?)?;
+            dict.set_item("no_speech_threshold", ::pyo3::IntoPyObjectExt::into_bound_py_any(no_speech_threshold, py)?)?;
+            dict.set_item("detection_timeout", ::pyo3::IntoPyObjectExt::into_bound_py_any(detection_timeout, py)?)?;
+            dict.set_item("max_endpointing_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_endpointing_delay, py)?)?;
+            dict.set_item("max_extensions", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_extensions, py)?)?;
+            dict.set_item("max_extension_secs", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_extension_secs, py)?)?;
+            Ok(dict.into_any())
+    }
 }
 
 pub mod avatar {

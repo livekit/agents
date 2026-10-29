@@ -10,6 +10,29 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+type AmdFunctionsImpl = <crate::Selected as super::Implementations>::AmdFunctions;
+
+/// These are the reference's, not tuning knobs: the default models are what the benchmark
+/// ran on.
+#[pyfunction]
+pub fn amd_constants<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    let out = <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_constants();
+    Ok(crate::generated::records::amd::amd_constants_to_py(py, out)?)
+}
+
+/// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
+/// else the default. `provided` is `None` only when the key was absent: an explicit default
+/// still beats a disagreeing activity.
+#[pyfunction]
+#[pyo3(signature = (provided, activity))]
+pub fn amd_resolve_max_endpointing_delay<'py>(py: Python<'py>, provided: Option<Bound<'_, PyAny>>, activity: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    let provided = provided.map(|v| ::lk_agents_abi::python::number_from_py::<f64>(&v, "provided").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("{}: {e}", "provided"))))).transpose()?;
+    let activity = activity.map(|v| ::lk_agents_abi::python::number_from_py::<f64>(&v, "activity").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("{}: {e}", "activity"))))).transpose()?;
+    let out = <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_resolve_max_endpointing_delay(provided, activity);
+    Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(out.as_secs_f64(), py)?)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 type DataStreamAudioOutputImpl = <crate::Selected as super::Implementations>::DataStreamAudioOutput;
 

@@ -312,7 +312,6 @@
     "to_strict_json_schema",
     "to_xml",
     "tokenize_paragraphs",
-    "tool_call_output",
     "tool_proxy_arguments",
     "tool_search_loaded",
     "tool_search_validate",

@@ -323,7 +323,7 @@ impl Run {
                 api.resolved_options().map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
             let cfg = AmdConfigKwargs {
                 max_endpointing_delay: Some(
-                    lk_agents_voice::amd::classifier::resolve_max_endpointing_delay_for_host(
+                    <lk_agents_voice::amd::classifier::AmdRules as lk_agents_abi::voice::amd::AmdFunctions>::amd_resolve_max_endpointing_delay(
                         None, activity,
                     )
                     .as_secs_f64(),

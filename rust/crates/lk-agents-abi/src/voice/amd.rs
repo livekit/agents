@@ -151,9 +151,8 @@ pub const EVALUATED_LLM_MODELS: &[&str] = &[
 pub const EVALUATED_STT_MODELS: &[&str] =
     &["deepgram/nova-3", "assemblyai/universal-streaming-multilingual", "cartesia/ink-whisper"];
 
-/// The detector's constants, as the thirteen keys the binding's `amd_constants` answers with.
-#[derive(Host)]
-#[binding(emit)]
+/// The detector's constants, as one dict so a host cannot pick up half of them.
+#[crate::host(record(module = "amd", emit, typed_dict))]
 pub struct AmdConstants {
     pub default_llm_model: String,
     pub default_stt_model: String,
@@ -169,6 +168,23 @@ pub struct AmdConstants {
     /// The extension budget: `MAX_EXTENSIONS` requests, each clamped to `MAX_EXTENSION_SECS`.
     pub max_extensions: u32,
     pub max_extension_secs: f64,
+}
+
+/// The detector's reference constants and its endpointing rule.
+#[crate::host(functions(pid = false))]
+pub trait AmdFunctions {
+    /// These are the reference's, not tuning knobs: the default models are what the benchmark
+    /// ran on.
+    #[host(function)]
+    fn amd_constants() -> AmdConstants;
+    /// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
+    /// else the default. `provided` is `None` only when the key was absent: an explicit default
+    /// still beats a disagreeing activity.
+    #[host(function)]
+    fn amd_resolve_max_endpointing_delay(
+        provided: Option<Duration>,
+        activity: Option<Duration>,
+    ) -> Duration;
 }
 
 // --- the user's tuning, as the host takes it ---------------------------------------------------

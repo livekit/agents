@@ -854,40 +854,36 @@ pub fn resolve_max_endpointing_delay(
     provided.or(activity).unwrap_or(default)
 }
 
-/// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's, else default.
-///
-/// `provided` is `None` only when the key was absent: the reference tests key presence, so an
-/// explicit default still beats a disagreeing activity.
-#[lk_agents_abi::host(export(name = "amd_resolve_max_endpointing_delay", pid = false))]
-pub fn resolve_max_endpointing_delay_for_host(
-    provided: Option<Duration>,
-    #[host(required)] activity: Option<Duration>,
-) -> Duration {
-    resolve_max_endpointing_delay(provided, activity, MAX_ENDPOINTING_DELAY)
-}
+/// The detector's constants and endpointing rule, as the host calls them.
+pub struct AmdRules;
 
-/// The detector's constants, as one dict so a host cannot pick up half of them.
-///
-/// These are the reference's, not tuning knobs: the default models are what the benchmark ran on.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn amd_constants() -> lk_agents_abi::voice::amd::AmdConstants {
-    use lk_agents_abi::voice::amd as a;
-    // The classifier's own defaults, so `DetectionOptions`' merge has one source.
-    let c = AmdConfig::default();
-    lk_agents_abi::voice::amd::AmdConstants {
-        default_llm_model: a::DEFAULT_LLM_MODEL.to_owned(),
-        default_stt_model: a::DEFAULT_STT_MODEL.to_owned(),
-        prompt: a::AMD_PROMPT.to_owned(),
-        evaluated_llm_models: a::EVALUATED_LLM_MODELS.iter().map(|s| (*s).to_owned()).collect(),
-        evaluated_stt_models: a::EVALUATED_STT_MODELS.iter().map(|s| (*s).to_owned()).collect(),
-        human_speech_threshold: c.human_speech_threshold.as_secs_f64(),
-        human_silence_threshold: c.human_silence_threshold.as_secs_f64(),
-        machine_silence_threshold: c.machine_silence_threshold.as_secs_f64(),
-        no_speech_threshold: c.no_speech_threshold.as_secs_f64(),
-        detection_timeout: c.detection_timeout.as_secs_f64(),
-        max_endpointing_delay: c.max_endpointing_delay.as_secs_f64(),
-        max_extensions: MAX_EXTENSIONS,
-        max_extension_secs: MAX_EXTENSION_SECS,
+impl lk_agents_abi::voice::amd::AmdFunctions for AmdRules {
+    fn amd_constants() -> lk_agents_abi::voice::amd::AmdConstants {
+        use lk_agents_abi::voice::amd as a;
+        // The classifier's own defaults, so `DetectionOptions`' merge has one source.
+        let c = AmdConfig::default();
+        a::AmdConstants {
+            default_llm_model: a::DEFAULT_LLM_MODEL.to_owned(),
+            default_stt_model: a::DEFAULT_STT_MODEL.to_owned(),
+            prompt: a::AMD_PROMPT.to_owned(),
+            evaluated_llm_models: a::EVALUATED_LLM_MODELS.iter().map(|s| (*s).to_owned()).collect(),
+            evaluated_stt_models: a::EVALUATED_STT_MODELS.iter().map(|s| (*s).to_owned()).collect(),
+            human_speech_threshold: c.human_speech_threshold.as_secs_f64(),
+            human_silence_threshold: c.human_silence_threshold.as_secs_f64(),
+            machine_silence_threshold: c.machine_silence_threshold.as_secs_f64(),
+            no_speech_threshold: c.no_speech_threshold.as_secs_f64(),
+            detection_timeout: c.detection_timeout.as_secs_f64(),
+            max_endpointing_delay: c.max_endpointing_delay.as_secs_f64(),
+            max_extensions: MAX_EXTENSIONS,
+            max_extension_secs: MAX_EXTENSION_SECS,
+        }
+    }
+
+    fn amd_resolve_max_endpointing_delay(
+        provided: Option<Duration>,
+        activity: Option<Duration>,
+    ) -> Duration {
+        resolve_max_endpointing_delay(provided, activity, MAX_ENDPOINTING_DELAY)
     }
 }
 

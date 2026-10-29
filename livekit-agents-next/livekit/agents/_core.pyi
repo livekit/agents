@@ -87,8 +87,6 @@ from ._generated._core_classes import (
     VideoFrameRef as VideoFrameRef,
     VoiceSession as VoiceSession,
     _core_RoomSession as _core_RoomSession,
-    amd_constants as amd_constants,
-    amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     default_aec_warmup as default_aec_warmup,
     default_input_modality as default_input_modality,
     filter_emoji as filter_emoji,
@@ -104,7 +102,6 @@ from ._generated._core_classes import (
     session_messages_topic as session_messages_topic,
     session_state_option_fields as session_state_option_fields,
     speech_priorities as speech_priorities,
-    tool_call_output as tool_call_output,
     video_queue_frames as video_queue_frames,
 )
 from ._generated._core_errors import (
@@ -346,6 +343,8 @@ from ._generated._core_voice import (
     _core_room_track_unpublished as _core_room_track_unpublished,
     _core_room_track_unsubscribed as _core_room_track_unsubscribed,
     _core_voice_session_start as _core_voice_session_start,
+    amd_constants as amd_constants,
+    amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     card_expired as card_expired,
     dtmf_code as dtmf_code,
     format_dtmf as format_dtmf,

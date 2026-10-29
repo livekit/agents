@@ -37,6 +37,25 @@ class AMDPredictionEvent:
         return _core.amd_prediction_is_machine(self)
 
 
+class AmdConstants(TypedDict):
+    """The detector's constants, as one dict so a host cannot pick up half of them."""
+
+    default_llm_model: str
+    default_stt_model: str
+    prompt: str
+    evaluated_llm_models: list[str]
+    evaluated_stt_models: list[str]
+    human_speech_threshold: float
+    human_silence_threshold: float
+    machine_silence_threshold: float
+    no_speech_threshold: float
+    detection_timeout: float
+    max_endpointing_delay: float
+    max_extensions: int
+    """The extension budget: `MAX_EXTENSIONS` requests, each clamped to `MAX_EXTENSION_SECS`."""
+    max_extension_secs: float
+
+
 @unique
 class AMDCategory(str, Enum):
     HUMAN = "human"

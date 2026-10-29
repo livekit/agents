@@ -76,6 +76,7 @@ impl generated::Implementations for Selected {
     type VoiceAgent = lk_agents_runtime::voice::VoiceAgentFrame;
     type SessionStart = lk_agents_runtime::voice::SessionStartPlans;
     type WorkflowChecks = lk_agents_runtime::voice::WorkflowRules;
+    type AmdFunctions = lk_agents_runtime::voice::AmdRules;
     type WarmTransfer = lk_agents_runtime::voice::workflows::warm_transfer::WarmTransfer;
     type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;

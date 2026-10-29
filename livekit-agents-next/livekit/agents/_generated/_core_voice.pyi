@@ -14,10 +14,22 @@ from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublicati
 
 from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, Sound, _core_RoomSession
 from ..types import NotGivenOr
+from .amd import AmdConstants
 from .avatar import AudioReceiverFrame
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .session_wire import StartPlan
 from .workflows import InstructionsArg
+
+def amd_constants() -> AmdConstants:
+    """These are the reference's, not tuning knobs: the default models are what the benchmark
+    ran on.
+    """
+
+def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | None) -> float:
+    """`_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
+    else the default. `provided` is `None` only when the key was absent: an explicit default
+    still beats a disagreeing activity.
+    """
 
 class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""
