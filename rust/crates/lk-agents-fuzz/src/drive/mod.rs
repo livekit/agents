@@ -29,6 +29,7 @@ use std::{
     time::Duration,
 };
 
+use lk_agents_abi::voice::background_audio::BackgroundAudioPlayer as _;
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::UpdateAgentArgs;
 use lk_agents_abi::voice::session_effects::SessionEvents;
@@ -46,7 +47,7 @@ use lk_agents_abi::{
     },
 };
 use lk_agents_abi::{Launch, OwnedTask};
-use lk_agents_runtime::voice::background_audio::BackgroundAudioPlayer;
+use lk_agents_runtime::voice::background_audio::{BackgroundAudio, BackgroundAudioPlayer};
 use lk_agents_runtime::voice::session::{Probe, Pusher, SessionOptions, VoiceSession};
 use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind};
 use lk_agents_voice::remote_session::{
@@ -673,7 +674,7 @@ pub struct Run {
     /// The next console request's id.
     next_request: u64,
     /// The background audio player, as `background_audio.py` runs it beside the session.
-    background: Option<Arc<BackgroundAudioPlayer>>,
+    background: Option<BackgroundAudio>,
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.

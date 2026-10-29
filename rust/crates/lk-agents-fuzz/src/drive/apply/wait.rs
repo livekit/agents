@@ -74,7 +74,7 @@ impl Run {
         let exited = self.cores.is_none();
         // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
         if exited && let Some(player) = self.background.take() {
-            player.close().await;
+            player.0.close().await;
         }
         if exited && let Some(worker) = self.avatar.take() {
             worker.close().await;

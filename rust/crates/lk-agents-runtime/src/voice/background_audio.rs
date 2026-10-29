@@ -38,10 +38,6 @@ impl PlaybackDone {
     pub fn new(fade_out: f64) -> Arc<Self> {
         Arc::new(Self::with(fade_out, false))
     }
-    /// A handle nothing plays into yet (`PlayHandle()` built by hand).
-    pub fn for_host(fade_out: f64) -> Self {
-        Self::with(fade_out, false)
-    }
     /// A sound that was never going to play (the probability draw selected silence) is born done.
     pub fn already_done() -> Arc<Self> {
         Arc::new(Self::with(0.0, true))
@@ -123,31 +119,11 @@ struct PublishedOutput {
 
 /// `_core.BackgroundAudioPlayer`: the mixer and the published track, under `background_audio.py`.
 impl BackgroundAudioPlayer {
-    pub fn for_host(
+    pub fn new(
         sample_rate: u32,
         num_channels: u16,
         blocksize: usize,
         stream_timeout_ms: u64,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
-        media_pool: MediaPoolSource,
-    ) -> Self {
-        Self::build(
-            sample_rate,
-            num_channels,
-            blocksize,
-            Duration::from_millis(stream_timeout_ms),
-            clock,
-            spawner,
-            media_pool,
-        )
-    }
-
-    fn build(
-        sample_rate: u32,
-        num_channels: u16,
-        blocksize: usize,
-        timeout: Duration,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         media_pool: MediaPoolSource,
@@ -176,101 +152,8 @@ impl BackgroundAudioPlayer {
             sample_rate,
             num_channels,
             blocksize,
-            timeout,
+            timeout: Duration::from_millis(stream_timeout_ms),
         }
-    }
-
-    /// `start(room)`: publishes the track on the room's local participant, starts the `ambient`
-    /// sound (drawn by probability with `choose`; a file loops), and returns the track's sid,
-    /// which the host resolves to its own `rtc.LocalTrackPublication`. A second start returns the
-    /// same sid. `source` is `track_publish_options.source`.
-    pub async fn start_for_host(
-        self: &Arc<Self>,
-        room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
-        draw: f64,
-        ambient: Vec<Sound>,
-        choose: bool,
-        source: Option<TrackSource>,
-    ) -> Result<lk_agents_abi::voice::rtc::TrackSid, RtcError> {
-        let participant = room.rtc().ok_or(RtcError::NotConnected)?.local().clone();
-        // Publish the track and own the pump. If the caller cancels, close waits and releases the
-        // track.
-        let this = self.clone();
-        spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
-            let mut output = this.output.lock().await;
-            if this.closed.load(Ordering::Acquire) {
-                return Err(RtcError::Closed("background audio"));
-            }
-            if let Some(output) = output.as_ref() {
-                return Ok(output.publication.sid().clone());
-            }
-            let (source, publication) = participant
-                .publish_audio_track(TrackPublishOptions {
-                    name: TRACK_NAME.into(),
-                    source: source.unwrap_or_default(),
-                    sample_rate: this.sample_rate,
-                    num_channels: this.num_channels,
-                    queue_size_ms: AUDIO_SOURCE_BUFFER_MS,
-                })
-                .await?;
-            let (stop, stop_rx) = tokio::sync::watch::channel(false);
-            let engine = this.clone();
-            let sink = source.clone();
-            let pump = spawn_owned((&this.tasks, this.spawner.as_ref()), async move {
-                if let Err(err) = engine.pump(sink, stop_rx).await {
-                    log::error!("background audio capture failed: {err}");
-                }
-            });
-            *output = Some(PublishedOutput {
-                participant,
-                source,
-                publication: publication.clone(),
-                stop,
-                pump,
-            });
-            this.started.store(true, Ordering::Release);
-            if !ambient.is_empty() {
-                // Open and started: `play` cannot refuse.
-                let _ = this.play(ambient, choose, false, true, draw);
-            }
-            Ok(publication.sid().clone())
-        })
-        .await
-        .map_err(|_| RtcError::host("background audio publication task stopped"))?
-    }
-
-    /// [`play`](Self::play), choosing by the host's `draw` (`random.random()`).
-    pub fn play_for_host(
-        &self,
-        sounds: Vec<Sound>,
-        draw: f64,
-        looping: bool,
-        ambient: bool,
-        choose: bool,
-    ) -> Result<Arc<PlaybackDone>, PlaybackError> {
-        self.play(sounds, choose, looping, ambient, draw)
-    }
-
-    /// [`on_agent_state`](Self::on_agent_state), choosing by the host's `draw` (`random.random()`).
-    pub fn on_agent_state_for_host(
-        &self,
-        sounds: Vec<Sound>,
-        draw: f64,
-        thinking: bool,
-        choose: bool,
-    ) -> Result<(), PlaybackError> {
-        let mut handle = self.thinking.lock().unwrap();
-        let last_done = handle.as_ref().map(|h| h.done());
-        match thinking_sound(self.phase(), !sounds.is_empty(), thinking, last_done) {
-            ThinkingSound::Keep => {}
-            ThinkingSound::Start => *handle = Some(self.play(sounds, choose, false, false, draw)?),
-            ThinkingSound::Stop => {
-                if let Some(h) = handle.as_ref() {
-                    h.stop();
-                }
-            }
-        }
-        Ok(())
     }
 
     fn phase(&self) -> PlayerPhase {
@@ -709,7 +592,7 @@ impl lk_agents_abi::voice::background_audio::PlayState for PlayState {
 }
 
 /// Native class execution over the ABI-owned room capability.
-pub struct BackgroundAudio(Arc<BackgroundAudioPlayer>);
+pub struct BackgroundAudio(pub Arc<BackgroundAudioPlayer>);
 
 impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for BackgroundAudio {
     type State = PlayState;
@@ -723,7 +606,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         stream_timeout_ms: u64,
     ) -> Result<Self, ProviderError> {
         let spawner = (env.spawner)().map_err(lk_agents_abi::errors::ApiError::new)?;
-        Ok(Self(Arc::new(BackgroundAudioPlayer::for_host(
+        Ok(Self(Arc::new(BackgroundAudioPlayer::new(
             sample_rate,
             num_channels,
             blocksize,
@@ -734,6 +617,10 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         ))))
     }
 
+    /// `start(room)`: publishes the track on the room's local participant, starts the `ambient`
+    /// sound (drawn by probability with `choose`; a file loops), and returns the track's sid,
+    /// which the host resolves to its own `rtc.LocalTrackPublication`. A second start returns the
+    /// same sid. `source` is `track_publish_options.source`.
     async fn start(
         &self,
         room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
@@ -742,7 +629,51 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         choose: bool,
         source: Option<TrackSource>,
     ) -> Result<lk_agents_abi::voice::rtc::TrackSid, RtcError> {
-        self.0.start_for_host(room, draw, ambient, choose, source).await
+        let participant = room.rtc().ok_or(RtcError::NotConnected)?.local().clone();
+        // Publish the track and own the pump. If the caller cancels, close waits and releases the
+        // track.
+        let this = self.0.clone();
+        spawn_owned((&self.0.tasks, self.0.spawner.as_ref()), async move {
+            let mut output = this.output.lock().await;
+            if this.closed.load(Ordering::Acquire) {
+                return Err(RtcError::Closed("background audio"));
+            }
+            if let Some(output) = output.as_ref() {
+                return Ok(output.publication.sid().clone());
+            }
+            let (source, publication) = participant
+                .publish_audio_track(TrackPublishOptions {
+                    name: TRACK_NAME.into(),
+                    source: source.unwrap_or_default(),
+                    sample_rate: this.sample_rate,
+                    num_channels: this.num_channels,
+                    queue_size_ms: AUDIO_SOURCE_BUFFER_MS,
+                })
+                .await?;
+            let (stop, stop_rx) = tokio::sync::watch::channel(false);
+            let engine = this.clone();
+            let sink = source.clone();
+            let pump = spawn_owned((&this.tasks, this.spawner.as_ref()), async move {
+                if let Err(err) = engine.pump(sink, stop_rx).await {
+                    log::error!("background audio capture failed: {err}");
+                }
+            });
+            *output = Some(PublishedOutput {
+                participant,
+                source,
+                publication: publication.clone(),
+                stop,
+                pump,
+            });
+            this.started.store(true, Ordering::Release);
+            if !ambient.is_empty() {
+                // Open and started: `play` cannot refuse.
+                let _ = this.play(ambient, choose, false, true, draw);
+            }
+            Ok(publication.sid().clone())
+        })
+        .await
+        .map_err(|_| RtcError::host("background audio publication task stopped"))?
     }
 
     fn play(
@@ -753,7 +684,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         ambient: bool,
         choose: bool,
     ) -> Result<Self::State, PlaybackError> {
-        self.0.play_for_host(sounds, draw, looping, ambient, choose).map(PlayState)
+        self.0.play(sounds, choose, looping, ambient, draw).map(PlayState)
     }
 
     fn on_agent_state(
@@ -763,7 +694,20 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         thinking: bool,
         choose: bool,
     ) -> Result<(), PlaybackError> {
-        self.0.on_agent_state_for_host(sounds, draw, thinking, choose)
+        let mut handle = self.0.thinking.lock().unwrap();
+        let last_done = handle.as_ref().map(|h| h.done());
+        match thinking_sound(self.0.phase(), !sounds.is_empty(), thinking, last_done) {
+            ThinkingSound::Keep => {}
+            ThinkingSound::Start => {
+                *handle = Some(self.0.play(sounds, choose, false, false, draw)?)
+            }
+            ThinkingSound::Stop => {
+                if let Some(h) = handle.as_ref() {
+                    h.stop();
+                }
+            }
+        }
+        Ok(())
     }
 
     fn closed(&self) -> bool {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::room_io::FixedRoom;
+use lk_agents_abi::voice::background_audio::BackgroundAudioPlayer as _;
 
 fn file(path: &str, probability: f64) -> Sound {
     Sound {
@@ -29,7 +30,7 @@ impl FrameStream for Frames {
     }
 }
 
-async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::rtc::FakeRoom>) {
+async fn started() -> (BackgroundAudio, Arc<lk_agents_test_support::rtc::FakeRoom>) {
     let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock(
         crate::rtc::events::RoomEventBus::port,
     );
@@ -39,7 +40,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
         time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
         pool: None,
     };
-    let player = Arc::new(BackgroundAudioPlayer::for_host(
+    let player = BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
         48_000,
         1,
         4_800,
@@ -47,8 +48,8 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
         fixed.time.clock(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         crate::process::env().media_pool,
-    ));
-    player.start_for_host(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();
+    )));
+    player.start(Arc::new(fixed), 0.5, Vec::new(), true, None).await.unwrap();
     (player, room)
 }
 
@@ -56,7 +57,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::r
 // a looping iterator accepted (it can only play once).
 #[tokio::test(start_paused = true)]
 async fn play_refuses_what_cannot_play() {
-    let idle = BackgroundAudioPlayer::for_host(
+    let idle = BackgroundAudioPlayer::new(
         48_000,
         1,
         4_800,
@@ -66,24 +67,24 @@ async fn play_refuses_what_cannot_play() {
         crate::process::env().media_pool,
     );
     assert!(matches!(
-        idle.play_for_host(vec![file("a.ogg", 1.0)], 0.5, false, false, true),
+        idle.play(vec![file("a.ogg", 1.0)], true, false, false, 0.5),
         Err(PlaybackError::NotStarted)
     ));
 
     let (player, _room) = started().await;
     let stream =
         Sound { source: SoundSource::Stream(Arc::new(Frames(Mutex::new(1)))), ..file("", 1.0) };
-    let looping = player.play_for_host(vec![stream], 0.5, true, false, true);
+    let looping = player.0.play(vec![stream], true, true, false, 0.5);
     assert!(matches!(looping, Err(PlaybackError::LoopingStream(_))));
     assert!(LoopingStreamError.to_string().contains("loop=False"));
     // The draw picked silence: the handle is born done.
-    let silent = player.play_for_host(vec![file("a.ogg", 0.0)], 0.5, false, false, true).unwrap();
+    let silent = player.0.play(vec![file("a.ogg", 0.0)], true, false, false, 0.5).unwrap();
     assert!(silent.done());
 
-    player.close().await;
-    assert!(player.closed());
+    player.0.close().await;
+    assert!(player.0.closed());
     assert!(matches!(
-        player.play(vec![file("a.ogg", 1.0)], false, false, false, 0.5),
+        player.0.play(vec![file("a.ogg", 1.0)], false, false, false, 0.5),
         Err(PlaybackError::Closed)
     ));
 }
@@ -92,7 +93,7 @@ async fn play_refuses_what_cannot_play() {
 // mid-fade), or a stop on a finished sound reopening it.
 #[tokio::test]
 async fn a_stop_waits_out_the_fade() {
-    let fading = PlaybackDone::for_host(0.5);
+    let fading = PlaybackDone::new(0.5);
     assert!(!fading.stop());
     assert!(fading.stop_requested() && !fading.done());
     assert!(fading.finish());
@@ -170,7 +171,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         crate::rtc::events::RoomEventBus::port,
     );
     let room = rtc.room("background-retirement-cancellation");
-    let player = Arc::new(BackgroundAudioPlayer::for_host(
+    let player = BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
         48_000,
         1,
         4_800,
@@ -178,7 +179,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         lk_agents_voice::agent_session::Timebase::from_virtual(clock.clone()).clock(),
         Arc::new(lk_agents_net::task::TokioSpawner::current()),
         crate::process::env().media_pool,
-    ));
+    )));
     let stream = Arc::new(DelayedClose {
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
@@ -188,7 +189,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
     });
     let sound = Sound { source: SoundSource::Stream(stream.clone()), ..file("", 1.0) };
     player
-        .start_for_host(
+        .start(
             Arc::new(FixedRoom {
                 rtc: Some(room.clone()),
                 time: lk_agents_voice::agent_session::Timebase::from_virtual(clock),
@@ -202,7 +203,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         .await
         .unwrap();
     stream.entered.notified().await;
-    let mut closing = Box::pin(player.close());
+    let mut closing = Box::pin(player.0.close());
     std::future::poll_fn(|cx| {
         assert!(closing.as_mut().poll(cx).is_pending());
         std::task::Poll::Ready(())
@@ -212,7 +213,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
     // Retirement stays owned after the close waiter is cancelled.
     stream.release.notify_one();
     tokio::task::yield_now().await;
-    player.close().await;
+    player.0.close().await;
     let finished = stream.finished.load(Ordering::SeqCst);
     let cancelled = stream.cancelled.load(Ordering::SeqCst);
     let publications = room.local_participant().track_publications().unwrap();
