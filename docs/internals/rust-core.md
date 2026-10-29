@@ -217,6 +217,7 @@ lk-agents-runtime/src/
     ivr.rs              IVR timers and feed over voice's navigator effects
     amd.rs              AMD timers, classification stream, tap stream, callee wait
     background_audio.rs mixer pump, file/stream reads, track publish/unpublish
+    keyterm_detection.rs keyterm extraction's provider stream, reported to voice's detection pass
     console.rs          the console TCP port adapter
     remote_session/     host runtime loops and drain, room byte-stream transport
     workflows/          DTMF publish/collect; warm transfer dialing, room watching, provider HTTP via the host
