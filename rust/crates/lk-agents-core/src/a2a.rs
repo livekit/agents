@@ -120,8 +120,11 @@ impl Message {
                         .extend(p.media_type.clone().map(|t| ("media_type".into(), t.into())));
                     Value::Object(attachment).to_string()
                 }
-                // Refused at receipt (`attachments::validate_received_parts`).
-                a2a::PartContent::Raw(_) => String::new(),
+                a2a::PartContent::Raw(_) => {
+                    debug_assert!(false, "a raw part passed the receipt check");
+                    // Refused at receipt (`attachments::validate_received_parts`).
+                    String::new()
+                }
             })
             .collect()
     }
