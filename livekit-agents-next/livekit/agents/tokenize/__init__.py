@@ -239,8 +239,13 @@ def replace_words(
         words: dictionary of words to replace
     """
 
+    def replace_all(text: str) -> str:
+        replaced = _core.replace_words(text, replacements)
+        assert replaced is not None, "only the streaming mode holds a word back"
+        return replaced[0]
+
     if isinstance(text, str):
-        return _core.replace_words(text, replacements)[0]  # type: ignore[no-any-return]
+        return replace_all(text)
 
     async def _replace_words() -> AsyncGenerator[str, None]:
         # the last word may still grow, so it is held until the next chunk
@@ -252,7 +257,7 @@ def replace_words(
                 yield buffer[:processed]
                 buffer = buffer[processed:]
         if buffer:
-            yield _core.replace_words(buffer, replacements)[0]
+            yield replace_all(buffer)
 
     return _replace_words()
 

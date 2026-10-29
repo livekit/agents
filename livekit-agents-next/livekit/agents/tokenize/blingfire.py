@@ -65,7 +65,7 @@ class SentenceTokenizer(_SentenceTokenizer):
         return [tok[0] for tok in tokens]
 
     def _split(self, text: str) -> list[tuple[str, int, int]]:
-        return _core.split_sentences(  # type: ignore[no-any-return]
+        return _core.split_sentences(
             text, self._config.min_sentence_len, retain_format=self._config.retain_format
         )
 
