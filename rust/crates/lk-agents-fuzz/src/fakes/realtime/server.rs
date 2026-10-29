@@ -198,6 +198,9 @@ pub struct Response {
     /// The tool call it makes, `(item, name)`.
     pub function_call: Option<(String, String)>,
     /// What the session was told: created, the message, its end.
+    /// Created on the server, and when the driver was told so (a reply cancelled before it was
+    /// created never is).
+    created: bool,
     told_created: Option<Ts>,
     announced: bool,
     message_done: bool,
@@ -302,8 +305,7 @@ impl Server {
         let mut happening = self.pending.remove(&key).expect("just seen");
         match &mut happening {
             Happening::Created { r } => {
-                let resp = &mut self.responses[*r as usize];
-                resp.told_created = Some(now);
+                self.responses[*r as usize].created = true;
             }
             Happening::MessageAdded { r, previous } => {
                 *previous = self.items.last().map(|i| i.id.clone());
@@ -348,9 +350,14 @@ impl Server {
         Some(happening)
     }
 
-    /// The generation the run registered for a response the session was told of.
+    /// The generation the run registered for a response the server created.
     pub fn registered(&mut self, r: u32, source: u32) {
         self.responses[r as usize].source = Some(source);
+    }
+
+    /// The driver was told the response was created.
+    pub fn told_created(&mut self, r: u32, now: Ts) {
+        self.responses[r as usize].told_created = Some(now);
     }
 
     /// What it breached since asked last.
@@ -365,6 +372,11 @@ impl Server {
             .filter(|i| i.assistant)
             .filter_map(|i| Some((i.source?, i.audio_ms)))
             .collect()
+    }
+
+    /// The ids of what it holds, in order.
+    pub fn ids(&self) -> Vec<String> {
+        self.items.iter().map(|i| i.id.clone()).collect()
     }
 
     pub fn holds(&self, id: &str) -> bool {
@@ -629,8 +641,8 @@ impl Server {
                 true
             }
             Exo::ResponseFailed => {
+                // It holds the conversation until its end is out.
                 let Some(r) = self.active else { return false };
-                self.active = None;
                 self.stop(now, r, GenerationStatus::Failed);
                 true
             }
@@ -781,7 +793,7 @@ impl Server {
                     | Happening::CallAdded { .. }
             )
         };
-        let not_created = self.responses[r as usize].told_created.is_none();
+        let not_created = !self.responses[r as usize].created;
         let (mut opened, mut called) = (false, false);
         let withdrawn: Vec<(Ts, u64)> = self
             .pending

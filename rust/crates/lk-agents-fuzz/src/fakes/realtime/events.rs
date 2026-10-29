@@ -52,6 +52,7 @@ impl Socket {
                     }
                     return;
                 }
+                st.server().expect("open").told_created(r, now);
                 st.close_generation(audio);
                 let req_id = request.filter(|req| st.asked.remove(req).is_some());
                 st.generation = Some(Generation {
@@ -73,10 +74,6 @@ impl Socket {
                     .unwrap_or_default();
                 let added =
                     stamped(message(&item, lk_agents_abi::Role::Assistant), self.clock.wall());
-                let remote = Event::RemoteItemAdded(RemoteItemAdded {
-                    previous_item_id: previous,
-                    item: Box::new(added),
-                });
                 if let Some(g) = st.generation.as_mut().filter(|g| g.r == r) {
                     let started = Event::MessageStarted(MessageStarted {
                         message_id: item.clone(),
@@ -91,7 +88,7 @@ impl Socket {
                     }
                     st.spoken.insert(item);
                 }
-                st.events.push_back(remote);
+                remote_added(st, added, previous);
             }
             Happening::Part { r } => {
                 if let Some(g) = st.generation.as_mut().filter(|g| g.r == r) {
@@ -147,10 +144,7 @@ impl Socket {
                     server.responses[r as usize].function_call.clone().expect("a call");
                 let previous = server.responses[r as usize].item.clone();
                 let call = stamped(function_call(&fc, &name), self.clock.wall());
-                st.events.push_back(Event::RemoteItemAdded(RemoteItemAdded {
-                    previous_item_id: previous,
-                    item: Box::new(call),
-                }));
+                remote_added(st, call, previous);
             }
             Happening::MessageDone { r } => {
                 if let Some(g) = st.generation.as_mut().filter(|g| g.r == r) {
@@ -226,11 +220,7 @@ impl Socket {
                 }
             }
             Happening::ItemAdded { item, previous } => {
-                let item = stamped(item, self.clock.wall());
-                st.events.push_back(Event::RemoteItemAdded(RemoteItemAdded {
-                    previous_item_id: previous,
-                    item: Box::new(item),
-                }));
+                remote_added(st, stamped(item, self.clock.wall()), previous);
             }
             Happening::SpeechStarted { item } => {
                 st.speech_started.insert(item, self.wall_secs());
@@ -418,6 +408,20 @@ impl Socket {
         };
         Event::Metrics(RealtimeMetrics { metrics: Box::new(AgentMetrics::Stt(metrics)) })
     }
+}
+
+/// The server added an item: the driver is told, and the session's mirror holds it after
+/// `previous` from now on.
+fn remote_added(st: &mut State, item: ChatItem, previous: Option<String>) {
+    if !st.desired.iter().any(|i| i.id() == item.id()) {
+        let at = previous
+            .as_deref()
+            .and_then(|p| st.desired.iter().position(|i| i.id() == p))
+            .map_or(st.desired.len(), |i| i + 1);
+        st.desired.insert(at, item.clone());
+    }
+    let added = RemoteItemAdded { previous_item_id: previous, item: Box::new(item) };
+    st.events.push_back(Event::RemoteItemAdded(added));
 }
 
 pub(super) fn modalities(message_id: &str, response_id: &str, audio: bool) -> Event {

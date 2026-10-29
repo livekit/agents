@@ -627,22 +627,21 @@ impl Socket {
             }
             RealtimeCommand::UpdateChatCtx(u) => {
                 let items = u.chat_ctx.items;
-                // What the conversation loses goes; what it gains is created in its place.
-                let gone: Vec<String> = st
-                    .desired
-                    .iter()
-                    .map(|i| i.id().to_owned())
-                    .filter(|id| !items.iter().any(|i| i.id() == id))
-                    .collect();
                 let server = st.server().expect("open");
-                for id in &gone {
-                    server.delete(id);
+                // What the conversation loses goes; what it gains is created in its place; a
+                // message the driver records as cut is replaced by its text.
+                for id in server.ids() {
+                    if !items.iter().any(|i| i.id() == id) {
+                        server.delete(&id);
+                    }
                 }
                 let mut previous = None;
                 for item in &items {
                     let unheld_output = matches!(item, ChatItem::FunctionCallOutput(o) if !server.holds_call(&o.call_id));
                     if !server.holds(item.id()) && !unheld_output {
                         server.create(now, item, previous.clone());
+                    } else if matches!(item, ChatItem::Message(m) if m.interrupted) {
+                        server.as_text(item.id());
                     }
                     if server.holds(item.id()) {
                         previous = Some(item.id().to_owned());
@@ -745,7 +744,8 @@ impl Socket {
             RealtimeCommand::Truncate(t) => {
                 // A message gone from the conversation, or held as text (a reconnect restored
                 // it), has nothing to cut. One heard not at all is replaced by its text.
-                if !t.has_audio || !st.spoken.contains(&t.message_id) {
+                let held = st.desired.iter().any(|i| i.id() == t.message_id);
+                if !t.has_audio || !held || !st.spoken.contains(&t.message_id) {
                     return;
                 }
                 let server = st.server().expect("open");
