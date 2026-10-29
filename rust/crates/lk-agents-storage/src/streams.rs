@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::StorageError;
-use crate::agentdb::{StreamReader, Streams};
 use crate::sql::{SqlValue, Statement, StatementResult};
 use crate::sqlite::FileConnection;
 use crate::{SqliteConnection, now_ms, shortuuid};
@@ -188,40 +187,6 @@ RETURNING seq",
             buffered: VecDeque::new(),
             ended: false,
         })
-    }
-}
-
-#[async_trait]
-impl ResponseStreams for Streams {
-    async fn create(&self, ttl: Option<Duration>) -> Result<StreamInfo, StorageError> {
-        Streams::create(self, ttl, None).await
-    }
-
-    async fn append(&self, stream_id: &str, record: &[u8]) -> Result<String, StorageError> {
-        self.append_now(stream_id, record).await
-    }
-
-    async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
-        Streams::close(self, stream_id).await
-    }
-
-    async fn delete(&self, stream_id: &str) -> Result<(), StorageError> {
-        Streams::delete(self, stream_id).await
-    }
-
-    fn read(&self, stream_id: &str, after: Option<&str>, live: bool) -> Box<dyn StreamRead> {
-        Box::new(Streams::read(self, stream_id, after, live))
-    }
-}
-
-#[async_trait]
-impl StreamRead for StreamReader {
-    async fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
-        StreamReader::next(self).await
-    }
-
-    fn next_offset(&self) -> &str {
-        StreamReader::next_offset(self)
     }
 }
 

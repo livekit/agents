@@ -9,10 +9,11 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use futures_util::StreamExt as _;
 
 use crate::StorageError;
-use crate::streams::{CONTENT_TYPE, DEFAULT_TTL, START, StreamInfo};
+use crate::streams::{CONTENT_TYPE, DEFAULT_TTL, ResponseStreams, START, StreamInfo, StreamRead};
 
 use super::conn::TokenMinter;
 use super::http_ok;
@@ -47,71 +48,6 @@ impl Streams {
 
     fn token(&self) -> Result<String, StorageError> {
         self.minter.mint()
-    }
-
-    /// A new stream, `AST_..`; `None` is the default day. `region` is the session's.
-    pub async fn create(
-        &self,
-        ttl: Option<Duration>,
-        region: Option<&str>,
-    ) -> Result<StreamInfo, StorageError> {
-        let body = serde_json::json!({
-            "content_type": CONTENT_TYPE,
-            "ttl_seconds": ttl.unwrap_or(DEFAULT_TTL).as_secs(),
-            "region": region.unwrap_or(""),
-        });
-        let resp = self
-            .http
-            .post(&self.base)
-            .bearer_auth(self.token()?)
-            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
-            .body(body.to_string())
-            .send()
-            .await
-            .map_err(transport)?;
-        let resp = http_ok(resp).await?;
-        let created: Created =
-            resp.json().await.map_err(|e| StorageError::Unavailable(e.to_string()))?;
-        Ok(StreamInfo { stream_id: created.stream_id, expires_at: created.expires_at })
-    }
-
-    /// One append, awaited: the resume cursor immediately after the record.
-    pub async fn append_now(&self, stream_id: &str, record: &[u8]) -> Result<String, StorageError> {
-        let resp = self
-            .http
-            .post(self.url(stream_id))
-            .bearer_auth(self.token()?)
-            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
-            .body(record.to_vec())
-            .send()
-            .await
-            .map_err(transport)?;
-        let resp = http_ok(resp).await?;
-        Ok(Position::at(required_next(&resp)?)?.encode())
-    }
-
-    /// Closes the stream: its terminal frame marks the commit.
-    pub async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
-        let resp = self
-            .http
-            .post(self.url(stream_id))
-            .bearer_auth(self.token()?)
-            .header("Stream-Closed", "true")
-            .send()
-            .await
-            .map_err(transport)?;
-        http_ok(resp).await.map(|_| ())
-    }
-
-    pub async fn delete(&self, stream_id: &str) -> Result<(), StorageError> {
-        let resp = self
-            .http
-            .delete(self.url(stream_id))
-            .bearer_auth(self.token()?)
-            .send()
-            .await
-            .map_err(transport)?;
-        http_ok(resp).await.map(|_| ())
     }
 
     /// Reads from `from` (`None`: the beginning). With `live`, follows the tail until the stream
@@ -184,15 +120,78 @@ struct Control {
     up_to_date: bool,
 }
 
-impl StreamReader {
-    /// The offset to resume from after the records returned so far.
-    pub fn next_offset(&self) -> &str {
-        &self.cursor
+#[async_trait]
+impl ResponseStreams for Streams {
+    /// A new stream, `AST_..`.
+    async fn create(&self, ttl: Option<Duration>) -> Result<StreamInfo, StorageError> {
+        let body = serde_json::json!({
+            "content_type": CONTENT_TYPE,
+            "ttl_seconds": ttl.unwrap_or(DEFAULT_TTL).as_secs(),
+            "region": "",
+        });
+        let resp = self
+            .http
+            .post(&self.base)
+            .bearer_auth(self.token()?)
+            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(transport)?;
+        let resp = http_ok(resp).await?;
+        let created: Created =
+            resp.json().await.map_err(|e| StorageError::Unavailable(e.to_string()))?;
+        Ok(StreamInfo { stream_id: created.stream_id, expires_at: created.expires_at })
     }
 
-    /// The next record, or `None` at the end: the tail for a catch-up read, the close for a live one.
-    /// Any failure settles the reader.
-    pub async fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
+    /// The resume cursor is immediately after the record.
+    async fn append(&self, stream_id: &str, record: &[u8]) -> Result<String, StorageError> {
+        let resp = self
+            .http
+            .post(self.url(stream_id))
+            .bearer_auth(self.token()?)
+            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
+            .body(record.to_vec())
+            .send()
+            .await
+            .map_err(transport)?;
+        let resp = http_ok(resp).await?;
+        Ok(Position::at(required_next(&resp)?)?.encode())
+    }
+
+    /// Its terminal frame marks the commit.
+    async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
+        let resp = self
+            .http
+            .post(self.url(stream_id))
+            .bearer_auth(self.token()?)
+            .header("Stream-Closed", "true")
+            .send()
+            .await
+            .map_err(transport)?;
+        http_ok(resp).await.map(|_| ())
+    }
+
+    async fn delete(&self, stream_id: &str) -> Result<(), StorageError> {
+        let resp = self
+            .http
+            .delete(self.url(stream_id))
+            .bearer_auth(self.token()?)
+            .send()
+            .await
+            .map_err(transport)?;
+        http_ok(resp).await.map(|_| ())
+    }
+
+    fn read(&self, stream_id: &str, after: Option<&str>, live: bool) -> Box<dyn StreamRead> {
+        Box::new(Streams::read(self, stream_id, after, live))
+    }
+}
+
+#[async_trait]
+impl StreamRead for StreamReader {
+    /// The tail ends a catch-up read, the close a live one. Any failure settles the reader.
+    async fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
         let result = self.next_inner().await;
         if result.is_err() {
             self.closed = true;
@@ -202,6 +201,12 @@ impl StreamReader {
         result
     }
 
+    fn next_offset(&self) -> &str {
+        &self.cursor
+    }
+}
+
+impl StreamReader {
     async fn next_inner(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
         if let Some(error) = self.error.take() {
             self.closed = true;

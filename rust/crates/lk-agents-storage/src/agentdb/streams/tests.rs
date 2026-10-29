@@ -114,7 +114,7 @@ impl Peer {
 #[tokio::test]
 async fn append_cursor_starts_after_the_appended_record() {
     let peer = Peer::start().await;
-    let cursor = peer.streams.append_now("AST_test", "\"café\"".as_bytes()).await.unwrap();
+    let cursor = peer.streams.append("AST_test", "\"café\"".as_bytes()).await.unwrap();
     let mut reader = peer.streams.read("AST_test", Some(&cursor), false);
     assert_eq!(reader.next().await.unwrap().unwrap(), b"2");
 }
@@ -224,7 +224,7 @@ async fn live_rotation_without_control_replays_only_unconsumed_records() {
 async fn a_missing_official_next_offset_is_never_an_empty_cursor() {
     let peer = Peer::start().await;
     assert!(matches!(
-        peer.streams.append_now("AST_missing_next", b"1").await,
+        peer.streams.append("AST_missing_next", b"1").await,
         Err(StorageError::Unavailable(_))
     ));
     let mut reader = peer.streams.read("AST_missing_next", None, false);
