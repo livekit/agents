@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex, Weak};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::media::emitter::{AudioEmitter as _, EmitterOutput};
-use lk_agents_abi::{AudioFrame, RealClock, TimedString, TokioSpawner};
+use lk_agents_abi::{AudioFrame, RealClock, TimedString};
 use lk_agents_media::workers::MediaWorkers;
+use lk_agents_net::task::TokioSpawner;
 
 use super::{AudioEmitter, EmitterEnv};
 

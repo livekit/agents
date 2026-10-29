@@ -125,7 +125,7 @@ pub fn host_clock() -> Arc<dyn Clock> {
 pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
     match host_time().and_then(|time| time.spawner()) {
         Some(spawner) => Ok(spawner),
-        None => Ok(Arc::new(lk_agents_abi::TokioSpawner::new(
+        None => Ok(Arc::new(lk_agents_net::task::TokioSpawner::new(
             handle().map_err(|error| error.to_string())?,
         ))),
     }

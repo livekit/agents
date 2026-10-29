@@ -3,12 +3,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime_native::{
     NativeRealtimeConfig, NativeRealtimeModel, RealtimeConfigurationError, RealtimeJsonOption,
     RealtimeOptions,
 };
-use lk_agents_abi::{Maybe, TokioSpawner};
+use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, NativeRealtime};

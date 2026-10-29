@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use lk_agents_abi::voice::console::ConsolePort;
 use lk_agents_abi::voice::io::AudioOutputExt;
-use lk_agents_abi::{AudioFrame, Clock, SimClock, TokioSpawner};
+use lk_agents_abi::{AudioFrame, Clock, SimClock};
 use lk_agents_fuzz::fakes::FakeCli;
+use lk_agents_runtime::net::task::TokioSpawner;
 
 // No transport has delivered this PCM to the CLI. A clock advance alone must not commit it as
 // heard; a late unkeyed acknowledgement must not borrow the next operation's identity either.

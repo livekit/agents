@@ -1,8 +1,8 @@
 use super::*;
 use crate::test_support_rtc::FakeRtc;
-use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::voice::io::PlaybackFinished;
 use lk_agents_abi::voice::rtc::RtcError;
+use lk_agents_net::task::TokioSpawner;
 
 #[tokio::test]
 async fn publication_arriving_after_close_is_retired() {

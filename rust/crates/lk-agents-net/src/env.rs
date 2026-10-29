@@ -61,7 +61,7 @@ impl ProcessEnv {
         }
         ProcessEnv {
             runtime,
-            spawner: || Ok(Arc::new(lk_agents_abi::TokioSpawner::new(runtime()?))),
+            spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
             clock: Arc::new(lk_agents_abi::RealClock::new()),
             http: || GatewayHttp::new().map(Arc::new),
             report_admission: || {

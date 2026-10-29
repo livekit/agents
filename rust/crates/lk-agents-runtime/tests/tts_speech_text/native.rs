@@ -1,10 +1,10 @@
 use super::NativeTts;
 use base64::Engine as _;
-use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::{ApiConnectOptions, Clock, StreamSink as _, StreamSource as _, Tts};
 use lk_agents_inference::headers::Headers;
 use lk_agents_inference::testkit::{FakeWs, text};
 use lk_agents_inference::tts::{AUDIO_QUEUE_CAPACITY, TEXT_QUEUE_CAPACITY, TtsOptions};
+use lk_agents_net::task::TokioSpawner;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;

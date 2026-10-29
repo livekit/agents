@@ -13,8 +13,9 @@ use std::{
 
 use base64::Engine;
 use lk_agents_abi::tts::text::SpeechTextProcessors;
-use lk_agents_abi::{SimClock, TokioSpawner, Tts};
+use lk_agents_abi::{SimClock, Tts};
 use lk_agents_inference::tts::{NativeTts, TtsOptions};
+use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_test_support::corpus;
 use tokio::sync::mpsc;

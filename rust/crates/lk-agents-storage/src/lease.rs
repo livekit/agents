@@ -7,7 +7,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lk_agents_net::task::OwnedTask;
+use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::task::TokioSpawner;
 use tokio::sync::watch;
 
 use crate::db::{self, EventWrite};
@@ -84,7 +85,7 @@ impl Lease {
                 }
             }
         };
-        let task = OwnedTask::spawn(&tokio::runtime::Handle::current(), work, |_| async {});
+        let task = TokioSpawner::current().spawn(work);
         *self.inner.renewal.lock().expect("renewal") = Some(task);
     }
 

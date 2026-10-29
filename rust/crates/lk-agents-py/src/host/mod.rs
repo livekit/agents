@@ -346,7 +346,9 @@ fn loop_clock(py: Python<'_>) -> Option<Arc<dyn lk_agents_abi::Clock>> {
 /// The running loop's executor on virtual time, else the process runtime's.
 fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
     loop_spawner().unwrap_or_else(|| {
-        Arc::new(lk_agents_abi::TokioSpawner::new(process_handle().expect("the process runtime")))
+        Arc::new(lk_agents_runtime::net::task::TokioSpawner::new(
+            process_handle().expect("the process runtime"),
+        ))
     })
 }
 

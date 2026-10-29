@@ -6,7 +6,7 @@ fn created(allow: bool) -> SpeechHandle {
 }
 
 fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
-    Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()))
+    Arc::new(lk_agents_test_support::TokioSpawner::new(tokio::runtime::Handle::current()))
 }
 
 // A queued or refused setter must not change the accepted speech view.

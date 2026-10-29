@@ -14,7 +14,8 @@ use super::*;
 use crate::test_support_rtc::FakeRtc;
 use lk_agents_abi::voice::room_io::{AudioInputConfig, AudioOutputConfig};
 use lk_agents_abi::voice::rtc::{LocalParticipant, RtcError, StreamInfo};
-use lk_agents_abi::{StreamSource, TokioSpawner, VirtualClock};
+use lk_agents_abi::{StreamSource, VirtualClock};
+use lk_agents_net::task::TokioSpawner;
 use std::time::Duration;
 
 fn config() -> RoomIoConfig {

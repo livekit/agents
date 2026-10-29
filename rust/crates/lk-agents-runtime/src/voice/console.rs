@@ -279,7 +279,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let io = Arc::new(ConsoleIo::new(&ProcessEnv::current_runtime(), addr));
-        let transport = io.clone().as_transport(Arc::new(lk_agents_abi::TokioSpawner::current()));
+        let transport =
+            io.clone().as_transport(Arc::new(lk_agents_net::task::TokioSpawner::current()));
         transport.start().await.unwrap();
         let (mut cli, _) = listener.accept().await.unwrap();
 

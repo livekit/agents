@@ -237,7 +237,8 @@ fn assembled(
     hook_bound: Option<f64>,
     options: Option<&crate::agent_activity::options::HostOptions>,
 ) -> SessionApi {
-    let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
+    let spawner =
+        Arc::new(lk_agents_test_support::TokioSpawner::new(tokio::runtime::Handle::current()));
     #[rustfmt::skip]
     let api = SessionApi::host_new(
         Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None,
@@ -380,7 +381,8 @@ async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let agents = HostAgents::default();
     agents.install("agent", Some(host_ref(1)));
-    let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
+    let spawner =
+        Arc::new(lk_agents_test_support::TokioSpawner::new(tokio::runtime::Handle::current()));
     let hooks: Arc<dyn SessionHooks> = hooks.clone();
     super::answer_hook(hooks, call, agents, Tx::new(tx), spawner).await;
     match rx.recv().await {

@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::RealClock;
-use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::llm::realtime::GenerationDone;
 use lk_agents_inference::realtime::native::{
     AudioDelta, Event, GenerationCreated, NativeRealtime, OPENAI,
 };
 use lk_agents_inference::testkit::NoImages;
+use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::websocket::TungsteniteTransport;
 
 #[tokio::test]

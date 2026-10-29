@@ -1,42 +1,118 @@
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, Location};
 use std::pin::Pin;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot, watch};
 
 use crate::{Clock, Ts};
-
-use tokio::runtime::Handle;
 
 /// Defined here to keep dependencies to `{tokio, async-trait}`.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// What a [`Spawner`] hands back: stops the task it spawned. Not Tokio's own, because a task may
-/// run on another executor (a virtual-time host loop, `python::loop_time`).
-#[derive(Clone)]
-pub struct AbortHandle(std::sync::Arc<dyn Abort>);
-
-/// An executor's side of an [`AbortHandle`].
-pub trait Abort: Send + Sync + 'static {
-    /// Drops the task's future soon; a finished task ignores it.
-    fn abort(&self);
-    /// Completed or aborted.
-    fn is_finished(&self) -> bool;
+/// Which way a task ended; the first of completion and cancellation to happen wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskOutcome {
+    Completed,
+    Cancelled,
+    Panicked,
 }
 
-impl AbortHandle {
-    pub fn new(inner: impl Abort) -> Self {
-        AbortHandle(std::sync::Arc::new(inner))
+/// Why an [`OwnedTask`] produced no value.
+#[derive(Debug)]
+pub enum TaskError {
+    /// Cancelled by its owner, or dropped unfinished by its executor.
+    Cancelled,
+    /// The work panicked, with the panic's message. The panic itself still unwinds into the
+    /// executor once the outcome is reported, so a harness judging its tasks sees it.
+    Panicked(String),
+}
+
+impl TaskError {
+    pub fn outcome(&self) -> TaskOutcome {
+        match self {
+            TaskError::Cancelled => TaskOutcome::Cancelled,
+            TaskError::Panicked(_) => TaskOutcome::Panicked,
+        }
+    }
+}
+
+impl std::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskError::Cancelled => f.write_str("task cancelled"),
+            TaskError::Panicked(message) => write!(f, "task panicked: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for TaskError {}
+
+/// The one way to own spawned work: dropping it requests cancellation, never detaches; awaiting
+/// it yields the work's value or why there is none, only after the work and everything it owned
+/// were dropped and its settle step ran.
+#[must_use = "dropping an OwnedTask cancels it"]
+pub struct OwnedTask<T = ()> {
+    /// `None` only once handed to an [`AbortHandle`].
+    cancel: Option<watch::Sender<bool>>,
+    done: oneshot::Receiver<Result<T, TaskError>>,
+}
+
+impl<T> OwnedTask<T> {
+    /// Requests cancellation; idempotent. The outcome is reported by the task, not implied here.
+    pub fn cancel(&self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.send_replace(true);
+        }
     }
 
+    /// Settled: the work ended or was dropped and the outcome was reported.
+    pub fn is_finished(&self) -> bool {
+        self.cancel.as_ref().is_none_or(watch::Sender::is_closed)
+    }
+
+    /// Gives up ownership for a cancel-only handle; the work then ends on its own.
+    pub fn into_abort_handle(mut self) -> AbortHandle {
+        AbortHandle(self.cancel.take().expect("an owned task has its cancel sender"))
+    }
+}
+
+impl<T> Future for OwnedTask<T> {
+    type Output = Result<T, TaskError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.done)
+            .poll(cx)
+            .map(|reported| reported.unwrap_or(Err(TaskError::Cancelled)))
+    }
+}
+
+impl<T> Drop for OwnedTask<T> {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+impl<T> std::fmt::Debug for OwnedTask<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedTask").field("finished", &self.is_finished()).finish()
+    }
+}
+
+/// A cancel-only handle on work nobody owns. Only the voice crate still spawns such work.
+#[derive(Clone)]
+pub struct AbortHandle(watch::Sender<bool>);
+
+impl AbortHandle {
     pub fn abort(&self) {
-        self.0.abort()
+        self.0.send_replace(true);
     }
 
     pub fn is_finished(&self) -> bool {
-        self.0.is_finished()
+        self.0.is_closed()
     }
 }
 
@@ -46,74 +122,129 @@ impl std::fmt::Debug for AbortHandle {
     }
 }
 
-impl Abort for tokio::task::AbortHandle {
-    fn abort(&self) {
-        tokio::task::AbortHandle::abort(self)
-    }
+/// Spawned work as its executor sees it: a future to run to completion. Only [`SpawnerExt`]
+/// builds one, so every task an executor runs has an [`OwnedTask`] owner.
+pub struct Spawned {
+    work: BoxFuture<'static, ()>,
+    site: &'static Location<'static>,
+}
 
-    fn is_finished(&self) -> bool {
-        tokio::task::AbortHandle::is_finished(self)
+impl Spawned {
+    /// The line that spawned it, so an executor can place a task it reports as stuck.
+    pub fn site(&self) -> &'static Location<'static> {
+        self.site
     }
 }
 
-impl From<tokio::task::AbortHandle> for AbortHandle {
-    fn from(handle: tokio::task::AbortHandle) -> Self {
-        AbortHandle::new(handle)
+impl Future for Spawned {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.work.as_mut().poll(cx)
     }
 }
 
-/// `tokio::spawn` panics on a host thread with no reactor, so the runtime handle is injected.
-/// Returns an [`AbortHandle`], not a `JoinHandle`, which would detach on drop.
-///
-/// `#[track_caller]`, so an executor can name the line that spawned a task it reports as stuck.
+/// `tokio::spawn` panics on a host thread with no reactor, so the executor is injected. It runs
+/// what it is handed to completion; cancellation and outcomes are [`OwnedTask`]'s, the same on
+/// every executor (Tokio, the host loop's virtual time, the DST's scheduler).
 pub trait Spawner: Send + Sync {
-    #[track_caller]
-    fn spawn(&self, f: BoxFuture<'static, ()>) -> AbortHandle;
+    fn execute(&self, task: Spawned);
 }
 
 /// Blanket-implemented, including for `dyn Spawner`.
 pub trait SpawnerExt: Spawner {
     #[track_caller]
-    fn spawn_unboxed<F>(&self, f: F) -> AbortHandle
+    fn spawn<T, F>(&self, work: F) -> OwnedTask<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+    {
+        launch(self, Location::caller(), work, |_| async {})
+    }
+
+    /// Runs `settled` with the outcome once `work` is dropped, also when the owner cancelled it.
+    #[track_caller]
+    fn spawn_settled<W, S, F>(&self, work: W, settled: S) -> OwnedTask
+    where
+        W: Future<Output = ()> + Send + 'static,
+        S: FnOnce(TaskOutcome) -> F + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
+    {
+        launch(self, Location::caller(), work, settled)
+    }
+
+    /// Unowned work with a cancel-only handle. Only the voice crate still uses it.
+    #[track_caller]
+    fn spawn_unboxed<F>(&self, work: F) -> AbortHandle
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn(Box::pin(f))
+        launch(self, Location::caller(), work, |_| async {}).into_abort_handle()
     }
 }
 
 impl<S: Spawner + ?Sized> SpawnerExt for S {}
 
-/// Never builds a runtime: an import-time thread would not survive the forkserver's `fork()`.
-#[derive(Clone, Debug)]
-pub struct TokioSpawner {
-    handle: Handle,
+fn launch<T, W, S, F, X>(
+    spawner: &X,
+    site: &'static Location<'static>,
+    work: W,
+    settled: S,
+) -> OwnedTask<T>
+where
+    X: Spawner + ?Sized,
+    T: Send + 'static,
+    W: Future<Output = T> + Send + 'static,
+    S: FnOnce(TaskOutcome) -> F + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (cancel, mut cancelled) = watch::channel(false);
+    let (report, done) = oneshot::channel();
+    let task = async move {
+        let mut panic = None;
+        let result = {
+            let mut work = std::pin::pin!(work);
+            // A dropped sender without a request is an [`AbortHandle`] gone: the work runs on.
+            let mut requested = std::pin::pin!(async {
+                if cancelled.wait_for(|requested| *requested).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            });
+            std::future::poll_fn(|cx| {
+                if requested.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(Err(TaskError::Cancelled));
+                }
+                match std::panic::catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(cx))) {
+                    Ok(Poll::Pending) => Poll::Pending,
+                    Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+                    Err(payload) => {
+                        let message = payload
+                            .downcast_ref::<&str>()
+                            .map(|m| (*m).to_owned())
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "non-string payload".to_owned());
+                        panic = Some(payload);
+                        Poll::Ready(Err(TaskError::Panicked(message)))
+                    }
+                }
+            })
+            .await
+        };
+        let outcome = result.as_ref().map_or_else(TaskError::outcome, |_| TaskOutcome::Completed);
+        settled(outcome).await;
+        let _ = report.send(result);
+        drop(cancelled);
+        if let Some(payload) = panic {
+            std::panic::resume_unwind(payload);
+        }
+    };
+    spawner.execute(Spawned { work: Box::pin(task), site });
+    OwnedTask { cancel: Some(cancel), done }
 }
 
-impl TokioSpawner {
-    pub fn new(handle: Handle) -> Self {
-        TokioSpawner { handle }
-    }
-
-    /// Call it inside the runtime; panics otherwise.
-    pub fn current() -> Self {
-        TokioSpawner::new(Handle::current())
-    }
-
-    pub fn handle(&self) -> &Handle {
-        &self.handle
-    }
-}
-
-impl Spawner for TokioSpawner {
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
-    fn spawn(&self, f: BoxFuture<'static, ()>) -> AbortHandle {
-        self.handle.spawn(f).abort_handle().into()
-    }
-}
-
-/// Named tasks and a way to wait for them to be gone (`utils.aio.TaskSet`). Entries are inserted
-/// before spawning and removed by a guard the task owns.
+/// Named [`OwnedTask`]s and a way to wait for them to be gone (`utils.aio.TaskSet`). Each task
+/// holds the set until it ends, so dropping the owner's handle cancels nothing: `close`,
+/// `abort_all` and `drain` do.
 #[derive(Default)]
 pub struct TaskSet {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -121,13 +252,18 @@ pub struct TaskSet {
     changed: Notify,
 }
 
+/// A task's key in its [`TaskSet`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TaskId(u64);
+
 #[derive(Default)]
 struct TaskEntries {
     closed: bool,
     next: u64,
-    tasks: BTreeMap<u64, (String, Option<AbortHandle>)>,
+    tasks: BTreeMap<u64, (String, Option<OwnedTask>)>,
 }
 
+/// Owned by the work: leaves the set when the work is dropped, however it ended.
 struct Leave {
     table: Arc<TaskSet>,
     id: u64,
@@ -135,7 +271,8 @@ struct Leave {
 
 impl Drop for Leave {
     fn drop(&mut self) {
-        self.table.inner.lock().expect("task table").tasks.remove(&self.id);
+        let left = self.table.inner.lock().expect("task table").tasks.remove(&self.id);
+        drop(left);
         self.table.changed.notify_waiters();
     }
 }
@@ -147,7 +284,7 @@ impl TaskSet {
         spawner: &dyn Spawner,
         name: &str,
         fut: impl Future<Output = ()> + Send + 'static,
-    ) -> AbortHandle {
+    ) -> TaskId {
         self.try_spawn(spawner, name, fut).expect("task admission is closed")
     }
 
@@ -158,7 +295,7 @@ impl TaskSet {
         spawner: &dyn Spawner,
         name: &str,
         fut: impl Future<Output = ()> + Send + 'static,
-    ) -> Option<AbortHandle> {
+    ) -> Option<TaskId> {
         let id = {
             let mut g = self.inner.lock().expect("task table");
             if g.closed {
@@ -170,21 +307,26 @@ impl TaskSet {
             id
         };
         let leave = Leave { table: Arc::clone(self), id };
-        let handle = spawner.spawn_unboxed(async move {
+        let task = spawner.spawn(async move {
             let _leave = leave;
             fut.await;
         });
-        let closed = {
-            let mut g = self.inner.lock().expect("task table");
-            if let Some(entry) = g.tasks.get_mut(&id) {
-                entry.1 = Some(handle.clone());
-            }
-            g.closed
-        };
-        if closed {
-            handle.abort();
+        let mut g = self.inner.lock().expect("task table");
+        if g.closed {
+            task.cancel();
         }
-        Some(handle)
+        // Absent when the work already ended; the task is then dropped finished.
+        if let Some(entry) = g.tasks.get_mut(&id) {
+            entry.1 = Some(task);
+        }
+        Some(TaskId(id))
+    }
+
+    /// Cancels one task; a finished one is ignored.
+    pub fn cancel(&self, id: TaskId) {
+        if let Some((_, Some(task))) = self.inner.lock().expect("task table").tasks.get(&id.0) {
+            task.cancel();
+        }
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -217,7 +359,7 @@ impl TaskSet {
         }
     }
 
-    /// Permanently refuse new work and abort admitted tasks without holding the table lock.
+    /// Permanently refuse new work and abort admitted tasks.
     pub fn close(&self) {
         self.inner.lock().expect("task table").closed = true;
         self.abort_all();
@@ -225,16 +367,10 @@ impl TaskSet {
 
     /// Abort every task without waiting: an owner going away.
     pub fn abort_all(&self) {
-        let handles: Vec<_> = self
-            .inner
-            .lock()
-            .expect("task table")
-            .tasks
-            .values()
-            .filter_map(|(_, handle)| handle.clone())
-            .collect();
-        for handle in handles {
-            handle.abort();
+        for task in
+            self.inner.lock().expect("task table").tasks.values().filter_map(|(_, t)| t.as_ref())
+        {
+            task.cancel();
         }
     }
 
@@ -252,128 +388,5 @@ impl TaskSet {
             return Vec::new();
         }
         self.cancel_and_wait(clock).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
-
-    /// A runtime on its own thread, standing in for the driver's.
-    struct Background {
-        handle: Handle,
-        stop: Option<tokio::sync::oneshot::Sender<()>>,
-        thread: Option<std::thread::JoinHandle<()>>,
-    }
-
-    impl Background {
-        #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-        fn start() -> Self {
-            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-            let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-            // Test-only thread: the calling thread must genuinely have no runtime.
-            let thread = std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_time()
-                    .build()
-                    .expect("build the background runtime");
-                ready_tx.send(rt.handle().clone()).expect("hand the handle back");
-                rt.block_on(async {
-                    let _ = stop_rx.await;
-                });
-            });
-            Background {
-                handle: ready_rx.recv().expect("the runtime thread started"),
-                stop: Some(stop_tx),
-                thread: Some(thread),
-            }
-        }
-    }
-
-    impl Drop for Background {
-        fn drop(&mut self) {
-            let _ = self.stop.take().expect("stop sender").send(());
-            let _ = self.thread.take().expect("thread").join();
-        }
-    }
-
-    // Catches: bare `tokio::spawn` on a host-reachable path (the calling thread has no reactor,
-    // asserted first).
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[test]
-    fn spawning_works_from_a_thread_with_no_runtime() {
-        let rt = Background::start();
-        let spawner: Arc<dyn Spawner> = Arc::new(TokioSpawner::new(rt.handle.clone()));
-
-        assert!(
-            Handle::try_current().is_err(),
-            "this thread must have no reactor, or the test proves nothing"
-        );
-
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        spawner.spawn_unboxed(async move {
-            done_tx.send("ran").expect("the test is still waiting");
-        });
-
-        assert_eq!(
-            done_rx.recv_timeout(Duration::from_secs(2)),
-            Ok("ran"),
-            "the injected handle did not run the task"
-        );
-    }
-
-    // Catches: handing back something that cannot stop the task (a `JoinHandle`, or a unit).
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    #[tokio::test]
-    async fn the_returned_handle_aborts_what_it_spawned() {
-        /// Set when the spawned future is dropped, which is what an abort does.
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        struct Cancelled(Arc<AtomicBool>);
-        impl Drop for Cancelled {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
-
-        let spawner = TokioSpawner::current();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let finished = Arc::new(AtomicBool::new(false));
-
-        let handle = {
-            let marker = Cancelled(Arc::clone(&cancelled));
-            let finished = Arc::clone(&finished);
-            spawner.spawn_unboxed(async move {
-                let _marker = marker;
-                // Never resolves, like a pump waiting on the next chunk from a provider.
-                std::future::pending::<()>().await;
-                finished.store(true, Ordering::SeqCst);
-            })
-        };
-
-        tokio::task::yield_now().await; // let it start
-        assert!(!cancelled.load(Ordering::SeqCst), "it must be running before the abort");
-        handle.abort();
-
-        for _ in 0..100 {
-            if cancelled.load(Ordering::SeqCst) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert!(cancelled.load(Ordering::SeqCst), "abort() did not stop the task it was handed");
-        assert!(!finished.load(Ordering::SeqCst), "the task ran past the abort point");
-    }
-    #[tokio::test]
-    async fn closing_task_admission_refuses_future_work_and_settles_admitted_work() {
-        let tasks = Arc::new(TaskSet::default());
-        let spawner = TokioSpawner::current();
-        tasks.spawn(&spawner, "pending", std::future::pending());
-        tasks.close();
-        assert!(tasks.try_spawn(&spawner, "late", async {}).is_none());
-        assert!(tasks.wait_empty(&crate::RealClock::new(), None).await);
     }
 }

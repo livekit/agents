@@ -35,7 +35,7 @@ use pyo3::types::PyCFunction;
 use pyo3_async_runtimes::generic::ContextExt;
 
 use lk_agents_abi::utils::clock::TICK_EPSILON;
-use lk_agents_abi::utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner};
+use lk_agents_abi::utils::spawner::{BoxFuture, Spawned, Spawner, SpawnerExt};
 use lk_agents_abi::{Clock, Ts, lock};
 
 /// The env knob; see the module docs.
@@ -273,24 +273,21 @@ impl LoopRuntime {
         self.closed.load(Ordering::Acquire)
     }
 
-    fn spawn_task(self: &Arc<Self>, fut: BoxFuture<'static, ()>) -> Arc<Task> {
+    fn spawn_task(self: &Arc<Self>, fut: BoxFuture<'static, ()>) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let task = Arc::new(Task {
             id,
             fut: Mutex::new(Some(fut)),
             runtime: Arc::downgrade(self),
             queued: AtomicBool::new(false),
-            aborted: AtomicBool::new(false),
             finished: AtomicBool::new(false),
         });
         if self.is_closed() {
-            task.finish_with(None);
-            return task;
+            return task.finish_with(None);
         }
         lock(&self.tasks).insert(id, Arc::clone(&task));
         // Never run inline: the first poll is a pump, like `loop.create_task`'s first step.
         task.schedule();
-        task
     }
 
     /// Hands `op` to the loop thread (run at the next pump).
@@ -475,7 +472,7 @@ impl LoopRuntime {
         let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone()).copy_context(py)?;
         let py_fut = event_loop.call_method0("create_future")?;
         let target = py_fut.clone().unbind();
-        let task = self.spawn_task(Box::pin(async move {
+        let task = LoopSpawner(Arc::clone(self)).spawn(async move {
             let result =
                 <super::ProcessRuntime as ContextExt>::scope(locals, CatchUnwind(Box::pin(fut)))
                     .await;
@@ -490,14 +487,14 @@ impl LoopRuntime {
                     Err(e) => target.call_method1("set_exception", (e.into_value(py),)),
                 };
             });
-        }));
+        });
         let on_done = PyCFunction::new_closure(
             py,
             Some(c"lk_loop_future_done"),
             None,
             move |args, _kwargs| -> PyResult<()> {
                 if args.get_item(0)?.call_method0("cancelled")?.is_truthy()? {
-                    task.abort();
+                    task.cancel();
                 }
                 Ok(())
             },
@@ -538,11 +535,10 @@ where
 
 struct Task {
     id: u64,
-    /// `None` while polled (so an abort or a wake from inside the poll never locks it) and once done.
+    /// `None` while polled (so a wake from inside the poll never locks it) and once done.
     fut: Mutex<Option<BoxFuture<'static, ()>>>,
     runtime: Weak<LoopRuntime>,
     queued: AtomicBool,
-    aborted: AtomicBool,
     finished: AtomicBool,
 }
 
@@ -566,16 +562,12 @@ impl Task {
         self.queued.store(false, Ordering::Release);
         let Some(mut fut) = lock(&self.fut).take() else { return };
         let rt = self.runtime.upgrade();
-        if self.aborted.load(Ordering::Acquire) {
-            drop(fut);
-            return self.finish_with(rt.as_ref());
-        }
         let waker = Waker::from(Arc::clone(self));
         let mut cx = Context::from_waker(&waker);
         match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(&mut cx))) {
             Ok(Poll::Pending) => {
                 let closed = rt.as_ref().is_none_or(|rt| rt.is_closed());
-                if self.aborted.load(Ordering::Acquire) || closed {
+                if closed {
                     drop(fut);
                     self.finish_with(rt.as_ref());
                 } else {
@@ -614,36 +606,13 @@ impl Wake for Task {
     }
 }
 
-impl Task {
-    /// Dropped at its next pump, on the loop thread (never inside the caller's own poll).
-    fn abort(self: &Arc<Self>) {
-        if self.finished.load(Ordering::Acquire) {
-            return;
-        }
-        self.aborted.store(true, Ordering::Release);
-        self.schedule();
-    }
-}
-
-struct TaskAbort(Arc<Task>);
-
-impl Abort for TaskAbort {
-    fn abort(&self) {
-        self.0.abort();
-    }
-
-    fn is_finished(&self) -> bool {
-        self.0.finished.load(Ordering::Acquire)
-    }
-}
-
 // --------------------------------------------------------------------- the ambient pair
 
 struct LoopSpawner(Arc<LoopRuntime>);
 
 impl Spawner for LoopSpawner {
-    fn spawn(&self, f: BoxFuture<'static, ()>) -> AbortHandle {
-        AbortHandle::new(TaskAbort(self.0.spawn_task(f)))
+    fn execute(&self, task: Spawned) {
+        self.0.spawn_task(Box::pin(task));
     }
 }
 

@@ -12,7 +12,7 @@ use lk_agents_abi::voice::rtc::{
     AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RpcHandler, RtcRoom,
     StreamBytesOptions,
 };
-use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Closed, Spawner, TaskSet, Ts, unix_secs};
+use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, TaskId, TaskSet, Ts, unix_secs};
 use lk_agents_voice::avatar::output::{
     AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
     unacknowledged_clear,
@@ -54,7 +54,7 @@ struct Inner {
     closing: Arc<TaskSet>,
     close_outcome: watch::Sender<Closed>,
     /// The give-up timer after a clear, and when it fires.
-    clear_timer: Mutex<Option<(AbortHandle, Ts, PlaybackSegment)>>,
+    clear_timer: Mutex<Option<(TaskId, Ts, PlaybackSegment)>>,
 }
 
 #[derive(Default)]
@@ -233,7 +233,7 @@ impl Inner {
             }
         };
         if let Some((timer, _, _)) = timer {
-            timer.abort();
+            self.tasks.cancel(timer);
         }
         self.retire_segment(key);
         Reply::Ok
@@ -308,7 +308,7 @@ impl Inner {
         if let Some((timer, _, _)) =
             self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
         {
-            timer.abort();
+            self.tasks.cancel(timer);
         }
         let Some(timeout) = give_up_after else { return };
         let me = Arc::clone(&self);
@@ -366,7 +366,7 @@ impl Inner {
         if let Some((timer, _, _)) =
             self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
         {
-            timer.abort();
+            self.tasks.cancel(timer);
         }
         self.retire_routes();
         self.tasks.close();

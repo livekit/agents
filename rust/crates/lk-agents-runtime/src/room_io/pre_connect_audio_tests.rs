@@ -13,7 +13,7 @@ async fn failed_registration_does_not_remove_another_stream_owner() {
         .unwrap();
     let handler = PreConnectAudioHandler::new(
         crate::rtc::room::Room::wrap(room.clone()),
-        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
         (24_000, 1),
@@ -42,7 +42,7 @@ async fn closed_preconnect_input_cannot_register_again() {
     let room = rtc.room("closed-registration");
     let handler = PreConnectAudioHandler::new(
         crate::rtc::room::Room::wrap(room.clone()),
-        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
         (24_000, 1),
@@ -80,7 +80,7 @@ async fn preconnect_overload_preserves_already_admitted_tracks() {
     let room = rtc.room("track-capacity");
     let handler = PreConnectAudioHandler::new(
         crate::rtc::room::Room::wrap(room.clone()),
-        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
         (24_000, 1),
@@ -116,7 +116,7 @@ async fn preconnect_receive_deadline_discards_partial_pcm() {
     let room = rtc.room("receive-deadline");
     let handler = PreConnectAudioHandler::new(
         crate::rtc::room::Room::wrap(room.clone()),
-        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock.clone(),
         Duration::from_secs(3),
         (24_000, 1),
@@ -144,7 +144,7 @@ async fn preconnect_duration_is_bounded_before_transfer() {
     let room = rtc.room("duration");
     let handler = PreConnectAudioHandler::new(
         crate::rtc::room::Room::wrap(room.clone()),
-        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
         clock,
         Duration::from_secs(3),
         (24_000, 1),

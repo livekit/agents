@@ -20,12 +20,12 @@ use std::time::Duration;
 
 use lk_agents_abi::Maybe;
 use lk_agents_abi::RealClock;
-use lk_agents_abi::TokioSpawner;
 use lk_agents_inference::realtime::native::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, NativeRealtime, OPENAI,
     OptionsPatch, SeqIds, XAI,
 };
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
+use lk_agents_net::task::TokioSpawner;
 use serde_json::json;
 
 /// No test may block for longer than this. A driver bug that parks forever fails as a timeout

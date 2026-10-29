@@ -34,7 +34,7 @@ impl Chain {
             speed: 1.0,
             hyphenator: Arc::new(Liang),
             clock: Arc::new(lk_agents_abi::RealClock::new()),
-            spawner: Arc::new(lk_agents_abi::TokioSpawner::current()),
+            spawner: Arc::new(lk_agents_test_support::TokioSpawner::current()),
         });
         let shown = watch::Sender::new(Vec::new());
         sync.audio_output().tracker().observe(Arc::new(Shown(shown.clone())));

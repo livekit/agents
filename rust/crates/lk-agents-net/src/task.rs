@@ -1,86 +1,171 @@
-//! Owned runtime tasks: every spawned task has an owner holding its [`OwnedTask`], a correlated
-//! cancellation request and one observed terminal outcome, reported only after the work and
-//! everything it owned were dropped. Dropping the handle requests cancellation; it never detaches.
+//! The Tokio executor behind the injected [`Spawner`]: the process runtime the runtime lends
+//! through `ProcessEnv`, or a caller's own. Ownership, cancellation and outcomes are
+//! [`lk_agents_abi::OwnedTask`]'s, the same on every executor.
 
-use std::panic::AssertUnwindSafe;
+use lk_agents_abi::{Spawned, Spawner};
+use tokio::runtime::Handle;
 
-use futures_util::FutureExt;
-use tokio::sync::oneshot;
-
-/// Which way a task ended; the first of completion and cancellation to happen wins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskOutcome {
-    Completed,
-    Cancelled,
-    Panicked,
+/// Never builds a runtime: an import-time thread would not survive the forkserver's `fork()`.
+#[derive(Clone, Debug)]
+pub struct TokioSpawner {
+    handle: Handle,
 }
 
-#[derive(Debug)]
-pub struct OwnedTask {
-    cancel: Option<oneshot::Sender<()>>,
-}
-
-impl OwnedTask {
-    /// Runs `work` on `runtime`, then `settled` with the outcome once `work` is dropped.
-    pub fn spawn<W, S, F>(runtime: &tokio::runtime::Handle, work: W, settled: S) -> Self
-    where
-        W: Future<Output = ()> + Send + 'static,
-        S: FnOnce(TaskOutcome) -> F + Send + 'static,
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let (cancel, cancelled) = oneshot::channel::<()>();
-        runtime.spawn(async move {
-            let outcome = {
-                let work = AssertUnwindSafe(work).catch_unwind();
-                tokio::select! {
-                    biased;
-                    // An `Err` is the handle dropped: cancellation as well.
-                    _ = cancelled => TaskOutcome::Cancelled,
-                    done = work => match done {
-                        Ok(()) => TaskOutcome::Completed,
-                        Err(_) => TaskOutcome::Panicked,
-                    },
-                }
-            };
-            settled(outcome).await;
-        });
-        OwnedTask { cancel: Some(cancel) }
+impl TokioSpawner {
+    pub fn new(handle: Handle) -> Self {
+        TokioSpawner { handle }
     }
 
-    /// Requests cancellation; idempotent. Completion is reported by the task, not implied here.
-    pub fn cancel(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
+    /// Call it inside the runtime; panics otherwise.
+    pub fn current() -> Self {
+        TokioSpawner::new(Handle::current())
+    }
+
+    pub fn handle(&self) -> &Handle {
+        &self.handle
     }
 }
 
-impl Drop for OwnedTask {
-    fn drop(&mut self) {
-        self.cancel();
+impl Spawner for TokioSpawner {
+    fn execute(&self, task: Spawned) {
+        drop(self.handle.spawn(task));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::{SpawnerExt, TaskOutcome, TaskSet};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
+    use tokio::sync::oneshot;
+
+    /// A runtime on its own thread, standing in for the driver's.
+    struct Background {
+        handle: Handle,
+        stop: Option<oneshot::Sender<()>>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Background {
+        fn start() -> Self {
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (stop_tx, stop_rx) = oneshot::channel();
+            // Test-only thread: the calling thread must genuinely have no runtime.
+            let thread = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .expect("build the background runtime");
+                ready_tx.send(rt.handle().clone()).expect("hand the handle back");
+                rt.block_on(async {
+                    let _ = stop_rx.await;
+                });
+            });
+            Background {
+                handle: ready_rx.recv().expect("the runtime thread started"),
+                stop: Some(stop_tx),
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for Background {
+        fn drop(&mut self) {
+            let _ = self.stop.take().expect("stop sender").send(());
+            let _ = self.thread.take().expect("thread").join();
+        }
+    }
+
+    // Catches: bare `tokio::spawn` on a host-reachable path (the calling thread has no reactor,
+    // asserted first).
+    #[test]
+    fn spawning_works_from_a_thread_with_no_runtime() {
+        let rt = Background::start();
+        let spawner: Arc<dyn Spawner> = Arc::new(TokioSpawner::new(rt.handle.clone()));
+
+        assert!(
+            Handle::try_current().is_err(),
+            "this thread must have no reactor, or the test proves nothing"
+        );
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let _task = spawner.spawn(async move {
+            done_tx.send("ran").expect("the test is still waiting");
+        });
+
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(2)),
+            Ok("ran"),
+            "the injected handle did not run the task"
+        );
+    }
+
+    // Catches: handing back something that cannot stop the task.
+    #[tokio::test]
+    async fn the_returned_handle_aborts_what_it_spawned() {
+        /// Set when the spawned future is dropped, which is what an abort does.
+        struct Cancelled(Arc<AtomicBool>);
+        impl Drop for Cancelled {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let spawner = TokioSpawner::current();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+
+        let handle = {
+            let marker = Cancelled(Arc::clone(&cancelled));
+            let finished = Arc::clone(&finished);
+            spawner.spawn(async move {
+                let _marker = marker;
+                // Never resolves, like a pump waiting on the next chunk from a provider.
+                std::future::pending::<()>().await;
+                finished.store(true, Ordering::SeqCst);
+            })
+        };
+
+        tokio::task::yield_now().await; // let it start
+        assert!(!cancelled.load(Ordering::SeqCst), "it must be running before the abort");
+        handle.cancel();
+
+        for _ in 0..100 {
+            if cancelled.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(cancelled.load(Ordering::SeqCst), "cancel() did not stop the task it was handed");
+        assert!(!finished.load(Ordering::SeqCst), "the task ran past the abort point");
+    }
+
+    #[tokio::test]
+    async fn closing_task_admission_refuses_future_work_and_settles_admitted_work() {
+        let tasks = Arc::new(TaskSet::default());
+        let spawner = TokioSpawner::current();
+        tasks.spawn(&spawner, "pending", std::future::pending());
+        tasks.close();
+        assert!(tasks.try_spawn(&spawner, "late", async {}).is_none());
+        assert!(tasks.wait_empty(&lk_agents_abi::RealClock::new(), None).await);
+    }
 
     async fn outcome_of(
         work: impl Future<Output = ()> + Send + 'static,
         cancel: bool,
     ) -> (TaskOutcome, bool) {
         let (tx, rx) = oneshot::channel();
-        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel::<()>();
-        struct Owned(std::sync::mpsc::Sender<()>);
+        let (dropped_tx, mut dropped_rx) = oneshot::channel::<()>();
+        struct Owned(Option<oneshot::Sender<()>>);
         impl Drop for Owned {
             fn drop(&mut self) {
-                let _ = self.0.send(());
+                let _ = self.0.take().map(|tx| tx.send(()));
             }
         }
-        let owned = Owned(dropped_tx);
-        let mut task = OwnedTask::spawn(
-            &tokio::runtime::Handle::current(),
+        let owned = Owned(Some(dropped_tx));
+        let task = TokioSpawner::current().spawn_settled(
             async move {
                 let _owned = owned;
                 work.await
@@ -94,7 +179,10 @@ mod tests {
             task.cancel();
             task.cancel();
         }
-        rx.await.unwrap()
+        let reported = rx.await.unwrap();
+        let awaited = task.await.map_or_else(|e| e.outcome(), |()| TaskOutcome::Completed);
+        assert_eq!(awaited, reported.0, "the owner sees the outcome the settle step saw");
+        reported
     }
 
     // Catches: an outcome reported while the work still holds its resources, a repeated cancel
@@ -114,8 +202,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_handle_cancels_the_task() {
         let (tx, rx) = oneshot::channel();
-        drop(OwnedTask::spawn(
-            &tokio::runtime::Handle::current(),
+        drop(TokioSpawner::current().spawn_settled(
             tokio::time::sleep(Duration::from_secs(3600)),
             move |outcome| async move {
                 let _ = tx.send(outcome);

@@ -2,8 +2,9 @@
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AudioFrame, HostRef, TokioSpawner};
+use lk_agents_abi::{AudioFrame, HostRef};
 use lk_agents_runtime::net::env::ProcessEnv;
+use lk_agents_runtime::net::task::TokioSpawner;
 use std::sync::Arc;
 
 pub struct DataStreamAudioOutput(lk_agents_runtime::avatar::output::DataStreamAudioOutput);

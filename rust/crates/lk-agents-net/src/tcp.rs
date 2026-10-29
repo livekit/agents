@@ -1,7 +1,8 @@
 //! Raw TCP connections on the hosting process's reactor, exposed as generic byte IO ports.
 
-use crate::task::OwnedTask;
+use crate::task::TokioSpawner;
 use lk_agents_abi::BoxFuture;
+use lk_agents_abi::SpawnerExt;
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -37,24 +38,14 @@ impl Connector for Tcp {
 }
 
 async fn connect_on(runtime: &tokio::runtime::Handle, addr: String) -> io::Result<Connection> {
-    let (ready, opened) = tokio::sync::oneshot::channel();
-    let task = OwnedTask::spawn(
-        runtime,
-        async move {
-            let result = async move {
-                let stream = tokio::net::TcpStream::connect(addr).await?;
-                let _ = stream.set_nodelay(true);
-                let (read, write) = stream.into_split();
-                Ok(Connection { read: Box::new(read), write: Box::new(write) })
-            }
-            .await;
-            let _ = ready.send(result);
-        },
-        |_| async {},
-    );
-    let result = opened.await.map_err(|_| io::Error::other("TCP connector stopped"))?;
-    drop(task);
-    result
+    // Opened on the owning reactor, wherever the caller polls; dropping the wait cancels it.
+    let connecting = TokioSpawner::new(runtime.clone()).spawn(async move {
+        let stream = tokio::net::TcpStream::connect(addr).await?;
+        let _ = stream.set_nodelay(true);
+        let (read, write) = stream.into_split();
+        Ok(Connection { read: Box::new(read), write: Box::new(write) })
+    });
+    connecting.await.map_err(|_| io::Error::other("TCP connector stopped"))?
 }
 
 #[cfg(test)]

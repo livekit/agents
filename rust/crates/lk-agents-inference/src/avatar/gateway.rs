@@ -24,9 +24,10 @@ use lk_agents_net::attempts::RequestPolicy;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
-use lk_agents_net::task::{OwnedTask, TaskOutcome};
+use lk_agents_net::task::TokioSpawner;
 
 const LOG: &str = "livekit.agents";
 
@@ -523,7 +524,7 @@ impl Driver {
         let work =
             async move { kind.run(&http, (*exchange).clone(), request, attempt, &reporter).await };
         let closed = self.reporter.clone();
-        let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
+        let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, move |outcome| async move {
             if outcome == TaskOutcome::Panicked {
                 log::error!(target: LOG, request = request.0, attempt; "avatar gateway request attempt panicked");
             }

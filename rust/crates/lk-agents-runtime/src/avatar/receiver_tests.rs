@@ -1,8 +1,9 @@
 //! Receiver conformance against supplied-clock RTC ports.
 use super::*;
+use lk_agents_abi::VirtualClock;
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::voice::rtc::ParticipantIdentity;
-use lk_agents_abi::{TokioSpawner, VirtualClock};
+use lk_agents_net::task::TokioSpawner;
 use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind, TrackSource};
 use lk_agents_voice::avatar::{
     RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, playback_method, stream_name,

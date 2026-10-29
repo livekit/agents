@@ -21,6 +21,7 @@ use std::{
     time::Duration,
 };
 
+use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::voice::avatar::AvatarRunner as _;
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
@@ -655,7 +656,7 @@ impl FakeAvatarWorker {
             let weak = Arc::downgrade(&me);
             let mut agent_sent = me.agent.local_participant().sent_count();
             let mut worker_sent = me.room.local_participant().sent_count();
-            spawner.spawn(Box::pin(async move {
+            spawner.spawn_unboxed(async move {
                 loop {
                     tokio::select! {
                         biased;
@@ -667,7 +668,7 @@ impl FakeAvatarWorker {
                         None => return,
                     }
                 }
-            }))
+            })
         };
         *me.relaying.lock().unwrap() = Some(relaying);
         // `AvatarRunner.start()`: the receiver's own start, then the runner's

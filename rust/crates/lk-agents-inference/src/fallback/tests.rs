@@ -10,8 +10,9 @@ use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::StreamSource;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{BoxFuture, Spawner, TokioSpawner};
+use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::{Clock, VirtualClock};
+use lk_agents_net::task::TokioSpawner;
 use tokio::sync::Semaphore;
 
 use crate::fallback::ChainPolicy;
@@ -474,7 +475,7 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
     let (mut stop, done, chain) = crate::fallback::channel::ChainTask::pair(clock.clone());
     let member_closed = Arc::new(AtomicBool::new(false));
     let closed_flag = Arc::clone(&member_closed);
-    let filling = tokio::spawn(async move {
+    let filling = TokioSpawner::current().spawn(async move {
         let _tx = tx;
         // The task's loop: serve until the consumer stops it, then close the member.
         let _ = stop.changed().await;
@@ -483,7 +484,7 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
     });
     let source: Box<dyn StreamSource<u8>> = Box::new(crate::fallback::channel::ChannelSource {
         rx,
-        task: Some(filling.abort_handle().into()),
+        task: Some(filling.into_abort_handle()),
         chain,
     });
     let closed = within(
@@ -504,17 +505,29 @@ async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<u8, ProviderError>>(4);
     let (_stop, _done, chain) = crate::fallback::channel::ChainTask::pair(clock.clone());
-    let filling = tokio::spawn(async move {
-        let _tx = tx;
-        std::future::pending::<()>().await;
+    let (ended, outcome) = tokio::sync::oneshot::channel();
+    let filling = TokioSpawner::current().spawn_settled(
+        async move {
+            let _tx = tx;
+            std::future::pending::<()>().await;
+        },
+        move |outcome| async move {
+            let _ = ended.send(outcome);
+        },
+    );
+    let source: Box<dyn StreamSource<u8>> = Box::new(crate::fallback::channel::ChannelSource {
+        rx,
+        task: Some(filling.into_abort_handle()),
+        chain,
     });
-    let handle = filling.abort_handle();
-    let source: Box<dyn StreamSource<u8>> =
-        Box::new(crate::fallback::channel::ChannelSource { rx, task: Some(handle.into()), chain });
     // A deadline already past gives the task one poll and no more.
     let closed = within("the close", source.close(lk_agents_abi::Ts::ZERO)).await;
     assert_eq!(closed, lk_agents_abi::Closed::TimedOut);
-    assert!(filling.await.unwrap_err().is_cancelled(), "the wedged task was aborted");
+    assert_eq!(
+        outcome.await.unwrap(),
+        lk_agents_abi::TaskOutcome::Cancelled,
+        "the wedged task was aborted"
+    );
 }
 
 #[tokio::test]
@@ -626,13 +639,13 @@ struct HeldSpawner {
 }
 
 impl Spawner for HeldSpawner {
-    fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
+    fn execute(&self, task: lk_agents_abi::Spawned) {
         self.queued.try_send(()).expect("one queued provider attempt");
         let release = self.release.clone();
-        self.runtime.spawn(Box::pin(async move {
+        drop(self.runtime.handle().spawn(async move {
             let _permit = release.acquire().await.expect("held task released");
-            future.await;
-        }))
+            task.await;
+        }));
     }
 }
 

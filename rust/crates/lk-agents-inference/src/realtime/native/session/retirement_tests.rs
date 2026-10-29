@@ -2,7 +2,8 @@ use super::*;
 use crate::realtime::OPENAI;
 use crate::testkit::{FakeWs, NoImages};
 use lk_agents_abi::llm::realtime::{GenerateReply, UpdateChatCtx};
-use lk_agents_abi::{ChatMessage, RealClock, Role, TokioSpawner};
+use lk_agents_abi::{ChatMessage, RealClock, Role};
+use lk_agents_net::task::TokioSpawner;
 
 fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
     let clock = Arc::new(RealClock::new());

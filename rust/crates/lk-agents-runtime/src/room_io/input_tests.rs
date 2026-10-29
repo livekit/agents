@@ -1,9 +1,10 @@
 use super::*;
 use crate::test_support_rtc::{FakeRtc, FakeTrackPublication};
+use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{
     ParticipantKind, RtcError, StreamInfo, TrackSource, silence_frame,
 };
-use lk_agents_abi::{TokioSpawner, errors::ProviderError};
+use lk_agents_net::task::TokioSpawner;
 use std::time::Duration;
 
 /// A microphone whose SDK processing the test controls.

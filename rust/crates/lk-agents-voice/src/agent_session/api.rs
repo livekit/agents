@@ -186,7 +186,7 @@ impl SessionApi {
 
             let mut tasks = Vec::new();
             if let Some(run) = owner.run() {
-                tasks.push(spawner.spawn(run));
+                tasks.push(spawner.spawn_unboxed(run));
             }
             // Drained whether or not anybody listens: the queue is unbounded.
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
@@ -199,7 +199,7 @@ impl SessionApi {
                 #[cfg(feature = "dst")]
                 host_event,
             };
-            tasks.push(spawner.spawn(drain(runner)));
+            tasks.push(spawner.spawn_unboxed(drain(runner)));
 
             {
                 let mut stage = stage.lock().unwrap_or_else(|p| p.into_inner());

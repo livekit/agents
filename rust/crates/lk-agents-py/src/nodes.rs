@@ -854,7 +854,7 @@ mod text_cleanup_tests {
                 host: g.bind(py).get_item("processing").unwrap().unwrap().unbind(),
                 locals: pyo3_async_runtimes::TaskLocals::new(event_loop).with_context(context),
                 clock: Arc::new(RealClock::new()),
-                spawner: Arc::new(lk_agents_abi::TokioSpawner::current()),
+                spawner: Arc::new(lk_agents_runtime::net::task::TokioSpawner::current()),
             }
         })
     }

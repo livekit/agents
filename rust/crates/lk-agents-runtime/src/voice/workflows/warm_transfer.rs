@@ -531,7 +531,7 @@ mod tests {
         Arc::new(HostWarmTransfer::new(
             plan,
             Arc::new(lk_agents_abi::VirtualClock::new()),
-            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         ))
     }
 
@@ -655,13 +655,13 @@ mod tests {
         }
     }
     struct ObservedSpawner {
-        inner: lk_agents_abi::TokioSpawner,
+        inner: lk_agents_net::task::TokioSpawner,
         started: std::sync::atomic::AtomicUsize,
     }
     impl Spawner for ObservedSpawner {
-        fn spawn(&self, work: lk_agents_abi::BoxFuture<'static, ()>) -> AbortHandle {
+        fn execute(&self, task: lk_agents_abi::Spawned) {
             self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.inner.spawn(work)
+            self.inner.execute(task)
         }
     }
 
@@ -669,7 +669,7 @@ mod tests {
     async fn cancelling_a_pending_creation_retires_the_late_call_on_the_supplied_spawner() {
         use std::future::Future as _;
         let spawner = Arc::new(ObservedSpawner {
-            inner: lk_agents_abi::TokioSpawner::current(),
+            inner: lk_agents_net::task::TokioSpawner::current(),
             started: 0.into(),
         });
         let (release, pending) = tokio::sync::oneshot::channel();

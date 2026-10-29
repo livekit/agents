@@ -465,7 +465,7 @@ mod tests {
     fn rt() -> (Arc<dyn Clock>, Arc<dyn Spawner>) {
         (
             Arc::new(lk_agents_abi::RealClock::default()),
-            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         )
     }
 
@@ -520,7 +520,7 @@ mod tests {
         }
         let (transport, _peer) = pair();
         let runtime =
-            HostRuntime::new(time.clone(), Arc::new(lk_agents_abi::TokioSpawner::current()));
+            HostRuntime::new(time.clone(), Arc::new(lk_agents_net::task::TokioSpawner::current()));
         let before = time.wall_secs();
         runtime
             .send_wire(

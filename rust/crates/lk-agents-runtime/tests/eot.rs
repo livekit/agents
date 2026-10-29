@@ -102,7 +102,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
             make,
             process::env().workers,
             None,
-            &lk_agents_abi::TokioSpawner::current(),
+            &lk_agents_net::task::TokioSpawner::current(),
         );
         let abandoned = stream.predict();
         let mut queued = None;
@@ -220,7 +220,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
             _ => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
         })
     });
-    let spawner = lk_agents_abi::TokioSpawner::current();
+    let spawner = lk_agents_net::task::TokioSpawner::current();
     let stream = EotStream::open(session, 16_000, make, process::env().workers, None, &spawner);
     tokio::time::timeout(Duration::from_secs(5), async {
         while !stream.is_fallback() {
@@ -282,7 +282,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
             make,
             process::env().workers,
             None,
-            &lk_agents_abi::TokioSpawner::current(),
+            &lk_agents_net::task::TokioSpawner::current(),
         );
         let first = tokio::time::timeout(Duration::from_secs(1), stream.predict())
             .await

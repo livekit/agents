@@ -58,7 +58,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
             conn_options: lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
         },
         Arc::new(TungsteniteTransport),
-        Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current())),
+        Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current())),
     );
 
     let (sink, mut source) = stt

@@ -5,8 +5,9 @@ use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
     ApiConnectOptions, AudioBuffer, AudioFrame, BoxFuture, Clock, Closed, Spawner, SpeechEvent,
     SpeechEventType, StreamSink, StreamSource, Stt, SttCapabilities, SttSink, SttSource,
-    SynthesizedAudio, TokioSpawner, Ts, Tts, TtsCapabilities, TtsSink, TtsSource, VirtualClock,
+    SynthesizedAudio, Ts, Tts, TtsCapabilities, TtsSink, TtsSource, VirtualClock,
 };
+use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;

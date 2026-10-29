@@ -91,7 +91,8 @@ fn assembled(
     hook_bound: Option<f64>,
     options: Option<&lk_agents_voice::agent_activity::options::HostOptions>,
 ) -> SessionApi {
-    let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
+    let spawner =
+        Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current()));
     #[rustfmt::skip]
     let api = SessionApi::host_new(
         Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None,
@@ -507,7 +508,8 @@ async fn a_held_say_interrupted_before_the_swap_does_not_play() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
     let (_held, handle) = say_from(&api, Origin::Host);
-    let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
+    let spawner =
+        Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current()));
     handle.interrupt_for_host(false, spawner).expect("an interruptible say");
     assert!(handle.interrupted_for_host(), "the interrupt is the handle's at once");
 
@@ -851,7 +853,7 @@ async fn close_during_opening_retires_only_the_accepted_remote_host() {
             transport.clone(),
             None,
             api.time().clone(),
-            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         ));
         (host, transport)
     };

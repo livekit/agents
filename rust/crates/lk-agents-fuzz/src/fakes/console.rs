@@ -1,5 +1,6 @@
 //! The CLI peer's bytes and paced speaker, driving the real console transport and audio legs.
 
+use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{BoxFuture, Clock, Spawner, Ts};
 use lk_agents_runtime::net::tcp::{Connection, Connector};
@@ -45,18 +46,18 @@ impl FakeCli {
         let (mut reader, mut writer) = tokio::io::split(cli);
         let (to_agent, mut sent) =
             tokio::sync::mpsc::unbounded_channel::<proto::AgentSessionMessage>();
-        world.spawn(Box::pin(async move {
+        world.spawn_unboxed(async move {
             while let Some(message) = sent.recv().await {
                 if writer.write_all(&frame(&message.encode_to_vec())).await.is_err() {
                     return;
                 }
             }
             let _ = writer.shutdown().await;
-        }));
+        });
         let cli = FakeCli { to_agent, playing_until: Arc::default(), clock };
         let speaker = cli.clone();
         let world_inner = world.clone();
-        world.spawn(Box::pin(async move {
+        world.spawn_unboxed(async move {
             let (mut pending, mut segment) = (Duration::ZERO, 0u64);
             let played = Arc::new(std::sync::atomic::AtomicU64::new(0));
             let mut decoder = FrameDecoder::new();
@@ -84,14 +85,14 @@ impl FakeCli {
                             let mut playing = speaker.playing_until.lock().unwrap();
                             *playing = Some(playing.map_or(until, |at| at.max(until)));
                             drop(playing);
-                            world_inner.spawn(Box::pin(async move {
+                            world_inner.spawn_unboxed(async move {
                                 speaker.clock.wait_until(until).await;
                                 if played.load(std::sync::atomic::Ordering::Relaxed) == this {
                                     speaker.send(Message::AudioPlaybackFinished(
                                         console_io::AudioPlaybackFinished {},
                                     ));
                                 }
-                            }));
+                            });
                         }
                         Some(Message::AudioPlaybackClear(_)) => {
                             pending = Duration::ZERO;
@@ -102,7 +103,7 @@ impl FakeCli {
                     }
                 }
             }
-        }));
+        });
         (io, cli)
     }
 

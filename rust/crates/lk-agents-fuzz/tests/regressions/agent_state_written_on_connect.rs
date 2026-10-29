@@ -2,8 +2,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::ATTRIBUTE_AGENT_STATE;
 use lk_agents_abi::voice::room_owner::RoomIo as _;
-use lk_agents_abi::{ATTRIBUTE_AGENT_STATE, TokioSpawner};
+use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
 use lk_agents_test_support::rtc::{ConnectionState, FakeRtc, RtcRoom};
 use lk_agents_voice::room_io::RoomIoConfig;

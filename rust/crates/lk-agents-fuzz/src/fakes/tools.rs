@@ -359,7 +359,7 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::utils::spawner::TokioSpawner;
+    use lk_agents_runtime::net::task::TokioSpawner;
     use lk_agents_voice::{
         agent_activity::scheduling::SpeechId,
         agent_session::{Timebase, Tx},

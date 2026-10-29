@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_abi::voice::io;
 use lk_agents_abi::voice::io::{
@@ -404,14 +405,14 @@ impl Playout {
             .collect();
         if let Some(world) = &self.lagging {
             let tracker = self.tracker.clone();
-            world.spawn(Box::pin(async move {
+            world.spawn_unboxed(async move {
                 for _ in 0..LAGGING_REPORT_HOPS {
                     tokio::task::yield_now().await;
                 }
                 for (key, ev) in finished {
                     tracker.playback_finished(key, ev);
                 }
-            }));
+            });
         } else {
             for (key, ev) in finished {
                 self.tracker.playback_finished(key, ev);

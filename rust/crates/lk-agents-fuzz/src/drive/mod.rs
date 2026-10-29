@@ -546,16 +546,14 @@ struct Spawned {
 }
 
 impl Spawner for Tasks {
-    fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
-        let site = std::panic::Location::caller();
-        let future = match &self.gate {
-            Some(gate) => gate.wrap(future),
-            None => future,
+    fn execute(&self, task: lk_agents_abi::Spawned) {
+        let site = task.site();
+        let future: BoxFuture<'static, ()> = match &self.gate {
+            Some(gate) => gate.wrap(Box::pin(task)),
+            None => Box::pin(task),
         };
         let task = tokio::spawn(future);
-        let abort = task.abort_handle().into();
         self.spawned.lock().unwrap().push(Spawned { at: self.stamps.now(), site, task });
-        abort
     }
 }
 
@@ -576,15 +574,12 @@ impl Drop for Tasks {
 pub struct World(Arc<Tasks>);
 
 impl Spawner for World {
-    fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
-        let future = match &self.0.gate {
-            Some(gate) => gate.wrap(future),
-            None => future,
+    fn execute(&self, task: lk_agents_abi::Spawned) {
+        let future: BoxFuture<'static, ()> = match &self.0.gate {
+            Some(gate) => gate.wrap(Box::pin(task)),
+            None => Box::pin(task),
         };
-        let task = tokio::spawn(future);
-        let abort = task.abort_handle().into();
-        self.0.world.lock().unwrap().push(task);
-        abort
+        self.0.world.lock().unwrap().push(tokio::spawn(future));
     }
 }
 

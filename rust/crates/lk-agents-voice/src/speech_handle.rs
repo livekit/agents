@@ -763,11 +763,11 @@ impl SpeechHandle {
             CreationInterrupt::Ignore => {}
             CreationInterrupt::Wait => {
                 let handle = Arc::clone(self);
-                spawner.spawn(Box::pin(async move {
+                lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
                     if handle.wait_created().await.is_ok() {
                         interrupt(&handle.api, handle.id());
                     }
-                }));
+                });
             }
         }
         Ok(())

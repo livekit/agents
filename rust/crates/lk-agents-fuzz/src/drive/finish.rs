@@ -675,6 +675,7 @@ fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::SpawnerExt as _;
 
     /// Runs `body` on a fresh run, then closes it and ends it as `run()` does: its outcome.
     fn ended(body: impl FnOnce(&Run) + 'static) -> Outcome {
@@ -722,11 +723,11 @@ mod tests {
     fn each_ending_is_told_apart() {
         assert_eq!(ended(|_| {}).ending, Ending::Completed);
         let violated = ended(|run| {
-            run.tasks.spawn(Box::pin(async { panic!("boom") }));
+            run.tasks.spawn_unboxed(async { panic!("boom") });
         });
         assert_eq!(violated.ending, Ending::ContractViolated, "{:?}", violated.failures);
         let deadlocked = ended(|run| {
-            run.tasks.spawn(Box::pin(std::future::pending()));
+            run.tasks.spawn_unboxed(std::future::pending());
         });
         assert!(
             matches!(&deadlocked.ending, Ending::Deadlock { evidence } if evidence.contains("nothing pending")),

@@ -27,11 +27,12 @@ use tokio::sync::mpsc;
 
 use crate::llm::parse::WireChunk;
 use futures_util::StreamExt;
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 use lk_agents_net::attempts::AttemptFailure;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
-use lk_agents_net::task::{OwnedTask, TaskOutcome};
+use lk_agents_net::task::TokioSpawner;
 
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
 const OBSERVATION_QUEUE: usize = 32;
@@ -259,11 +260,8 @@ impl Llm for GatewayLlm {
         headers.set("Authorization", format!("Bearer {bearer}"));
         let (http, url) =
             (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
-        let task = OwnedTask::spawn(
-            &self.runtime,
-            async move { http.warm(url, headers.into_vec()).await },
-            |_| async {},
-        );
+        let task = TokioSpawner::new(self.runtime.clone())
+            .spawn(async move { http.warm(url, headers.into_vec()).await });
         *self.prewarm.lock().unwrap_or_else(|p| p.into_inner()) = Some(task);
     }
 
@@ -437,7 +435,7 @@ impl LlmChunks {
                     let work = async move {
                         send_attempt(&exchange.http, exchange.attempt(), attempt, reporter).await
                     };
-                    let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
+                    let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, move |outcome| async move {
                         if outcome == TaskOutcome::Panicked {
                             log::error!(target: "livekit.agents", attempt; "LLM request attempt panicked");
                         }

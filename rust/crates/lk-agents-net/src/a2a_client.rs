@@ -24,7 +24,8 @@ use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::source::{NativeSource, PullError, Pulled};
 use crate::sse::SseDecoder;
-use crate::task::{OwnedTask, TaskOutcome};
+use crate::task::TokioSpawner;
+use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;
@@ -343,35 +344,37 @@ impl AgentClient {
                 }
             }
         };
-        let task = OwnedTask::spawn(&self.inner.runtime, work, move |outcome| async move {
-            {
-                let inner = cleanup_inner;
-                if outcome != TaskOutcome::Completed && !terminal.load(Ordering::Acquire) {
-                    let task = remote.lock().ok().and_then(|task| task.clone());
-                    match task {
-                        Some(task) => {
-                            inner.cancel_owned(&task).await;
-                        }
-                        None => {
-                            inner.observe(CleanupObservation::UnacknowledgedRequest { request: id })
+        let task = TokioSpawner::new(self.inner.runtime.clone()).spawn_settled(
+            work,
+            move |outcome| async move {
+                {
+                    let inner = cleanup_inner;
+                    if outcome != TaskOutcome::Completed && !terminal.load(Ordering::Acquire) {
+                        let task = remote.lock().ok().and_then(|task| task.clone());
+                        match task {
+                            Some(task) => {
+                                inner.cancel_owned(&task).await;
+                            }
+                            None => inner
+                                .observe(CleanupObservation::UnacknowledgedRequest { request: id }),
                         }
                     }
+                    let empty = if let Ok(mut operations) = inner.operations.lock() {
+                        operations.remove(&id);
+                        operations.is_empty()
+                    } else {
+                        false
+                    };
+                    if empty
+                        && inner.closed.load(Ordering::Acquire)
+                        && let Ok(mut core) = inner.core.lock()
+                    {
+                        core.close();
+                    }
                 }
-                let empty = if let Ok(mut operations) = inner.operations.lock() {
-                    operations.remove(&id);
-                    operations.is_empty()
-                } else {
-                    false
-                };
-                if empty
-                    && inner.closed.load(Ordering::Acquire)
-                    && let Ok(mut core) = inner.core.lock()
-                {
-                    core.close();
-                }
-            }
-            done.send_replace(true);
-        });
+                done.send_replace(true);
+            },
+        );
         {
             let mut operations = self.inner.operations.lock().map_err(poisoned)?;
             self.inner.ensure_open()?;

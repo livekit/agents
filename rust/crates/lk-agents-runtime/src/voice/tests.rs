@@ -28,7 +28,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
         view,
         time,
         config,
-        spawner: Arc::new(lk_agents_abi::TokioSpawner::current()),
+        spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
         journal: Journal::observed(move |step| observed.lock().unwrap().push(step.clone())),
         probe: None,
         agent: "agent".into(),

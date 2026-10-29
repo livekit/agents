@@ -403,7 +403,7 @@ impl SessionApi {
                             .await;
                             if first.is_pending() {
                                 running.retain(|task| !task.is_finished());
-                                running.push(spawner.spawn(answer));
+                                running.push(spawner.spawn_unboxed(answer));
                             }
                         }
                         ev => {
@@ -627,7 +627,7 @@ impl SessionApi {
                 handed.into_iter().for_each(|id| resources.release(id));
             }
         };
-        self.spawner.spawn(Box::pin(handoff));
+        self.spawner.spawn_unboxed(handoff);
         Ok(())
     }
 

@@ -8,7 +8,8 @@ use lk_agents_abi::voice::rtc::{
     TrackPublishOptions,
 };
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID};
-use lk_agents_abi::{Clock, RealClock, TokioSpawner};
+use lk_agents_abi::{Clock, RealClock};
+use lk_agents_net::task::TokioSpawner;
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 

@@ -6,6 +6,7 @@
 //! realtime generation at its first input, which is where the host's node is invoked.
 use std::sync::Arc;
 
+use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
 use lk_agents_abi::{
@@ -183,7 +184,7 @@ impl NodeFactory for FakeNodes {
         let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
         let retained = Arc::new(std::sync::Mutex::new(None::<Box<dyn Send>>));
         let released = retained.clone();
-        self.registry.world.spawn(Box::pin(async move {
+        self.registry.world.spawn_unboxed(async move {
             let outcome = loop {
                 let op = tokio::select! {
                     biased;
@@ -218,7 +219,7 @@ impl NodeFactory for FakeNodes {
                 owner.take()
             };
             drop(owner);
-        }));
+        });
         Ok(Arc::new(EchoText(
             tx,
             self.invocation(NodeUse::Transcription),
@@ -237,7 +238,7 @@ impl NodeFactory for FakeNodes {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AudioFrame>();
         let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cleared = Arc::clone(&cut);
-        self.registry.world.spawn(Box::pin(async move {
+        self.registry.world.spawn_unboxed(async move {
             while let Some(frame) = rx.recv().await {
                 if cleared.load(std::sync::atomic::Ordering::SeqCst)
                     || below.capture_frame(&frame).await.is_err()
@@ -245,7 +246,7 @@ impl NodeFactory for FakeNodes {
                     break;
                 }
             }
-        }));
+        });
         Ok(Arc::new(EchoAudio(tx, cut, self.invocation(NodeUse::RealtimeAudio))))
     }
 

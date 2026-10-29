@@ -1,6 +1,7 @@
 use super::*;
 use lk_agents_abi::voice::io::{AudioOutputExt, PlaybackEvent, PlaybackObserver};
-use lk_agents_abi::{SpawnerExt, TokioSpawner, VirtualClock};
+use lk_agents_abi::{SpawnerExt, VirtualClock};
+use lk_agents_net::task::TokioSpawner;
 use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind, TrackSource};
 use lk_agents_voice::avatar::{RPC_PLAYBACK_STARTED, stream_segment};
 

@@ -234,7 +234,7 @@ mod tests {
         let transport = RoomTransport::new(
             crate::rtc::room::Room::wrap(room.clone()),
             clock,
-            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            Arc::new(lk_agents_net::task::TokioSpawner::current()),
         );
         transport.start().await.unwrap();
         transport.start().await.expect("idempotent");
