@@ -190,8 +190,8 @@ impl Clock for RealClock {
     }
 }
 
-/// `_TICK_EPSILON` in `tests/virtual_time.py`.
-const TICK_EPSILON: Duration = Duration::from_micros(1);
+/// `_TICK_EPSILON` in `tests/virtual_time.py`: wall stamps stay strictly increasing.
+pub const TICK_EPSILON: Duration = Duration::from_micros(1);
 
 pub struct VirtualClock {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]

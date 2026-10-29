@@ -34,6 +34,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
 use pyo3_async_runtimes::generic::ContextExt;
 
+use lk_agents_abi::utils::clock::TICK_EPSILON;
 use lk_agents_abi::utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner};
 use lk_agents_abi::{Clock, Ts, lock};
 
@@ -45,9 +46,6 @@ pub const VIRTUAL_TIME_MARKER: &str = "_lk_agents_virtual_time";
 
 /// A pump runs at most this many tasks before yielding to the loop's other callbacks.
 const PUMP_BUDGET: usize = 256;
-
-/// `_TICK_EPSILON` in `tests/virtual_time.py`: wall stamps stay strictly increasing.
-const TICK_EPSILON: Duration = Duration::from_micros(1);
 
 // --------------------------------------------------------------------- the float rule
 

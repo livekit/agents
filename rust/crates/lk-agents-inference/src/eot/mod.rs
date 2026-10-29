@@ -33,7 +33,6 @@ pub use connector::TungsteniteEotConnector;
 pub use detector::{DetectorStream, NativeEot};
 pub use eot::{
     CancelReason, DEFAULT_PREDICTION_TIMEOUT, DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning,
-    MIN_SILENCE_DURATION,
 };
 pub use local::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CLIENT_BUFFER_SECONDS, LocalEotModel, LocalTransport,

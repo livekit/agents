@@ -9,10 +9,6 @@ use crate::eot::EotWarn;
 /// `DEFAULT_SAMPLE_RATE` (`base.py:29`). The rate the models are trained at.
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
 
-/// `MIN_SILENCE_DURATION_MS` (`base.py:32`): the minimum VAD silence before a request is worth
-/// sending. Enforced against the caller's VAD by `AudioRecognition`.
-pub const MIN_SILENCE_DURATION: Duration = Duration::from_millis(200);
-
 /// `DEFAULT_PREDICTION_TIMEOUT` (`base.py:37`), how long §2.3's `AwaitingPrediction` waits.
 pub const DEFAULT_PREDICTION_TIMEOUT: Duration = Duration::from_secs(1);
 
