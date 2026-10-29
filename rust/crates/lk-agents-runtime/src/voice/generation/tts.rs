@@ -5,14 +5,13 @@ use super::llm::{Retried, SegEvent, report_metrics, retry};
 use super::pipeline_reply::teardown_deadline;
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::agent_session::SessionShared;
 use lk_agents_voice::generation::tts::{
-    AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, TextEffect, TranscriptEffect,
+    AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics, TextEffect,
+    TranscriptEffect,
 };
 use lk_agents_voice::generation::{Attempt, GenEvent, TurnAccumulator};
 use lk_agents_voice::speech_handle::SpeechHandle;
@@ -104,7 +103,12 @@ pub(super) async fn perform_tts_inference(
                     });
                 }));
                 let aligned = aligned.as_deref_mut();
-                let tts_data = TtsGenerationData::new(tts, shared, segment);
+                let tts_data = SynthesisMetrics::new(
+                    tts.id(),
+                    segment,
+                    shared.time.wall_secs(),
+                    shared.time.wall_secs(),
+                );
                 let streaming = Streaming {
                     shared,
                     handle,
@@ -190,7 +194,7 @@ async fn synthesize(
         end_input(sink, &mut streaming.transforms);
     }
     let heard = playback.run(shared, handle, &mut streaming).await;
-    streaming.tts_data.take_calls(shared, handle, &mut streaming.source, true);
+    take_tts_calls(&mut streaming.tts_data, shared, handle, &mut streaming.source, true);
     let Streaming { state, source, rx, tts_data, aligned, .. } = streaming;
     let StreamingTts { words, input_done, .. } = state;
     // Always: `end_input` before teardown (a second call is a no-op).
@@ -200,7 +204,14 @@ async fn synthesize(
     let produced = tts_data.produced();
     match heard {
         Ok(mut heard) => {
-            tts_data.finish(shared, handle, &fed);
+            if let Some(record) = tts_data.finish(
+                &fed,
+                shared.time.wall_secs(),
+                handle.interrupted(),
+                handle.speech_id(),
+            ) {
+                report_metrics(shared, handle, record);
+            }
             // Drain the rest so the next segment starts clean; it joins the item only if the audio
             // played out whole (on the aligned path the item is the stamps).
             if !input_done {
@@ -253,7 +264,7 @@ struct Streaming<'a, 'b> {
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,
     state: StreamingTts,
-    tts_data: TtsGenerationData,
+    tts_data: SynthesisMetrics,
     aligned: Option<&'a mut Aligned<'b>>,
 }
 
@@ -305,7 +316,7 @@ impl Segment for Streaming<'_, '_> {
                 }
             }
         };
-        self.tts_data.take_calls(self.shared, self.handle, &mut self.source, false);
+        take_tts_calls(&mut self.tts_data, self.shared, self.handle, &mut self.source, false);
         let chunk = match chunk {
             Ok(Some(chunk)) => chunk,
             Ok(None) => {
@@ -317,7 +328,9 @@ impl Segment for Streaming<'_, '_> {
             }
             Err(e) => return Err(DriverError::from(e)),
         };
-        self.tts_data.note(self.shared, self.acc, &chunk);
+        if let Some(stats) = self.tts_data.note(&chunk, self.shared.time.wall_secs()) {
+            self.acc.record_tts(self.tts_data.segment, stats);
+        }
         if let Some(a) = self.aligned.as_deref_mut() {
             a.chunk(&chunk).await;
         }
@@ -350,92 +363,17 @@ pub(super) fn transformed(shared: &Arc<SessionShared>, raw: &str) -> String {
     out.concat()
 }
 
-/// `_TTSGenerationData` and `_metrics_monitor_task`'s fold for one request. A failed request
-/// leaves no `TTSMetrics`; only the first synthesised segment feeds the turn's TTS metrics.
-struct TtsGenerationData {
-    tts: lk_agents_abi::ProviderId,
-    segment: usize,
-    synthesis_started_at: f64,
-    started_at: f64,
-    metrics: TtsMetricState,
-    /// The source meters its own provider calls (a `StreamAdapter`'s sentences), so the stream
-    /// has no record of its own.
-    metered_calls: bool,
-}
-
-impl TtsGenerationData {
-    fn new(tts: &dyn Tts, shared: &Arc<SessionShared>, segment: usize) -> Self {
-        TtsGenerationData {
-            tts: tts.id(),
-            segment,
-            synthesis_started_at: shared.time.wall_secs(),
-            started_at: shared.time.wall_secs(),
-            metrics: TtsMetricState::for_host(true),
-            metered_calls: false,
-        }
-    }
-
-    /// Reports the calls the source finished; `in_flight` ends the running one too.
-    fn take_calls(
-        &mut self,
-        shared: &SessionShared,
-        handle: &SpeechHandle,
-        source: &mut lk_agents_abi::TtsSource,
-        in_flight: bool,
-    ) {
-        let Some(records) = source.take_call_metrics(in_flight) else { return };
-        self.metered_calls = true;
-        for mut record in records {
-            if let AgentMetrics::Tts(tts) = &mut record {
-                tts.speech_id = Some(handle.speech_id().to_owned());
-            }
-            report_metrics(shared, handle, record);
-        }
-    }
-
-    /// Whether audio came.
-    fn produced(&self) -> bool {
-        self.metrics.ttfb().is_some()
-    }
-
-    fn note(
-        &mut self,
-        shared: &SessionShared,
-        acc: &mut TurnAccumulator,
-        chunk: &SynthesizedAudio,
-    ) {
-        if !self.produced() {
-            // The turn's, from when the provider was first sent text; without that stamp, from
-            // the first input, which also counts the text buffering. The record's is the
-            // request's.
-            let anchor = chunk.started_time.unwrap_or(self.synthesis_started_at);
-            let stats = lk_agents_voice::generation::TtsStats {
-                ttfb: Some(shared.time.wall_secs() - anchor),
-                synthesis_started_at: chunk.started_time,
-            };
-            acc.record_tts(self.segment, stats);
-        }
-        let started_at = self.started_at;
-        self.metrics.observe(chunk, || shared.time.wall_secs() - started_at);
-    }
-
-    fn finish(mut self, shared: &SessionShared, handle: &SpeechHandle, text: &str) {
-        if self.metered_calls {
-            return;
-        }
-        let now = shared.time.wall_secs();
-        let context = Context {
-            timestamp: now,
-            label: self.tts.label.clone(),
-            cancelled: handle.interrupted(),
-            metadata: Some(self.tts.metadata()),
-        };
-        // No token counts, acquire time or connection reuse on this path.
-        let record = self.metrics.finish(now, self.started_at, text, 0, 0, 0.0, false, context);
-        if let Some(mut record) = record {
-            record.speech_id = Some(handle.speech_id().to_owned());
-            report_metrics(shared, handle, AgentMetrics::Tts(record));
-        }
+/// Provider-owned sentence metrics are observations, not a second synthesis record.
+fn take_tts_calls(
+    state: &mut SynthesisMetrics,
+    shared: &SessionShared,
+    handle: &SpeechHandle,
+    source: &mut lk_agents_abi::TtsSource,
+    in_flight: bool,
+) {
+    let Some(records) = source.take_call_metrics(in_flight) else { return };
+    for record in state.calls(records, handle.speech_id()) {
+        report_metrics(shared, handle, record);
     }
 }
 

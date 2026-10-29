@@ -128,3 +128,87 @@ impl AlignedTranscript {
         effects
     }
 }
+
+/// One synthesis request's observations. All timestamps are supplied by the executor.
+pub struct SynthesisMetrics {
+    provider: lk_agents_abi::ProviderId,
+    pub segment: usize,
+    synthesis_started_at: f64,
+    started_at: f64,
+    metrics: lk_agents_abi::telemetry::provider::TtsMetricState,
+    metered_calls: bool,
+}
+
+impl SynthesisMetrics {
+    pub fn new(
+        provider: lk_agents_abi::ProviderId,
+        segment: usize,
+        synthesis_started_at: f64,
+        started_at: f64,
+    ) -> Self {
+        Self {
+            provider,
+            segment,
+            synthesis_started_at,
+            started_at,
+            metrics: lk_agents_abi::telemetry::provider::TtsMetricState::for_host(true),
+            metered_calls: false,
+        }
+    }
+
+    pub fn produced(&self) -> bool {
+        self.metrics.ttfb().is_some()
+    }
+
+    pub fn note(
+        &mut self,
+        chunk: &lk_agents_abi::SynthesizedAudio,
+        now: f64,
+    ) -> Option<super::TtsStats> {
+        let first = (!self.produced()).then(|| super::TtsStats {
+            ttfb: Some(now - chunk.started_time.unwrap_or(self.synthesis_started_at)),
+            synthesis_started_at: chunk.started_time,
+        });
+        self.metrics.observe(chunk, || now - self.started_at);
+        first
+    }
+
+    pub fn calls(
+        &mut self,
+        records: Vec<lk_agents_abi::metrics::base::AgentMetrics>,
+        speech_id: &str,
+    ) -> Vec<lk_agents_abi::metrics::base::AgentMetrics> {
+        self.metered_calls = true;
+        records
+            .into_iter()
+            .map(|mut record| {
+                if let lk_agents_abi::metrics::base::AgentMetrics::Tts(tts) = &mut record {
+                    tts.speech_id = Some(speech_id.to_owned());
+                }
+                record
+            })
+            .collect()
+    }
+
+    pub fn finish(
+        mut self,
+        text: &str,
+        now: f64,
+        interrupted: bool,
+        speech_id: &str,
+    ) -> Option<lk_agents_abi::metrics::base::AgentMetrics> {
+        if self.metered_calls {
+            return None;
+        }
+        let context = lk_agents_abi::telemetry::provider::Context {
+            timestamp: now,
+            label: self.provider.label.clone(),
+            cancelled: interrupted,
+            metadata: Some(self.provider.metadata()),
+        };
+        let mut record =
+            self.metrics.finish(now, self.started_at, text, 0, 0, 0.0, false, context)?;
+        record.speech_id = Some(speech_id.to_owned());
+        Some(lk_agents_abi::metrics::base::AgentMetrics::Tts(record))
+    }
+}
