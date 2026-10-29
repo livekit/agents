@@ -7,11 +7,13 @@ use futures_util::StreamExt;
 use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort, timeout_duration};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
-use lk_agents_core::mcp::{ConnectionSettlement, TransportSettlement, allowed_tools};
+use lk_agents_core::mcp::{
+    ConnectionSettlement, ListStep, ToolListing, TransportSettlement, progress_message,
+};
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams,
-    ProgressNotificationParam, ServerResult, Tool,
+    ProgressNotificationParam, ServerResult,
 };
 use rmcp::service::serve_client_with_ct;
 use rmcp::service::{
@@ -123,8 +125,7 @@ pub struct McpSession {
     initializing: Mutex<Option<Arc<TransportReceipt>>>,
     connecting: tokio::sync::Mutex<()>,
     cancel: Mutex<CancellationToken>,
-    cache: Mutex<Option<Vec<Tool>>>,
-    allowed: Mutex<Vec<String>>,
+    listing: Mutex<ToolListing>,
 }
 
 impl McpSessionPort for McpSession {
@@ -139,8 +140,7 @@ impl McpSessionPort for McpSession {
             initializing: Mutex::default(),
             connecting: tokio::sync::Mutex::default(),
             cancel: Mutex::new(CancellationToken::new()),
-            cache: Mutex::default(),
-            allowed: Mutex::default(),
+            listing: Mutex::default(),
         })
     }
     fn connected(&self) -> bool {
@@ -151,10 +151,10 @@ impl McpSessionPort for McpSession {
             .is_some_and(|c| !c.cancel.is_cancelled() && !c.peer.is_transport_closed())
     }
     fn set_allowed_tools(&self, allowed: Vec<String>) {
-        *self.allowed.lock().unwrap() = allowed;
+        self.listing.lock().unwrap().set_allowed(allowed);
     }
     fn invalidate_cache(&self) {
-        *self.cache.lock().unwrap() = None;
+        self.listing.lock().unwrap().invalidate();
     }
 
     async fn connect_http(
@@ -214,40 +214,28 @@ impl McpSessionPort for McpSession {
     async fn list_tools(&self) -> Result<Value, McpError> {
         let connection = self.live(McpError::NotInitialized)?;
         let _call = connection.borrow()?;
-        let cached = self.cache.lock().unwrap().clone();
-        let tools = match cached {
-            Some(tools) => tools,
-            None => {
-                let mut tools = Vec::new();
-                let mut cursor = None;
-                loop {
-                    let params = PaginatedRequestParams::default().with_cursor(cursor);
-                    let request = ClientRequest::ListToolsRequest(
-                        rmcp::model::ListToolsRequest::with_param(params),
-                    );
-                    let result = self.request(&connection, request).await?;
-                    let ServerResult::ListToolsResult(page) = result else {
-                        return Err(McpError::UnexpectedResponse);
-                    };
-                    tools.extend(page.tools);
-                    cursor = page.next_cursor;
-                    if cursor.is_none() {
-                        break;
-                    }
-                }
-                // A closing connection must not repopulate the next run's cache.
-                if !connection.cancel.is_cancelled() {
-                    *self.cache.lock().unwrap() = Some(tools.clone());
-                }
-                tools
-            }
-        };
-        let tools = tools
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()
-            .map_err(|e| McpError::Decode(Arc::new(e)))?;
-        Ok(allowed_tools(tools, &self.allowed.lock().unwrap()).into())
+        let mut step = self.listing.lock().unwrap().list();
+        loop {
+            let (pages, cursor) = match step {
+                ListStep::Done(tools) => return Ok(tools.into()),
+                ListStep::Fetch { pages, cursor } => (pages, cursor),
+            };
+            let params = PaginatedRequestParams::default().with_cursor(cursor);
+            let request =
+                ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest::with_param(params));
+            let ServerResult::ListToolsResult(page) = self.request(&connection, request).await?
+            else {
+                return Err(McpError::UnexpectedResponse);
+            };
+            let tools = page
+                .tools
+                .into_iter()
+                .map(serde_json::to_value)
+                .collect::<Result<_, _>>()
+                .map_err(|e| McpError::Decode(Arc::new(e)))?;
+            let closing = connection.cancel.is_cancelled();
+            step = self.listing.lock().unwrap().page(pages, tools, page.next_cursor, closing);
+        }
     }
     async fn call_tool(
         &self,
@@ -274,7 +262,7 @@ impl McpSessionPort for McpSession {
                 _ = connection.cancel.cancelled() => return Err(cancelled()),
                 result = &mut response => break result.map_err(|e| connection.error(e))?,
                 Some(update) = updates.next() => {
-                    if let (Some(sink), Some(message)) = (&progress, update.message.as_deref().filter(|m| !m.is_empty())) {
+                    if let (Some(sink), Some(message)) = (&progress, progress_message(update.message.as_deref())) {
                         let invocation = McpInvocation { host_context: host_context.clone() };
                         call.host_callback_pending = true;
                         tokio::select! {

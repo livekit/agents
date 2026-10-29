@@ -246,18 +246,77 @@ impl ConnectionSettlement {
     }
 }
 
-/// The listed tools the session exposes: all of them, or only the allowed names.
-pub fn allowed_tools(tools: Vec<Value>, allowed: &[String]) -> Vec<Value> {
-    tools
-        .into_iter()
-        .filter(|tool| {
-            allowed.is_empty()
-                || tool
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|n| allowed.iter().any(|a| a == n))
-        })
-        .collect()
+/// The session's tool listing: the server's tools cached across runs, exposed through the allowed
+/// names, fetched page by page when nothing is cached.
+#[derive(Debug, Default)]
+pub struct ToolListing {
+    cache: Option<Vec<Value>>,
+    allowed: Vec<String>,
+}
+
+/// The next step of one `list_tools` call.
+#[derive(Debug)]
+pub enum ListStep {
+    /// Fetch the page after `cursor` (the first page when `None`), then feed it to
+    /// [`ToolListing::page`] with `pages`.
+    Fetch { pages: ToolPages, cursor: Option<String> },
+    /// The tools the session exposes.
+    Done(Vec<Value>),
+}
+
+/// The pages one fresh listing has fetched so far.
+#[derive(Debug, Default)]
+pub struct ToolPages(Vec<Value>);
+
+impl ToolListing {
+    pub fn set_allowed(&mut self, allowed: Vec<String>) {
+        self.allowed = allowed;
+    }
+    pub fn invalidate(&mut self) {
+        self.cache = None;
+    }
+    pub fn list(&self) -> ListStep {
+        match &self.cache {
+            Some(tools) => ListStep::Done(self.allowed(tools.clone())),
+            None => ListStep::Fetch { pages: ToolPages::default(), cursor: None },
+        }
+    }
+    /// One fetched page. The complete listing is cached unless its connection is closing: a
+    /// closing connection must not repopulate the next run's cache.
+    pub fn page(
+        &mut self,
+        mut pages: ToolPages,
+        tools: Vec<Value>,
+        next_cursor: Option<String>,
+        closing: bool,
+    ) -> ListStep {
+        pages.0.extend(tools);
+        if next_cursor.is_some() {
+            return ListStep::Fetch { pages, cursor: next_cursor };
+        }
+        if !closing {
+            self.cache = Some(pages.0.clone());
+        }
+        ListStep::Done(self.allowed(pages.0))
+    }
+    /// All the tools, or only the allowed names.
+    fn allowed(&self, tools: Vec<Value>) -> Vec<Value> {
+        tools
+            .into_iter()
+            .filter(|tool| {
+                self.allowed.is_empty()
+                    || tool
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|n| self.allowed.iter().any(|a| a == n))
+            })
+            .collect()
+    }
+}
+
+/// A progress notification reaches the host only when it carries a non-empty message.
+pub fn progress_message(message: Option<&str>) -> Option<&str> {
+    message.filter(|m| !m.is_empty())
 }
 
 fn decode_error(message: impl Into<String>) -> McpError {
