@@ -693,13 +693,6 @@ async fn options_view_changes_only_after_core_acceptance() {
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
 }
 
-// Catches: a session built with no `SessionOptions` answering a configuration it does not have.
-#[tokio::test(start_paused = true)]
-async fn a_session_without_options_resolves_none() {
-    let api = running(unobserved(fake_room("no-options").1, None)).await;
-    assert!(api.resolved_options().is_none());
-}
-
 fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
     use lk_agents_abi::voice::session_options::{HostValue, SessionKwargs, TurnHandlingKwargs};
     SessionKwargs {

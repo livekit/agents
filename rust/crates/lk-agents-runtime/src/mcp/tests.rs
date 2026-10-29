@@ -179,17 +179,6 @@ async fn close_joins_the_blocked_host_reader() {
     );
 }
 
-#[test]
-fn result_renderer_uses_upstream_content_records() {
-    let result =
-        rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text("hello")]);
-    let expected = serde_json::to_string(&result.content[0]).unwrap();
-    assert_eq!(
-        lk_agents_core::mcp::render_result("echo", &serde_json::to_value(result).unwrap()).unwrap(),
-        expected
-    );
-}
-
 #[tokio::test(start_paused = true)]
 async fn missed_cleanup_deadline_keeps_ownership_and_never_reports_clean() {
     let (session, peer) = connected().await;

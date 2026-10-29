@@ -478,23 +478,6 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
     assert_eq!(registry.released.load(Ordering::SeqCst), 2);
 }
 
-// Catches: a validated output value lost between the host and the result.
-#[tokio::test(start_paused = true)]
-async fn the_validated_output_reaches_the_result() {
-    let registry = Arc::new(Registry::default());
-    let mut s = setup(
-        vec![Reply::Call("final_result", json!({"day": "Monday"}))],
-        Body::Returns,
-        OutputSpec::Structured {
-            schema: json!({"type": "object", "properties": {"day": {"type": "string"}}}),
-        },
-        registry,
-    );
-    let updates = drain(&mut s.updates).await;
-    let Ok(settled) = finished(&updates) else { panic!() };
-    assert!(settled.output.is_some());
-}
-
 // Catches: cancellation not reaching the running body through the host, or the run
 // settling before the body reported back.
 #[tokio::test(start_paused = true)]

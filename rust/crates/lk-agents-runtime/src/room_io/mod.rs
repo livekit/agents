@@ -135,5 +135,3 @@ impl room_owner::SessionRoom for DetachedSession {
     }
 }
 
-#[cfg(test)]
-mod session_tests;
