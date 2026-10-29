@@ -23,7 +23,7 @@ use lk_agents_core::a2a::{
 };
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Receive, ReceiveInput};
-use lk_agents_storage::run::{ItemRow, TaskRow};
+use lk_agents_storage::run::ItemRow;
 
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_secs, shortuuid};
 

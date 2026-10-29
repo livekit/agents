@@ -4,7 +4,6 @@ use std::time::SystemTime;
 
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use lk_agents_inference::evals::prompts;
-use lk_agents_net::env::Env;
 
 use lk_agents_runtime::process::Process;
 

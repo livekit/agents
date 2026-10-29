@@ -1,6 +1,6 @@
 use super::*;
 use lk_agents_abi::voice::io::{AudioOutputExt, PlaybackEvent, PlaybackObserver};
-use lk_agents_abi::{TokioSpawner, VirtualClock};
+use lk_agents_abi::{SpawnerExt, TokioSpawner, VirtualClock};
 use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind, TrackSource};
 use lk_agents_voice::avatar::{RPC_PLAYBACK_STARTED, stream_segment};
 
@@ -61,16 +61,6 @@ fn output_method(f: &Fixture, base: &str, index: usize) -> String {
         },
     )
     .unwrap()
-}
-
-fn receipt_segment(id: &str) -> AvatarPlaybackSegment {
-    AvatarPlaybackSegment {
-        playback: PlaybackSegment {
-            attachment: 1,
-            segment: id.strip_prefix('S').and_then(|id| id.parse().ok()).unwrap_or(1),
-        },
-        stream_id: Some(id.to_owned()),
-    }
 }
 
 async fn settle() {

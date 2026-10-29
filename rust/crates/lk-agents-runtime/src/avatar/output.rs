@@ -13,7 +13,7 @@ use lk_agents_abi::voice::rtc::{
     StreamBytesOptions,
 };
 use lk_agents_abi::{
-    AbortHandle, AudioFrame, Clock, Closed, Spawner, SpawnerExt, TaskSet, Ts, unix_secs,
+    AbortHandle, AudioFrame, Clock, Closed, Spawner, TaskSet, Ts, unix_secs,
 };
 use lk_agents_voice::avatar::output::{
     AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,

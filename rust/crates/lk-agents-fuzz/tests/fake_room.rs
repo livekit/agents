@@ -2,7 +2,6 @@
 //! over the runtime's room event fan-out and stream admission it feeds, as the DST runs it.
 
 use lk_agents_abi::{AudioFrame, Clock, StreamSource, VirtualClock};
-use lk_agents_runtime::rtc::events::RoomEventBus;
 use lk_agents_runtime::rtc::room::Room;
 use lk_agents_test_support::rtc::*;
 use std::collections::BTreeMap;
