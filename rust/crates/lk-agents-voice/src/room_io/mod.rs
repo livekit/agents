@@ -70,17 +70,6 @@ pub enum Opened {
     Vad(lk_agents_abi::VadSink, lk_agents_abi::VadSource),
 }
 
-impl Opened {
-    /// A stream nobody takes still reaches the provider's `close`, or a plugin leaks its
-    /// connection.
-    pub async fn close(self, deadline: lk_agents_abi::Ts) {
-        let _ = match self {
-            Opened::Stt(_, source) => source.close(deadline).await,
-            Opened::Vad(_, source) => source.close(deadline).await,
-        };
-    }
-}
-
 /// The legs an agent has after `reopen_legs`: given, or the table's row where none was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InputProviders {

@@ -436,7 +436,10 @@ impl Runtime {
                 tx.send_opened(StreamOpened { open, leg, outcome })
             {
                 let deadline = time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-                stream.close(deadline).await;
+                let _ = match stream {
+                    Opened::Stt(_, source) => source.close(deadline).await,
+                    Opened::Vad(_, source) => source.close(deadline).await,
+                };
             }
         });
     }
