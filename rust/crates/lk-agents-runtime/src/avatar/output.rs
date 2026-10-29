@@ -15,7 +15,10 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{
     AbortHandle, AudioFrame, Clock, Closed, Spawner, SpawnerExt, TaskSet, Ts, unix_secs,
 };
-use lk_agents_voice::avatar::output::{Finish, OutputState, Reply, check_caller, report_routes};
+use lk_agents_voice::avatar::output::{
+    AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
+    unacknowledged_clear,
+};
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED, playback_method, stream_name,
 };
@@ -295,44 +298,32 @@ impl Inner {
                 String::new(),
             )
             .await;
-        let failed = match rpc {
-            Ok((0, _)) => None,
-            Ok((code, message)) => Some(format!("{code}: {message}")),
-            Err(e) => Some(e.to_string()),
-        };
-        if !self.tracker.has_pending_segment(key) {
-            self.retire_segment(key);
-            return;
-        }
-        // a failed clear marks the playout done at once
-        let timeout = match failed {
-            Some(e) => {
-                log::error!(target: LOG, error = e.as_str(); "failed to perform clear buffer rpc");
-                Some(Duration::ZERO)
-            }
-            None => self.clear_buffer_timeout,
-        };
+        let pending = self.tracker.has_pending_segment(key);
+        let give_up_after =
+            match after_clear(pending, rpc.map_err(|e| e.to_string()), self.clear_buffer_timeout) {
+                AfterClear::Retire => {
+                    self.retire_segment(key);
+                    return;
+                }
+                AfterClear::AwaitFinish { give_up_after } => give_up_after,
+            };
         if let Some((timer, _, _)) =
             self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
         {
             timer.abort();
         }
-        let Some(timeout) = timeout else { return };
+        let Some(timeout) = give_up_after else { return };
         let me = Arc::clone(&self);
         let at = self.clock.now().saturating_add(timeout);
         let timer = self.tasks.try_spawn(&*self.spawner, "avatar_clear_timeout", async move {
             me.clock.wait_until(at).await;
             {
                 let mut timer = me.clear_timer.lock().unwrap_or_else(|p| p.into_inner());
-                if timer.as_ref().is_some_and(|(_, _, segment)| *segment == key) { timer.take(); }
+                if timer.as_ref().is_some_and(|(_, _, segment)| *segment == key) {
+                    timer.take();
+                }
             }
-            log::warn!(target: LOG,
-                "playback clear was not acknowledged with segment identity; ending the captured segment unheard");
-            me.tracker.playback_finished(key, PlaybackFinished {
-                playback_position: Duration::ZERO,
-                interrupted: true,
-                synchronized_transcript: None,
-            });
+            me.tracker.playback_finished(key, unacknowledged_clear());
             me.retire_segment(key);
         });
         if let Some(timer) = timer {

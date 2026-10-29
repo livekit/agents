@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackFinished, PlaybackSegment};
 
-use super::{FinishedPayload, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED};
+use super::{FinishedPayload, LOG, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputError {
@@ -65,6 +65,45 @@ fn finished_report(payload: &str) -> Result<PlaybackFinished, Reply> {
         interrupted: report.interrupted,
         synchronized_transcript: report.synchronized_transcript,
     })
+}
+
+/// What follows the agent's `lk.clear_buffer` RPC for a segment.
+#[derive(Debug, PartialEq)]
+pub enum AfterClear {
+    /// The segment already finished: retire it.
+    Retire,
+    /// Wait for the avatar's finish, giving up after the delay (never, for `None`).
+    AwaitFinish { give_up_after: Option<Duration> },
+}
+
+/// `pending`: the playout still waits for the segment's finish; `rpc`: the clear's reply,
+/// `(0, _)` on success. A failed clear gives up at once, else after `clear_buffer_timeout`.
+pub fn after_clear(
+    pending: bool,
+    rpc: Result<(u32, String), String>,
+    clear_buffer_timeout: Option<Duration>,
+) -> AfterClear {
+    if !pending {
+        return AfterClear::Retire;
+    }
+    let failed = match rpc {
+        Ok((0, _)) => return AfterClear::AwaitFinish { give_up_after: clear_buffer_timeout },
+        Ok((code, message)) => format!("{code}: {message}"),
+        Err(error) => error,
+    };
+    log::error!(target: LOG, error = failed.as_str(); "failed to perform clear buffer rpc");
+    AfterClear::AwaitFinish { give_up_after: Some(Duration::ZERO) }
+}
+
+/// The segment's finish when the avatar never acknowledged a clear: unheard, interrupted.
+pub fn unacknowledged_clear() -> PlaybackFinished {
+    log::warn!(target: LOG,
+        "playback clear was not acknowledged with segment identity; ending the captured segment unheard");
+    PlaybackFinished {
+        playback_position: Duration::ZERO,
+        interrupted: true,
+        synchronized_transcript: None,
+    }
 }
 
 /// What an avatar's `lk.playback_finished` does to its segment.
