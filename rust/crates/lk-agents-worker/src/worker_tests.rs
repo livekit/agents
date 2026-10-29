@@ -152,9 +152,7 @@ fn register_message(worker_id: &str) -> Result<ServerMessage, TransportError> {
     Ok(msg)
 }
 
-type Scripted = Worker<ScriptedTransport, LoadHost, FrozenClock>;
-
-fn conn(steps: Vec<Step>, max_retry: u32) -> (Scripted, Arc<Mutex<Wire>>, WorkerClient) {
+fn conn(steps: Vec<Step>, max_retry: u32) -> (Worker, Arc<Mutex<Wire>>, WorkerClient) {
     conn_with(
         steps,
         max_retry,
@@ -168,16 +166,16 @@ fn conn_with(
     max_retry: u32,
     cfg_worker: WorkerConfig,
     host: LoadHost,
-) -> (Scripted, Arc<Mutex<Wire>>, WorkerClient) {
+) -> (Worker, Arc<Mutex<Wire>>, WorkerClient) {
     let wire = Arc::new(Mutex::new(Wire::default()));
     let t = ScriptedTransport { script: Mutex::new(steps.into()), wire: wire.clone() };
     let m = WorkerState::new(cfg_worker);
     let (c, h) = Worker::with_components(
-        t,
+        Arc::new(t),
         runtime_cfg(max_retry),
         m,
-        host,
-        FrozenClock,
+        Arc::new(host),
+        Arc::new(FrozenClock),
         crate::test_support::blocking_io(),
     );
     (c, wire, h)
@@ -312,7 +310,7 @@ async fn registering_leaves_the_idle_process_target_on_the_handle() {
 
 // The default load function: which side samples, and what "no answer" means
 
-fn load_conn(host: LoadHost) -> (Scripted, WorkerClient) {
+fn load_conn(host: LoadHost) -> (Worker, WorkerClient) {
     // Finite, so `worker_load` is actually compared against something (devmode's is `inf`).
     let cfg = WorkerConfig {
         ws_url: "wss://gw".into(),
@@ -470,7 +468,7 @@ impl WorkerHost for GatedHost {
 
 struct RuntimeRig {
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
-    runtime: Worker<ChannelTransport, GatedHost, TestClock>,
+    runtime: Worker,
     handle: WorkerClient,
     peer: tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>,
     sent: tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
@@ -494,24 +492,24 @@ fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
     let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (runtime, handle) = Worker::with_components(
-        ChannelTransport {
+        Arc::new(ChannelTransport {
             stall_writes: stall_writes.clone(),
             incoming: Mutex::new(Some(incoming)),
             sent: send,
             closed: closed.clone(),
-        },
+        }),
         runtime_cfg(max_retry),
         WorkerState::new(WorkerConfig {
             load_threshold: EnvOption::Fixed(0.7),
             ..Default::default()
         }),
-        GatedHost {
+        Arc::new(GatedHost {
             started: start,
             decisions: decisions.clone(),
             launches: launches.clone(),
             dropped: dropped.clone(),
-        },
-        TestClock(tokio::time::Instant::now()),
+        }),
+        Arc::new(TestClock(tokio::time::Instant::now())),
         crate::test_support::blocking_io(),
     );
     RuntimeRig {
@@ -706,11 +704,11 @@ impl WorkerTransport for HangingTransport {
 #[tokio::test(start_paused = true)]
 async fn closing_cancels_an_unfinished_dial() {
     let (mut runtime, handle) = Worker::with_components(
-        HangingTransport(tokio::sync::Notify::new()),
+        Arc::new(HangingTransport(tokio::sync::Notify::new())),
         runtime_cfg(0),
         WorkerState::new(WorkerConfig::default()),
-        LoadHost::default(),
-        TestClock(tokio::time::Instant::now()),
+        Arc::new(LoadHost::default()),
+        Arc::new(TestClock(tokio::time::Instant::now())),
         crate::test_support::blocking_io(),
     );
     let h = handle.clone();

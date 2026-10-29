@@ -542,8 +542,9 @@ impl ServerRuntime {
                     crate::TransportConfig::WebTransport { insecure: *insecure }
                 }
             };
+            let worker_host = Arc::new(host.clone());
             let (mut worker, handle) =
-                Worker::new(config, connection, transport, host.clone(), blocking_io.clone());
+                Worker::new(config, connection, transport, worker_host, blocking_io.clone());
             resources.worker = Some(handle.clone());
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();

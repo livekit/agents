@@ -149,13 +149,13 @@ pub struct RuntimeConfig {
     pub connection_timeout: Duration,
 }
 
-pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
-    transport: Arc<T>,
+pub struct Worker {
+    transport: Arc<dyn WorkerTransport>,
     cfg: RuntimeConfig,
     state: WorkerState,
-    host: Arc<P>,
+    host: Arc<dyn WorkerHost>,
     pub(super) blocking_io: lk_agents_net::blocking_io::BlockingIo,
-    clock: C,
+    clock: Arc<dyn Clock>,
     default_load: DefaultLoadCalc,
     cpu: Option<CpuMonitor>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
@@ -175,7 +175,7 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     rollover_requested: bool,
 }
 
-impl<T: WorkerTransport, P: WorkerHost, C: Clock> Drop for Worker<T, P, C> {
+impl Drop for Worker {
     fn drop(&mut self) {
         self.operations.clear();
         let mut snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
@@ -308,9 +308,9 @@ impl ConnectionIo {
         matches!(self.state, ConnectionState::Active(_))
     }
 
-    async fn next_event<T: WorkerTransport + 'static>(
+    async fn next_event(
         &mut self,
-        transport: Arc<T>,
+        transport: Arc<dyn WorkerTransport>,
         config: &RuntimeConfig,
     ) -> Result<ConnectionEvent, RuntimeError> {
         tokio::select! {
@@ -347,10 +347,10 @@ impl ConnectionIo {
 }
 
 impl ConnectionState {
-    async fn next_event<T: WorkerTransport + 'static>(
+    async fn next_event(
         &mut self,
         outbox: &mut Outbox,
-        transport: Arc<T>,
+        transport: Arc<dyn WorkerTransport>,
         config: &RuntimeConfig,
     ) -> Result<ConnectionEvent, RuntimeError> {
         match self {
@@ -373,8 +373,8 @@ impl ConnectionState {
     }
 }
 
-fn dial<T: WorkerTransport + 'static>(
-    transport: Arc<T>,
+fn dial(
+    transport: Arc<dyn WorkerTransport>,
     config: &RuntimeConfig,
 ) -> Result<BoxFuture<'static, Result<Connected, TransportError>>, RuntimeError> {
     let url = config.server_url.clone();
@@ -474,35 +474,33 @@ enum Completion {
     EndpointDone(u64),
 }
 
-impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
+impl Worker {
     /// Starts nothing. Subscribe through the handle before awaiting [`Self::run`] to see
     /// registration.
     pub fn new(
         config: crate::WorkerConfig,
         connection: RuntimeConfig,
         transport: crate::TransportConfig,
-        host: P,
+        host: Arc<dyn WorkerHost>,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> (Self, WorkerClient) {
         Self::with_components(
-            transport.build(),
+            transport.build().into(),
             connection,
             WorkerState::new(config),
             host,
-            RealClock::new(),
+            Arc::new(RealClock::new()),
             blocking_io,
         )
     }
-}
 
-impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, P, C> {
     /// Explicit runtime components, for custom drivers and tests.
     pub fn with_components(
-        transport: T,
+        transport: Arc<dyn WorkerTransport>,
         cfg: RuntimeConfig,
         state: WorkerState,
-        host: P,
-        clock: C,
+        host: Arc<dyn WorkerHost>,
+        clock: Arc<dyn Clock>,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> (Self, WorkerClient) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -517,10 +515,10 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         };
         (
             Self {
-                transport: Arc::new(transport),
+                transport,
                 cfg,
-                state: state.with_wall(WallAnchor::of(&clock)),
-                host: Arc::new(host),
+                state: state.with_wall(WallAnchor::of(&*clock)),
+                host,
                 blocking_io,
                 clock,
                 default_load: DefaultLoadCalc::new(),
@@ -1044,7 +1042,7 @@ mod write_tests {
         assert!(queue.pop_front().is_none(), "disconnected writes must not be replayed");
     }
 
-    impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, P, C> {
+    impl Worker {
         pub(crate) async fn sample_load(&mut self) -> Result<(), RuntimeError> {
             let mut outbox = Outbox::new(self.cfg.connection_timeout);
             self.execute(vec![WorkerStateEffect::SampleLoad], &mut outbox);
