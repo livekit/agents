@@ -1,12 +1,19 @@
 use super::*;
 
+use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Processes are numbers; `fail_init` makes every initialize fail, `fail_launch` the first n
-/// launches.
+use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::worker::ipc::ProcessCompletion;
+use lk_agents_abi::worker::ipc_host::{ProcessHost, SupervisedProcess};
+use lk_agents_abi::{BoxFuture, RefRegistry};
+use serde_json::{Map, Value};
+
+/// Processes are numbered in creation order; `fail_init` makes every initialize fail,
+/// `fail_launch` the first n launches.
 #[derive(Default)]
 struct Host {
-    next: AtomicUsize,
+    created: Mutex<Vec<Executor>>,
     fail_init: bool,
 
     fail_launch: AtomicUsize,
@@ -25,46 +32,135 @@ struct Host {
     exits: Notify,
 }
 
-#[async_trait::async_trait]
-impl PoolHost for Arc<Host> {
-    type Proc = usize;
-    type Job = ();
-    type Error = String;
-
-    async fn create(&self) -> Result<usize, String> {
-        Ok(self.next.fetch_add(1, Ordering::SeqCst))
+impl Host {
+    fn process(&self, n: usize) -> Executor {
+        self.created.lock().unwrap()[n].clone()
     }
-    async fn start(&self, _: &usize) -> Result<(), String> {
+
+    fn created(&self) -> usize {
+        self.created.lock().unwrap().len()
+    }
+}
+
+/// The pool sees a process only by its identity: no step reaches the host's executor.
+struct Numbered(usize);
+
+impl ProcessHost for Numbered {
+    fn launch<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn launched<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn launch_failed<'a>(
+        &'a self,
+        _: &'a CallContext,
+        _: String,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn completed<'a>(
+        &'a self,
+        _: &'a CallContext,
+        _: ProcessCompletion,
+        _: u32,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn log(
+        &self,
+        _: i32,
+        _: String,
+        _: Map<String, Value>,
+        _: Option<HostError>,
+    ) -> Result<(), HostError> {
+        unreachable!()
+    }
+    fn start<'a>(
+        &'a self,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<Arc<dyn SupervisedProcess>, HostError>> {
+        unreachable!()
+    }
+    fn initialize<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn launch_job<'a>(
+        &'a self,
+        _: &'a CallContext,
+        _: HostRef,
+        _: f64,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn close<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+        unreachable!()
+    }
+    fn join<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<bool, HostError>> {
+        unreachable!()
+    }
+}
+
+fn number(process: &Executor) -> usize {
+    let host: &dyn Any = &*process.host;
+    host.downcast_ref::<Numbered>().expect("a numbered process").0
+}
+
+fn numbers(processes: &[Executor]) -> Vec<usize> {
+    processes.iter().map(number).collect()
+}
+
+struct NoRefs;
+
+impl RefRegistry for NoRefs {
+    fn release(&self, _: u64) {}
+}
+
+/// The job the pool hands a process: it never reads it.
+fn job() -> HostRef {
+    let refs: Arc<dyn RefRegistry> = Arc::new(NoRefs);
+    HostRef::new(0, &refs)
+}
+
+#[async_trait::async_trait]
+impl Executors for Host {
+    async fn create(&self) -> Result<Executor, HostError> {
+        let mut created = self.created.lock().unwrap();
+        let process = Executor::new(Arc::new(Numbered(created.len())));
+        created.push(process.clone());
+        Ok(process)
+    }
+    async fn start(&self, _: &Executor) -> Result<(), HostError> {
         Ok(())
     }
-    async fn initialize(&self, _: &usize) -> Result<(), String> {
+    async fn initialize(&self, _: &Executor) -> Result<(), HostError> {
         if self.slow_initialize {
             std::future::pending::<()>().await;
         }
-        if self.fail_init { Err("init failed".into()) } else { Ok(()) }
+        if self.fail_init { Err(HostError::new("init failed")) } else { Ok(()) }
     }
-    async fn launch(&self, _: &usize, _: &()) -> Result<(), String> {
+    async fn launch(&self, _: &Executor, _: &HostRef) -> Result<(), HostError> {
         if self.slow_launch {
             std::future::pending::<()>().await;
         }
         let left = self.fail_launch.load(Ordering::SeqCst);
         if left > 0 {
             self.fail_launch.store(left - 1, Ordering::SeqCst);
-            return Err("launch failed".into());
+            return Err(HostError::new("launch failed"));
         }
         Ok(())
     }
-    async fn close(&self, p: &usize) -> Result<(), String> {
+    async fn close(&self, p: &Executor) -> Result<(), HostError> {
         if let Some(gate) = &self.close_gate {
             let _ = gate.subscribe().wait_for(|released| *released).await;
         }
-        self.closed.lock().unwrap().push(*p);
+        self.closed.lock().unwrap().push(number(p));
         self.exits.notify_waiters();
-        if self.fail_close { Err("close failed".into()) } else { Ok(()) }
+        if self.fail_close { Err(HostError::new("close failed")) } else { Ok(()) }
     }
-    fn close_failed(&self, _: &usize, error: String) {
+    fn close_failed(&self, _: &Executor, error: HostError) {
         assert!(self.fail_close);
-        assert_eq!(error, "close failed", "cleanup must preserve its cause");
+        assert_eq!(error.to_string(), "close failed", "cleanup must preserve its cause");
     }
     fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
         self.cleanup_observed
@@ -72,28 +168,28 @@ impl PoolHost for Arc<Host> {
             .expect("unexpected cleanup deadline miss")
             .send_replace(Some(observation));
     }
-    async fn wait_exit(&self, p: &usize) -> Result<(), String> {
+    async fn wait_exit(&self, p: &Executor) -> Result<(), HostError> {
         loop {
             let exited = self.exits.notified();
             tokio::pin!(exited);
             exited.as_mut().enable();
-            if self.closed.lock().unwrap().contains(p) {
+            if self.closed.lock().unwrap().contains(&number(p)) {
                 return Ok(());
             }
             exited.await;
         }
     }
-    fn exit_failed(&self, _: &usize, error: String) {
+    fn exit_failed(&self, _: &Executor, error: HostError) {
         panic!("unexpected exit observation failure: {error}");
     }
-    async fn join(&self, p: &usize) -> Result<PoolJoinOutcome, String> {
+    async fn join(&self, p: &Executor) -> Result<PoolJoinOutcome, HostError> {
         loop {
             let exited = self.exits.notified();
             tokio::pin!(exited);
             exited.as_mut().enable();
-            if self.closed.lock().unwrap().contains(p) {
+            if self.closed.lock().unwrap().contains(&number(p)) {
                 if self.join_receipt.as_ref().is_some_and(|receipt| !*receipt.borrow()) {
-                    return Err("join failed".into());
+                    return Err(HostError::new("join failed"));
                 }
                 if let Some(gate) = &self.reap_gate {
                     let _ = gate.subscribe().wait_for(|reaped| *reaped).await;
@@ -103,16 +199,16 @@ impl PoolHost for Arc<Host> {
             exited.await;
         }
     }
-    fn join_failed(&self, _: &usize, error: String) {
-        assert_eq!(error, "join failed", "join must preserve its cause");
+    fn join_failed(&self, _: &Executor, error: HostError) {
+        assert_eq!(error.to_string(), "join failed", "join must preserve its cause");
     }
-    fn emit(&self, event: PoolEvent, p: &usize) {
-        self.events.lock().unwrap().push((event, *p));
+    fn emit(&self, event: PoolEvent, p: &Executor) {
+        self.events.lock().unwrap().push((event, number(p)));
     }
-    fn init_failed(&self, _: &usize, _: String) {}
+    fn init_failed(&self, _: &Executor, _: HostError) {}
 }
 
-fn pool(host: &Arc<Host>, idle: usize) -> ProcPool<Arc<Host>> {
+fn pool(host: &Arc<Host>, idle: usize) -> ProcPool {
     let opts = PoolOptions {
         num_idle_processes: idle,
         initialize_timeout: Duration::from_secs(1),
@@ -134,7 +230,7 @@ async fn keeps_the_idle_processes_warm_and_replaces_the_one_a_job_takes() {
     let pool = pool(&host, 2);
     pool.start().await.unwrap();
     assert_eq!(count(&host, PoolEvent::Ready), 2);
-    pool.launch_job("j1", ()).await.unwrap();
+    pool.launch_job("j1", job()).await.unwrap();
     assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
     tokio::time::sleep(REFILL_INTERVAL * 3).await;
     assert_eq!(count(&host, PoolEvent::Ready), 3, "the taken process is replaced");
@@ -151,15 +247,15 @@ async fn exited_warm_process_is_never_assigned_to_a_job() {
     let host = Arc::new(Host::default());
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
-    host.close(&0).await.unwrap();
+    host.close(&host.process(0)).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while pool.processes().contains(&0) {
+        while numbers(&pool.processes()).contains(&0) {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    pool.launch_job("after-exit", ()).await.unwrap();
+    pool.launch_job("after-exit", job()).await.unwrap();
     assert!(
         host.events
             .lock()
@@ -178,7 +274,7 @@ async fn a_launch_raises_when_every_spawn_fails() {
     let pool = pool(&host, 0);
     pool.start().await.unwrap();
     assert!(matches!(
-        pool.launch_job("j1", ()).await,
+        pool.launch_job("j1", job()).await,
         Err(LaunchError::AcquireExhausted { attempts: MAX_ACQUIRE_ATTEMPTS })
     ));
     assert_eq!(pool.jobs_waiting(), 0);
@@ -196,7 +292,7 @@ async fn a_cancelled_launch_releases_its_wait_and_its_process() {
     pool.start().await.unwrap();
     let waiting = tokio::spawn({
         let pool = pool.clone();
-        async move { pool.launch_job("j1", ()).await }
+        async move { pool.launch_job("j1", job()).await }
     });
     tokio::time::sleep(Duration::from_millis(5)).await;
     waiting.abort();
@@ -208,7 +304,7 @@ async fn a_cancelled_launch_releases_its_wait_and_its_process() {
     pool.start().await.unwrap();
     let launching = tokio::spawn({
         let pool = pool.clone();
-        async move { pool.launch_job("j1", ()).await }
+        async move { pool.launch_job("j1", job()).await }
     });
     tokio::time::sleep(Duration::from_millis(20)).await;
     launching.abort();
@@ -225,14 +321,14 @@ async fn join_jobs_waits_for_the_processes_running_a_job() {
     let host = Arc::new(Host::default());
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
-    pool.launch_job("j1", ()).await.unwrap();
+    pool.launch_job("j1", job()).await.unwrap();
     let joining = tokio::spawn({
         let pool = pool.clone();
         async move { pool.join_jobs().await }
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!joining.is_finished(), "the job's process still runs");
-    host.close(&0).await.unwrap();
+    host.close(&host.process(0)).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), joining).await.unwrap().unwrap();
     pool.aclose().await;
 }
@@ -244,7 +340,7 @@ async fn a_failed_launch_is_retried_on_a_fresh_process() {
     let host = Arc::new(Host { fail_launch: AtomicUsize::new(1), ..Host::default() });
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
-    pool.launch_job("j1", ()).await.unwrap();
+    pool.launch_job("j1", job()).await.unwrap();
     assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
     assert!(host.closed.lock().unwrap().contains(&0), "the process that failed is closed");
     pool.aclose().await;
@@ -261,23 +357,19 @@ async fn failed_launch_waiting_for_reaping_does_not_spawn_unbounded_replacements
     let pool = pool(&host, 2);
     pool.start().await.unwrap();
     let requests: Vec<_> = (0..3)
-        .map(|job| {
+        .map(|n| {
             let pool = pool.clone();
-            tokio::spawn(async move { pool.launch_job(&format!("job-{job}"), ()).await })
+            tokio::spawn(async move { pool.launch_job(&format!("job-{n}"), job()).await })
         })
         .collect();
 
     // Timer progress also proves that ready-process churn cannot starve the event loop.
     tokio::time::sleep(Duration::from_millis(1)).await;
-    let created = host.next.load(Ordering::SeqCst);
+    let created = host.created();
     assert!(created <= 5, "two warmed processes plus three admitted requests bound creation");
     for _ in 0..3 {
         tokio::time::sleep(REFILL_INTERVAL).await;
-        assert_eq!(
-            host.next.load(Ordering::SeqCst),
-            created,
-            "cleanup must stop replacement churn"
-        );
+        assert_eq!(host.created(), created, "cleanup must stop replacement churn");
     }
     reaped.send_replace(true);
     for request in requests {
@@ -293,16 +385,16 @@ async fn direct_launch_is_refused_after_drain_and_close() {
     pool.start().await.unwrap();
     pool.join_jobs().await;
     assert!(matches!(
-        pool.launch_job("after-drain", ()).await,
+        pool.launch_job("after-drain", job()).await,
         Err(LaunchError::Admission(PoolAdmissionError::Draining))
     ));
-    assert_eq!(host.next.load(Ordering::SeqCst), 1);
+    assert_eq!(host.created(), 1);
     pool.aclose().await;
     assert!(matches!(
-        pool.launch_job("after-close", ()).await,
+        pool.launch_job("after-close", job()).await,
         Err(LaunchError::Admission(PoolAdmissionError::Closed))
     ));
-    assert_eq!(host.next.load(Ordering::SeqCst), 1);
+    assert_eq!(host.created(), 1);
 }
 
 #[tokio::test]
@@ -369,7 +461,11 @@ async fn close_deadline_returns_normally_and_retains_cleanup_ownership() {
     pool.start().await.unwrap();
     pool.aclose().await;
     assert_eq!(observed.borrow().as_ref().unwrap().processes, [ProcessId(0)]);
-    assert_eq!(pool.processes(), [0], "the resource stays owned after public close returns");
+    assert_eq!(
+        numbers(&pool.processes()),
+        [0],
+        "the resource stays owned after public close returns"
+    );
     gate.send_replace(true);
     tokio::time::timeout(Duration::from_secs(1), async {
         while !pool.processes().is_empty() {
@@ -393,7 +489,7 @@ async fn failed_join_cannot_report_cleaned_or_release_the_resource_owner() {
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
     pool.aclose().await;
-    assert_eq!(pool.processes(), [0], "failed join cannot release process ownership");
+    assert_eq!(numbers(&pool.processes()), [0], "failed join cannot release process ownership");
     assert_eq!(count(&host, PoolEvent::Closed), 0, "failed join is not cleaned");
     assert_eq!(observed.borrow().as_ref().unwrap().processes, [ProcessId(0)]);
     receipt.send_replace(true);
@@ -413,10 +509,10 @@ async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
     let host = Arc::new(Host { reap_gate: Some(reaped.clone()), ..Host::default() });
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
-    host.close(&0).await.unwrap();
+    host.close(&host.process(0)).await.unwrap();
     tokio::time::sleep(REFILL_INTERVAL).await;
-    assert!(pool.processes().contains(&0), "ownership must remain until reaping");
-    pool.launch_job("after-os-exit", ()).await.unwrap();
+    assert!(numbers(&pool.processes()).contains(&0), "ownership must remain until reaping");
+    pool.launch_job("after-os-exit", job()).await.unwrap();
     let dead_process_was_launched = host
         .events
         .lock()

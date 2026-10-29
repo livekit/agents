@@ -10,7 +10,11 @@ use futures_util::FutureExt;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
+use lk_agents_abi::HostRef;
+use lk_agents_abi::errors::HostError;
+
 use super::lock;
+use super::process_pool::Executor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolEvent {
@@ -39,30 +43,27 @@ impl PoolEvent {
     }
 }
 
+/// The pool's steps on its executors: the host's in production, a fake in tests.
 #[async_trait::async_trait]
-pub trait PoolHost: Send + Sync + 'static {
-    type Proc: Clone + PartialEq + Send + Sync + 'static;
-    type Job: Clone + Send + Sync + 'static;
-    type Error: std::fmt::Display + Send + 'static;
-
-    async fn create(&self) -> Result<Self::Proc, Self::Error>;
-    async fn start(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
-    async fn initialize(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
-    async fn launch(&self, proc: &Self::Proc, job: &Self::Job) -> Result<(), Self::Error>;
-    async fn close(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
-    fn close_failed(&self, proc: &Self::Proc, error: Self::Error);
+pub trait Executors: Send + Sync + 'static {
+    async fn create(&self) -> Result<Executor, HostError>;
+    async fn start(&self, proc: &Executor) -> Result<(), HostError>;
+    async fn initialize(&self, proc: &Executor) -> Result<(), HostError>;
+    async fn launch(&self, proc: &Executor, job: &HostRef) -> Result<(), HostError>;
+    async fn close(&self, proc: &Executor) -> Result<(), HostError>;
+    fn close_failed(&self, proc: &Executor, error: HostError);
     fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
         crate::diagnostics::emit(
             log::Level::Error,
             format!("process pool cleanup incomplete: {observation:?}"),
         );
     }
-    async fn wait_exit(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
-    fn exit_failed(&self, proc: &Self::Proc, error: Self::Error);
-    async fn join(&self, proc: &Self::Proc) -> Result<PoolJoinOutcome, Self::Error>;
-    fn join_failed(&self, proc: &Self::Proc, error: Self::Error);
-    fn emit(&self, event: PoolEvent, proc: &Self::Proc);
-    fn init_failed(&self, proc: &Self::Proc, error: Self::Error);
+    async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError>;
+    fn exit_failed(&self, proc: &Executor, error: HostError);
+    async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError>;
+    fn join_failed(&self, proc: &Executor, error: HostError);
+    fn emit(&self, event: PoolEvent, proc: &Executor);
+    fn init_failed(&self, proc: &Executor, error: HostError);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -79,10 +80,10 @@ enum Readiness {
     Closed,
 }
 
-struct Inner<H: PoolHost> {
-    host: H,
+struct Inner {
+    host: Arc<dyn Executors>,
     opts: PoolOptions,
-    state: Mutex<State<H::Proc>>,
+    state: Mutex<State>,
     changed: Notify,
     idle_ready: watch::Sender<Readiness>,
     closed: watch::Sender<bool>,
@@ -90,10 +91,10 @@ struct Inner<H: PoolHost> {
 }
 
 #[derive(Debug)]
-pub enum LaunchError<E> {
+pub enum LaunchError {
     NoProcess,
     AcquireExhausted { attempts: u32 },
-    Launch(E),
+    Launch(HostError),
     Admission(PoolAdmissionError),
 }
 
@@ -114,27 +115,27 @@ impl std::fmt::Display for PoolStartError {
     }
 }
 
-pub struct ProcPool<H: PoolHost>(Arc<Inner<H>>);
+pub struct ProcPool(Arc<Inner>);
 
-struct Waiting<H: PoolHost> {
-    pool: ProcPool<H>,
+struct Waiting {
+    pool: ProcPool,
     request: ReservationId,
 }
 
-impl<H: PoolHost> Drop for Waiting<H> {
+impl Drop for Waiting {
     fn drop(&mut self) {
         self.pool.handle(PoolInput::Cancel(self.request));
     }
 }
 
-impl<H: PoolHost> Clone for ProcPool<H> {
+impl Clone for ProcPool {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<H: PoolHost> ProcPool<H> {
-    pub fn new(host: H, opts: PoolOptions) -> Self {
+impl ProcPool {
+    pub fn new(host: Arc<dyn Executors>, opts: PoolOptions) -> Self {
         // CPU discovery is runtime configuration; constructing a pool performs no filesystem I/O.
         let limits = PoolLimits {
             idle_processes: opts.num_idle_processes,
@@ -153,11 +154,7 @@ impl<H: PoolHost> ProcPool<H> {
         }))
     }
 
-    pub fn host(&self) -> &H {
-        &self.0.host
-    }
-
-    pub fn processes(&self) -> Vec<H::Proc> {
+    pub fn processes(&self) -> Vec<Executor> {
         lock(&self.0.state).executors.values().cloned().collect()
     }
 
@@ -357,7 +354,7 @@ impl<H: PoolHost> ProcPool<H> {
             self.0.host.start(&process).await?;
             self.0.host.emit(PoolEvent::Started, &process);
             self.0.host.initialize(&process).await?;
-            Ok::<_, H::Error>(())
+            Ok::<_, HostError>(())
         };
         let initialized = tokio::select! {
             biased;
@@ -378,7 +375,7 @@ impl<H: PoolHost> ProcPool<H> {
         self.handle(PoolInput::Ready(id));
     }
 
-    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, H::Proc), PoolFailure> {
+    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, Executor), PoolFailure> {
         loop {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
@@ -400,7 +397,7 @@ impl<H: PoolHost> ProcPool<H> {
         }
     }
 
-    pub async fn launch_job(&self, job_id: &str, job: H::Job) -> Result<(), LaunchError<H::Error>> {
+    pub async fn launch_job(&self, job_id: &str, job: HostRef) -> Result<(), LaunchError> {
         let (request, effects) = {
             let mut state = lock(&self.0.state);
             let request = ReservationId(state.next_request);
@@ -644,8 +641,8 @@ struct Reservation {
     launch_attempts: u32,
 }
 
-struct State<P> {
-    executors: BTreeMap<ProcessId, P>,
+struct State {
+    executors: BTreeMap<ProcessId, Executor>,
     tasks: Vec<JoinHandle<()>>,
     next_request: u64,
     now: Duration,
@@ -669,7 +666,7 @@ struct State<P> {
     retry_exit_at: BTreeMap<ProcessId, Duration>,
 }
 
-impl<P> State<P> {
+impl State {
     fn new(limits: PoolLimits) -> Self {
         assert!(limits.concurrent_initializations > 0);
         assert!(limits.pending_jobs > 0);

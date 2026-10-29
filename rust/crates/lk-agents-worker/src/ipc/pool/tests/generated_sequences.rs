@@ -29,21 +29,21 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
 
     // Exit is visible before the receipt. The exited process remains owned during these
     // launches, but it must already have lost its eligibility to receive a job.
-    host.close(&0).await.unwrap();
+    host.close(&host.process(0)).await.unwrap();
     tokio::time::sleep(REFILL_INTERVAL).await;
-    assert!(pool.processes().contains(&0), "lost the reaping owner: seed {seed}");
+    assert!(numbers(&pool.processes()).contains(&0), "lost the reaping owner: seed {seed}");
     let mut requests = Vec::new();
-    for job in 0..3 {
+    for n in 0..3 {
         let pool = pool.clone();
         requests.push(tokio::spawn(async move {
-            pool.launch_job(&format!("seed-{seed}-job-{job}"), ()).await
+            pool.launch_job(&format!("seed-{seed}-job-{n}"), job()).await
         }));
     }
     tokio::time::sleep(Duration::from_millis(1)).await;
     phase.set("duplicate admission");
     assert!(
         matches!(
-            pool.launch_job(&format!("seed-{seed}-job-0"), ()).await,
+            pool.launch_job(&format!("seed-{seed}-job-0"), job()).await,
             Err(LaunchError::Admission(PoolAdmissionError::DuplicateJob))
         ),
         "duplicate admitted: seed {seed}"
@@ -80,7 +80,7 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
     tokio::time::sleep(Duration::from_millis(1)).await;
     assert!(!drain.is_finished(), "drain finished with running jobs: seed {seed}");
     assert!(matches!(
-        pool.launch_job("during-drain", ()).await,
+        pool.launch_job("during-drain", job()).await,
         Err(LaunchError::Admission(PoolAdmissionError::Draining))
     ));
     let mut processes = pool.processes();
@@ -128,5 +128,5 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
         }
     }
     assert_eq!(launched.len(), 3 - usize::from(cancel), "seed {seed}");
-    assert_eq!(retired.len(), host.next.load(Ordering::SeqCst), "process leaked: seed {seed}");
+    assert_eq!(retired.len(), host.created(), "process leaked: seed {seed}");
 }

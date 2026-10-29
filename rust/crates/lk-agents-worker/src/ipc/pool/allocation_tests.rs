@@ -2,7 +2,7 @@ use super::*;
 
 const NOW: Duration = Duration::ZERO;
 
-fn core(idle: usize, capacity: usize, pending: usize) -> State<()> {
+fn core(idle: usize, capacity: usize, pending: usize) -> State {
     State::new(PoolLimits {
         idle_processes: idle,
         concurrent_initializations: capacity,
@@ -11,7 +11,7 @@ fn core(idle: usize, capacity: usize, pending: usize) -> State<()> {
     })
 }
 
-fn admit(core: &mut State<()>, id: u64) -> Vec<PoolEffect> {
+fn admit(core: &mut State, id: u64) -> Vec<PoolEffect> {
     core.handle(PoolInput::Admit { request: ReservationId(id), job_id: format!("job-{id}") }, NOW)
 }
 

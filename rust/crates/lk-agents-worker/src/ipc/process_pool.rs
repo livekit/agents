@@ -11,9 +11,7 @@ use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{PoolHost, ProcessHost, WorkerError, WorkerProcPool};
 
 use super::owner::{ProcessOwner, queue_diagnostic};
-use super::pool::{
-    LaunchError, PoolEvent, PoolHost as Allocation, PoolJoinOutcome, PoolOptions, ProcPool,
-};
+use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::{Level, ProcSupervisor, secs};
 use crate::env::Env;
 use crate::io::WorkerIo;
@@ -21,8 +19,14 @@ use crate::io::WorkerIo;
 /// One executor and, once started, its native supervisor.
 #[derive(Clone)]
 pub struct Executor {
-    host: Arc<dyn ProcessHost>,
+    pub(super) host: Arc<dyn ProcessHost>,
     supervisor: Arc<OnceLock<ProcSupervisor>>,
+}
+
+impl Executor {
+    pub(super) fn new(host: Arc<dyn ProcessHost>) -> Self {
+        Self { host, supervisor: Arc::new(OnceLock::new()) }
+    }
 }
 
 /// Compared by identity.
@@ -33,21 +37,16 @@ impl PartialEq for Executor {
 }
 
 /// The host's pool and the context its executors' steps run in (the pool's constructor's).
-pub struct Executors<E> {
+struct HostExecutors<E> {
     host: Arc<dyn PoolHost>,
     context: CallContext,
     env: PhantomData<fn() -> E>,
 }
 
 #[async_trait::async_trait]
-impl<E: Env> Allocation for Executors<E> {
-    type Proc = Executor;
-    type Job = HostRef;
-    type Error = HostError;
-
+impl<E: Env> Executors for HostExecutors<E> {
     async fn create(&self) -> Result<Executor, HostError> {
-        let host = self.host.create().await?;
-        Ok(Executor { host, supervisor: Arc::new(OnceLock::new()) })
+        Ok(Executor::new(self.host.create().await?))
     }
 
     async fn start(&self, proc: &Executor) -> Result<(), HostError> {
@@ -128,8 +127,9 @@ impl<E: Env> Allocation for Executors<E> {
 }
 
 pub struct ProcessPool<E: Env> {
-    pool: ProcPool<Executors<E>>,
+    pool: ProcPool,
     io: WorkerIo,
+    env: PhantomData<fn() -> E>,
 }
 
 impl<E: Env> WorkerProcPool for ProcessPool<E> {
@@ -145,10 +145,11 @@ impl<E: Env> WorkerProcPool for ProcessPool<E> {
             initialize_timeout: secs(initialize_timeout),
             close_timeout: secs(close_timeout),
         };
-        let executors = Executors { host, context, env: PhantomData };
+        let executors = HostExecutors::<E> { host, context, env: PhantomData };
         Ok(Self {
-            pool: ProcPool::new(executors, opts),
+            pool: ProcPool::new(Arc::new(executors), opts),
             io: E::worker_io().map_err(WorkerError::Failed)?,
+            env: PhantomData,
         })
     }
 
