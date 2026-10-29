@@ -78,8 +78,9 @@ class PrismHistory:
     while an edit holds the lock. Callers receive independent chat snapshots.
 
     Reads are snapshots, not replacements for the local conversation record.
-    Deletion-only changes preserve existing turns. Changes to order or content
-    rebuild completed history, avoiding guesses about whole-turn insertion anchors.
+    Deletion-only changes and missing imported results preserve existing turns.
+    Changes to order or content rebuild completed history, avoiding guesses about
+    whole-turn insertion anchors.
     This is a sequence of acknowledged operations, not a server transaction.
     """
 
@@ -279,8 +280,22 @@ class PrismHistory:
             and len(unchanged) == len(old)
             and [i.id for i in desired[: len(old)]] == [i.id for i in old]
         )
+        # Prism places an imported result directly after its call, even when
+        # newer turns exist. Complete those calls without replacing their history.
+        insert_results = (
+            not removed
+            and len(unchanged) == len(old)
+            and retained == desired_retained
+            and all(
+                isinstance(i, llm.FunctionCallOutput)
+                and i.call_id in pending
+                and i.call_id not in self._calls
+                for i in added
+            )
+        )
+        additions_only = append_only or insert_results
         delete_only = not added and len(unchanged) == len(desired) and retained == desired_retained
-        rebuild = not append_only and not delete_only
+        rebuild = not additions_only and not delete_only
         # A live call cannot be imported, replaced, or hidden by a history edit.
         if rebuild and (self._active or pending):
             raise HistoryUpdateError(
@@ -341,7 +356,7 @@ class PrismHistory:
                 committed = True
                 if rebuild and self._response_revision != response_revision:
                     raise HistoryUpdateError("A new reply started during history replacement")
-            for index, item in enumerate(to_create):
+            for item in to_create:
                 if (
                     not rebuild
                     and isinstance(item, llm.FunctionCallOutput)
@@ -359,16 +374,16 @@ class PrismHistory:
                     ref_item = await self._sdk.create_item(_wire(item))
                     self._ids[item.id] = ref_item.item_id
                 committed = True
-                if append_only:
+                if additions_only:
                     # Insert before observations that arrived during acknowledgment.
-                    self._chat.items.insert(len(old) + index, item.model_copy(deep=True))
+                    self._chat.items.insert(desired.index(item), item.model_copy(deep=True))
                 if isinstance(item, llm.FunctionCallOutput):
                     self._rejected_results.discard(item.call_id)
                 if rebuild and self._response_revision != response_revision:
                     raise HistoryUpdateError("A new reply started during history replacement")
         except Exception as error:
             if (
-                append_only
+                additions_only
                 and isinstance(error, r.RimeRealtimeError)
                 and error.fault.scope == "event"
             ):

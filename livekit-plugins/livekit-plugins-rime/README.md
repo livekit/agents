@@ -263,11 +263,15 @@ An imported result must immediately follow its call. Images, video, developer
 messages, and tool progress are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
 
-Append and deletion preserve retained turns. Replacing or reordering history
+Append, deletion, and insertion of missing imported results preserve retained turns.
+To retry an imported result after newer speech, insert it directly after its
+existing call and keep all other items unchanged and in order. Prism acknowledges
+each result separately. Replacing or reordering history
 rebuilds completed items with new server IDs. A rebuild requires no active reply
 or pending tool call. Prism has no atomic history replacement: replies can see
 intermediate context between operations. An explicit event-scoped refusal during
-an append preserves acknowledged items and reports the original provider error.
+an append or result insertion preserves acknowledged items and reports the original
+provider error.
 Keep the requested context to retry or correct the unaccepted items. Preserve
 newer conversation items and accepted item IDs when retrying. The plugin does not retry
 automatically or execute tools again. Replies requested through the plugin are

@@ -3058,6 +3058,7 @@ class Peer:
         self.truncations = asyncio.Queue()
         self.items = []
         self.server_items = []
+        self.imported_calls = set()
         self.history_operations = []
         self.history_started = asyncio.Event()
         self.history_release = asyncio.Event()
@@ -3107,6 +3108,7 @@ class Peer:
         self.connections += 1
         self.settings = None
         self.server_items = []
+        self.imported_calls = set()
         self.running = {}
         self.request_id = socket.request.headers.get("x-request-id", "peer-request")
         await self.emit("session.created", session={"id": "session-1"})
@@ -3176,7 +3178,22 @@ class Peer:
                     self.history_serial += 1
                     item = {"id": f"history-{self.history_serial}", **event["item"]}
                     self.items.append(event["item"])
-                    self.server_items.append(item)
+                    # Imported results have server-defined placement after their call.
+                    if item["type"] == "function_call":
+                        self.imported_calls.add(item["call_id"])
+                    if (
+                        item["type"] == "function_call_output"
+                        and item["call_id"] in self.imported_calls
+                    ):
+                        call_index = next(
+                            index
+                            for index, call in enumerate(self.server_items)
+                            if call.get("type") == "function_call"
+                            and call["call_id"] == item["call_id"]
+                        )
+                        self.server_items.insert(call_index + 1, item)
+                    else:
+                        self.server_items.append(item)
                     await self.emit(
                         "conversation.item.created",
                         prism_request_event_id=event["event_id"],
@@ -3534,6 +3551,140 @@ class TestRealtime:
             await session.update_chat_ctx(target)
             assert len(await model._get_history()) == 2
             assert len(peer.history_operations) == 3
+            pending = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await pending
+
+    @pytest.mark.parametrize("active_reply", [False, True])
+    async def test_imported_result_retry_preserves_new_speech_and_acknowledged_ids(
+        self, active_reply
+    ):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="test")
+            errors = []
+            session.on("error", errors.append)
+            target = llm.ChatContext(tool_history().items[2:4])
+            peer.fail_history_at = 2
+            with pytest.raises(PrismError):
+                await session.update_chat_ctx(target)
+            call_id = (await model._get_history())[0].id
+            peer.server_items.append(
+                {"id": "speech", "type": "message", "role": "user", "text": "Keep this"}
+            )
+            await peer.emit(
+                "conversation.item.input_audio_transcription.completed",
+                item_id="speech",
+                transcript="Keep this",
+            )
+            await wait_until(lambda: len(session.chat_ctx.items) == 2)
+            target.items.append(session.chat_ctx.items[-1])
+            response = await peer.start() if active_reply else None
+            if response:
+                await wait_until(lambda: response in session._history._active)
+            peer.fail_history_at = 3
+            with pytest.raises(PrismError, match="invalid_request"):
+                await session.update_chat_ctx(target)
+            assert [i.id for i in session.chat_ctx.items] == [target.items[0].id, "speech"]
+            with pytest.raises(llm.RealtimeError, match="tool results"):
+                await session.generate_reply()
+
+            peer.history_started.clear()
+            peer.history_release.clear()
+            change = asyncio.create_task(session.update_chat_ctx(target))
+            try:
+                await asyncio.wait_for(peer.history_started.wait(), 3)
+                # Do not record the result before Prism acknowledges it.
+                assert len(session.chat_ctx.items) == 2
+                peer.server_items.append(
+                    {"id": "later", "type": "message", "role": "user", "text": "Keep this too"}
+                )
+                await peer.emit(
+                    "conversation.item.input_audio_transcription.completed",
+                    item_id="later",
+                    transcript="Keep this too",
+                )
+                await wait_until(lambda: len(session.chat_ctx.items) == 3)
+            finally:
+                peer.history_release.set()
+            await change
+            assert [i.id for i in session.chat_ctx.items] == [
+                *[i.id for i in target.items],
+                "later",
+            ]
+            history = await model._get_history()
+            assert [i.id for i in history] == [call_id, history[1].id, "speech", "later"]
+            assert history[1].call_id == target.items[0].call_id
+            assert [i["type"] for i in peer.history_operations] == ["conversation.item.create"] * 4
+            assert all(
+                i["item"]["type"] == "function_call_output" for i in peer.history_operations[1:]
+            )
+            await session.update_chat_ctx(session.chat_ctx)
+            assert len(peer.history_operations) == 4
+            if response:
+                await peer.end(response)
+            pending = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await pending
+            assert not any(not error.recoverable for error in errors)
+
+    @pytest.mark.parametrize("failure", ["event", "session", "disconnect"])
+    async def test_result_insertions_keep_accepted_prefix_and_reject_uncertain_outcomes(
+        self, failure
+    ):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="test")
+            errors = []
+            session.on("error", errors.append)
+            pairs = []
+            for index in range(2):
+                call = llm.FunctionCall(call_id=f"imported-{index}", name="lookup", arguments="{}")
+                result = llm.FunctionCallOutput(call_id=call.call_id, output="42", is_error=False)
+                pairs.extend([call, result])
+                target = session.chat_ctx
+                target.items.extend([call, result])
+                peer.fail_history_at = len(peer.history_operations) + 2
+                with pytest.raises(PrismError):
+                    await session.update_chat_ctx(target)
+            target = session.chat_ctx
+            target.add_message(role="user", content="Newer speech")
+            await session.update_chat_ctx(target)
+            before = await model._get_history()
+            target = llm.ChatContext([*pairs, target.items[-1]])
+            if failure == "disconnect":
+                peer.close_history_at = len(peer.history_operations) + 2
+            else:
+                peer.fail_history_at = len(peer.history_operations) + 2
+                peer.fail_history_scope = failure
+            with pytest.raises((llm.RealtimeError, RimeStreamError)):
+                await session.update_chat_ctx(target)
+            assert [i.id for i in session.chat_ctx.items] == [
+                pairs[0].id,
+                pairs[1].id,
+                pairs[2].id,
+                target.items[-1].id,
+            ]
+            if failure != "event":
+                await wait_until(lambda: any(not error.recoverable for error in errors))
+                with pytest.raises((llm.RealtimeError, RimeStreamError)):
+                    await session.update_chat_ctx(target)
+                return
+            accepted_id = (await model._get_history())[1].id
+            await session.update_chat_ctx(target)
+            after = await model._get_history()
+            assert [i.id for i in after] == [
+                before[0].id,
+                accepted_id,
+                before[1].id,
+                after[3].id,
+                before[2].id,
+            ]
+            assert [i.id for i in session.chat_ctx.items] == [i.id for i in target.items]
+            assert len(peer.history_operations) == 8
+            assert not any(not error.recoverable for error in errors)
             pending = session.generate_reply()
             response = await peer.start(await peer.next())
             await peer.end(response)
