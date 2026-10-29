@@ -63,6 +63,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+openspline = ["livekit-plugins-openspline>=0.1.0; python_version < '3.13'"]
 mcp = ["mcp>=2.2, <3"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
