@@ -129,8 +129,14 @@ async def test_a_duplicate_call_on_a_call_is_refused_with_the_agents_template() 
     assert outputs == {"c0": "checked", "c1": "check runs"}
 
 
-async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call() -> None:
+# Catches: tools a toolset lists in setup() losing their policies on a call, on start and when
+# their agent arrives by update_agent (the handoff rebuilds the frame on its own path).
+@pytest.mark.parametrize("handoff", [False, True])
+async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call(
+    handoff: bool,
+) -> None:
     runs: list[str] = []
+    entered = asyncio.Event()
 
     @function_tool(on_duplicate="reject")
     async def check(ctx: RunContext) -> str:
@@ -145,6 +151,11 @@ async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call() ->
             return self
 
     agent = Agent(instructions="Check.", name="desk", tools=[Listed(id="listed")])
+
+    @agent.on_enter
+    async def enter(session: VoiceSession) -> None:
+        entered.set()
+
     calls = [FunctionToolCall(name="check", arguments="{}", call_id=f"c{n}") for n in range(2)]
     model = FakeLLM(
         fake_responses=[
@@ -153,6 +164,11 @@ async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call() ->
         ]
     )
     async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
-        await session.start(agent)
+        if handoff:
+            await session.start(Agent(instructions="Greet.", name="greeter"))
+            session.update_agent(agent)
+        else:
+            await session.start(agent)
+        await asyncio.wait_for(entered.wait(), 5)
         await session._run(user_input="hello")
     assert runs == ["c0"]

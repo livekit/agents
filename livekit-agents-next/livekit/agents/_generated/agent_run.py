@@ -208,13 +208,13 @@ class FunctionToolInfo:
     """`FunctionToolInfo`: one tool as the model and the gate see it."""
 
     spec: dict[str, object]
-    raw_schema: bool
+    raw_schema: bool = False
     """Declared by a raw JSON schema (`raw_schema=`, MCP): no signature to validate against."""
-    needs_approval: ReadBack | None
+    needs_approval: ReadBack | None = None
     """`needs_approval=`: the body runs only on an answered read-back."""
-    on_duplicate: DuplicateMode
-    duplicate_scope: DuplicateScope
-    retries: int | None
+    on_duplicate: DuplicateMode = "allow"
+    duplicate_scope: DuplicateScope = "name"
+    retries: int | None = None
     """`retries=` on the tool: its own budget in place of the run's `Retries.tools`."""
     remote: str | None = None
     """A `RemoteAgent(...).as_tool()`'s endpoint: with the tool's name, its configured identity

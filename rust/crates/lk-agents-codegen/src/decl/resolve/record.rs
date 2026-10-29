@@ -405,6 +405,12 @@ pub(super) fn record_target(
     Ok((module, name, extract, emit))
 }
 
+/// A unit-only enum: it crosses as its string.
+pub(super) fn unit_enum(item: &syn::Item) -> bool {
+    matches!(item, syn::Item::Enum(e)
+        if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)))
+}
+
 pub(super) fn record_entry(attrs: &[syn::Attribute]) -> Option<Entry> {
     voc::read(attrs).ok().and_then(|entries| voc::find(&entries, "record").cloned())
 }

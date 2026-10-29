@@ -13,7 +13,7 @@ mod proxy;
 mod record;
 pub(crate) use proxy::boxed_future;
 use proxy::eager_future;
-use record::{record_entry, record_target};
+use record::{record_entry, record_target, unit_enum};
 
 /// Every `#[host(class)]` of the crate, in module order.
 pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
@@ -846,7 +846,7 @@ impl Resolver<'_> {
                 host: HostForm::Record { module: module_name, name },
                 extract,
                 emit,
-                literal: false,
+                literal: unit_enum(it),
             }));
         }
         if voc::find(&entries, "error").is_some() {
@@ -926,8 +926,7 @@ impl Resolver<'_> {
                 }
             };
             // A unit-only enum's derive writes its string both ways.
-            let unit = matches!(it, syn::Item::Enum(e)
-                if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)));
+            let unit = unit_enum(it);
             return Ok(Ty::Record(Record {
                 rust,
                 host,
@@ -1127,6 +1126,8 @@ fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Result<(), Str
         (Ty::Optional(_), Literal::None) => true,
         // A transparent record crossing `None` (`records::check_none_defaults`).
         (Ty::Record(Record { host: HostForm::Record { .. }, .. }), Literal::None) => true,
+        // A unit enum's string; the generated model's type check holds it to a member.
+        (Ty::Record(r), Literal::Str(_)) => r.literal && matches!(r.host, HostForm::Record { .. }),
         (Ty::Optional(inner), d) => return check_default(at, inner, Some(d)),
         (Ty::Bool, Literal::Bool(_))
         | (Ty::Float, Literal::Float(_) | Literal::Int(_))

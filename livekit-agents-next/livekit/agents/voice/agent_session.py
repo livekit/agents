@@ -1419,18 +1419,7 @@ class _AgentHooks:
         (the session's already are): a provider tool has none."""
         await self._acquire(self._agent_toolsets(tools))
         infos = {info.spec["name"]: info for info in tool_infos(llm.ToolContext(tools))}
-        return [
-            infos.get(spec["name"])
-            or FunctionToolInfo(
-                spec=spec,
-                raw_schema=False,
-                needs_approval=None,
-                on_duplicate="allow",
-                duplicate_scope="name",
-                retries=None,
-            )
-            for spec in tool_specs(tools)
-        ]
+        return [infos.get(spec["name"]) or FunctionToolInfo(spec=spec) for spec in tool_specs(tools)]
 
     def _agent_toolsets(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Toolset]:
         return [t for t in tools if isinstance(t, llm.Toolset) and t not in self._session._tools]

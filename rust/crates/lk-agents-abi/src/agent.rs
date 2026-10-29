@@ -306,12 +306,17 @@ pub trait VoiceAgent: AgentFrame + Sized + 'static {
 pub struct FunctionToolInfo {
     pub spec: ToolSpec,
     /// Declared by a raw JSON schema (`raw_schema=`, MCP): no signature to validate against.
+    #[host(default = false)]
     pub raw_schema: bool,
     /// `needs_approval=`: the body runs only on an answered read-back.
+    #[host(default = None)]
     pub needs_approval: Option<ReadBack>,
+    #[host(default = "allow")]
     pub on_duplicate: DuplicateMode,
+    #[host(default = "name")]
     pub duplicate_scope: DuplicateScope,
     /// `retries=` on the tool: its own budget in place of the run's `Retries.tools`.
+    #[host(default = None)]
     pub retries: Option<u32>,
     /// A `RemoteAgent(...).as_tool()`'s endpoint: with the tool's name, its configured identity
     /// as an expert on a voice session.
