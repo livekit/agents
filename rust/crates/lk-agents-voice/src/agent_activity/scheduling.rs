@@ -927,7 +927,9 @@ impl Driver {
             // first.
             PreemptiveVerdict::Reuse => {
                 if let Some(handle) = self.activity.speech_scheduler.handle(speech) {
-                    handle.mark_scheduled();
+                    out.machine().push(crate::agent_session::effects::Effect::SpeechScheduled(
+                        Arc::clone(handle),
+                    ));
                 }
                 out.trace(TurnStep::PreemptiveReconciled { speech, verdict });
                 Some(speech)

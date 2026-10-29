@@ -210,6 +210,7 @@ fn journal_form(planned: &Planned) -> Option<Step> {
         | Effect::Closing
         | Effect::SttConversationItem { .. }
         | Effect::SpeechStart { .. }
+        | Effect::SpeechScheduled(_)
         | Effect::PushKeyterms { .. }
         | Effect::RequestKeyterms { .. }
         | Effect::CancelKeyterms(_)
@@ -287,6 +288,8 @@ pub enum Effect {
         role: String,
         text: String,
     },
+    /// Publish an admitted speech's scheduled state to runtime observers.
+    SpeechScheduled(Arc<crate::speech_handle::SpeechHandle>),
     SpeechStart {
         handle: Arc<crate::speech_handle::SpeechHandle>,
         context: Box<crate::generation::ReplyContext>,
