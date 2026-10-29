@@ -178,7 +178,10 @@ and `LIVEKIT_API_SECRET` set), each call mints a one-hour thread grant,
 identity `delegate`, with `read` and `write` on the caller's thread, and shares
 that thread with the endpoint: the message carries it as `contextId`, and the
 endpoint answers in it on its own lane
-([two brains, one thread](internals/storage.md#two-brains-one-thread)). It
+([two brains, one thread](internals/storage.md#two-brains-one-thread)). The
+endpoint finds that thread in the project's threads service, so the caller
+needs the same storage: a caller without storage, whose thread lives only in
+memory, gets the task failed `thread-not-found`. It
 reads the card under a project credential. Off the project's origin it sends
 no token.
 `chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
