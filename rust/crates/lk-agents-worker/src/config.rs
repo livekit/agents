@@ -18,7 +18,7 @@ pub struct WorkerOptions {
     pub api_secret: Option<String>,
     /// Falls back to `LIVEKIT_WORKER_TOKEN`.
     pub worker_token: Option<String>,
-    /// Falls back to `LIVEKIT_AGENT_NAME_OVERRIDE`, then `LIVEKIT_AGENT_NAME`.
+    /// `LIVEKIT_AGENT_NAME_OVERRIDE` wins over it; falls back to `LIVEKIT_AGENT_NAME`.
     pub agent_name: Option<String>,
     /// Falls back to `LIVEKIT_AGENT_DEPLOYMENT`.
     pub deployment: Option<String>,
@@ -91,9 +91,8 @@ impl WorkerOptions {
             .worker_token
             .or_else(|| env("LIVEKIT_WORKER_TOKEN"))
             .filter(|value| !value.is_empty());
-        let agent_name = self
-            .agent_name
-            .or_else(|| env("LIVEKIT_AGENT_NAME_OVERRIDE"))
+        let agent_name = env("LIVEKIT_AGENT_NAME_OVERRIDE")
+            .or(self.agent_name)
             .or_else(|| env("LIVEKIT_AGENT_NAME"))
             .unwrap_or_default();
         let deployment =
@@ -187,7 +186,13 @@ mod tests {
             ..Default::default()
         };
         let (worker, connection, _) = options.resolve_with(
-            |_| panic!("explicit options must not consult the environment"),
+            |name| {
+                assert_eq!(
+                    name, "LIVEKIT_AGENT_NAME_OVERRIDE",
+                    "explicit options read only the override"
+                );
+                None
+            },
             || panic!("explicit capacity must not probe CPUs"),
         );
         assert_eq!(worker.ws_url, "wss://explicit.example");
@@ -223,7 +228,7 @@ mod tests {
         assert!(connection.api_key.is_empty());
         assert!(connection.api_secret.is_empty());
         assert_eq!(connection.worker_token, None);
-        assert!(worker.agent_name.is_empty());
+        assert_eq!(worker.agent_name, "override-name", "the launcher's override still wins");
         assert!(worker.deployment.is_empty());
         assert_eq!(worker.num_idle_processes.get(false), 0);
     }
@@ -237,7 +242,7 @@ mod tests {
         };
         let (worker, connection, _) = options.resolve_with(environment, || 8.0);
         assert_eq!(worker.ws_url, "wss://explicit.example");
-        assert_eq!(worker.agent_name, "explicit-name");
+        assert_eq!(worker.agent_name, "override-name", "the launcher's override wins");
         assert_eq!(connection.api_key, "environment-key");
         assert_eq!(worker.deployment, "environment-deployment");
         assert_eq!(worker.num_idle_processes.get(false), 4);
