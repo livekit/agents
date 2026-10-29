@@ -322,20 +322,6 @@ impl GatewayTts {
         }
     }
 
-    /// Open a duplex synthesis. The gateway has no one-shot endpoint, so `synthesize` is this plus
-    /// one push and `end_input`. `headers` is `get_inference_headers()`, read by the host in the
-    /// synthesis's job context; each sentence pushed goes out as it arrives.
-    pub async fn stream_for_host(
-        &self,
-        headers: Option<Vec<(String, String)>>,
-        conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(TtsSink, TtsSource), ProviderError> {
-        let (sink, source) = self
-            .configured(conn_options)
-            .stream_identified(headers.map(|pairs| pairs.into_iter().collect()))?;
-        Ok((Box::new(sink), Box::new(source)))
-    }
-
     fn open(
         &self,
         identification: Option<&Headers>,
