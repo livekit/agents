@@ -19,7 +19,7 @@ from collections.abc import (
     Iterator,
 )
 from types import TracebackType
-from typing import Any, Generic, Protocol, TypeVar, overload, runtime_checkable
+from typing import Generic, Protocol, TypeVar, overload, runtime_checkable
 
 from typing_extensions import AsyncContextManager
 
@@ -572,7 +572,7 @@ class TaskSet:
 
     def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._loop = loop or asyncio.get_event_loop()
-        self._set = set[asyncio.Task[Any]]()
+        self._set = set[asyncio.Task[object]]()
         self._closed = False
 
     def create_task(
@@ -587,11 +587,20 @@ class TaskSet:
         return task
 
     @property
-    def tasks(self) -> set[asyncio.Task[Any]]:
+    def tasks(self) -> set[asyncio.Task[object]]:
         return self._set.copy()
 
 
-async def cancel_and_wait(*futures: asyncio.Future[Any]) -> None:
+class _CancellableFuture(Protocol):
+    def cancel(self, msg: object = None) -> bool: ...
+    def done(self) -> bool: ...
+    def cancelled(self) -> bool: ...
+    def exception(self) -> BaseException | None: ...
+    def add_done_callback(self, callback: Callable[[_CancellableFuture], object], /) -> None: ...
+    def remove_done_callback(self, callback: Callable[[_CancellableFuture], object], /) -> int: ...
+
+
+async def cancel_and_wait(*futures: _CancellableFuture) -> None:
     loop = asyncio.get_running_loop()
     waiters = []
 
