@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, AgentTask, ToolError, function_tool
+from livekit.agents.beta.workflows.dtmf_inputs import GetDtmfResult
 from livekit.agents.llm import FunctionToolCall, ToolResult
 from livekit.agents.voice.remote_session import RemoteSession, SessionHost
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -26,6 +28,7 @@ async def _start_confirmation(
     later_result: Any = NOT_GIVEN,
     task_result: Any = True,
     parent_speech: bool = True,
+    complete_from_callback: bool = False,
 ) -> tuple[AgentSession, asyncio.Event, FakeLLM]:
     ready = asyncio.Event()
     continued = asyncio.Event()
@@ -38,7 +41,12 @@ async def _start_confirmation(
         @function_tool
         async def confirm_details(self) -> ToolResult:
             """Confirm the synthetic details."""
-            self.complete(task_result)
+            if complete_from_callback:
+                asyncio.get_running_loop().call_soon(
+                    self.complete, task_result, context=contextvars.Context()
+                )
+            else:
+                self.complete(task_result)
             return ToolResult(None, reply_required=False)
 
     class Wrapper(AgentTask[bool]):
@@ -150,6 +158,92 @@ async def test_task_output_survives_parent_speech(depth: int, disable_retries: b
             PARENT_LINES
         )
     finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize("depth", [0, 1, 2])
+async def test_awaited_callback_completion_supplies_current_run_output(depth: int) -> None:
+    session, continued, _ = await _start_confirmation(depth=depth, complete_from_callback=True)
+    try:
+        await asyncio.wait_for(session.run(user_input="wait"), timeout=3)
+        assert not continued.is_set()
+
+        result = await asyncio.wait_for(
+            session.run(user_input="yes", output_type=bool, output_options=None), timeout=3
+        )
+        assert result.final_output is True
+        assert continued.is_set()
+        assert [event.item.text_content for event in result.events if event.type == "message"] == (
+            PARENT_LINES
+        )
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize(
+    "unrelated_result",
+    [NOT_GIVEN, GetDtmfResult("1234"), None, ValueError("unrelated task failed")],
+    ids=["control", "value", "explicit_none", "error"],
+)
+async def test_unrelated_completion_does_not_replace_run_output(unrelated_result: Any) -> None:
+    ready = asyncio.Event()
+    answer_ready = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+    unrelated_task = AgentTask[Any](instructions="Reserved for unrelated work.")
+
+    class Answer(AgentTask[str]):
+        async def on_enter(self) -> None:
+            self.complete("correct answer")
+
+    class Parent(Agent):
+        async def on_enter(self) -> None:
+            async def finish_unrelated() -> None:
+                await release.wait()
+                if unrelated_result is not NOT_GIVEN:
+                    unrelated_task.complete(unrelated_result)
+                completed.set()
+
+            self.callback = asyncio.create_task(finish_unrelated())
+            ready.set()
+
+        @function_tool
+        async def answer(self) -> ToolResult:
+            """Provide this run's typed answer."""
+            answer = await Answer(instructions="Return the answer.")
+            assert answer == "correct answer"
+            answer_ready.set()
+            await completed.wait()
+            return ToolResult(None, reply_required=False)
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="answer",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="answer", arguments="{}", call_id="answer")],
+            )
+        ]
+    )
+    session = AgentSession(llm=llm)
+    parent = Parent(instructions="Test callback completion ownership.")
+    await session.start(parent, session_host=False)
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=3)
+        run = session.run(user_input="answer", output_type=str, output_options=None)
+        await asyncio.wait_for(answer_ready.wait(), timeout=3)
+        assert not run.done()
+        release.set()
+
+        result = await asyncio.wait_for(run, timeout=3)
+        assert result.final_output == "correct answer"
+        assert unrelated_task.done() == (unrelated_result is not NOT_GIVEN)
+    finally:
+        release.set()
+        completed.set()
+        await asyncio.wait_for(parent.callback, timeout=3)
         await session.aclose()
 
 
