@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::media::codecs::CodecFailure;
-use lk_agents_abi::media::decoder::ByteDecoderOptions;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, MediaWorkers};
@@ -49,7 +48,6 @@ pub enum DecoderError {
 struct State {
     output: VecDeque<AudioFrame>,
     output_samples: usize,
-    decoded_samples: usize,
     done: bool,
     error: Option<DecoderError>,
 }
@@ -67,7 +65,6 @@ struct Shared {
     cancelled: AtomicBool,
     ready: Notify,
     limits: DecoderLimits,
-    sample_limit: Option<usize>,
     /// A streaming decoder's input; cancellation closes it so a blocked read returns.
     input: Option<Arc<StreamBuffer>>,
 }
@@ -136,18 +133,9 @@ impl Shared {
             if let Some(error) = state.error.as_ref() {
                 return Err(error.clone());
             }
-            if self
-                .sample_limit
-                .is_some_and(|limit| samples.len() > limit.saturating_sub(state.decoded_samples))
-            {
-                let error = DecoderError::Overflow("decoded duration");
-                Self::fail(&mut state, error.clone());
-                return Err(error);
-            }
             if samples.len() <= self.limits.output_samples.saturating_sub(state.output_samples) {
                 // Reserve worker-local prepared PCM before releasing the lock.
                 state.output_samples += samples.len();
-                state.decoded_samples += samples.len();
                 break;
             }
             if samples.len() <= self.limits.output_samples {
@@ -196,36 +184,7 @@ impl AudioDecoder {
         limits: DecoderLimits,
     ) -> Result<Self, DecoderError> {
         let source = Source::File { path, looping };
-        Self::start(workers, source, Some(sample_rate), num_channels, limits, None)
-    }
-
-    /// A finite head uses the same admission, bounded output and cleanup receipt as file audio.
-    pub fn open_bytes(
-        workers: &MediaWorkers,
-        options: ByteDecoderOptions,
-        limits: DecoderLimits,
-    ) -> Result<Self, DecoderError> {
-        if options.max_input_bytes == 0 || options.max_duration.is_zero() {
-            return Err(DecoderError::InvalidLimits);
-        }
-        if options.data.len() > options.max_input_bytes {
-            return Err(DecoderError::Overflow("encoded bytes"));
-        }
-        let sample_limit = u128::from(options.sample_rate)
-            .checked_mul(u128::from(options.num_channels))
-            .and_then(|rate| rate.checked_mul(options.max_duration.as_nanos()))
-            .and_then(|samples| usize::try_from(samples / 1_000_000_000).ok())
-            .filter(|samples| *samples > 0)
-            .ok_or(DecoderError::InvalidLimits)?;
-        let source = if options.mime == "audio/pcm" || options.mime.is_empty() {
-            let (rate, channels) = options.pcm_format.ok_or(DecoderError::InvalidLimits)?;
-            Source::Pcm { data: options.data, format: AudioFormat::new(rate, channels) }
-        } else {
-            Source::Container { mime: options.mime, data: options.data }
-        };
-        let (rate, channels) = (Some(options.sample_rate), options.num_channels);
-        let decoder = Self::start(workers, source, rate, channels, limits, Some(sample_limit))?;
-        Ok(decoder)
+        Self::start(workers, source, Some(sample_rate), num_channels, limits)
     }
 
     /// Bytes pushed as they arrive through the returned input, decoded by one admitted native
@@ -248,7 +207,7 @@ impl AudioDecoder {
         }
         let input = Arc::new(StreamBuffer::new());
         let source = Source::Stream { mime: mime.to_owned(), input: input.clone() };
-        let decoder = Self::start(workers, source, sample_rate, num_channels, limits, None)?;
+        let decoder = Self::start(workers, source, sample_rate, num_channels, limits)?;
         let shared = decoder.shared.clone();
         let input = DecoderInput { shared, pipe: input, ended: AtomicBool::new(false) };
         Ok((decoder, input))
@@ -260,7 +219,6 @@ impl AudioDecoder {
         sample_rate: Option<u32>,
         num_channels: u16,
         limits: DecoderLimits,
-        sample_limit: Option<usize>,
     ) -> Result<Self, DecoderError> {
         if !limits.format.is_valid()
             || limits.output_samples == 0
@@ -283,7 +241,6 @@ impl AudioDecoder {
             state: Mutex::new(State {
                 output: VecDeque::new(),
                 output_samples: 0,
-                decoded_samples: 0,
                 done: false,
                 error: None,
             }),
@@ -291,7 +248,6 @@ impl AudioDecoder {
             cancelled: AtomicBool::new(false),
             ready: Notify::new(),
             limits,
-            sample_limit,
             input,
         });
         let resource = shared.clone();
@@ -462,7 +418,6 @@ lk_agents_abi::inventory::submit! {
                 .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
                 .map_err(|error| error.to_string())
         },
-        open_bytes,
     }
 }
 
@@ -514,16 +469,6 @@ pub use lk_agents_media::StreamBuffer;
 
 #[cfg(feature = "python")]
 pub use lk_agents_media::blingfire::MediaTokenization;
-
-pub(crate) fn open_bytes(
-    options: ByteDecoderOptions,
-) -> Result<Box<dyn lk_agents_abi::media::decoder::FileDecoder>, String> {
-    let workers = crate::process::workers().map_err(|error| error.to_string())?;
-    let limits = decoder_limits(options.sample_rate, options.num_channels);
-    AudioDecoder::open_bytes(&workers, options, limits)
-        .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
-        .map_err(|error| error.to_string())
-}
 
 /// Two seconds of queued PCM, delivered in 10 ms chunks.
 pub(crate) fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {

@@ -3,10 +3,10 @@
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, TaskSet};
+use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::room_io::pre_connect_state::{
-    MAX_BYTES, MAX_DURATION, PreConnectBuffer, PreConnectState, source_format,
+    HeadBytes, PreConnectBuffer, PreConnectState, replayed,
 };
-use lk_agents_voice::room_io::{PRE_CONNECT_AUDIO_BUFFER_STREAM, PRE_CONNECT_MAX_DELTA};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -130,93 +130,17 @@ impl PreConnectAudioHandler {
         self.changed.notify_waiters();
     }
 
+    /// The simulation decodes the admitted head inline; production runs the same decode on its
+    /// media pool.
     async fn receive(
         &self,
         stream: &mut ByteStream,
     ) -> std::result::Result<Vec<AudioFrame>, String> {
-        let (rate, channels) = source_format(&stream.info)?;
-        if stream.info.total_length.is_some_and(|length| length > MAX_BYTES as u64) {
-            return Err("pre-connect encoded byte capacity exceeded".into());
+        let mut head = HeadBytes::new(&stream.info)?;
+        while let Some(chunk) = stream.chunks.next().await.map_err(|e| e.to_string())? {
+            head.push(&chunk)?;
         }
-        let raw = stream.info.mime_type.is_empty() || stream.info.mime_type == "audio/pcm";
-        let mut bytes = Vec::new();
-        let limit = (rate as usize) * (channels as usize) * 2 * (MAX_DURATION.as_secs() as usize);
-        let read: std::result::Result<(), String> = async {
-            while let Some(chunk) = stream.chunks.next().await.map_err(|e| e.to_string())? {
-                if chunk.len() > MAX_BYTES.saturating_sub(bytes.len())
-                    || (raw && chunk.len() > limit.saturating_sub(bytes.len()))
-                {
-                    return Err("pre-connect encoded byte/duration capacity exceeded".into());
-                }
-                bytes.extend(chunk);
-            }
-            Ok(())
-        }
-        .await;
-        read?;
-        if raw && bytes.len() % (usize::from(channels) * 2) != 0 {
-            return Err("pre-connect PCM contains an incomplete sample".into());
-        }
-        let mut pcm = if raw {
-            bytes.chunks_exact(2).map(|p| i16::from_le_bytes([p[0], p[1]])).collect::<Vec<_>>()
-        } else {
-            let mut decoder = lk_agents_media::Decoder::wav(
-                Some(rate),
-                lk_agents_media::decoder::DecodeLimits {
-                    min_sample_rate: 8_000,
-                    max_sample_rate: 192_000,
-                    max_channels: 8,
-                    max_streams: 8,
-                    max_expansion_ratio: 24,
-                    // This fake transforms the admitted finite head in one calculator step.
-                    max_samples_per_frame: limit / 2,
-                },
-            )
-            .map_err(|e| e.to_string())?;
-            let mut pcm = decoder.push(&bytes).map_err(|e| e.to_string())?;
-            pcm.extend(decoder.finish().map_err(|e| e.to_string())?);
-            pcm
-        };
-        if pcm.len() > limit / 2 {
-            return Err("pre-connect decoded duration capacity exceeded".into());
-        }
-        if channels != self.format.1 {
-            pcm = if self.format.1 == 1 {
-                lk_agents_media::downmix_mono(&pcm, channels)
-            } else if channels == 1 {
-                pcm.into_iter()
-                    .flat_map(|v| std::iter::repeat_n(v, self.format.1 as usize))
-                    .collect()
-            } else {
-                return Err("unsupported channel conversion".into());
-            };
-        }
-        let mut converter = lk_agents_media::new_resampler(
-            rate,
-            self.format.0,
-            u32::from(self.format.1),
-            lk_agents_media::Quality::default(),
-        )
-        .map_err(|e| e.to_string())?;
-        let mut normalized = converter.push(&pcm).map_err(|e| e.to_string())?.to_vec();
-        normalized.extend(converter.flush().map_err(|e| e.to_string())?);
-        let sample_limit =
-            self.format.0 as usize * usize::from(self.format.1) * MAX_DURATION.as_secs() as usize;
-        if normalized.len() > sample_limit {
-            return Err("pre-connect normalized duration capacity exceeded".into());
-        }
-        let width = (self.format.0 as usize / 100) * self.format.1 as usize;
-        Ok(normalized
-            .chunks(width.max(1))
-            .map(|pcm| {
-                AudioFrame::new(
-                    lk_agents_media::pcm_bytes(pcm),
-                    self.format.0,
-                    self.format.1,
-                    (pcm.len() / self.format.1 as usize) as u32,
-                )
-            })
-            .collect())
+        head.decode(self.format)
     }
     pub async fn wait_for_data(&self, track: &TrackSid) -> Result<Vec<AudioFrame>> {
         let id = self.state.lock().unwrap().slot(track)?;
@@ -233,13 +157,7 @@ impl PreConnectAudioHandler {
         };
         let outcome = lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, waiting).await;
         match outcome {
-            Ok(Ok(buffer))
-                if self.clock.now().saturating_duration_since(buffer.received_at)
-                    <= PRE_CONNECT_MAX_DELTA =>
-            {
-                Ok(buffer.frames)
-            }
-            Ok(Ok(_)) => Ok(Vec::new()),
+            Ok(Ok(buffer)) => Ok(replayed(buffer, self.clock.now())),
             Ok(Err(error)) => Err(IoError::PreConnectMalformed(error)),
             Err(_) => {
                 self.state.lock().unwrap().expire(id);

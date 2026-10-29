@@ -202,6 +202,57 @@ mod tests {
     }
 
     #[test]
+    fn a_head_decodes_to_the_session_format_in_ten_millisecond_frames() {
+        let info = lk_agents_abi::voice::rtc::StreamInfo {
+            attributes: [("sampleRate".into(), "48000".into()), ("channels".into(), "2".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let mut head = HeadBytes::new(&info).unwrap();
+        head.push(&[100, 0, 200, 0].repeat(960)).unwrap();
+        let frames = head.decode((24_000, 1)).unwrap();
+        assert!(frames.iter().all(|f| (f.sample_rate, f.num_channels) == (24_000, 1)));
+        assert_eq!(frames.iter().map(|f| f.samples_per_channel).sum::<u32>(), 480);
+        assert!(frames.iter().all(|f| f.samples_per_channel <= 240));
+    }
+
+    #[test]
+    fn normalization_preserves_the_heads_duration() {
+        for (source, target) in [(24_000u32, 24_000u32), (48_000, 24_000), (24_000, 48_000)] {
+            let info = lk_agents_abi::voice::rtc::StreamInfo {
+                attributes: [
+                    ("sampleRate".into(), source.to_string()),
+                    ("channels".into(), "2".into()),
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            };
+            let mut head = HeadBytes::new(&info).unwrap();
+            head.push(&lk_agents_media::pcm_bytes(&[100, 200].repeat(source as usize / 10)))
+                .unwrap();
+            let frames = head.decode((target, 1)).unwrap();
+            let samples: u32 = frames.iter().map(|f| f.samples_per_channel).sum();
+            assert_eq!(samples, target / 10, "{source} -> {target}");
+        }
+    }
+
+    #[test]
+    fn a_raw_head_longer_than_its_duration_bound_is_refused() {
+        let info = lk_agents_abi::voice::rtc::StreamInfo {
+            attributes: [("sampleRate".into(), "8000".into()), ("channels".into(), "1".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let mut head = HeadBytes::new(&info).unwrap();
+        let ten_seconds = vec![0; 8_000 * 2 * 10];
+        head.push(&ten_seconds).unwrap();
+        assert!(head.push(&[0, 0]).is_err());
+    }
+
+    #[test]
     fn preconnect_overload_preserves_already_admitted_tracks() {
         let mut state = PreConnectState::default();
         let tracks =
@@ -227,6 +278,95 @@ mod tests {
 
 pub const MAX_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// One buffered head as it arrives, within its encoded byte and PCM duration bounds.
+pub struct HeadBytes {
+    format: (u32, u16),
+    mime: String,
+    pcm_limit: Option<usize>,
+    data: Vec<u8>,
+}
+
+impl HeadBytes {
+    pub fn new(info: &lk_agents_abi::voice::rtc::StreamInfo) -> std::result::Result<Self, String> {
+        let format = source_format(info)?;
+        if info.total_length.is_some_and(|length| length > MAX_BYTES as u64) {
+            return Err("pre-connect encoded byte capacity exceeded".into());
+        }
+        let raw = info.mime_type.is_empty() || info.mime_type == "audio/pcm";
+        let pcm_limit = raw.then(|| sample_limit(format) * 2);
+        Ok(Self { format, mime: info.mime_type.clone(), pcm_limit, data: Vec::new() })
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> std::result::Result<(), String> {
+        if chunk.len() > MAX_BYTES.saturating_sub(self.data.len()) {
+            return Err("pre-connect encoded byte capacity exceeded".into());
+        }
+        if self.pcm_limit.is_some_and(|limit| chunk.len() > limit.saturating_sub(self.data.len())) {
+            return Err("pre-connect PCM duration/byte capacity exceeded".into());
+        }
+        self.data.extend_from_slice(chunk);
+        Ok(())
+    }
+
+    /// Synchronous CPU work: decoded, remixed and resampled to the session's `target`, in 10 ms
+    /// frames, never more than [`MAX_DURATION`] of it.
+    pub fn decode(self, target: (u32, u16)) -> std::result::Result<Vec<AudioFrame>, String> {
+        use lk_agents_media::AudioFormat;
+        use lk_agents_media::source::{Source, decode, frames};
+        let limit = sample_limit(target);
+        let source = match self.pcm_limit {
+            Some(_) => Source::Pcm {
+                data: self.data,
+                format: AudioFormat::new(self.format.0, self.format.1),
+            },
+            None => Source::Container { mime: self.mime, data: self.data },
+        };
+        let limits = lk_agents_media::decoder::DecodeLimits {
+            min_sample_rate: 8_000,
+            max_sample_rate: 192_000,
+            max_channels: 8,
+            max_streams: 8,
+            max_expansion_ratio: 24,
+            max_samples_per_frame: limit,
+        };
+        let format = AudioFormat::new(target.0, target.1);
+        let mut pcm = Vec::new();
+        decode::<lk_agents_media::CodecError>(
+            source,
+            Some(target.0),
+            target.1,
+            limits,
+            &|| false,
+            &mut |decoded, samples| {
+                if decoded != format || samples.len() > limit - pcm.len() {
+                    return Err(lk_agents_media::CodecError::DecodeLimit(
+                        "pre-connect decoded format or duration",
+                    ));
+                }
+                pcm.extend_from_slice(samples);
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        let chunk = (target.0 as usize / 100) * usize::from(target.1);
+        Ok(frames(format, &pcm, chunk).collect())
+    }
+}
+
+/// Interleaved samples in [`MAX_DURATION`] of `format`.
+fn sample_limit((rate, channels): (u32, u16)) -> usize {
+    rate as usize * usize::from(channels) * MAX_DURATION.as_secs() as usize
+}
+
+/// What a waiter replays of a head: nothing once it is older than
+/// [`super::PRE_CONNECT_MAX_DELTA`], since the live track already carries that speech.
+pub fn replayed(buffer: PreConnectBuffer, now: Ts) -> Vec<AudioFrame> {
+    if now.saturating_duration_since(buffer.received_at) > super::PRE_CONNECT_MAX_DELTA {
+        return Vec::new();
+    }
+    buffer.frames
+}
 
 pub fn source_format(
     info: &lk_agents_abi::voice::rtc::StreamInfo,

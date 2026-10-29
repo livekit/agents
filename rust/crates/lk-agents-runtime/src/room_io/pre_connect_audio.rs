@@ -3,17 +3,14 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::codecs::open_bytes;
-use lk_agents_abi::media::decoder::ByteDecoderOptions;
 use lk_agents_abi::voice::io::{IoError, Result};
-use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, StreamInfo, TrackSid};
+use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamSource, TaskSet};
 use lk_agents_voice::room_io::pre_connect_state::{PreConnectBuffer, PreConnectState};
 use tokio::sync::Notify;
 
-use lk_agents_voice::room_io::{PRE_CONNECT_AUDIO_BUFFER_STREAM, PRE_CONNECT_MAX_DELTA};
-
-use lk_agents_voice::room_io::pre_connect_state::{MAX_BYTES, MAX_DURATION, source_format};
+use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
+use lk_agents_voice::room_io::pre_connect_state::{HeadBytes, replayed};
 
 #[derive(Default)]
 struct State {
@@ -161,10 +158,7 @@ impl PreConnectAudioHandler {
                 return Err(IoError::PreConnectTimeout(track.clone()));
             }
         };
-        if self.clock.now().saturating_duration_since(outcome.received_at) > PRE_CONNECT_MAX_DELTA {
-            return Ok(Vec::new());
-        }
-        Ok(outcome.frames)
+        Ok(replayed(outcome, self.clock.now()))
     }
 
     async fn read_stream(self: Arc<Self>, track: TrackSid, id: u64, mut stream: ByteStream) {
@@ -188,7 +182,7 @@ impl PreConnectAudioHandler {
         let cleanup = stream.chunks.close(deadline).await;
         self.record_cleanup(cleanup);
         let outcome = match received {
-            Ok(data) if cleanup == Closed::Clean => self.decode(data, stream.info).await,
+            Ok(head) if cleanup == Closed::Clean => self.decode(head).await,
             Ok(_) => Err("pre-connect stream cleanup did not finish".into()),
             Err(error) => Err(error),
         };
@@ -201,69 +195,28 @@ impl PreConnectAudioHandler {
         self.changed.notify_waiters();
     }
 
-    async fn decode(
-        &self,
-        data: Vec<u8>,
-        info: StreamInfo,
-    ) -> std::result::Result<Vec<AudioFrame>, String> {
-        let source_format = source_format(&info)?;
+    /// On the media pool, abandoned at close.
+    async fn decode(&self, head: HeadBytes) -> std::result::Result<Vec<AudioFrame>, String> {
+        let closed = || -> std::result::Result<Vec<AudioFrame>, String> {
+            Err("pre-connect input is closed".into())
+        };
+        let stopped = self.stopped.notified();
+        tokio::pin!(stopped);
+        stopped.as_mut().enable();
         if self.state.lock().unwrap().closed {
-            return Err("pre-connect input is closed".into());
+            return closed();
         }
-        let raw = info.mime_type.is_empty() || info.mime_type == "audio/pcm";
-        let mut decoder = open_bytes(ByteDecoderOptions {
-            mime: info.mime_type,
-            data,
-            pcm_format: raw.then_some(source_format),
-            sample_rate: self.format.0,
-            num_channels: self.format.1,
-            max_input_bytes: MAX_BYTES,
-            max_duration: MAX_DURATION,
-        })?;
-        let decode = async {
-            let mut frames = Vec::new();
-            let mut retained = 0usize;
-            let pcm_limit = self.format.0 as usize
-                * usize::from(self.format.1)
-                * 2
-                * MAX_DURATION.as_secs() as usize;
-            loop {
-                let stopped = self.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if self.state.lock().unwrap().closed {
-                    return Err("pre-connect input is closed".into());
-                }
-                let frame = tokio::select! {
-                    biased;
-                    () = &mut stopped => return Err("pre-connect input is closed".into()),
-                    frame = decoder.next() => frame?,
-                };
-                let Some(frame) = frame else {
-                    return Ok(frames);
-                };
-                if (frame.sample_rate, frame.num_channels) != self.format
-                    || frame.data.len() > pcm_limit.saturating_sub(retained)
-                    || frame.data.len() > MAX_BYTES.saturating_sub(retained)
-                {
-                    return Err(
-                        "pre-connect decoder exceeded the admitted PCM format or capacity".into()
-                    );
-                }
-                retained += frame.data.len();
-                frames.push(frame);
-                tokio::task::yield_now().await;
-            }
-        }
-        .await;
-        let cleanup = decoder.close(lk_agents_abi::HOST_TEARDOWN_TIMEOUT).await;
-        match (decode, cleanup) {
-            (Ok(frames), Ok(())) => Ok(frames),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(format!("pre-connect decoder cleanup: {error}")),
-            (Err(error), Err(cleanup)) => {
-                Err(format!("{error}; pre-connect decoder cleanup: {cleanup}"))
-            }
+        let format = self.format;
+        let workers = crate::process::workers().map_err(|error| error.to_string())?;
+        let job = workers
+            .try_spawn(lk_agents_media::workers::MediaWorkerClass::Decoder, move || {
+                head.decode(format)
+            })
+            .map_err(|error| error.to_string())?;
+        tokio::select! {
+            biased;
+            () = &mut stopped => closed(),
+            decoded = job => decoded.map_err(|_| "pre-connect decoder panicked".to_string())?,
         }
     }
 
@@ -309,26 +262,13 @@ impl PreConnectAudioHandler {
     }
 }
 
-async fn receive_bytes(stream: &mut ByteStream) -> std::result::Result<Vec<u8>, String> {
-    let (sample_rate, num_channels) = source_format(&stream.info)?;
-    if stream.info.total_length.is_some_and(|length| length > MAX_BYTES as u64) {
-        return Err("pre-connect encoded byte capacity exceeded".into());
-    }
-    let raw = stream.info.mime_type.is_empty() || stream.info.mime_type == "audio/pcm";
-    let pcm_limit =
-        (u64::from(sample_rate) * u64::from(num_channels) * 2 * MAX_DURATION.as_secs()) as usize;
-    let mut data = Vec::new();
+async fn receive_bytes(stream: &mut ByteStream) -> std::result::Result<HeadBytes, String> {
+    let mut head = HeadBytes::new(&stream.info)?;
     while let Some(chunk) = stream.chunks.next().await.map_err(|error| error.to_string())? {
-        if chunk.len() > MAX_BYTES.saturating_sub(data.len()) {
-            return Err("pre-connect encoded byte capacity exceeded".into());
-        }
-        if raw && chunk.len() > pcm_limit.saturating_sub(data.len()) {
-            return Err("pre-connect PCM duration/byte capacity exceeded".into());
-        }
-        data.extend_from_slice(&chunk);
+        head.push(&chunk)?;
         tokio::task::yield_now().await;
     }
-    Ok(data)
+    Ok(head)
 }
 
 #[cfg(test)]
