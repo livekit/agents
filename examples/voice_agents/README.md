@@ -23,6 +23,7 @@ session = AgentSession(
 ### Getting Started
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with multilingual STT, turn detection, preemptive generation, and metrics collection
+- [`inference_responses_agent.py`](./inference_responses_agent.py) - `basic_agent.py` with `inference.responses.LLM` (the Responses API through LiveKit Inference)
 
 ### MCP & External Integrations
 
