@@ -68,6 +68,8 @@ bytes = "1"
 python = ["dep:pyo3", "pyo3/multiple-pymethods", "dep:pyo3-async-runtimes", "dep:base64"]
 # See the `serde` dependency's note: the derive on the plain enums the voice core carries.
 serde = []
+# The zeroed metrics records tests fill in field by field (`metrics::testkit`).
+testkit = []
 
 [dev-dependencies]
 lk-agents-test-support = { path = "../lk-agents-test-support" }

@@ -20,7 +20,7 @@ impl lk_agents_abi::telemetry::policy::MetricSeries for MetricSeries {
 
     fn admit(&mut self, name: String, attributes: Vec<(String, String)>) -> bool {
         let attributes: BTreeMap<_, _> = attributes.into_iter().collect();
-        let instrument = lk_agents_abi::metrics::otel::INSTRUMENTS.iter().any(|(n, _)| *n == name)
+        let instrument = super::records::INSTRUMENTS.iter().any(|(n, _)| *n == name)
             || matches!(
                 name.as_str(),
                 "gen_ai.invoke_agent.duration"

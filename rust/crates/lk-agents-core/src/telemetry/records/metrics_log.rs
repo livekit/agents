@@ -1,6 +1,6 @@
 //! `metrics/utils.py`'s `log_metrics`: Rust decides what to record, the host owns the logger.
 
-use crate::metrics::base::AgentMetrics;
+use lk_agents_abi::metrics::base::AgentMetrics;
 
 /// Ints and floats stay distinct, as in the reference.
 #[derive(Debug, Clone, PartialEq)]
@@ -150,9 +150,10 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::base::{CachedTokenDetails, InputTokenDetails, OutputTokenDetails};
-    use crate::metrics::testkit as tk;
-    use lk_agents_abi::metrics::base::Metadata;
+    use lk_agents_abi::metrics::base::{
+        CachedTokenDetails, InputTokenDetails, Metadata, OutputTokenDetails,
+    };
+    use lk_agents_abi::metrics::testkit as tk;
 
     fn keys(l: &MetricsLog) -> Vec<&'static str> {
         l.fields.iter().map(|(k, _)| *k).collect()

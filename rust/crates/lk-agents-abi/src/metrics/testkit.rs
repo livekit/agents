@@ -12,11 +12,11 @@ use crate::metrics::base::{
     RealtimeModelMetrics, SttMetrics, TtsMetrics, VadMetrics,
 };
 
-pub(crate) fn meta(provider: &str, model: &str) -> Option<Metadata> {
+pub fn meta(provider: &str, model: &str) -> Option<Metadata> {
     Some(Metadata { model_name: Some(model.to_owned()), model_provider: Some(provider.to_owned()) })
 }
 
-pub(crate) fn llm() -> LlmMetrics {
+pub fn llm() -> LlmMetrics {
     LlmMetrics {
         label: String::new(),
         request_id: String::new(),
@@ -36,7 +36,7 @@ pub(crate) fn llm() -> LlmMetrics {
     }
 }
 
-pub(crate) fn stt() -> SttMetrics {
+pub fn stt() -> SttMetrics {
     SttMetrics {
         label: String::new(),
         request_id: String::new(),
@@ -54,7 +54,7 @@ pub(crate) fn stt() -> SttMetrics {
     }
 }
 
-pub(crate) fn tts() -> TtsMetrics {
+pub fn tts() -> TtsMetrics {
     TtsMetrics {
         label: String::new(),
         request_id: String::new(),
@@ -75,7 +75,7 @@ pub(crate) fn tts() -> TtsMetrics {
     }
 }
 
-pub(crate) fn vad() -> VadMetrics {
+pub fn vad() -> VadMetrics {
     VadMetrics {
         label: String::new(),
         timestamp: 0.0,
@@ -86,7 +86,7 @@ pub(crate) fn vad() -> VadMetrics {
     }
 }
 
-pub(crate) fn eou() -> EouMetrics {
+pub fn eou() -> EouMetrics {
     EouMetrics {
         timestamp: 0.0,
         end_of_utterance_delay: 0.0,
@@ -97,7 +97,7 @@ pub(crate) fn eou() -> EouMetrics {
     }
 }
 
-pub(crate) fn realtime() -> RealtimeModelMetrics {
+pub fn realtime() -> RealtimeModelMetrics {
     RealtimeModelMetrics {
         label: String::new(),
         request_id: String::new(),
@@ -118,7 +118,7 @@ pub(crate) fn realtime() -> RealtimeModelMetrics {
     }
 }
 
-pub(crate) fn avatar() -> AvatarMetrics {
+pub fn avatar() -> AvatarMetrics {
     AvatarMetrics {
         timestamp: 0.0,
         playback_latency: 0.0,
@@ -128,7 +128,7 @@ pub(crate) fn avatar() -> AvatarMetrics {
     }
 }
 
-pub(crate) fn interruption() -> InterruptionMetrics {
+pub fn interruption() -> InterruptionMetrics {
     InterruptionMetrics {
         timestamp: 0.0,
         total_duration: 0.0,
@@ -141,7 +141,7 @@ pub(crate) fn interruption() -> InterruptionMetrics {
     }
 }
 
-pub(crate) fn eot() -> EotInferenceMetrics {
+pub fn eot() -> EotInferenceMetrics {
     EotInferenceMetrics {
         timestamp: 0.0,
         total_duration: 0.0,

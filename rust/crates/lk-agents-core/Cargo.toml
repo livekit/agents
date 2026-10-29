@@ -28,3 +28,6 @@ base64.workspace = true
 thiserror.workspace = true
 # MCP legacy SSE endpoint resolution and its same-origin rule.
 url = "2"
+
+[dev-dependencies]
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }

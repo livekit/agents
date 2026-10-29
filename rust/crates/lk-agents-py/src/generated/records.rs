@@ -2166,7 +2166,7 @@ pub mod storage_turn {
 pub mod telemetry {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/metrics/otel.rs.
+    // Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
 
     pub fn otel_value_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::metrics::OtelValue) -> PyResult<Bound<'py, PyAny>> {
         Ok(match value {

@@ -3,26 +3,24 @@
 //! presence outside and truthiness inside. `tests/test_otel_metrics_seam.py` checks every record
 //! names one of the host's instruments, as the right kind.
 
-use lk_agents_abi::MetricsMetadata;
-use lk_agents_abi::MetricsReport;
-use lk_agents_abi::metrics::base::Metadata;
-
-use crate::metrics::base::AgentMetrics;
+use lk_agents_abi::metrics::base::{AgentMetrics, Metadata};
+use lk_agents_abi::metrics::{OtelValue, OtelWire};
+use lk_agents_abi::{MetricsMetadata, MetricsReport};
 
 /// A counter takes `.add`, a histogram `.record`.
-#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstrumentKind {
     Counter,
     Histogram,
 }
 
-/// Token counts stay integers: the exported data point type follows the first value seen.
-#[crate::host(record(module = "telemetry", emit, transparent))]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum OtelValue {
-    Int(u64),
-    Float(f64),
+impl InstrumentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InstrumentKind::Counter => "counter",
+            InstrumentKind::Histogram => "histogram",
+        }
+    }
 }
 
 /// `attributes` keeps the reference's insertion order.
@@ -36,7 +34,7 @@ pub struct OtelRecord {
 
 impl OtelRecord {
     /// `int` and `float` stay distinct: an OTel series takes its type from the first value.
-    pub fn wire(self) -> super::OtelWire {
+    pub fn wire(self) -> OtelWire {
         let attrs = self.attributes.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
         (self.instrument.to_owned(), self.kind.as_str().to_owned(), self.value, attrs)
     }
@@ -237,7 +235,7 @@ pub fn turn_records(report: &MetricsReport) -> Vec<OtelRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::testkit as tk;
+    use lk_agents_abi::metrics::testkit as tk;
 
     fn names(records: &[OtelRecord]) -> Vec<&'static str> {
         records.iter().map(|r| r.instrument).collect()

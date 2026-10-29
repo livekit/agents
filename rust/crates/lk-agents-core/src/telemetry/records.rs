@@ -1,8 +1,16 @@
 //! What the host's logger and meters record for a metrics event.
 
+mod metrics_log;
+mod otel;
+
 use lk_agents_abi::MetricsReport;
-use lk_agents_abi::metrics::{AgentMetrics, LogValue, OtelWire, log_fields, turn_records};
+use lk_agents_abi::metrics::{AgentMetrics, OtelWire};
 use serde_json::{Map, Value};
+
+use metrics_log::{LogValue, log_fields};
+use otel::{turn_records, usage_records};
+
+pub(crate) use otel::INSTRUMENTS;
 
 pub struct MetricsRecords;
 
@@ -29,6 +37,6 @@ impl lk_agents_abi::metrics::MetricsRecords for MetricsRecords {
     }
 
     fn otel_usage_records(metrics: AgentMetrics) -> Vec<OtelWire> {
-        lk_agents_abi::metrics::usage_records(&metrics).into_iter().map(|r| r.wire()).collect()
+        usage_records(&metrics).into_iter().map(|r| r.wire()).collect()
     }
 }

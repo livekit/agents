@@ -2,7 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
-#     rust/crates/lk-agents-abi/src/metrics/otel.rs
+#     rust/crates/lk-agents-abi/src/metrics/mod.rs
 #     rust/crates/lk-agents-abi/src/telemetry/policy.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs

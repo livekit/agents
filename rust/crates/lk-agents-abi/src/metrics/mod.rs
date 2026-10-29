@@ -4,27 +4,29 @@
 use crate::MetricsReport;
 
 pub mod base;
-pub mod log;
-pub mod otel;
 pub mod usage;
 
-#[cfg(test)]
-pub(crate) mod testkit;
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 
 pub use base::{
     AgentMetrics, AvatarMetrics, CachedTokenDetails, EotInferenceMetrics, EouMetrics,
     InputTokenDetails, InterruptionMetrics, LlmMetrics, OutputTokenDetails,
     RealtimeModelMetrics, SttMetrics, TtsMetrics, VadMetrics,
 };
-pub use log::{LogValue, MetricsLog, log_fields};
-pub use otel::{
-    INSTRUMENTS, InstrumentKind, OtelRecord, OtelValue, turn_records, usage_records,
-};
+/// Token counts stay integers: the exported data point type follows the first value seen.
+#[crate::host(record(module = "telemetry", emit, transparent))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OtelValue {
+    Int(u64),
+    Float(f64),
+}
+
 /// One OTel observation: `(instrument, kind, value, attributes)`, attributes in insertion order.
 pub type OtelWire = (String, String, OtelValue, indexmap::IndexMap<String, String>);
 
-/// What the host's logger and meters record for a metrics event; the decisions are `log` and
-/// `otel`'s, the implementation `lk-agents-core`'s.
+/// What the host's logger and meters record for a metrics event; the decisions are
+/// `lk_agents_core::telemetry::records`'.
 #[crate::host(functions)]
 pub trait MetricsRecords {
     /// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
