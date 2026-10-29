@@ -47,6 +47,9 @@ impl generated::Implementations for Selected {
     type TextFunctions = lk_agents_runtime::cores::TextAlgorithms;
     type TraceParents = lk_agents_runtime::cores::TraceParents;
     type MetricsRecords = lk_agents_runtime::cores::MetricsRecords;
+    type Tagger = lk_agents_runtime::net::session_report::records::Tagger;
+    type UploadGate = lk_agents_runtime::net::session_report::records::UploadGate;
+    type ReportRecords = lk_agents_runtime::net::session_report::records::ReportRecords;
     type ProviderMetrics = lk_agents_runtime::cores::ProviderMetrics;
     type LlmMetricState = lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = lk_agents_runtime::cores::TtsMetricState;
@@ -146,7 +149,7 @@ impl generated::Implementations for Selected {
     type InferenceCredentials = lk_agents_runtime::net::credentials::Credentials;
     type InferenceModels = lk_agents_runtime::inference::models::Models;
     type CliSignals = lk_agents_runtime::worker::cli_signals::CliSignals;
-    type SessionReportProjection = lk_agents_abi::telemetry::report::projection::ReportProjection;
+    type SessionReportProjection = lk_agents_runtime::net::session_report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
     type EventRetention =
         lk_agents_runtime::net::session_report::EventRetention<lk_agents_runtime::process::Process>;

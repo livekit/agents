@@ -399,6 +399,238 @@ impl _core_MetricSeries {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+type TaggerImpl = <crate::Selected as super::Implementations>::Tagger;
+
+/// Tag sessions with metadata for observability.
+///
+/// The Tagger allows adding string tags (key:value format) with optional
+/// structured metadata to sessions. Tags and metadata are uploaded to
+/// LiveKit Cloud at session end.
+///
+/// Example:
+/// ```python
+/// # Mark session as successful
+/// ctx.tagger.success(reason="Task completed successfully")
+///
+/// # Mark session as failed
+/// ctx.tagger.fail(reason="User hung up before completing booking")
+///
+/// # Add custom tags
+/// ctx.tagger.add("voicemail:true")
+/// ctx.tagger.add("language:es")
+///
+/// # Add tags with structured metadata
+/// ctx.tagger.add(
+///     "appointment:booked",
+///     metadata={"slot_id": "abc123", "calendar": "cal.com"},
+/// )
+///
+/// # Remove a tag
+/// ctx.tagger.remove("voicemail:true")
+/// ```
+#[pyclass(name = "Tagger", module = "livekit.agents._core")]
+pub struct Tagger(TaggerImpl);
+
+#[pymethods]
+impl Tagger {
+    #[new]
+    fn new() -> PyResult<Tagger> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::new();
+        Ok(Tagger(out))
+    }
+
+    /// Mark the session as successful; ``reason`` is kept apart from the tag.
+    #[pyo3(signature = (reason = None))]
+    fn success(&mut self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::success(&mut self.0, reason);
+        Ok(())
+    }
+
+    /// Mark the session as failed; ``reason`` is kept apart from the tag.
+    #[pyo3(signature = (reason = None))]
+    fn fail(&mut self, reason: ::std::option::Option<::std::string::String>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::fail(&mut self.0, reason);
+        Ok(())
+    }
+
+    /// Add a ``key:value`` tag, with optional structured metadata.
+    #[pyo3(signature = (tag, *, metadata = None))]
+    fn add(&mut self, tag: ::std::string::String, metadata: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        let metadata = metadata.map(|v| ::lk_agents_abi::python::value_from_py(&v, "metadata")).transpose()?;
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::add(&mut self.0, tag, metadata);
+        Ok(())
+    }
+
+    /// Remove a tag; removing an absent one does nothing.
+    #[pyo3(signature = (tag))]
+    fn remove(&mut self, tag: ::std::string::String) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::remove(&mut self.0, tag);
+        Ok(())
+    }
+
+    /// The session's tags.
+    #[getter]
+    fn tags<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::tags(&self.0);
+        Ok(::pyo3::types::PyFrozenSet::new(py, out.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
+    }
+
+    /// ``sorted(tagger.tags)``.
+    fn sorted_tags(&self) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::sorted_tags(&self.0);
+        Ok(out)
+    }
+
+    /// ``(tag, metadata, epoch seconds)``, in insertion order.
+    fn entries<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::entries(&self.0);
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, match x1 { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? }, ::pyo3::IntoPyObjectExt::into_bound_py_any(x2, py)?])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
+    }
+
+    fn is_empty(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::is_empty(&self.0);
+        Ok(out)
+    }
+
+    /// The judgments recorded by judge groups.
+    #[getter]
+    fn evaluations(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::EvaluationRecord>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::evaluations(&self.0);
+        Ok(out)
+    }
+
+    /// ``"success"``, ``"fail"`` or ``None``.
+    #[getter]
+    fn outcome<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome(&self.0);
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::outcome_to_py(py, value)?)).transpose()?)
+    }
+
+    /// The reason given with the outcome.
+    #[getter]
+    fn outcome_reason(&self) -> PyResult<::std::option::Option<::std::string::String>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::outcome_reason(&self.0);
+        Ok(out)
+    }
+
+    /// One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record.
+    #[pyo3(signature = (name, verdict, reasoning, instructions))]
+    fn _core_record_judgment(&mut self, name: ::std::string::String, verdict: ::std::string::String, reasoning: ::std::string::String, instructions: ::std::string::String) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_record_judgment(&mut self.0, name, verdict, reasoning, instructions);
+        Ok(())
+    }
+
+    /// Whether the session has judgments or an outcome to upload.
+    fn has_evals(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::has_evals(&self.0);
+        Ok(out)
+    }
+
+    /// The session report's upload records, in the reference's order; none once uploads are
+    /// ``disabled``. A raise in ``project_item`` (a chat item's span attribute) is re-raised once
+    /// the records are built.
+    #[pyo3(signature = (report, disabled, project_item, capture_content = false))]
+    fn _core_session_records(&self, report: Bound<'_, PyAny>, disabled: bool, project_item: Bound<'_, PyAny>, capture_content: bool) -> PyResult<::std::vec::Vec<::lk_agents_abi::LogRecordWire>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let report = crate::generated::records::telemetry::session_report_input_from_py(&report)?;
+        let project_item = crate::generated::telemetry::ChatItemProjectionProxy::from_host(&project_item)?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+type UploadGateImpl = <crate::Selected as super::Implementations>::UploadGate;
+
+fn _extract_upload_gate_is_disabled_response_status_code(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
+    ::lk_agents_abi::python::number_from_py::<u16>(&obj, "status_code")
+}
+
+fn _extract_upload_gate_is_disabled_response_body(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "body") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "body") }).collect::<PyResult<Vec<_>>>()) } }
+}
+
+/// Per-session upload gate: the "data recording is disabled" latch, one transition, one warning.
+#[pyclass(name = "UploadGate", module = "livekit.agents._core")]
+pub struct UploadGate(UploadGateImpl);
+
+#[pymethods]
+impl UploadGate {
+    #[new]
+    fn new() -> PyResult<UploadGate> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::new();
+        Ok(UploadGate(out))
+    }
+
+    /// Called when a session re-initialises recording.
+    fn reset(&mut self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::reset(&mut self.0);
+        Ok(())
+    }
+
+    #[getter]
+    fn disabled(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disabled(&self.0);
+        Ok(out)
+    }
+
+    /// Returns ``True`` on the transition only, where the reference logs its warning.
+    fn disable(&mut self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::disable(&mut self.0);
+        Ok(out)
+    }
+
+    /// Whether an upload response is the project's "recording disabled" 401.
+    #[staticmethod]
+    #[pyo3(signature = (status_code, body))]
+    fn is_disabled_response(#[pyo3(from_py_with = _extract_upload_gate_is_disabled_response_status_code)] status_code: u16, #[pyo3(from_py_with = _extract_upload_gate_is_disabled_response_body)] body: ::std::vec::Vec<u8>) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <UploadGateImpl as ::lk_agents_abi::telemetry::report::UploadGate>::is_disabled_response(status_code, body);
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+type ReportRecordsImpl = <crate::Selected as super::Implementations>::ReportRecords;
+
+/// Whether recording is enabled for the job.
+#[pyfunction]
+#[pyo3(signature = (options))]
+pub fn recording_enabled(options: ::lk_agents_abi::telemetry::report::RecordingOptions) -> PyResult<bool> {
+    let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::recording_enabled(options);
+    Ok(out)
+}
+
+/// One chat item's upload record; one at a time lets a host SDK emit a large report without
+/// another whole-history vector under its interpreter lock. ``None`` once uploads are
+/// ``disabled`` or the transcript is not recorded.
+#[pyfunction]
+#[pyo3(signature = (disabled, options, item, projected, capture_content, identity))]
+pub fn _core_session_chat_record(disabled: bool, options: ::lk_agents_abi::telemetry::report::RecordingOptions, item: ::lk_agents_abi::ChatItem, projected: Bound<'_, PyAny>, capture_content: bool, identity: (::std::string::String, ::std::string::String, ::std::string::String)) -> PyResult<::std::option::Option<::lk_agents_abi::LogRecordWire>> {
+    let projected = ::lk_agents_abi::python::value_from_py(&projected, "projected")?;
+    let out = <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
 type _core_SessionReportProjectionImpl = <crate::Selected as super::Implementations>::SessionReportProjection;
 
@@ -813,6 +1045,68 @@ impl _core_PreparedTranscript {
             let out = <_core_PreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish_report(&this, report, path)
                 .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+
+/// [`::lk_agents_abi::telemetry::report::ChatItemProjection`] over a host `collections.abc.Callable`.
+#[derive(Clone)]
+pub struct ChatItemProjectionProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl ChatItemProjectionProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
+        Ok(ChatItemProjectionProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>(|obj| ChatItemProjectionProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::telemetry::report::ChatItemProjection for ChatItemProjectionProxy {
+    fn project(&self, item: ::lk_agents_abi::ChatItem) -> ::std::result::Result<::serde_json::Value, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let item_arg = item;
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(item_arg, py)?];
+                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (::lk_agents_abi::python::value_from_py(&o, "ChatItemProjection.__call__")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
         })
     }
 }

@@ -5,7 +5,6 @@ use lk_agents_abi::{ChatItem, ChatMessage, Role, VirtualClock};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::worker::worker::SessionReportInput;
 
 // ============================================================================================
 // records
@@ -87,7 +86,7 @@ fn denied_content_never_reaches_session_projection_or_report_records() {
         let mut report = view(&[], &items, RecordingOptions { redaction, ..all_on() });
         report.options = json!({"instructions": "customer prompt"});
         let records = session_records(
-            &UploadGate::new(),
+            false,
             &report,
             &t,
             &|_| panic!("content policy must run before projecting the transcript"),
@@ -122,8 +121,7 @@ fn a_failing_verdict_bumps_the_evaluation_severity() {
     t.record_judgment("booked", "fail", "never booked", "");
     t.record_judgment("unsure", "maybe", "hmm", "");
 
-    let recs =
-        session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}), true);
+    let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let evals = find(&recs, "evaluation");
     assert_eq!(evals.len(), 3);
     assert_eq!(
@@ -140,8 +138,7 @@ fn a_failing_verdict_bumps_the_evaluation_severity() {
 fn a_failed_outcome_bumps_severity_and_an_empty_reason_is_omitted() {
     let mut t = tagger();
     t.fail(Some("user hung up"));
-    let recs =
-        session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}), true);
+    let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let o = find(&recs, "outcome");
     assert_eq!(o.len(), 1);
     assert_eq!(o[0].severity_number, 17);
@@ -149,8 +146,7 @@ fn a_failed_outcome_bumps_severity_and_an_empty_reason_is_omitted() {
 
     let mut t = tagger();
     t.success(None::<String>);
-    let recs =
-        session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}), true);
+    let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let o = find(&recs, "outcome");
     assert_eq!(o[0].severity_number, 0);
     assert_eq!(attr(o[0], "outcome"), &json!({"outcome": "success"}));
@@ -159,13 +155,7 @@ fn a_failed_outcome_bumps_severity_and_an_empty_reason_is_omitted() {
 // Catches: emitting `[]` for an empty tag set or usage list instead of `None`.
 #[test]
 fn empty_tags_and_usage_are_null_not_empty_lists() {
-    let recs = session_records(
-        &UploadGate::new(),
-        &view(&[], &[], all_on()),
-        &tagger(),
-        &|_| json!({}),
-        true,
-    );
+    let recs = session_records(false, &view(&[], &[], all_on()), &tagger(), &|_| json!({}), true);
     let s = find(&recs, "session report")[0];
     assert_eq!(attr(s, "session.tags"), &Value::Null);
     assert_eq!(attr(s, "usage"), &Value::Null);
@@ -178,8 +168,7 @@ fn session_tags_are_sorted() {
     t.add("zebra:1", None);
     t.add("apple:2", None);
     t.add("mango:3", None);
-    let recs =
-        session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}), true);
+    let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let s = find(&recs, "session report")[0];
     assert_eq!(attr(s, "session.tags"), &json!(["apple:2", "mango:3", "zebra:1"]));
 }
@@ -191,19 +180,14 @@ fn the_summary_and_transcript_gates_are_independent() {
     let items = vec![ChatItem::Message(ChatMessage::text("i", Role::User, "hi", t))];
     let logs_only = RecordingOptions { logs: true, ..Default::default() };
     assert!(logs_only.recording_enabled());
-    let recs = session_records(
-        &UploadGate::new(),
-        &view(&[], &items, logs_only),
-        &tagger(),
-        &|_| json!({}),
-        true,
-    );
+    let recs =
+        session_records(false, &view(&[], &items, logs_only), &tagger(), &|_| json!({}), true);
     assert_eq!(find(&recs, "session report").len(), 1);
     assert_eq!(find(&recs, "chat item").len(), 0);
 
     // Nothing enabled: no summary, no transcript -- but see the next test.
     let recs = session_records(
-        &UploadGate::new(),
+        false,
         &view(&[], &items, RecordingOptions::default()),
         &tagger(),
         &|_| json!({}),
@@ -219,7 +203,7 @@ fn tag_and_outcome_records_are_emitted_with_recording_off() {
     t.add("voicemail:true", Some(json!({"slot_id": "abc"})));
     t.fail(Some("no answer"));
     let recs = session_records(
-        &UploadGate::new(),
+        false,
         &view(&[], &[], RecordingOptions::default()),
         &t,
         &|_| json!({}),
@@ -238,8 +222,7 @@ fn only_tags_with_non_empty_metadata_produce_a_record() {
     t.add("plain:1", None);
     t.add("empty:1", Some(json!({})));
     t.add("rich:1", Some(json!({"k": "v"})));
-    let recs =
-        session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}), true);
+    let recs = session_records(false, &view(&[], &[], all_on()), &t, &|_| json!({}), true);
     let tags = find(&recs, "tag");
     assert_eq!(tags.len(), 1, "{tags:?}");
     assert_eq!(attr(tags[0], "tag"), &json!({"name": "rich:1", "metadata": {"k": "v"}}));
@@ -249,11 +232,11 @@ fn only_tags_with_non_empty_metadata_produce_a_record() {
 #[test]
 fn the_summary_timestamp_falls_through_a_zero_started_at() {
     let mut v = view(&[], &[], all_on());
-    let recs = session_records(&UploadGate::new(), &v, &tagger(), &|_| json!({}), true);
+    let recs = session_records(false, &v, &tagger(), &|_| json!({}), true);
     assert_eq!(find(&recs, "session report")[0].timestamp, (100, 0));
 
     v.started_at = Some(0.0);
-    let recs = session_records(&UploadGate::new(), &v, &tagger(), &|_| json!({}), true);
+    let recs = session_records(false, &v, &tagger(), &|_| json!({}), true);
     assert_eq!(find(&recs, "session report")[0].timestamp, (200, 0));
 }
 
@@ -307,4 +290,144 @@ fn tag_timestamps_come_from_the_session_clock() {
     // Not exactly 10s: `Clock::wall` nudges by 1 µs per read.
     let delta = ts[1].duration_since(ts[0]).unwrap();
     assert!(delta > Duration::from_millis(9_990) && delta < Duration::from_secs(11), "{ts:?}");
+}
+
+// ============================================================================================
+// the upload gate
+// ============================================================================================
+
+#[test]
+fn incremental_chat_records_keep_supplied_identity_time_and_enforce_recording_consent() {
+    let item = ChatItem::Message(lk_agents_abi::ChatMessage::new(
+        "message-a",
+        lk_agents_abi::Role::User,
+        vec![lk_agents_abi::ChatContent::Text("private".into())],
+        std::time::UNIX_EPOCH + std::time::Duration::from_nanos(123_456),
+    ));
+    let identity: (String, String, String) = ("job-a".into(), "room-a".into(), "room-name".into());
+    let projected = json!({"id": "message-a", "content": ["private"]});
+    let mut gate = UploadGate::new();
+    let mut options = RecordingOptions { transcript: true, ..Default::default() };
+    let record = session_chat_record(
+        gate.disabled(),
+        &options,
+        item.clone(),
+        projected.clone(),
+        true,
+        identity.clone(),
+    )
+    .unwrap();
+    assert_eq!(record.timestamp_nanos, 123_456);
+    assert_eq!(record.attributes["chat.item"], projected);
+    assert_eq!(record.attributes["job_id"], "job-a");
+    assert_eq!(record.attributes["lk.telemetry.capture_content"], true);
+    assert!(
+        session_chat_record(
+            gate.disabled(),
+            &options,
+            item.clone(),
+            projected.clone(),
+            false,
+            identity.clone()
+        )
+        .is_none()
+    );
+    options.redaction = true;
+    assert!(
+        session_chat_record(
+            gate.disabled(),
+            &options,
+            item.clone(),
+            projected.clone(),
+            true,
+            identity.clone()
+        )
+        .is_none()
+    );
+    options.redaction = false;
+    options.transcript = false;
+    assert!(
+        session_chat_record(
+            gate.disabled(),
+            &options,
+            item.clone(),
+            projected.clone(),
+            true,
+            identity.clone()
+        )
+        .is_none()
+    );
+    options.transcript = true;
+    gate.disable();
+    assert!(
+        session_chat_record(gate.disabled(), &options, item, projected, true, identity.clone())
+            .is_none()
+    );
+}
+
+#[test]
+fn large_tag_state_cannot_create_an_unbounded_sdk_report_or_remove_the_business_outcome() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let mut tagger = Tagger::new(clock);
+    for index in 0..1_000 {
+        tagger.add(&format!("tag-{index}"), Some(json!({"detail": "value"})));
+    }
+    tagger.success(Some("completed"));
+    let report = SessionReportInput {
+        recording_options: RecordingOptions { logs: true, ..Default::default() },
+        ..Default::default()
+    };
+    let records = session_records(false, &report, &tagger, &|_| Value::Null, true);
+    assert!(records.len() <= super::policy::SDK_PENDING_RECORDS);
+    assert!(
+        records.iter().any(|record| record.body == "outcome"
+            && record.attributes["outcome"]["outcome"] == "success")
+    );
+    assert!(records[0].attributes["lk.telemetry.omitted_report_entries"].as_u64().unwrap() > 0);
+    assert_eq!(tagger.sorted_tags().len(), 1_001, "business tag state remains application-owned");
+    assert!(records.iter().all(|record| report_value_fits(&record.attributes)));
+}
+
+// Catches: gating on the status code alone (a missing-grant 401 would disable uploads).
+#[test]
+fn only_the_recording_disabled_401_closes_the_gate() {
+    assert!(UploadGate::is_disabled_response(401, b"data recording is disabled for project"));
+    assert!(UploadGate::is_disabled_response(401, b"Disabled By Owner"));
+    assert!(!UploadGate::is_disabled_response(401, b"missing project id"));
+    assert!(!UploadGate::is_disabled_response(
+        401,
+        b"operation requires observability write grant"
+    ));
+    // Right text, wrong code -- the reference checks the code first.
+    assert!(!UploadGate::is_disabled_response(403, b"data recording is disabled"));
+    assert!(!UploadGate::is_disabled_response(500, b"data recording is disabled"));
+}
+
+// Catches: panicking or missing the marker on a non-UTF-8 body.
+#[test]
+fn invalid_utf8_body_still_matches() {
+    let mut body = b"data recording is disabled ".to_vec();
+    body.extend_from_slice(&[0xff, 0xfe]);
+    assert!(UploadGate::is_disabled_response(401, &body));
+}
+
+// Catches: the gate becoming a global again.
+#[test]
+fn two_sessions_do_not_share_the_disabled_flag() {
+    let mut a = UploadGate::new();
+    let b = UploadGate::new();
+    a.disable();
+    assert!(a.disabled());
+    assert!(!b.disabled(), "session B must still be allowed to upload");
+}
+
+// Catches: warning on every rejected upload instead of once, and `reset()` not re-arming.
+#[test]
+fn disable_reports_only_the_transition_and_reset_rearms() {
+    let mut g = UploadGate::new();
+    assert!(g.disable());
+    assert!(!g.disable());
+    g.reset();
+    assert!(!g.disabled());
+    assert!(g.disable());
 }

@@ -38,7 +38,6 @@
   "pyo3-file:rust/crates/lk-agents-abi/src/recorder.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/storage/mod.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/stt/stt.rs",
-  "pyo3-file:rust/crates/lk-agents-abi/src/telemetry/report.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/timed.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/tts/tts.rs",
   "pyo3-file:rust/crates/lk-agents-abi/src/turn/keyterms.rs",

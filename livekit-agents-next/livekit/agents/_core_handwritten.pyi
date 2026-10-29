@@ -12,11 +12,7 @@ from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any, Protocol
 
-from ._generated._core_classes import (
-    ChatItem,
-    Tagger,
-    UploadGate,
-)
+from ._generated._core_classes import ChatItem
 from ._generated.storage_class import (
     EventRow,
     InboxRow,
@@ -216,17 +212,6 @@ def chat_ctx_to_dict(
 
 def resolve_host_ref(id: int) -> Any:
     """The object the host interned under ``id``; read, not released."""
-
-# --- metrics and telemetry -----------------------------------------------------------------------
-
-def session_records(
-    gate: UploadGate,
-    report: dict[str, Any],
-    tagger: Tagger,
-    project_item: Callable[[Any], Any],
-    capture_content: bool = False,
-) -> list[Any]:
-    """Upload records for a completed session; ``project_item`` serializes chat items."""
 
 # --- tokenize ------------------------------------------------------------------------------------
 

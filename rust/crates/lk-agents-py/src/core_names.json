@@ -300,7 +300,6 @@
     "serialize_image_frame",
     "serialize_image_url",
     "session_messages_topic",
-    "session_records",
     "session_state_option_fields",
     "speech_priorities",
     "split_all_markup",

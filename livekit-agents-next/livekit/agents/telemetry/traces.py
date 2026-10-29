@@ -19,7 +19,7 @@ from pydantic import JsonValue
 from livekit import rtc
 
 from .. import _core
-from .._generated.telemetry import RecordingOptions
+from .._generated.telemetry import RecordingOptions, SessionReportInput
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import ATTRIBUTE_SIMULATION_ENABLED
@@ -251,23 +251,22 @@ async def _upload_session_report(
             builder = _core._core_PreparedTranscript()
             builder.check_input(len(report.chat_history.items), 0)
             batch_size = builder.input_batch_size
-        records = _core.session_records(
-            destination.upload_gate,
-            {
-                "agent_name": agent_name,
-                "job_id": snapshot.job_id,
-                "room_id": snapshot.room_id,
-                "room": snapshot.room,
-                "sdk_version": snapshot.sdk_version,
-                "started_at": report.started_at,
-                "timestamp": snapshot.timestamp,
-                "options": snapshot.options,
-                "omitted_events": snapshot.omitted_events,
-                "recording_options": recording_options,
-                "model_usage": snapshot.usage or [],
-                "chat_history": [],
-            },
-            tagger,
+        records = tagger._core_session_records(
+            SessionReportInput(
+                agent_name=agent_name,
+                job_id=snapshot.job_id,
+                room_id=snapshot.room_id,
+                room=snapshot.room,
+                sdk_version=snapshot.sdk_version,
+                started_at=report.started_at,
+                timestamp=snapshot.timestamp,
+                options=snapshot.options or {},
+                omitted_events=snapshot.omitted_events,
+                recording_options=recording_options,
+                model_usage=snapshot.usage or [],
+                chat_history=[],
+            ),
+            destination.upload_gate.disabled,
             lambda item: _chat_item_span_attribute(from_core_item(item)),
             capture_content=capture_content,
         )
@@ -291,7 +290,7 @@ async def _upload_session_report(
         for item in items:
             native_item = _append_transcript_item(builder, item, len(report.chat_history.items))
             record = _core._core_session_chat_record(
-                destination.upload_gate,
+                destination.upload_gate.disabled,
                 recording_options,
                 native_item,
                 _chat_item_span_attribute(item),

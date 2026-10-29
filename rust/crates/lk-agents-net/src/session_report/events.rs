@@ -117,7 +117,7 @@ impl<E: Env> lk_agents_abi::telemetry::observation::EventRetention for EventRete
     }
 
     fn accepts(&self, kind: String, redaction: bool) -> bool {
-        lk_agents_abi::telemetry::report::projection::event_allowed(
+        super::projection::event_allowed(
             &kind,
             self.capture_content,
             redaction,

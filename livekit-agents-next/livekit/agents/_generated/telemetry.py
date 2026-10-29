@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
+    from .._core import ChatItem
     from .usage import ModelUsage
 
 OtelValue: TypeAlias = int | float
@@ -54,6 +55,28 @@ class EvaluationRecord:
     verdict: str
     reasoning: str
     instructions: str
+
+
+Outcome: TypeAlias = Literal["success", "fail"]
+"""The session outcome. `"fail"` bumps the outcome record's severity."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SessionReportInput:
+    """`SessionReport._core_view()`: what the report's upload records are built from."""
+
+    job_id: str
+    room_id: str
+    room: str
+    agent_name: str
+    sdk_version: str
+    started_at: float | None
+    timestamp: float
+    options: object
+    recording_options: RecordingOptions
+    model_usage: list[ModelUsage]
+    chat_history: list[ChatItem]
+    omitted_events: int = 0
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -81,6 +81,9 @@ pub trait Implementations: 'static {
     type TtsMetricState: ::lk_agents_abi::telemetry::provider::TtsMetricState;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
     type MetricSeries: ::lk_agents_abi::telemetry::policy::MetricSeries;
+    type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
+    type UploadGate: ::lk_agents_abi::telemetry::report::UploadGate;
+    type ReportRecords: ::lk_agents_abi::telemetry::report::ReportRecords;
     type SessionReportProjection: ::lk_agents_abi::telemetry::report::projection::SessionReportProjection;
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
@@ -254,6 +257,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::TtsMetricState>()?;
     m.add_class::<telemetry::_core_TelemetryPolicy>()?;
     m.add_class::<telemetry::_core_MetricSeries>()?;
+    m.add_class::<telemetry::Tagger>()?;
+    m.add_class::<telemetry::UploadGate>()?;
+    m.add_function(wrap_pyfunction!(telemetry::recording_enabled, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_session_chat_record, m)?)?;
     m.add_class::<telemetry::_core_SessionReportProjection>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds, m)?)?;

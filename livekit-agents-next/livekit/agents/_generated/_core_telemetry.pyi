@@ -5,15 +5,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from .._core import ChatItem
 from .llm import ChatChunk
 from .stt import SpeechEvent
 from .telemetry import (
+    EvaluationRecord,
     LogRecordWire,
+    Outcome,
     ProjectedReportEvent,
     RecordingOptions,
+    SessionReportInput,
     SessionReportSnapshot,
     TelemetryExportAction,
     TelemetryRecordKind,
@@ -147,6 +150,115 @@ class _core_MetricSeries:
     """
     def __init__(self) -> None: ...
     def admit(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool: ...
+
+class Tagger:
+    """Tag sessions with metadata for observability.
+
+    The Tagger allows adding string tags (key:value format) with optional
+    structured metadata to sessions. Tags and metadata are uploaded to
+    LiveKit Cloud at session end.
+
+    Example:
+    ```python
+    # Mark session as successful
+    ctx.tagger.success(reason="Task completed successfully")
+
+    # Mark session as failed
+    ctx.tagger.fail(reason="User hung up before completing booking")
+
+    # Add custom tags
+    ctx.tagger.add("voicemail:true")
+    ctx.tagger.add("language:es")
+
+    # Add tags with structured metadata
+    ctx.tagger.add(
+        "appointment:booked",
+        metadata={"slot_id": "abc123", "calendar": "cal.com"},
+    )
+
+    # Remove a tag
+    ctx.tagger.remove("voicemail:true")
+    ```
+    """
+    def __init__(self) -> None: ...
+    def success(self, reason: str | None = None) -> None:
+        """Mark the session as successful; ``reason`` is kept apart from the tag."""
+    def fail(self, reason: str | None = None) -> None:
+        """Mark the session as failed; ``reason`` is kept apart from the tag."""
+    def add(self, tag: str, *, metadata: object | None = None) -> None:
+        """Add a ``key:value`` tag, with optional structured metadata."""
+    def remove(self, tag: str) -> None:
+        """Remove a tag; removing an absent one does nothing."""
+    @property
+    def tags(self) -> frozenset[str]:
+        """The session's tags."""
+    def sorted_tags(self) -> list[str]:
+        """``sorted(tagger.tags)``."""
+    def entries(self) -> list[tuple[str, object | None, float]]:
+        """``(tag, metadata, epoch seconds)``, in insertion order."""
+    def is_empty(self) -> bool: ...
+    @property
+    def evaluations(self) -> list[EvaluationRecord]:
+        """The judgments recorded by judge groups."""
+    @property
+    def outcome(self) -> Outcome | None:
+        """``"success"``, ``"fail"`` or ``None``."""
+    @property
+    def outcome_reason(self) -> str | None:
+        """The reason given with the outcome."""
+    def _core_record_judgment(
+        self,
+        name: str,
+        verdict: str,
+        reasoning: str,
+        instructions: str,
+    ) -> None:
+        """One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record."""
+    def has_evals(self) -> bool:
+        """Whether the session has judgments or an outcome to upload."""
+    def _core_session_records(
+        self,
+        report: SessionReportInput,
+        disabled: bool,
+        project_item: Callable[[ChatItem], object],
+        capture_content: bool = False,
+    ) -> list[LogRecordWire]:
+        """The session report's upload records, in the reference's order; none once uploads are
+        ``disabled``. A raise in ``project_item`` (a chat item's span attribute) is re-raised once
+        the records are built.
+        """
+
+class UploadGate:
+    """Per-session upload gate: the "data recording is disabled" latch, one transition, one warning."""
+    def __init__(self) -> None: ...
+    def reset(self) -> None:
+        """Called when a session re-initialises recording."""
+    @property
+    def disabled(self) -> bool: ...
+    def disable(self) -> bool:
+        """Returns ``True`` on the transition only, where the reference logs its warning."""
+    @staticmethod
+    def is_disabled_response(
+        status_code: int,
+        body: bytes | bytearray | memoryview | list[int],
+    ) -> bool:
+        """Whether an upload response is the project's "recording disabled" 401."""
+
+def recording_enabled(options: RecordingOptions) -> bool:
+    """Whether recording is enabled for the job."""
+
+def _core_session_chat_record(
+    disabled: bool,
+    options: RecordingOptions,
+    item: ChatItem,
+    projected: object,
+    capture_content: bool,
+    identity: tuple[str, str, str],
+) -> LogRecordWire | None:
+    """One chat item's upload record; one at a time lets a host SDK emit a large report without
+    another whole-history vector under its interpreter lock. ``None`` once uploads are
+    ``disabled`` or the transcript is not recorded.
+    """
 
 class _core_SessionReportProjection:
     def __init__(

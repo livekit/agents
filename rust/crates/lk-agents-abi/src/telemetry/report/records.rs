@@ -1,6 +1,6 @@
 //! Typed session-report observations shared by host SDK adapters.
 
-use super::{LogRecord, epoch_nanos};
+use crate::telemetry::{LogRecord, epoch_nanos};
 use serde_json::Value;
 
 /// A [`LogRecord`] as the dict `_upload_session_report` hands `logger.emit`: one integer of epoch

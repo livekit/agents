@@ -55,10 +55,7 @@ mod testkit;
 // The session report (`traces.py`, `observability.py`). Its `RecordingOptions` is not
 // re-exported: `voice::session_options` has a type of that name.
 pub(crate) use telemetry::attributes;
-pub use telemetry::report::{
-    DISABLED_MARKERS, EvaluationRecord, LogRecordWire, LoggerName, Outcome, TAG_FAIL, TAG_SUCCESS,
-    TagEntry, Tagger, UploadGate, session_records, usage_attributes,
-};
+pub use telemetry::report::{EvaluationRecord, LogRecordWire, Outcome, TAG_FAIL, TAG_SUCCESS};
 
 #[cfg(feature = "python")]
 pub use media::emitter::EmitterError;

@@ -2222,6 +2222,41 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+
+    pub fn outcome_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::Outcome) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::Outcome::Success => "success",
+                ::lk_agents_abi::Outcome::Fail => "fail",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    static SESSION_REPORT_INPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn session_report_input_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::report::SessionReportInput> {
+        let py = obj.py();
+            if !obj.is_instance(SESSION_REPORT_INPUT.import(py, "livekit.agents._generated.telemetry", "SessionReportInput")?)? {
+                return Err(super::not_a(obj, "SessionReportInput"));
+            }
+            Ok(::lk_agents_abi::telemetry::report::SessionReportInput {
+                job_id: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "job_id", |v| v.extract::<::std::string::String>())?,
+                room_id: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "room_id", |v| v.extract::<::std::string::String>())?,
+                room: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "room", |v| v.extract::<::std::string::String>())?,
+                agent_name: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "agent_name", |v| v.extract::<::std::string::String>())?,
+                sdk_version: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "sdk_version", |v| v.extract::<::std::string::String>())?,
+                started_at: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "started_at", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportInput.started_at")).map(Some) })?,
+                timestamp: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportInput.timestamp"))?,
+                options: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "options", |v| ::lk_agents_abi::python::value_from_py(v, "SessionReportInput.options"))?,
+                recording_options: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "recording_options", |v| v.extract::<::lk_agents_abi::telemetry::report::RecordingOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
+                model_usage: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "model_usage", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::metrics::ModelUsage>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
+                chat_history: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "chat_history", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
+                omitted_events: ::lk_agents_abi::python::attr_with(obj, "SessionReportInput", "omitted_events", |v| ::lk_agents_abi::python::number_from_py::<usize>(v, "SessionReportInput.omitted_events"))?,
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
     static SPAN_UPDATE_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

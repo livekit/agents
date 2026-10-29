@@ -8,6 +8,8 @@
 
 mod admission;
 pub mod events;
+pub mod projection;
+pub mod records;
 pub mod transcript;
 
 use std::marker::PhantomData;
@@ -18,7 +20,6 @@ use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::telemetry::report::UploadGate;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use prost::Message;
@@ -86,7 +87,7 @@ impl<E: Env> SessionReportUpload for SessionReportUploader<E> {
         capture_content: bool,
         redaction_enabled: bool,
     ) -> (bool, bool) {
-        let projection = lk_agents_abi::telemetry::report::projection::ReportProjection::new(
+        let projection = projection::ReportProjection::new(
             capture_content,
             &lk_agents_abi::telemetry::report::RecordingOptions {
                 transcript: transcript_requested,
@@ -220,7 +221,7 @@ impl<E: Env> SessionReportUploader<E> {
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = response_body(response).await?;
-                    if UploadGate::is_disabled_response(status, &body) {
+                    if records::UploadGate::is_disabled_response(status, &body) {
                         self.disabled.store(true, Ordering::Release);
                         return Ok(false);
                     }
