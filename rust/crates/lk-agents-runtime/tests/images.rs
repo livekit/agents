@@ -31,7 +31,7 @@ async fn text_turns_can_be_formatted_while_all_image_workers_are_busy() {
 #[tokio::test]
 async fn oversized_pixels_are_refused_before_buffer_conversion_or_encoding() {
     let media_pool = lk_agents_media::pool::MediaPool::new(Default::default()).unwrap();
-    let result = lk_agents_runtime::images::prepare_on(
+    let result = lk_agents_runtime::inference::images::prepare_on(
         &media_pool,
         std::sync::Arc::new(lk_agents_media::images::Images::default()),
         ImageInput::Frame(VideoFrame {

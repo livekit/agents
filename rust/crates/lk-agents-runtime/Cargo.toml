@@ -51,7 +51,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 default = ["media-resample"]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
 media-resample = ["lk-agents-media/resample"]
-media-images = ["lk-agents-media/images"]
+media-images = ["lk-agents-media/images", "lk-agents-inference/images"]
 media-blingfire = ["lk-agents-media/blingfire"]
 native-audio = ["lk-agents-inference/native-audio", "lk-agents-voice/native-audio"]
 # The voice family's in-place `_core` expansions, until they are declared; only `lk-agents-py`

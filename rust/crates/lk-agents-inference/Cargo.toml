@@ -99,6 +99,8 @@ default = ["native-audio"]
 native-audio = ["lk-agents-media/resample"]
 # Container decoding (ogg, mp3, ...) in the TTS emitter and the streaming decoder.
 ffmpeg = ["lk-agents-media/ffmpeg"]
+# Provider image preparation on the media pool (`images`).
+images = ["lk-agents-media/images"]
 # The network-reaching, `#[ignore]`d live tests (`tests/inference/live_*.rs`).
 live = []
 # The transport fakes (`testkit`), for tests only.

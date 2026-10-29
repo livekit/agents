@@ -10,6 +10,8 @@ pub mod evals;
 pub mod extra;
 pub mod headers;
 pub mod ids;
+#[cfg(feature = "images")]
+pub mod images;
 pub mod provider;
 // The two model-backed detectors: same credentials and transport as the providers below.
 pub mod eot;

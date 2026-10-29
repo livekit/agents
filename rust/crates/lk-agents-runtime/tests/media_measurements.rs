@@ -142,7 +142,7 @@ async fn media_never_block_measurements() {
                         let media_pool = media_pool.clone();
                         let data = pixels.clone();
                         tasks.push(async move {
-                            let image = lk_agents_runtime::images::prepare_on(
+                            let image = lk_agents_runtime::inference::images::prepare_on(
                                 &media_pool,
                                 std::sync::Arc::new(lk_agents_media::images::Images::default()),
                                 ImageInput::Frame(VideoFrame {

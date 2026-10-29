@@ -49,8 +49,6 @@ pub use lk_agents_storage as storage;
 pub mod a2a;
 pub mod agent_run;
 pub mod host;
-#[cfg(feature = "media-images")]
-pub mod images;
 pub mod mcp;
 pub mod process;
 pub mod recording;

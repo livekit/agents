@@ -6,8 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
-use lk_agents_abi::media::images::FrameReader;
-use lk_agents_media::pool::{MediaPoolLimits, MediaPool};
+use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
 use lk_agents_voice::tts::processing::SpeechText;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -34,13 +33,11 @@ struct Started {
 /// The ports outlive a fork: the host objects are the child's too.
 struct State {
     started: Option<Started>,
-    /// The host's frame reader, installed once as the host starts.
-    frames: Option<Arc<dyn FrameReader>>,
     /// The host's time, installed once as the host loads.
     time: Option<Arc<dyn HostTime>>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, time: None });
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, time: None });
 
 /// The host's clock and executor. Each read resolves the caller's: a host whose
 /// running loop is on virtual time answers with that loop's.
@@ -95,7 +92,8 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .map_err(|error| ProcessError::Start(error.to_string()))?;
     let report_admission = Default::default();
     let http = Arc::new(lk_agents_net::http::GatewayHttp::new().map_err(ProcessError::Start)?);
-    let started = slot.insert(Started { pid, runtime, media_pool, blocking_io, report_admission, http });
+    let started =
+        slot.insert(Started { pid, runtime, media_pool, blocking_io, report_admission, http });
     Ok(read(started))
 }
 
@@ -154,7 +152,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
 /// Image preparation with the host's frame reader, once the host installed one.
 #[cfg(feature = "media-images")]
 fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-    Arc::new(Process::images())
+    Arc::new(lk_agents_inference::images::resolver())
 }
 
 #[cfg(not(feature = "media-images"))]
@@ -162,24 +160,13 @@ fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send
     Arc::new(lk_agents_net::env::NoImagePreparation)
 }
 
-/// The process the runtime owns: its host ports and image preparation.
+/// The process the runtime owns: its host ports.
 pub struct Process;
 
 impl Process {
-    /// Takes the host's frame reader as the host starts; the first one installed stays.
-    pub fn install_frame_reader(reader: Arc<dyn FrameReader>) {
-        state().frames.get_or_insert(reader);
-    }
-
     /// Takes the host's time as the host loads; the first one installed stays.
     pub fn install_host_time(time: Arc<dyn HostTime>) {
         state().time.get_or_insert(time);
-    }
-
-    /// Image preparation with the host's frame reader, once the host installed one.
-    #[cfg(feature = "media-images")]
-    pub fn images() -> lk_agents_media::images::Images {
-        lk_agents_media::images::Images::new(state().frames.clone())
     }
 }
 

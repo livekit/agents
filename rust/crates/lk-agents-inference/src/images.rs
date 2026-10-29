@@ -1,6 +1,7 @@
-//! The declared image functions over this process's image worker and the host's frame reader.
+//! The declared image functions: provider images prepared on the injected media pool, with the
+//! host's frame reader for host frames.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use lk_agents_abi::MediaRef;
 use lk_agents_abi::media::images::{
@@ -10,9 +11,16 @@ use lk_agents_abi::media::images::{
 use lk_agents_media::images::Images;
 use lk_agents_media::pool::{JobClass, MediaPool};
 
-use crate::process::Process;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_net::env::ProcessEnv;
+
+/// The host's frame reader, installed once as the host starts; the first one stays.
+static FRAMES: OnceLock<Arc<dyn FrameReader>> = OnceLock::new();
+
+/// Image preparation with the host's frame reader, once the host installed one.
+pub fn resolver() -> Images {
+    Images::new(FRAMES.get().cloned())
+}
 
 pub struct ImageFunctions;
 
@@ -20,7 +28,7 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     type Env = ProcessEnv;
 
     fn install_frame_reader(reader: Arc<dyn FrameReader>) {
-        Process::install_frame_reader(reader);
+        let _first_stays = FRAMES.set(reader);
     }
 
     async fn encode_image(
@@ -115,7 +123,7 @@ mod tests {
             buffer_type: 0,
             data: vec![127; 1920 * 1080 * 4].into(),
         };
-        let media_pool = crate::process::media_pool().unwrap();
+        let media_pool = MediaPool::new(Default::default()).unwrap();
         let mut encoding = Box::pin(prepare_on(
             &media_pool,
             Arc::new(Images::default()),
