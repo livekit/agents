@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};
 use async_trait::async_trait;
-use livekit_api::services::databases::DatabaseClient;
 use livekit_api::services::threads::ThreadClient;
 use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_url};
 use livekit_protocol::agent::agent_thread::{
@@ -133,49 +132,9 @@ impl AgentDbStorage {
         &self.opts
     }
 
-    pub fn minter(&self) -> &TokenMinter {
-        &self.minter
-    }
-
-    pub fn streams(&self) -> &Streams {
-        &self.streams
-    }
-
     /// The threads service: map its errors with [`service_error`].
     pub fn threads(&self) -> &ThreadClient {
         self.api.threads()
-    }
-
-    /// The database lifecycle, for development and tests: map its errors with
-    /// [`service_error`].
-    pub fn databases(&self) -> &DatabaseClient {
-        self.api.databases()
-    }
-
-    /// One connection to `database_id`, parked for the next open when the thread closes; the
-    /// thread's id is `thread_id`.
-    pub async fn open_database(
-        &self,
-        thread_id: &str,
-        database_id: &str,
-        holder: &str,
-    ) -> Result<Thread, StorageError> {
-        let (conn, schema) = match self.pool.take(database_id) {
-            Some(idle) => (idle.conn, idle.schema),
-            None => {
-                let mut opts = conn::Options::new(self.data_plane.clone(), database_id);
-                opts.reconnect = self.opts.reconnect.clone();
-                let conn = Conn::dial(opts, self.minter.clone(), self.runtime.clone()).await?;
-                (conn, SchemaCell::default())
-            }
-        };
-        let pooled = Pooled {
-            conn,
-            schema: schema.clone(),
-            pool: self.pool.clone(),
-            closed: AtomicBool::new(false),
-        };
-        Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, holder).await
     }
 }
 
@@ -204,9 +163,26 @@ impl Storage for AgentDbStorage {
         }
     }
 
+    /// One connection to the thread's database, parked for the next open when the thread
+    /// closes.
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
-        let record = self.get_thread(thread_id).await?;
-        self.open_database(thread_id, &record.database_id, holder).await
+        let database_id = self.get_thread(thread_id).await?.database_id;
+        let (conn, schema) = match self.pool.take(&database_id) {
+            Some(idle) => (idle.conn, idle.schema),
+            None => {
+                let mut opts = conn::Options::new(self.data_plane.clone(), &database_id);
+                opts.reconnect = self.opts.reconnect.clone();
+                let conn = Conn::dial(opts, self.minter.clone(), self.runtime.clone()).await?;
+                (conn, SchemaCell::default())
+            }
+        };
+        let pooled = Pooled {
+            conn,
+            schema: schema.clone(),
+            pool: self.pool.clone(),
+            closed: AtomicBool::new(false),
+        };
+        Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, holder).await
     }
 
     fn response_streams(&self) -> Arc<dyn crate::ResponseStreams> {
