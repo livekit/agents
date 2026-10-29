@@ -135,40 +135,38 @@ impl crate::agent::HostContext for McpInvocation {
 
 /// The host's SDK streams. Dropping receive cancels the host coroutine through the shared bridge.
 #[crate::host(proxy(host = "livekit.agents.llm.mcp._Streams"))]
-#[async_trait::async_trait]
 pub trait McpTransport: Send + Sync {
     #[host(await, name = "_core_start")]
-    async fn start(
-        &self,
-        #[host(context)] invocation: &McpInvocation,
-    ) -> Result<(), crate::errors::HostError>;
+    fn start<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a McpInvocation,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     #[host(await, name = "_core_send")]
-    async fn send(
-        &self,
-        #[host(context)] invocation: &McpInvocation,
-        message: &serde_json::Value,
-    ) -> Result<(), crate::errors::HostError>;
+    fn send<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a McpInvocation,
+        message: &'a serde_json::Value,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     #[host(await, name = "_core_receive")]
-    async fn receive(
-        &self,
-        #[host(context)] invocation: &McpInvocation,
-    ) -> Result<serde_json::Value, crate::errors::HostError>;
+    fn receive<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a McpInvocation,
+    ) -> crate::BoxFuture<'a, Result<serde_json::Value, crate::errors::HostError>>;
     #[host(await, name = "_core_close")]
-    async fn close(
-        &self,
-        #[host(context)] invocation: &McpInvocation,
-    ) -> Result<(), crate::errors::HostError>;
+    fn close<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a McpInvocation,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
 }
 
 #[crate::host(proxy(host = "livekit.agents.llm.mcp._Progress"))]
-#[async_trait::async_trait]
 pub trait McpProgress: Send + Sync {
     #[host(await, name = "_core_update")]
-    async fn update(
-        &self,
-        #[host(context)] invocation: &McpInvocation,
-        message: &str,
-    ) -> Result<(), crate::errors::HostError>;
+    fn update<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a McpInvocation,
+        message: &'a str,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
 }
 
 /// An SDK session whose owner cancels and joins independently of request borrowers.

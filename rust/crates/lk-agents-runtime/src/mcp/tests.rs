@@ -28,77 +28,95 @@ impl Drop for Reading {
     }
 }
 
-#[async_trait::async_trait]
 impl McpTransport for Peer {
-    async fn start(&self, _: &McpInvocation) -> Result<(), HostError> {
-        Ok(())
+    fn start<'a>(
+        &'a self,
+        _: &'a McpInvocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn send(&self, _: &McpInvocation, m: &Value) -> Result<(), HostError> {
-        let message: ClientJsonRpcMessage = serde_json::from_value(m.clone()).unwrap();
-        let ClientJsonRpcMessage::Request(request) = message else { return Ok(()) };
-        let progress_token = request.request.get_meta().get_progress_token();
-        let result = match request.request {
-            ClientRequest::InitializeRequest(request) => {
-                let mut capabilities = ServerCapabilities::default();
-                capabilities.tools = Some(Default::default());
-                let mut result = InitializeResult::new(capabilities);
-                result.protocol_version = request.params.protocol_version;
-                result.server_info = Implementation::new("regression", "1");
-                ServerResult::InitializeResult(result)
-            }
-            ClientRequest::ListToolsRequest(request) => {
-                let second = request.params.and_then(|p| p.cursor).as_deref() == Some("second");
-                let mut page = ListToolsResult::default();
-                page.tools = vec![Tool::new(
-                    if second { "second" } else { "first" },
-                    "test tool",
-                    serde_json::Map::new(),
-                )];
-                page.next_cursor = (!second).then(|| "second".into());
-                ServerResult::ListToolsResult(page)
-            }
-            ClientRequest::CallToolRequest(request) => {
-                self.called.notify_one();
-                if request.params.name == "fail" {
-                    self.fail_receive.notify_one();
+    fn send<'a>(
+        &'a self,
+        _: &'a McpInvocation,
+        m: &'a Value,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move {
+            let message: ClientJsonRpcMessage = serde_json::from_value(m.clone()).unwrap();
+            let ClientJsonRpcMessage::Request(request) = message else { return Ok(()) };
+            let progress_token = request.request.get_meta().get_progress_token();
+            let result = match request.request {
+                ClientRequest::InitializeRequest(request) => {
+                    let mut capabilities = ServerCapabilities::default();
+                    capabilities.tools = Some(Default::default());
+                    let mut result = InitializeResult::new(capabilities);
+                    result.protocol_version = request.params.protocol_version;
+                    result.server_info = Implementation::new("regression", "1");
+                    ServerResult::InitializeResult(result)
                 }
-                if request.params.name == "progress" {
-                    let token = progress_token.unwrap();
-                    let mut params = ProgressNotificationParam::new(token, 1.0);
-                    params.message = Some("working".into());
-                    let message = ServerJsonRpcMessage::Notification(JsonRpcNotification {
-                        jsonrpc: JsonRpcVersion2_0,
-                        notification: ServerNotification::ProgressNotification(
-                            ProgressNotification::new(params),
-                        ),
-                    });
-                    self.send.send(serde_json::to_value(message).unwrap()).await.unwrap();
+                ClientRequest::ListToolsRequest(request) => {
+                    let second = request.params.and_then(|p| p.cursor).as_deref() == Some("second");
+                    let mut page = ListToolsResult::default();
+                    page.tools = vec![Tool::new(
+                        if second { "second" } else { "first" },
+                        "test tool",
+                        serde_json::Map::new(),
+                    )];
+                    page.next_cursor = (!second).then(|| "second".into());
+                    ServerResult::ListToolsResult(page)
                 }
-                return Ok(());
+                ClientRequest::CallToolRequest(request) => {
+                    self.called.notify_one();
+                    if request.params.name == "fail" {
+                        self.fail_receive.notify_one();
+                    }
+                    if request.params.name == "progress" {
+                        let token = progress_token.unwrap();
+                        let mut params = ProgressNotificationParam::new(token, 1.0);
+                        params.message = Some("working".into());
+                        let message = ServerJsonRpcMessage::Notification(JsonRpcNotification {
+                            jsonrpc: JsonRpcVersion2_0,
+                            notification: ServerNotification::ProgressNotification(
+                                ProgressNotification::new(params),
+                            ),
+                        });
+                        self.send.send(serde_json::to_value(message).unwrap()).await.unwrap();
+                    }
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            };
+            let reply = ServerJsonRpcMessage::Response(JsonRpcResponse {
+                jsonrpc: JsonRpcVersion2_0,
+                id: request.id,
+                result,
+            });
+            self.send.send(serde_json::to_value(reply).unwrap()).await.unwrap();
+            Ok(())
+        })
+    }
+    fn receive<'a>(
+        &'a self,
+        _: &'a McpInvocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Value, HostError>> {
+        Box::pin(async move {
+            let _reading = Reading(self.dropped.clone());
+            self.receiving.notify_one();
+            tokio::select! {
+                _ = self.fail_receive.notified() => Err(HostError::new("reader connection reset")),
+                reply = async { self.replies.lock().await.recv().await } => Ok(reply.unwrap_or(Value::Null)),
             }
-            _ => return Ok(()),
-        };
-        let reply = ServerJsonRpcMessage::Response(JsonRpcResponse {
-            jsonrpc: JsonRpcVersion2_0,
-            id: request.id,
-            result,
-        });
-        self.send.send(serde_json::to_value(reply).unwrap()).await.unwrap();
-        Ok(())
+        })
     }
-    async fn receive(&self, _: &McpInvocation) -> Result<Value, HostError> {
-        let _reading = Reading(self.dropped.clone());
-        self.receiving.notify_one();
-        tokio::select! {
-            _ = self.fail_receive.notified() => Err(HostError::new("reader connection reset")),
-            reply = async { self.replies.lock().await.recv().await } => Ok(reply.unwrap_or(Value::Null)),
-        }
-    }
-    async fn close(&self, _: &McpInvocation) -> Result<(), HostError> {
-        if self.block_close.load(Ordering::SeqCst) {
-            self.release_close.notified().await;
-        }
-        Ok(())
+    fn close<'a>(
+        &'a self,
+        _: &'a McpInvocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move {
+            if self.block_close.load(Ordering::SeqCst) {
+                self.release_close.notified().await;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -206,11 +224,16 @@ async fn reader_failure_reaches_the_call_with_its_host_cause() {
 }
 
 struct BlockedProgress(Notify);
-#[async_trait::async_trait]
 impl McpProgress for BlockedProgress {
-    async fn update(&self, _: &McpInvocation, _: &str) -> Result<(), HostError> {
-        self.0.notify_one();
-        std::future::pending().await
+    fn update<'a>(
+        &'a self,
+        _: &'a McpInvocation,
+        _: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move {
+            self.0.notify_one();
+            std::future::pending().await
+        })
     }
 }
 

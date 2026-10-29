@@ -1090,15 +1090,15 @@ impl McpTransportProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(|obj| McpTransportProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
-    async fn start(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn start<'a>(&'a self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "McpTransport._core_start", invocation, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -1111,9 +1111,10 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn send(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &::serde_json::Value) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn send<'a>(&'a self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &::serde_json::Value) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let message_arg = ::std::clone::Clone::clone(message);
@@ -1121,6 +1122,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?, ::lk_agents_abi::python::value_to_py(py, &message_arg)?];
                 Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -1133,15 +1135,17 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn receive(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::std::result::Result<::serde_json::Value, ::lk_agents_abi::errors::HostError> {
+    fn receive<'a>(&'a self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::serde_json::Value, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "McpTransport._core_receive", invocation, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_receive")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -1154,15 +1158,17 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             let out = (::lk_agents_abi::python::value_from_py(&o, "McpTransport._core_receive")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn close(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn close<'a>(&'a self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "McpTransport._core_close", invocation, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -1174,6 +1180,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             let o = out.bind(py);
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }
@@ -1209,9 +1216,8 @@ impl McpProgressProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(|obj| McpProgressProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
-    async fn update(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &str) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn update<'a>(&'a self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &str) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let message_arg = message.to_owned();
@@ -1219,6 +1225,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
                 Ok((host.bind(py).getattr("_core_update")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
+        ::std::boxed::Box::pin(async move {
         let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
@@ -1230,6 +1237,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
             let o = out.bind(py);
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }
