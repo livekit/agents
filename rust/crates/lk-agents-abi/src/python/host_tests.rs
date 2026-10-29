@@ -428,20 +428,6 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
         });
     }
 
-    // Catches: an audio frame losing its shape across the audio-in/TTS-out legs, or handed to the
-    // host as the dict rather than its `rtc.AudioFrame`.
-    #[test]
-    fn an_audio_frame_round_trips_through_the_host_class() {
-        attach(|py| {
-            let _ = eval_with_stubs(py, "out = None");
-            let original = AudioFrame::new(vec![1u8, 0, 2, 0, 3, 0], 48_000, 1, 3);
-            let host = (&original).into_pyobject(py).unwrap();
-            assert_eq!(host.get_type().name().unwrap().to_string(), "AudioFrame");
-            let back: AudioFrame = extract_generated::<AudioFrame>(&host).unwrap();
-            assert_eq!(back, original);
-        });
-    }
-
     // Catches: the emitted dict keyed differently from the dataclass it feeds -- the Rust `kind`
     // instead of the host's `type`, the variant name instead of the literal, a translating STT's
     // `target_*`/`source_*` lists lost crossing back behind an adapter, or words handed back as

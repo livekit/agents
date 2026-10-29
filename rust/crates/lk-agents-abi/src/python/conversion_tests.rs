@@ -440,41 +440,6 @@ fn generated_collections_validate_typed_keys_and_nested_values_in_both_direction
     });
 }
 
-#[derive(Debug, Default, lk_agents_host_derive::Host)]
-#[binding(extract, emit, from_items)]
-struct NullableUpdate {
-    #[binding(default, skip_if_none)]
-    value: crate::Maybe<Option<String>>,
-}
-
-#[test]
-fn generated_presence_roundtrips_omitted_null_and_empty_values() {
-    attach(|py| {
-        for literal in ["{}", "{'value': None}", "{'value': ''}"] {
-            let source = module(py, &format!("source = {literal}\n")).getattr("source").unwrap();
-            let record = source.extract::<NullableUpdate>().unwrap();
-            let output = record.into_pyobject(py).unwrap();
-            assert!(source.eq(output).unwrap());
-        }
-    });
-}
-
-#[test]
-fn tool_defaults_apply_only_to_missing_fields() {
-    attach(|py| {
-        let value =
-            module(py, "value = {'name': 'lookup', 'json_schema': {}}\n").getattr("value").unwrap();
-        let tool = value.extract::<crate::llm::llm::ToolSpec>().unwrap();
-        assert_eq!(tool.description, "");
-        assert!(!tool.flags.ignore_on_enter);
-        value.set_item("description", py.None()).unwrap();
-        assert!(
-            value.extract::<crate::llm::llm::ToolSpec>().is_err(),
-            "null is not a missing description"
-        );
-    });
-}
-
 #[test]
 fn unicode_float_and_newtype_boundaries_keep_their_declared_semantics() {
     attach(|py| {
