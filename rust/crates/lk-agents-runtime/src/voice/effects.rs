@@ -63,7 +63,7 @@ impl Runtime {
                 if let Err(error) = player.try_send(*event) {
                     if matches!(error, tokio::sync::mpsc::error::TrySendError::Full(_)) {
                         log::error!(target: "livekit.agents", speech = speech.0,
-                            capacity = lk_agents_voice::generation::realtime_generation::PLAYER_CAPACITY;
+                            capacity = crate::voice::generation::realtime_generation::PLAYER_CAPACITY;
                             "a realtime speech fell too far behind its reply; it ends on what it holds");
                     }
                     self.realtime_players.remove(&speech);
@@ -212,8 +212,7 @@ impl Runtime {
             E::SpeechStart { handle, mut context, llm, tts } => {
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
-                    let capacity =
-                        lk_agents_voice::generation::realtime_generation::PLAYER_CAPACITY;
+                    let capacity = crate::voice::generation::realtime_generation::PLAYER_CAPACITY;
                     let (tx, rx) = tokio::sync::mpsc::channel(capacity);
                     self.realtime_players.insert(handle.id(), tx);
                     rx
@@ -244,7 +243,7 @@ impl Runtime {
                             }
                         }
                     }
-                    lk_agents_voice::generation::pipeline_reply::pipeline_reply_task(
+                    crate::voice::generation::pipeline_reply::pipeline_reply_task(
                         shared, task, *context, player,
                     )
                     .await;

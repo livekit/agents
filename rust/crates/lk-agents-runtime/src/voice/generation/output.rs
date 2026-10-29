@@ -1,18 +1,18 @@
 //! A generation owns its admitted output binding even when it is cancelled while awaiting it.
 
-use crate::agent_session::output::SegmentBinding;
-use crate::agent_session::{Answer, RequestId, SessionShared};
-use crate::generation::GenEvent;
-use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
     PlaybackSegment, TextOutput,
 };
+use lk_agents_voice::agent_session::output::SegmentBinding;
+use lk_agents_voice::agent_session::{Answer, RequestId, SessionShared};
+use lk_agents_voice::generation::GenEvent;
+use lk_agents_voice::speech_handle::SpeechHandle;
 use std::sync::{Arc, Weak};
 
 pub(super) struct OutputBinding {
     shared: Arc<SessionShared>,
-    speech: crate::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     request: RequestId,
     pub(super) binding: SegmentBinding,
     activated: bool,
@@ -22,7 +22,7 @@ pub(super) struct OutputBinding {
 /// Established before the grant is awaited, so cancellation still releases a late grant.
 struct PendingBinding {
     shared: Arc<SessionShared>,
-    speech: crate::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     request: RequestId,
     transferred: bool,
 }
@@ -40,7 +40,7 @@ impl OutputBinding {
     pub(super) async fn acquire(
         shared: &Arc<SessionShared>,
         handle: &SpeechHandle,
-    ) -> Result<Option<Self>, crate::agent_session::DriverError> {
+    ) -> Result<Option<Self>, lk_agents_voice::agent_session::DriverError> {
         let (call, answer) = shared.open_call(Answer::output_binding);
         let request = call.id;
         let mut pending = PendingBinding {
@@ -52,7 +52,7 @@ impl OutputBinding {
         shared.report_awaited(GenEvent::BindOutput { call: request, speech: handle.id() }, call);
         let binding = answer
             .await
-            .map_err(|_| crate::agent_session::output::OutputBindingError::ReplyLost)??;
+            .map_err(|_| lk_agents_voice::agent_session::output::OutputBindingError::ReplyLost)??;
         let Some(binding) = binding else { return Ok(None) };
         pending.transferred = true;
         Ok(Some(Self {
@@ -91,7 +91,9 @@ impl OutputBinding {
         self.text_processing = None;
     }
 
-    pub(super) async fn activate(&mut self) -> Result<bool, crate::agent_session::DriverError> {
+    pub(super) async fn activate(
+        &mut self,
+    ) -> Result<bool, lk_agents_voice::agent_session::DriverError> {
         if self.activated {
             return Ok(true);
         }
@@ -102,19 +104,20 @@ impl OutputBinding {
         );
         if !answer
             .await
-            .map_err(|_| crate::agent_session::output::OutputBindingError::ReplyLost)??
+            .map_err(|_| lk_agents_voice::agent_session::output::OutputBindingError::ReplyLost)??
         {
             return Ok(false);
         }
         self.activated =
             self.audio().is_none_or(|audio| audio.begin_segment(self.binding.segment).is_ok());
         if !self.activated {
-            self.shared.trace(crate::trace::PlayoutStep::OutputRefused {
+            self.shared.trace(lk_agents_voice::trace::PlayoutStep::OutputRefused {
                 speech: self.speech,
-                reason: crate::agent_session::output::OutputBindingError::ActivationUnavailable,
+                reason: lk_agents_voice::agent_session::output::OutputBindingError::ActivationUnavailable,
             });
             return Err(
-                crate::agent_session::output::OutputBindingError::ActivationUnavailable.into()
+                lk_agents_voice::agent_session::output::OutputBindingError::ActivationUnavailable
+                    .into(),
             );
         }
         Ok(true)
@@ -166,7 +169,7 @@ struct OutputSettlement {
     shared: Weak<SessionShared>,
     output: lk_agents_abi::resources::ResourceId,
     request: RequestId,
-    speech: crate::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     segment: PlaybackSegment,
 }
 

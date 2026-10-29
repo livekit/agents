@@ -650,11 +650,11 @@ impl SpeechHandle {
     /// until it answers, or detaches with its first update.
     ///
     /// [`tool_returned`]: Self::tool_returned
-    pub(crate) fn tool_blocking(&self, call_id: &str, name: &str) {
+    pub fn tool_blocking(&self, call_id: &str, name: &str) {
         lock(&self.inner).blocking_tools.push((call_id.to_owned(), name.to_owned()));
     }
 
-    pub(crate) fn tool_returned(&self, call_id: &str) {
+    pub fn tool_returned(&self, call_id: &str) {
         let mut inner = lock(&self.inner);
         if let Some(i) = inner.blocking_tools.iter().position(|(c, _)| c == call_id) {
             inner.blocking_tools.remove(i);
@@ -681,7 +681,7 @@ impl SpeechHandle {
         self.inner.lock().unwrap().user_metrics = Some(metrics);
     }
 
-    pub(crate) fn user_metrics(&self) -> Option<lk_agents_abi::MetricsReport> {
+    pub fn user_metrics(&self) -> Option<lk_agents_abi::MetricsReport> {
         self.inner.lock().unwrap().user_metrics.clone()
     }
 }

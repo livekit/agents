@@ -4,17 +4,17 @@ use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_te
 use super::llm::{Retried, SegEvent, extend, report_metrics, retry};
 use super::pipeline_reply::teardown_deadline;
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
-use crate::agent_session::DriverError;
-use crate::agent_session::SessionShared;
-use crate::generation::{Attempt, GenEvent, TurnAccumulator};
-use crate::speech_handle::SpeechHandle;
-use crate::trace::{GenerationStep, ProviderKind};
-use crate::transcription::Heard;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
+use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::generation::{Attempt, GenEvent, TurnAccumulator};
+use lk_agents_voice::speech_handle::SpeechHandle;
+use lk_agents_voice::trace::{GenerationStep, ProviderKind};
+use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
 use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
 use std::sync::Arc;
@@ -45,7 +45,6 @@ struct Failed {
     synchronized: Option<String>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `perform_tts_inference`, retried: opens are retried until a frame arrives; a later failure, or a
 /// spent budget, loses the voice.
 #[allow(clippy::too_many_arguments)]
@@ -56,7 +55,6 @@ pub(super) async fn perform_tts_inference(
     tts: &dyn Tts,
     segment: usize,
     first: Visible,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &mut mpsc::UnboundedReceiver<SegEvent>,
     text_out: Option<&TextLeg<'_>>,
     mut aligned: Option<&mut Aligned<'_>>,
@@ -254,7 +252,6 @@ struct Streaming<'a, 'b> {
     acc: &'a mut TurnAccumulator,
     sink: &'a lk_agents_abi::TtsSink,
     source: lk_agents_abi::TtsSource,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &'a mut mpsc::UnboundedReceiver<SegEvent>,
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,
@@ -273,7 +270,6 @@ impl Segment for Streaming<'_, '_> {
         first_frame(self.shared, self.acc, at);
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next(&mut self) -> Result<Next, DriverError> {
         if self.ended {
             return Ok(Next::End);
@@ -420,7 +416,7 @@ impl TtsGenerationData {
             // the first input, which also counts the text buffering. The record's is the
             // request's.
             let anchor = chunk.started_time.unwrap_or(self.synthesis_started_at);
-            let stats = crate::generation::TtsStats {
+            let stats = lk_agents_voice::generation::TtsStats {
                 ttfb: Some(shared.time.wall_secs() - anchor),
                 synthesis_started_at: chunk.started_time,
             };
@@ -461,9 +457,7 @@ pub(super) enum SynthesisEvent {
 
 pub(super) struct SynthesisPlayout<'a> {
     pub(super) binding: &'a mut super::output::OutputBinding,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) tx: mpsc::UnboundedSender<SynthesisEvent>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) rx: mpsc::UnboundedReceiver<SynthesisEvent>,
     pub(super) gate: &'a mut PlaybackGate,
     /// The segment's one processed transcript leg, shared with its completion receipt.
@@ -471,7 +465,6 @@ pub(super) struct SynthesisPlayout<'a> {
 }
 
 impl SynthesisPlayout<'_> {
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Authorization blocks only the consumer; it never cancels a pending provider read.
     async fn run(
         &mut self,
@@ -557,7 +550,6 @@ impl SynthesisPlayout<'_> {
 
 /// The buffered side of [`SynthesisPlayout`]: what the synthesiser produced, played in order.
 struct SynthesizedSegment<'a, 'b> {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &'a mut mpsc::UnboundedReceiver<SynthesisEvent>,
     text: String,
     leg: &'a TextLeg<'b>,

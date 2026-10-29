@@ -8,6 +8,7 @@ pub mod audio;
 pub mod background_audio;
 pub mod console;
 mod effects;
+pub mod generation;
 mod legs;
 mod recorder;
 pub mod remote_session;

@@ -1,19 +1,19 @@
 //! `perform_audio_forwarding`: one segment's frames pushed to the sink, and what the sink reports.
 
-use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::DriverError;
-use crate::agent_session::SessionShared;
-use crate::generation::GenEvent;
-use crate::generation::TurnAccumulator;
-use crate::speech_handle::SpeechHandle;
-use crate::trace::{PlayoutStep, SinkCall};
-use crate::transcription::Heard;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment,
 };
 use lk_agents_abi::voice::rtc::frame_duration;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
+use lk_agents_voice::agent_activity::scheduling::SpeechId;
+use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::generation::GenEvent;
+use lk_agents_voice::generation::TurnAccumulator;
+use lk_agents_voice::speech_handle::SpeechHandle;
+use lk_agents_voice::trace::{PlayoutStep, SinkCall};
+use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -103,8 +103,6 @@ impl From<DriverError> for SourceFailed {
     }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `perform_audio_forwarding` for one segment. `out: None` drains and drops the frames, reporting
 /// nothing. The clean path ends with `flush`, then waits for the sink to report played out.
 pub(crate) async fn perform_audio_forwarding<S: Segment>(
@@ -254,7 +252,6 @@ fn synchronized(heard: Option<String>, text: String) -> String {
     heard.map(|heard| Visible::of(&heard).text).unwrap_or(text)
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `false` when interrupted while parked. Every source and every sink goes through here.
 async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool {
     let speech = handle.id();
@@ -262,10 +259,10 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
     if !level.borrow_and_update().launch_holds.contains(&speech) {
         return true;
     }
-    shared.trace(crate::trace::InterruptStep::PlayoutGate {
+    shared.trace(lk_agents_voice::trace::InterruptStep::PlayoutGate {
         speech,
-        op: crate::agent_session::effects::GateOp::Pause,
-        cause: crate::agent_session::effects::GateCause::Launch,
+        op: lk_agents_voice::agent_session::effects::GateOp::Pause,
+        cause: lk_agents_voice::agent_session::effects::GateCause::Launch,
     });
     loop {
         tokio::select! {
@@ -331,7 +328,6 @@ enum SinkReport {
     Reset,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 struct SinkReports(mpsc::UnboundedSender<SinkReport>);
 
 impl PlaybackObserver for SinkReports {
@@ -405,7 +401,6 @@ struct Playing<'a> {
     shared: &'a Arc<SessionShared>,
     handle: &'a SpeechHandle,
     out: &'a dyn AudioOutput,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedReceiver<SinkReport>,
     chain: OutputChain,
     started: bool,
@@ -572,7 +567,6 @@ impl Playing<'_> {
         self.settle(segment);
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `fut`, folding queued sink reports before the operation they may explain.
     async fn watched<T>(&mut self, fut: impl std::future::Future<Output = T>) -> Option<T> {
         tokio::pin!(fut);

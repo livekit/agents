@@ -384,7 +384,7 @@ pub struct ToolExecution {
 
 impl ToolExecution {
     /// The lifecycle event's text: nothing for a silent return, handoff or cancellation.
-    pub(crate) fn ended_message(&self) -> Option<String> {
+    pub fn ended_message(&self) -> Option<String> {
         match self.end {
             ToolEnd::Done => (!self.output.output.is_empty()).then(|| self.output.output.clone()),
             ToolEnd::Error => Some(self.output.output.clone()),

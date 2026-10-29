@@ -1,11 +1,13 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
-use crate::agent_session::SessionShared;
-use crate::events::{DiagnosticEvent, SessionEvent};
-use crate::generation::{GenEvent, ReplyContext};
-use crate::speech_handle::SpeechHandle;
-use crate::tool_executor::{CallId, StepDecision, ToolExecution, ToolGo, ToolOutcome, answer};
 use lk_agents_abi::FunctionCall;
+use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::events::{DiagnosticEvent, SessionEvent};
+use lk_agents_voice::generation::{GenEvent, ReplyContext};
+use lk_agents_voice::speech_handle::SpeechHandle;
+use lk_agents_voice::tool_executor::{
+    CallId, StepDecision, ToolExecution, ToolGo, ToolOutcome, answer,
+};
 use std::sync::Arc;
 
 /// Calls go to the runner as they arrive (latency hides behind the generation's tail). **Order is
@@ -52,14 +54,15 @@ impl ToolStep {
         // they said them, and the history shows the call as it ran.
         if let Some(answering) = ctx.answering.as_ref().filter(|a| a.tool == call.name)
             && let Some(spec) = ctx.request.tools.iter().find(|t| t.name == call.name)
-            && let Some(arguments) = crate::tool_executor::answer_arguments(spec, &answering.said)
+            && let Some(arguments) =
+                lk_agents_voice::tool_executor::answer_arguments(spec, &answering.said)
         {
             call.arguments = arguments;
         }
         // Only offered calls reach the speech; the shared tool machine answers an invented one.
         let advertised = ctx.request.tools.iter().any(|t| t.name == call.name);
         let names = vec![call.name.clone()];
-        shared.trace(crate::trace::ToolStep::Calls { speech: handle.id(), names });
+        shared.trace(lk_agents_voice::trace::ToolStep::Calls { speech: handle.id(), names });
         let (speech, step) = (handle.id(), handle.num_steps());
         // `tool_choice="none"` calls are started and dropped: told to the speech and the loop as
         // the model made them.
@@ -86,7 +89,7 @@ impl ToolStep {
                 if advertised {
                     handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
                 }
-                let (go, moved) = shared.open_call(crate::agent_session::Answer::tool_go);
+                let (go, moved) = shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
                 let started = GenEvent::ToolCallStarted {
                     speech,
                     step,
@@ -185,9 +188,9 @@ mod authorization_tests {
 /// One call's host work, each move decided by the shared tool machine in the loop.
 struct HostedCall<'a> {
     shared: &'a Arc<SessionShared>,
-    speech: crate::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     step: u32,
-    runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+    runner: Option<Arc<dyn lk_agents_voice::tool_executor::HostToolRunner>>,
     host_speech: &'a lk_agents_abi::CoreObject,
 }
 
@@ -196,7 +199,7 @@ impl HostedCall<'_> {
     /// call's machine id once it has one, and the outcome the machine records.
     async fn run(
         &self,
-        first: crate::agent_session::api::Awaited<ToolGo>,
+        first: lk_agents_voice::agent_session::api::Awaited<ToolGo>,
         mut one: FunctionCall,
         handle: &SpeechHandle,
         task: bool,
@@ -281,9 +284,9 @@ impl HostedCall<'_> {
     /// Reports the event built for the answer's request id, and awaits the call's next move.
     async fn ask(
         &self,
-        event: impl FnOnce(crate::agent_session::RequestId) -> GenEvent,
-    ) -> Result<ToolGo, crate::agent_session::api::Unanswered> {
-        let (call, next) = self.shared.open_call(crate::agent_session::Answer::tool_go);
+        event: impl FnOnce(lk_agents_voice::agent_session::RequestId) -> GenEvent,
+    ) -> Result<ToolGo, lk_agents_voice::agent_session::api::Unanswered> {
+        let (call, next) = self.shared.open_call(lk_agents_voice::agent_session::Answer::tool_go);
         self.shared.report_awaited(event(call.id), call);
         next.await
     }
@@ -332,9 +335,10 @@ pub(crate) async fn run_tools(
     // `tool_choice="none"` calls are dropped (this bounds a tool loop), each reported.
     if ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden) {
         for d in &tools.calls {
-            let diagnostic = DiagnosticEvent::error(crate::events::diagnostics::TOOL_CHOICE_NONE)
-                .with("function", d.call.name.clone())
-                .with("speech_id", handle.id().0.to_string());
+            let diagnostic =
+                DiagnosticEvent::error(lk_agents_voice::events::diagnostics::TOOL_CHOICE_NONE)
+                    .with("function", d.call.name.clone())
+                    .with("speech_id", handle.id().0.to_string());
             shared.report(GenEvent::Emit(Box::new(SessionEvent::Diagnostic(diagnostic))));
         }
         return None;
@@ -357,8 +361,9 @@ pub(crate) async fn run_tools(
             Ok(None) => continue,
             // Aborted or panicked: never a hole, since `next_step` pairs by index.
             Err(_) => {
-                let missing =
-                    ToolOutcome::ToolError(crate::tool_executor::MISSING_TOOL_OUTPUT.into());
+                let missing = ToolOutcome::ToolError(
+                    lk_agents_voice::tool_executor::MISSING_TOOL_OUTPUT.into(),
+                );
                 let execution = answer(&d.call, missing.clone().into(), shared.time.wall());
                 shared.report(GenEvent::ToolCallEnded {
                     speech: handle.id(),
@@ -381,18 +386,19 @@ pub(crate) async fn run_tools(
     let limit = lk_agents_abi::agent::Retries::default().tool;
     let retried = executions.iter().map(|e| (e.call.name.as_str(), e.retry));
     let retries_exceeded = retries.step(retried, limit);
-    let mut decision = crate::tool_executor::next_step(crate::tool_executor::StepInputs {
-        tool_output: &executions,
-        interrupted_before_tools,
-        // Re-read after: a interruption during a tool suppresses the reply, not the handoff, commit
-        // or step increment.
-        interrupted: handle.interrupted(),
-        num_steps: handle.num_steps(),
-        max_tool_steps: ctx.speech.max_tool_steps(),
-        forwarded_text_empty,
-        user_metrics: ctx.user_metrics.clone(),
-        retries_exceeded,
-    });
+    let mut decision =
+        lk_agents_voice::tool_executor::next_step(lk_agents_voice::tool_executor::StepInputs {
+            tool_output: &executions,
+            interrupted_before_tools,
+            // Re-read after: a interruption during a tool suppresses the reply, not the handoff, commit
+            // or step increment.
+            interrupted: handle.interrupted(),
+            num_steps: handle.num_steps(),
+            max_tool_steps: ctx.speech.max_tool_steps(),
+            forwarded_text_empty,
+            user_metrics: ctx.user_metrics.clone(),
+            retries_exceeded,
+        });
 
     // A host running hooks runs the event's handlers before the step goes on: they may cancel the
     // reply or the handoff. A loop gone answers nothing, and nothing
@@ -402,7 +408,7 @@ pub(crate) async fn run_tools(
     shared.report(GenEvent::ToolsFinished {
         speech: handle.id(),
         step: handle.num_steps(),
-        tools: crate::tool_executor::StepTools {
+        tools: lk_agents_voice::tool_executor::StepTools {
             commit: decision.commit.clone(),
             executed: decision.tools_executed.clone().map(Box::new),
             warnings: decision.warnings.clone(),

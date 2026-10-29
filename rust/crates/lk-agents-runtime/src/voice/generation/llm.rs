@@ -2,17 +2,17 @@
 
 use super::pipeline_reply::teardown_deadline;
 use super::tools::ToolStep;
-use crate::agent_session::DriverError;
-use crate::agent_session::SessionShared;
-use crate::events::SessionEvent;
-use crate::generation::{Attempt, Retry};
-use crate::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::speech_handle::SpeechHandle;
-use crate::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::provider::{Context, LlmMetricState};
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
+use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::generation::{Attempt, Retry};
+use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
+use lk_agents_voice::speech_handle::SpeechHandle;
+use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::{Visible, VisibleStream};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -31,15 +31,12 @@ pub(super) fn extend(acc: &mut Visible, more: &Visible) {
     acc.tags.extend(more.tags.iter().cloned());
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `_produce_segments`. The dispatched tools come back on every path, failure included.
 pub(super) async fn produce_segments(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] tx: mpsc::UnboundedSender<
-        SegEvent,
-    >,
+    tx: mpsc::UnboundedSender<SegEvent>,
 ) -> (Result<LlmGenerationData, DriverError>, ToolStep) {
     let mut tools = ToolStep::new();
     // A closed receiver means the voice gave up; dropping the chunk is right.
@@ -77,15 +74,12 @@ pub(super) async fn produce_segments(
     (Ok(LlmGenerationData::new(shared)), tools)
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `perform_llm_inference`, retried per the request's budget while nothing has been produced.
 async fn perform_llm_inference(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] tx: &mpsc::UnboundedSender<
-        SegEvent,
-    >,
+    tx: &mpsc::UnboundedSender<SegEvent>,
     tools: &mut ToolStep,
 ) -> Result<LlmGenerationData, DriverError> {
     // Held for the step: a mid-reply handoff must not move the model under a request on the wire.
@@ -95,7 +89,7 @@ async fn perform_llm_inference(
     if let Some(dynamic) = &ctx.providers.dynamic_instructions {
         let speech = handle.object();
         match dynamic.render(&speech).await {
-            Ok(text) => crate::generation::append_instructions(&mut chat_ctx, &text),
+            Ok(text) => lk_agents_voice::generation::append_instructions(&mut chat_ctx, &text),
             Err(e) => {
                 log::error!(target: "livekit.agents", "the agent's instructions functions failed; the static instructions are sent: {e}")
             }
@@ -121,7 +115,10 @@ async fn perform_llm_inference(
         shared.trace(GenerationStep::ChatRequested {
             speech,
             step,
-            ctx_hash: crate::generation::stable_hash(&format!("{:?}", req.chat_ctx.items)),
+            ctx_hash: lk_agents_voice::generation::stable_hash(&format!(
+                "{:?}",
+                req.chat_ctx.items
+            )),
             tools: req.tools.iter().map(|t| t.name.clone()).collect(),
             instructions_hash: ctx.request.instructions_hash,
             ctx_ids: req.chat_ctx.items.iter().map(|it| it.id().to_owned()).collect(),
@@ -175,7 +172,6 @@ async fn perform_llm_inference(
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Tool calls are dispatched on arrival. `Err` carries whether output came first, which forbids a
 /// retry.
 async fn read_llm_stream(
@@ -183,9 +179,7 @@ async fn read_llm_stream(
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     stream: &mut LlmStream,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] tx: &mpsc::UnboundedSender<
-        SegEvent,
-    >,
+    tx: &mpsc::UnboundedSender<SegEvent>,
     tools: &mut ToolStep,
     data: &mut LlmGenerationData,
 ) -> Result<(), (ProviderError, bool)> {

@@ -1,23 +1,23 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
 //! segments, through the realtime audio node when the agent has one.
 
-use crate::agent_activity::realtime::{RealtimeWake, realtime_state};
-use crate::agent_session::{DriverError, SessionShared, Tx};
-use crate::generation::forward::{TextLeg, first_text_started_speaking};
-use crate::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
-use crate::generation::playout::{
+use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
+use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
+use crate::voice::generation::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding,
 };
-use crate::generation::tools::{ToolStep, run_tools};
-use crate::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
-use crate::io::RealtimeAudioNode;
-use crate::speech_handle::SpeechHandle;
-use crate::tool_executor::{NextStep, StepDecision};
-use crate::trace::GenerationStep;
+use crate::voice::generation::tools::{ToolStep, run_tools};
 use lk_agents_abi::llm::realtime::{Event, Modalities};
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, llm::realtime as rt};
+use lk_agents_voice::agent_activity::realtime::{RealtimeWake, response_id_of};
+use lk_agents_voice::agent_session::{DriverError, SessionShared, Tx};
+use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
+use lk_agents_voice::io::RealtimeAudioNode;
+use lk_agents_voice::speech_handle::SpeechHandle;
+use lk_agents_voice::tool_executor::{NextStep, StepDecision};
+use lk_agents_voice::trace::GenerationStep;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -33,7 +33,6 @@ pub(crate) type RealtimePlayer = mpsc::Receiver<Event>;
 /// holds.
 pub const PLAYER_CAPACITY: usize = 8192;
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;
 /// the speech ends when its last frame has played.
 pub(crate) async fn realtime_generation_task(
@@ -101,7 +100,7 @@ pub(crate) async fn realtime_generation_task(
         backlog: std::collections::VecDeque::new(),
         leg: None,
     };
-    let mut heard = crate::generation::playout::silent(String::new(), true);
+    let mut heard = crate::voice::generation::playout::silent(String::new(), true);
     loop {
         let Some(mut binding) = super::output::OutputBinding::acquire(shared, handle).await? else {
             heard.complete = false;
@@ -253,7 +252,7 @@ pub(crate) async fn realtime_generation_task(
 /// The step failed: the server keeps only what the person heard of it before the failure.
 fn heard_until(
     generation: &mut Generation<'_>,
-    heard: &mut crate::transcription::Heard,
+    heard: &mut lk_agents_voice::transcription::Heard,
     wake: &Tx,
     handle: &SpeechHandle,
     error: DriverError,
@@ -354,7 +353,7 @@ impl Generation<'_> {
     fn note_event(&mut self, event: &Event) {
         self.received = true;
         if self.response_id.is_none()
-            && let Some(id) = realtime_state::response_id_of(event)
+            && let Some(id) = response_id_of(event)
         {
             self.response_id = Some(id.to_owned());
         }
@@ -431,13 +430,13 @@ impl Generation<'_> {
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
         // Opened as the pipeline's synthesis is: a failed open is retried on the same budget.
-        let mut attempt = crate::generation::Attempt::new(self.shared.conn.tts);
+        let mut attempt = lk_agents_voice::generation::Attempt::new(self.shared.conn.tts);
         let (sink, source) = loop {
             let error = match tts.stream().await {
                 Ok(pair) => break pair,
                 Err(error) => error,
             };
-            let kind = crate::trace::ProviderKind::Tts;
+            let kind = lk_agents_voice::trace::ProviderKind::Tts;
             let failed = |e, r| tts.failed(e, r);
             match super::llm::retry(self.shared, self.handle, &mut attempt, kind, &error, &failed)
                 .await
@@ -455,7 +454,6 @@ impl Generation<'_> {
         Ok(())
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The voiced message's next frame, its text fed meanwhile; `None` once its audio is over.
     async fn voice(&mut self) -> Option<Result<Next, DriverError>> {
         let v = self.voiced.as_mut()?;
@@ -523,7 +521,7 @@ impl Generation<'_> {
     /// The truncations that leave the server holding what the caller heard (`heard.played` of the
     /// generation's audio): a message heard in part is cut there, one heard none of is deleted
     /// (cut at 0), one heard whole is left. A message with no audio is cut to the words heard.
-    fn cuts(&self, heard: &crate::transcription::Heard) -> Vec<rt::Truncate> {
+    fn cuts(&self, heard: &lk_agents_voice::transcription::Heard) -> Vec<rt::Truncate> {
         let mut words = heard.text.as_str();
         let mut cuts = Vec::new();
         for (i, m) in self.messages.iter().enumerate() {
@@ -702,7 +700,7 @@ impl Segment for Generation<'_> {
                 }
                 // The request this speech was announced for failed (`_mark_done(error=e)`).
                 Event::GenerateReplyFailed(failed) => {
-                    let error = crate::generation::pipeline_reply::fatal(failed.error.message);
+                    let error = lk_agents_voice::generation::fatal(failed.error.message);
                     return Err(DriverError::Provider(error));
                 }
                 // The loop routes only a generation's own events here; the rest are the loop's.

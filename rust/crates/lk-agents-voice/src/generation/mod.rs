@@ -2,14 +2,6 @@
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
 use crate::tts::markup::MarkupExt;
-mod forward;
-mod llm;
-mod output;
-pub mod pipeline_reply;
-pub(crate) mod playout;
-pub mod realtime_generation;
-pub(crate) mod tools;
-mod tts;
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::tool_executor::Toolset;
@@ -124,7 +116,7 @@ impl TurnAccumulator {
     }
 
     /// Synthesis may start early; message chronology starts when playback is authorized.
-    pub(crate) fn set_reply_started_at(&mut self, at: SystemTime) {
+    pub fn set_reply_started_at(&mut self, at: SystemTime) {
         self.reply_started_at = at;
     }
 
@@ -139,6 +131,11 @@ impl TurnAccumulator {
             Some(first) if first == segment => self.first_tts = stats,
             Some(_) => {}
         }
+    }
+
+    /// Adoption supplies the completed user turn's metrics to a preemptive reply.
+    pub fn set_user_metrics(&mut self, metrics: MetricsReport) {
+        self.user_metrics = Some(metrics);
     }
 
     pub fn started_speaking_at(&self) -> Option<f64> {
@@ -159,7 +156,7 @@ impl TurnAccumulator {
 
     /// `out.tts_failed`: a reply cut short by a failed TTS (or by its output) reads as
     /// interrupted to the LLM.
-    pub(crate) fn cut_short(&mut self) {
+    pub fn cut_short(&mut self) {
         self.cut_short = true;
     }
 
@@ -674,7 +671,7 @@ impl std::fmt::Debug for ReplyContext {
 pub use lk_agents_abi::agent::HostInstructions;
 
 /// Append dynamic instructions to the request's static prompt.
-pub(crate) fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {
+pub fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {
     if dynamic.is_empty() {
         return;
     }
@@ -1059,4 +1056,9 @@ mod expressive_tests {
         assert!(off.chat_ctx.items.iter().all(|it| it.id() != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID));
         assert!(!texts(&off.chat_ctx).contains("<expr"), "markup stripped when off");
     }
+}
+
+/// A local generation failure that cannot be retried.
+pub fn fatal(message: impl Into<String>) -> ProviderError {
+    ProviderError::Local(lk_agents_abi::errors::ApiError::new(message).with_retryable(false))
 }

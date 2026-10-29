@@ -1,27 +1,19 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `_pipeline_reply_task`: the one task every speech runs, its steps and their follow-ups.
 
 use super::forward::{Voice, voice_leg};
 use super::llm::{SegEvent, produce_segments};
 use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
-use crate::agent_session::DriverError;
-use crate::agent_session::SessionShared;
-use crate::generation::realtime_generation::realtime_generation_task;
-use crate::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
-use crate::generation::{GenEvent, ReplyContext, ReplySource};
-use crate::speech_handle::SpeechHandle;
-use crate::tool_executor::NextStep;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use crate::voice::generation::realtime_generation::realtime_generation_task;
+use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use lk_agents_core::tool_outcome::ToolRetries;
+use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::agent_session::SessionShared;
+use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
+use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
+use lk_agents_voice::speech_handle::SpeechHandle;
+use lk_agents_voice::tool_executor::NextStep;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -89,7 +81,7 @@ async fn run(
     if let Some(replan) = ctx.replan.take() {
         let Some(planned) = request_plan(
             shared,
-            crate::generation::ReplyPlan {
+            lk_agents_voice::generation::ReplyPlan {
                 speech: handle.id(),
                 after: replan.after,
                 step: None,
@@ -152,7 +144,7 @@ pub(crate) enum StepOutcome {
     Done(Finished),
     /// `pending` is what this step produced, which the loop may not have committed yet.
     Again {
-        request: crate::tool_executor::ReplyRequest,
+        request: lk_agents_voice::tool_executor::ReplyRequest,
         pending: Vec<ChatItem>,
     },
     Next(Finished),
@@ -202,7 +194,7 @@ pub(crate) fn finish_step_with(
     let mut acc = acc;
     // A preemptive reply learns its user turn's metrics when it is adopted, after it started.
     if let Some(metrics) = handle.user_metrics() {
-        acc.user_metrics = Some(metrics);
+        acc.set_user_metrics(metrics);
     }
     let mut outcome = acc.finish(FinishInputs {
         stopped_speaking_at: shared.time.wall_secs(),
@@ -218,8 +210,6 @@ pub(crate) fn finish_step_with(
     Finished { outcome, interrupted }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// One step of `_pipeline_reply_task_impl` (or `_tts_task`): the words and the voice, two futures
 /// on one task.
 async fn pipeline_reply_task_impl(
@@ -331,16 +321,16 @@ async fn follow_up(
     handle: &Arc<SpeechHandle>,
     prev: &ReplyContext,
     spoken_step: u32,
-    request: crate::tool_executor::ReplyRequest,
+    request: lk_agents_voice::tool_executor::ReplyRequest,
     pending: Vec<ChatItem>,
 ) -> Option<ReplyContext> {
     let planned = request_plan(
         shared,
-        crate::generation::ReplyPlan {
+        lk_agents_voice::generation::ReplyPlan {
             speech: handle.id(),
             after: handle.id(),
             step: Some(spoken_step),
-            spec: crate::generation::PlanSpec {
+            spec: lk_agents_voice::generation::PlanSpec {
                 record: None,
                 new_message: None,
                 instructions: None,
@@ -380,9 +370,9 @@ async fn follow_up(
 /// The runtime owns the waiter; the core owns when the accepted record is ready.
 async fn request_plan(
     shared: &SessionShared,
-    plan: crate::generation::ReplyPlan,
-) -> Option<crate::generation::PlannedReply> {
-    let (call, result) = shared.open_call(crate::agent_session::Answer::reply_plan);
+    plan: lk_agents_voice::generation::ReplyPlan,
+) -> Option<lk_agents_voice::generation::PlannedReply> {
+    let (call, result) = shared.open_call(lk_agents_voice::agent_session::Answer::reply_plan);
     shared.report_awaited(GenEvent::Plan { call: call.id, plan: Box::new(plan) }, call);
     result.await.ok().flatten().map(|planned| *planned)
 }
@@ -402,8 +392,4 @@ pub(super) fn empty_outcome(
 
 pub(super) fn teardown_deadline(shared: &SessionShared) -> Ts {
     shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
-}
-
-pub(crate) fn fatal(message: impl Into<String>) -> ProviderError {
-    ProviderError::Local(ApiError::new(message).with_retryable(false))
 }

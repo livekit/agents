@@ -185,7 +185,7 @@ pub(super) fn bare_reply(req_id: &str) -> RealtimeCommand {
     })
 }
 
-pub(crate) fn response_id_of(ev: &Event) -> Option<&str> {
+pub fn response_id_of(ev: &Event) -> Option<&str> {
     match ev {
         Event::MessageStarted(m) => m.response_id.as_deref(),
         Event::TextDelta(d) => d.response_id.as_deref(),

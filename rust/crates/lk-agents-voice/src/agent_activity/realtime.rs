@@ -11,7 +11,7 @@ use crate::agent_session::{Close, ClosePhase, Closing, Driver, SpeechCall, Tx};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
-use crate::generation::pipeline_reply::fatal;
+use crate::generation::fatal;
 use crate::trace::{InterruptCause, InterruptStep, RealtimeStep};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{
@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use realtime_state::{Pending, Phase, Reuse, Route, Swap, bare_reply, response_id_of};
+pub use realtime_state::response_id_of;
+use realtime_state::{Pending, Phase, Reuse, Route, Swap, bare_reply};
 pub use realtime_state::{RealtimeSessionState, Request, RequestKey, Settled};
 
 /// The realtime requests' state, behind its methods.
