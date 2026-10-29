@@ -97,7 +97,6 @@
     "SessionClosing",
     "SessionOptions",
     "SessionRecorder",
-    "Sound",
     "SpeechHandle",
     "StaleHandle",
     "StartJobFields",

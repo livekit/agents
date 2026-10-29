@@ -358,8 +358,9 @@ impl BackgroundAudioPlayer {
     }
 
     #[pyo3(signature = (room, draw, *, ambient, choose, source = None))]
-    fn start<'py>(&self, py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, #[pyo3(from_py_with = _extract_background_audio_player_start_draw)] draw: f64, ambient: ::std::vec::Vec<::lk_agents_abi::voice::background_audio::Sound>, choose: bool, source: ::std::option::Option<::lk_agents_abi::voice::room_io::TrackSource>) -> PyResult<Bound<'py, PyAny>> {
+    fn start<'py>(&self, py: Python<'py>, room: ::lk_agents_abi::voice::room_owner::RoomSession, #[pyo3(from_py_with = _extract_background_audio_player_start_draw)] draw: f64, ambient: Bound<'_, PyAny>, choose: bool, source: ::std::option::Option<::lk_agents_abi::voice::room_io::TrackSource>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let ambient = ambient.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::background_audio_wire::sound_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::start(&this, room, draw, ambient, choose, source)
@@ -369,15 +370,17 @@ impl BackgroundAudioPlayer {
     }
 
     #[pyo3(signature = (sounds, draw, *, looping = false, ambient = false, choose = true))]
-    fn play(&self, sounds: ::std::vec::Vec<::lk_agents_abi::voice::background_audio::Sound>, #[pyo3(from_py_with = _extract_background_audio_player_play_draw)] draw: f64, looping: bool, ambient: bool, choose: bool) -> PyResult<super::voice::PlayState> {
+    fn play(&self, sounds: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_background_audio_player_play_draw)] draw: f64, looping: bool, ambient: bool, choose: bool) -> PyResult<super::voice::PlayState> {
         ::lk_agents_abi::python::check_pid()?;
+        let sounds = sounds.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::background_audio_wire::sound_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::play(&self.0, sounds, draw, looping, ambient, choose).map_err(|e: ::lk_agents_abi::voice::background_audio::PlaybackError| <::lk_agents_abi::voice::background_audio::PlaybackError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(super::voice::PlayState(::std::sync::Arc::new(out)))
     }
 
     #[pyo3(signature = (sounds, draw, thinking, *, choose = true))]
-    fn on_agent_state(&self, sounds: ::std::vec::Vec<::lk_agents_abi::voice::background_audio::Sound>, #[pyo3(from_py_with = _extract_background_audio_player_on_agent_state_draw)] draw: f64, thinking: bool, choose: bool) -> PyResult<()> {
+    fn on_agent_state(&self, sounds: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_background_audio_player_on_agent_state_draw)] draw: f64, thinking: bool, choose: bool) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
+        let sounds = sounds.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::background_audio_wire::sound_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         <BackgroundAudioPlayerImpl as ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer>::on_agent_state(&self.0, sounds, draw, thinking, choose).map_err(|e: ::lk_agents_abi::voice::background_audio::PlaybackError| <::lk_agents_abi::voice::background_audio::PlaybackError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }

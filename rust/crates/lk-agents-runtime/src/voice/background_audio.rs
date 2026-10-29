@@ -18,12 +18,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use lk_agents_voice::background_audio::{
-    AUDIO_SOURCE_BUFFER_MS, AudioConfig, BuiltinAudioClip, LoopingStreamError, Playback,
+    AUDIO_SOURCE_BUFFER_MS, BuiltinAudioClip, LoopingStreamError, Playback,
     PlayerPhase, TRACK_NAME, ThinkingSound, apply_gain, plan_play, select_sound, thinking_sound,
 };
 
 pub use lk_agents_abi::voice::background_audio::{
-    FrameStream, PlaybackError, PlaybackInput, Sound,
+    FrameStream, PlaybackError, Sound,
 };
 
 /// Completion and stop notification owned by voice, shared with the caller's handle
@@ -297,21 +297,22 @@ impl BackgroundAudioPlayer {
             return Ok(PlaybackHandle::already_done());
         };
         let sound = sounds.into_iter().nth(index).expect("the plan names one of the sounds");
-        let handle = PlaybackHandle::new(sound.config.fade_out);
-        let input = match sound.input {
-            PlaybackInput::File(path) => Input::File(FileInput {
-                path,
+        let handle = PlaybackHandle::new(sound.fade_out);
+        let playback = Playback::new(&sound);
+        let input = match sound.stream {
+            Some(stream) => Input::Stream(stream),
+            None => Input::File(FileInput {
+                path: sound.path.unwrap_or_default(),
                 looping,
                 clock: self.clock.clone(),
                 media_pool: self.media_pool,
                 decoder: None,
             }),
-            PlaybackInput::Stream(stream) => Input::Stream(stream),
         };
         self.queued.lock().unwrap().push(Source {
             input,
             pending: None,
-            playback: Playback::new(&sound.config),
+            playback,
             handle: handle.clone(),
             spawner: self.spawner.clone(),
             tasks: self.tasks.clone(),

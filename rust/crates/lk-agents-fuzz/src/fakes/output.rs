@@ -614,14 +614,14 @@ pub struct FakeSoundStream {
 impl FakeSoundStream {
     pub fn sound(frames: u32) -> lk_agents_abi::voice::background_audio::Sound {
         let stream = Arc::new(FakeSoundStream { left: Mutex::new(frames) });
-        lk_agents_abi::voice::background_audio::Sound::for_host(
-            None,
-            Some(stream),
-            0.8,
-            1.0,
-            0.1,
-            0.1,
-        )
+        lk_agents_abi::voice::background_audio::Sound {
+            path: None,
+            stream: Some(stream),
+            volume: 0.8,
+            probability: 1.0,
+            fade_in: 0.1,
+            fade_out: 0.1,
+        }
     }
 }
 

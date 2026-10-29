@@ -12,10 +12,11 @@ from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 
-from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, Sound, _core_RoomSession
+from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, _core_RoomSession
 from ..types import NotGivenOr
 from .amd import AmdConstants
 from .avatar import AudioReceiverFrame
+from .background_audio_wire import Sound
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .session_wire import StartPlan
 from .workflows import InstructionsArg

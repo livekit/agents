@@ -302,18 +302,6 @@ def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[s
 def video_queue_frames() -> int: ...
 
 
-class Sound:
-    def __init__(
-        self,
-        path: str | None,
-        stream: Any | None = None,
-        volume: float = 1.0,
-        probability: float = 1.0,
-        fade_in: float = 0.0,
-        fade_out: float = 0.0,
-    ) -> None: ...
-
-
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
     configuration comes back as the dict `session.options` views.

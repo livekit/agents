@@ -1071,6 +1071,29 @@ pub mod avatar {
     }
 }
 
+pub mod background_audio_wire {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/background_audio.rs.
+    static SOUND: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn sound_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::background_audio::Sound> {
+        let py = obj.py();
+            if !obj.is_instance(SOUND.import(py, "livekit.agents._generated.background_audio_wire", "Sound")?)? {
+                return Err(super::not_a(obj, "Sound"));
+            }
+            Ok(::lk_agents_abi::voice::background_audio::Sound {
+                path: ::lk_agents_abi::python::attr_with(obj, "Sound", "path", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                stream: ::lk_agents_abi::python::attr_with(obj, "Sound", "stream", |v| if v.is_none() { Ok(None) } else { (crate::generated::voice::FrameStreamProxy::from_host(&v)).map(Some) })?,
+                volume: ::lk_agents_abi::python::attr_with(obj, "Sound", "volume", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.volume"))?,
+                probability: ::lk_agents_abi::python::attr_with(obj, "Sound", "probability", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.probability"))?,
+                fade_in: ::lk_agents_abi::python::attr_with(obj, "Sound", "fade_in", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.fade_in"))?,
+                fade_out: ::lk_agents_abi::python::attr_with(obj, "Sound", "fade_out", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "Sound.fade_out"))?,
+            })
+    }
+}
+
 pub mod duplex {
     use pyo3::prelude::*;
 

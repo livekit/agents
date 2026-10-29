@@ -69,7 +69,6 @@ from ._generated._core_classes import (
     SessionClock as SessionClock,
     SessionClosing as SessionClosing,
     SessionOptions as SessionOptions,
-    Sound as Sound,
     SpeechHandle as SpeechHandle,
     StaleHandle as StaleHandle,
     StartJobFields as StartJobFields,

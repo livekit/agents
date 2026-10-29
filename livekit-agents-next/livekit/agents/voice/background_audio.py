@@ -12,6 +12,7 @@ from typing import Any, NamedTuple
 from livekit import rtc
 
 from .. import _core
+from .._generated.background_audio_wire import Sound
 from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -89,7 +90,7 @@ class _FrameStream:
 
 def _sounds(
     source: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None],
-) -> tuple[list[_core.Sound], bool]:
+) -> tuple[list[Sound], bool]:
     """The core's candidates (none for an unset sound), and whether to draw one by probability
     (a list)."""
     configs = source if isinstance(source, list) else [source] if source else []
@@ -99,13 +100,13 @@ def _sounds(
             cfg = AudioConfig(cfg)
         audio = cfg.source.path() if isinstance(cfg.source, BuiltinAudioClip) else cfg.source
         sounds.append(
-            _core.Sound(
-                audio if isinstance(audio, str) else None,
-                None if isinstance(audio, str) else _FrameStream(audio),
-                cfg.volume,
-                cfg.probability,
-                cfg.fade_in,
-                cfg.fade_out,
+            Sound(
+                path=audio if isinstance(audio, str) else None,
+                stream=None if isinstance(audio, str) else _FrameStream(audio),
+                volume=cfg.volume,
+                probability=cfg.probability,
+                fade_in=cfg.fade_in,
+                fade_out=cfg.fade_out,
             )
         )
     return sounds, isinstance(source, list)

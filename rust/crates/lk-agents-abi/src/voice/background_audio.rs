@@ -17,19 +17,6 @@ pub trait FrameStream: Send + Sync {
     fn close(&self) -> crate::BoxFuture<'_, ()>;
 }
 
-/// `AudioConfig`'s playback parameters; its `source` is the sound's input.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AudioConfig {
-    /// 0.0-1.0.
-    pub volume: f64,
-    /// The chance this one is picked when several are offered. 0.0-1.0.
-    pub probability: f64,
-    /// Seconds to ramp from 0 up to `volume` when playback starts. `0` starts at full volume.
-    pub fade_in: f64,
-    /// Seconds to ramp back down to 0 when `stop()` is called. `0` cuts immediately.
-    pub fade_out: f64,
-}
-
 /// `play(loop=True)` with an iterator source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoopingStreamError;
@@ -45,40 +32,21 @@ impl std::fmt::Display for LoopingStreamError {
 
 impl std::error::Error for LoopingStreamError {}
 
-/// `AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip`; a builtin clip arrives
-/// as its file path.
-#[derive(Clone)]
-pub enum PlaybackInput {
-    File(String),
-    Stream(Arc<dyn FrameStream>),
-}
-
-/// `_core.Sound`: one candidate, as the host hands it over -- a file path (a builtin clip arrives
-/// as its path) or a host stream.
-#[crate::class(from_py_object)]
+/// One candidate sound, as the host hands it over: a file path (a builtin clip arrives as its
+/// path) or a host stream, and how to play it.
+#[crate::host(record(module = "background_audio_wire", extract))]
 #[derive(Clone)]
 pub struct Sound {
-    pub config: AudioConfig,
-    pub input: PlaybackInput,
-}
-
-#[crate::host(object)]
-impl Sound {
-    #[host(new(defaults(volume = 1.0, probability = 1.0, fade_in = 0.0, fade_out = 0.0)))]
-    pub fn for_host(
-        #[host(required)] path: Option<String>,
-        stream: Option<Arc<dyn FrameStream>>,
-        volume: f64,
-        probability: f64,
-        fade_in: f64,
-        fade_out: f64,
-    ) -> Self {
-        let input = match stream {
-            Some(stream) => PlaybackInput::Stream(stream),
-            None => PlaybackInput::File(path.unwrap_or_default()),
-        };
-        Sound { config: AudioConfig { volume, probability, fade_in, fade_out }, input }
-    }
+    pub path: Option<String>,
+    pub stream: Option<Arc<dyn FrameStream>>,
+    /// 0.0-1.0.
+    pub volume: f64,
+    /// The chance this one is picked when several are offered. 0.0-1.0.
+    pub probability: f64,
+    /// Seconds to ramp from 0 up to `volume` when playback starts. `0` starts at full volume.
+    pub fade_in: f64,
+    /// Seconds to ramp back down to 0 when `stop()` is called. `0` cuts immediately.
+    pub fade_out: f64,
 }
 
 #[derive(Debug, thiserror::Error)]

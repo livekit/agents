@@ -1,7 +1,7 @@
 //! Background sound selection and per-frame fade progression.
 
-pub use lk_agents_abi::voice::background_audio::{AudioConfig, LoopingStreamError};
-use lk_agents_abi::voice::background_audio::{PlaybackError, PlaybackInput, Sound};
+pub use lk_agents_abi::voice::background_audio::LoopingStreamError;
+use lk_agents_abi::voice::background_audio::{PlaybackError, Sound};
 use std::f64::consts::PI;
 
 // Kept small because `clear_queue()` would cut ambient sounds abruptly: a sound removed from the
@@ -43,7 +43,7 @@ impl BuiltinAudioClip {
 
 /// `_select_sound_from_list`: pick one config by probability, or none, from one uniform `draw` in
 /// `[0, 1)` the host supplies. Probabilities summing below one leave the rest to silence.
-pub fn select_sound(sounds: &[AudioConfig], draw: f64) -> Option<usize> {
+pub fn select_sound(sounds: &[Sound], draw: f64) -> Option<usize> {
     let total: f64 = sounds.iter().map(|s| s.probability).sum();
     if total <= 0.0 {
         return None;
@@ -95,13 +95,12 @@ pub fn plan_play(
         return Err(PlaybackError::NotStarted);
     }
     let index = if choose {
-        let configs: Vec<_> = sounds.iter().map(|sound| sound.config.clone()).collect();
-        select_sound(&configs, draw)
+        select_sound(sounds, draw)
     } else {
         (!sounds.is_empty()).then_some(0)
     };
     let Some(index) = index else { return Ok(None) };
-    let is_stream = matches!(sounds[index].input, PlaybackInput::Stream(_));
+    let is_stream = sounds[index].stream.is_some();
     let looping = looping || (ambient && !is_stream);
     if looping && is_stream {
         return Err(LoopingStreamError.into());
@@ -210,7 +209,7 @@ pub struct Playback {
 }
 
 impl Playback {
-    pub fn new(cfg: &AudioConfig) -> Self {
+    pub fn new(cfg: &Sound) -> Self {
         Playback {
             volume: cfg.volume,
             fade_in: cfg.fade_in,

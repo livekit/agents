@@ -2,7 +2,14 @@ use super::*;
 use crate::room_io::FixedRoom;
 
 fn file(path: &str, probability: f64) -> Sound {
-    Sound::for_host(Some(path.to_owned()), None, 1.0, probability, 0.0, 0.0)
+    Sound {
+        path: Some(path.to_owned()),
+        stream: None,
+        volume: 1.0,
+        probability,
+        fade_in: 0.0,
+        fade_out: 0.0,
+    }
 }
 
 /// A host stream of `frames` short frames.
@@ -65,7 +72,7 @@ async fn play_refuses_what_cannot_play() {
     ));
 
     let (player, _room) = started().await;
-    let stream = Sound::for_host(None, Some(Arc::new(Frames(Mutex::new(1)))), 1.0, 1.0, 0.0, 0.0);
+    let stream = Sound { stream: Some(Arc::new(Frames(Mutex::new(1)))), path: None, ..file("", 1.0) };
     let looping = player.play_for_host(vec![stream], 0.5, true, false, true);
     assert!(matches!(looping, Err(PlaybackError::LoopingStream(_))));
     assert!(LoopingStreamError.to_string().contains("loop=False"));
@@ -179,7 +186,7 @@ async fn stopping_during_stream_retirement_keeps_cleanup_owned_after_a_waiter_is
         calls: std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicUsize::new(0),
     });
-    let sound = Sound::for_host(None, Some(stream.clone()), 1.0, 1.0, 0.0, 0.0);
+    let sound = Sound { stream: Some(stream.clone()), path: None, ..file("", 1.0) };
     player
         .start_for_host(
             Arc::new(FixedRoom {
