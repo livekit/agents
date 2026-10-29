@@ -12,10 +12,6 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use lk_agents_abi::voice::speech::{
-    SPEECH_PRIORITY_HIGH, SPEECH_PRIORITY_LOW, SPEECH_PRIORITY_NORMAL,
-};
-
 const HANDOFF: &str = "a handoff resumed scheduling before the drain completed";
 
 const CLOSING: &str = "the session is closing";
