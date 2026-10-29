@@ -65,10 +65,12 @@ pytest with the `--allow-uncategorized` option to temporarily disable this rule
 
 ### Running Agents
 ```bash
-python myagent.py dev       # Development mode with hot reload (connects to LiveKit)
-python myagent.py start     # Production mode
+lk agent dev               # Development mode with hot reload (connects to LiveKit)
+lk agent console           # Talk to the agent in the terminal
+lk agent start             # Production mode
 ```
-These subcommands are the interface `lk agent dev|start|console` (the Go livekit-cli) invokes.
+`lk agent` (the Go livekit-cli) runs `python main.py start [--dev]`, `console` or `download-files`;
+those subcommands are its internal interface, not a user entry point.
 
 ### Linking Local python-rtc (for SDK development)
 ```bash

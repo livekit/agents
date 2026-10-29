@@ -14,7 +14,7 @@ email, by text and on the phone.
 
 ## What the pattern is made of
 
-- **A delegate as a tool.** `Agent(tools=[A2ADelegate(BACKEND)])` on the frontend, for the
+- **A delegate as a tool.** `Agent(tools=[RemoteAgent(BACKEND).as_tool()])` on the frontend, for the
   call and the text door alike: one tool, `ask`, described from the back office's card. The
   frontend relays what comes back and never guesses.
 - **A tool that asks for what it is missing.** `schedule_appointment` takes the slot and the
