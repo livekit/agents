@@ -194,6 +194,14 @@ def run(request: pytest.FixtureRequest) -> Entrypoint:
     return request.param  # type: ignore[no-any-return]
 
 
+# VoiceSession.run accepts output outside AgentRun: no output validators, no final_result, no
+# output retries. These vectors flip once a call's reply composes the shared AgentRun.
+VOICE_OUTPUT_GAP = pytest.mark.xfail(
+    strict=True, reason="a call's reply does not run AgentRun's output acceptance yet"
+)
+OUTPUT_ENTRYPOINTS = [*ENTRYPOINTS[:2], pytest.param(_voice, id="voice", marks=VOICE_OUTPUT_GAP)]
+
+
 async def test_a_plain_reply_is_the_output(run: Entrypoint) -> None:
     agent = Agent(name="desk", instructions="Help", llm=Script(Reply("Hello there.")))
     settled = await run(agent, "Hi")
@@ -792,3 +800,87 @@ async def test_a_none_result_continues_in_text_and_asks_no_reply_on_a_call(run: 
     if run is not _voice:
         settled.expect.next_event().is_message(role="assistant")
     settled.expect.no_more_events()
+
+
+@pytest.mark.parametrize("run", OUTPUT_ENTRYPOINTS)
+async def test_an_output_validator_retries_then_replaces_the_accepted_output(
+    run: Entrypoint,
+) -> None:
+    model = Script(Reply("unverified"), Reply("verified"))
+    agent = Agent(instructions="Help", llm=model)
+    seen: list[str] = []
+
+    @agent.output_validator
+    def check(ctx: RunContext, output: str) -> str:
+        seen.append(output)
+        if output != "verified":
+            raise ModelRetry("Verify the booking first.")
+        return "Booking verified."
+
+    settled = await run(agent, "Booking")
+    assert seen == ["unverified", "verified"]
+    assert settled.output == "Booking verified."
+    assert any(
+        i.type == "message" and "Verify the booking first." in (i.text_content or "")
+        for i in model.requests[1].items
+    )
+
+
+@pytest.mark.parametrize("run", OUTPUT_ENTRYPOINTS)
+async def test_an_output_that_keeps_failing_exhausts_only_its_output_retries(
+    run: Entrypoint,
+) -> None:
+    model = Script(Reply("wrong"), Reply("still wrong"))
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.output_validator
+    def check(ctx: RunContext, output: str) -> str:
+        raise ModelRetry("Verify the booking first.")
+
+    with pytest.raises(UnexpectedModelBehavior, match="output"):
+        await run(agent, "Booking")
+    assert len(model.requests) == 2
+
+
+@pytest.mark.parametrize("run", OUTPUT_ENTRYPOINTS)
+async def test_a_typed_output_is_validated_and_retried_before_acceptance(run: Entrypoint) -> None:
+    from pydantic import BaseModel
+
+    class Booking(BaseModel):
+        nights: Annotated[int, Field(ge=1)]
+
+    model = Script(
+        call("final_result", {"nights": 0}, "bad"),
+        call("final_result", {"nights": "2"}, "good"),
+    )
+    agent = Agent(instructions="Help", llm=model, output_type=Booking)
+    settled = await run(agent, "Book two nights")
+    assert settled.output == Booking(nights=2)
+    assert len(model.requests) == 2
+    assert any(
+        i.type == "function_call_output" and i.is_error and "nights" in i.output
+        for i in model.requests[1].items
+    )
+
+
+@pytest.mark.xfail(
+    strict=True, reason="the transcription-only path does not deliver a verbatim question"
+)
+async def test_a_verbatim_voice_question_reaches_the_transcription_output() -> None:
+    from .fake_io import FakeTextOutput
+
+    agent = Agent(instructions="Help", llm=Script(call("ask", {}, "question")))
+
+    @agent.tool
+    async def ask(ctx: RunContext) -> InputRequired:
+        """Ask for the date."""
+        return InputRequired("Which date?", verbatim=True)
+
+    output = FakeTextOutput()
+    async with VoiceSession() as session:
+        session.output.transcription = output
+        await session.start(agent)
+        result: VoiceRunResult[Any] = await session.run(user_input="Book")
+        assert result.status == "input_required" and result.question == "Which date?"
+        await session.wait_for_idle()
+        assert "".join(output._messages) == "Which date?"
