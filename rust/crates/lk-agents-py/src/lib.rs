@@ -25,6 +25,8 @@ pub mod host;
 pub mod nodes;
 
 pub mod realtime_fallback;
+/// `_core.HostRealtimeModel`: a plugin's realtime model as the core's own.
+pub mod realtime_host;
 /// `init(role)` and the registration table.
 pub mod runtime;
 /// `Streams` and `StreamReader`, and the record helpers of `turn.rs`.
@@ -98,6 +100,7 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::process::Process,
     >;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
+    type HostRealtimeModel = crate::realtime_host::HostRealtimeModel;
     type AgentClient =
         lk_agents_runtime::net::a2a_client::AgentClient<lk_agents_runtime::process::Process>;
     type Reply = lk_agents_runtime::net::a2a_client::Reply;

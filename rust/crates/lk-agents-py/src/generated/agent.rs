@@ -187,15 +187,24 @@ impl AgentHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::AgentHost>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentHost>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::AgentHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), notifier: ::std::default::Default::default() })
     }
 }
@@ -399,16 +408,28 @@ impl HostInstructionsProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::agent::HostInstructions>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::HostInstructions>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::HostInstructions>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(HostInstructionsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(HostInstructionsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 

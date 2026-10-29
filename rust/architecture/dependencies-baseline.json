@@ -1,5 +1,4 @@
 [
-  "dependency:lk-agents-abi:async-trait",
   "dependency:lk-agents-abi:futures-channel",
   "dependency:lk-agents-abi:futures-core",
   "dependency:lk-agents-abi:futures-io",

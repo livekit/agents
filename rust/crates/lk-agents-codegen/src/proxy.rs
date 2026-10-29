@@ -35,11 +35,15 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         reads =
             format!("        let source = ::std::sync::Arc::new(obj.clone().unbind());\n{reads}");
     }
+    let context_arg = "context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>";
     if p.captures_context() {
+        reads.push_str("        let context = match context {\n            Some(context) => ::std::clone::Clone::clone(context),\n            None => crate::host::capture_context(obj.py())?,\n        };\n");
         fields.push(
             "    /// The host's running loop and a copy of its context, captured when it was taken.\n    context: ::lk_agents_abi::utils::host_ref::HostRef,\n".into(),
         );
-        inits.push("context: crate::host::capture_context(obj.py())?".into());
+        inits.push("context".into());
+    } else {
+        reads.push_str("        let _ = context;\n");
     }
     if p.methods.iter().any(|m| m.kind == ProxyCall::Notify) {
         fields.push(
@@ -66,7 +70,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         inits.push(format!("{}: None", bound.name));
     }
     s.push_str(&format!(
-        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj)?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
+        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
         fields.concat(),
         inits.join(", "),
         host = p.host,
@@ -220,7 +224,17 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
         )
     };
-    let context = match m.ret.ok.holds_host_stream() {
+    // A proxy an awaited call returns is taken off the host loop: its calls run in a copy of the
+    // context the returning call ran in.
+    let returned_proxy = match &m.ret.ok {
+        Ty::Proxy { declared: Some((family, name)), boxed: false, .. }
+            if m.kind == ProxyCall::Await =>
+        {
+            Some(format!("super::{family}::{name}Proxy::in_context(o, context)"))
+        }
+        _ => None,
+    };
+    let context = match m.ret.ok.holds_host_stream() || returned_proxy.is_some() {
         true => format!(
             "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n"
         ),
@@ -256,7 +270,10 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         )),
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;
-            let read = from_host("o", &m.ret.ok, &label, &at)?;
+            let read = match returned_proxy {
+                Some(read) => read,
+                None => from_host("o", &m.ret.ok, &label, &at)?,
+            };
             let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
             Ok(awaited(
                 m,

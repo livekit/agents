@@ -18,7 +18,6 @@ livekit-protocol.workspace = true
 # The A2A messages and artifacts the typed task records keep (`storage::thread`).
 a2a.workspace = true
 pbjson-types.workspace = true
-async-trait.workspace = true
 # Expands to nothing. It exists so `#[host(..)]` is legal Rust; see `voice/mod.rs`.
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 # `extra` is JSON, not an opaque host payload: the reference reads it for control flow and

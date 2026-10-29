@@ -1130,16 +1130,28 @@ impl ExchangeStreamProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(ExchangeStreamProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(ExchangeStreamProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -1237,16 +1249,28 @@ impl AsgiApplicationProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(AsgiApplicationProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(AsgiApplicationProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 
@@ -1298,16 +1322,28 @@ impl SessionJobProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::job::SessionJob>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::job::SessionJob>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(SessionJobProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(SessionJobProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 
@@ -1356,20 +1392,32 @@ impl SessionPortProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
         let framework_info = {
             let v = crate::host::read(obj, "_core_framework_info")?;
             (|| -> ::pyo3::PyResult<_> { let tuple = v.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_framework_info"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?,)) })()?
         };
-        Ok(SessionPortProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, framework_info })
+        Ok(SessionPortProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, framework_info })
     }
 }
 
@@ -1578,16 +1626,28 @@ impl DevServerProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::cli::DevServer>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::cli::DevServer>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::cli::DevServer>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::cli::DevServer>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 
@@ -1655,16 +1715,25 @@ impl ProcessHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ProcessHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ProcessHost>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ProcessHost>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ProcessHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
         let source = ::std::sync::Arc::new(obj.clone().unbind());
+        let _ = context;
         Ok(ProcessHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), source })
     }
 }
@@ -1926,15 +1995,24 @@ impl ChildInitializeProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(ChildInitializeProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
@@ -1981,16 +2059,28 @@ impl JobHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobHost>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobHost>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(JobHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(JobHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 
@@ -2355,15 +2445,24 @@ impl JobCallProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(JobCallProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
@@ -2410,15 +2509,24 @@ impl ParticipantEntrypointProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(ParticipantEntrypointProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
@@ -2471,16 +2579,28 @@ impl PoolHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::PoolHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::PoolHost>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::PoolHost>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::PoolHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(PoolHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(PoolHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -2491,6 +2611,7 @@ impl PoolHostProxy {
 impl ::lk_agents_abi::worker::ipc_host::PoolHost for PoolHostProxy {
     fn create(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ProcessHost>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "PoolHost._core_create", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_create")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -2504,8 +2625,11 @@ impl ::lk_agents_abi::worker::ipc_host::PoolHost for PoolHostProxy {
                     return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
                 }
             };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("PoolHost._core_create: the call captured no host context")));
+                };
             let o = out.bind(py);
-            let out = (crate::generated::worker::ProcessHostProxy::from_host(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (super::worker::ProcessHostProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -2538,16 +2662,28 @@ impl ServerHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(ServerHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
+        Ok(ServerHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 

@@ -647,7 +647,6 @@ class VoiceSession:
         vad: Any | None = None,
         llm: Any | None = None,
         realtime: Any | None = None,
-        realtime_host: Any | None = None,
         tts: Any | None = None,
         on_event: Any | None = None,
         hooks: Any | None = None,

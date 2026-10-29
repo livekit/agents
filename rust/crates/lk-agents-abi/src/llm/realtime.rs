@@ -66,6 +66,7 @@ pub struct RealtimeCapabilities {
 ///
 /// `fields_only`: nothing crosses as this payload; `generate_reply_failed` spreads its keys flat.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Host)]
+#[crate::host(error(kind = "RuntimeError"))]
 #[binding(fields_only)]
 #[error("{message}")]
 pub struct RealtimeError {
@@ -469,7 +470,7 @@ pub trait RealtimeSession: Send + Sync {
 /// **The `tag_value` strings below are the wire.** A host session reads each as its member's
 /// dict, `kind` included.
 #[derive(Debug, Clone, Host)]
-#[binding(emit)]
+#[binding(emit, from_items)]
 #[derive(lk_agents_host_derive::Vocabulary)]
 #[vocabulary(kind = RealtimeCommandKind)]
 pub enum RealtimeCommand {
@@ -663,26 +664,28 @@ pub struct Truncate {
 /// A realtime model: speech in, speech out, over one live session.
 ///
 /// Plugins implement `session()`, returning a `RealtimeSession`.
-#[crate::host(proxy)]
+#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeModel"))]
 #[python(provider(
     name = "RealtimeModel",
     module = "realtime",
     path = "livekit.agents.llm.realtime",
     error(name = "RealtimeModelError", kind = "realtime_model_error")
 ))]
-#[async_trait::async_trait]
 pub trait HostRealtime: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> String;
 
     /// What this instance supports, fixed at construction.
     // Read once: the audio path never takes the GIL to ask.
     #[python(init)]
+    #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> RealtimeCapabilities;
 
     /// The model and provider labelling this instance's turn metrics.
     #[python(identity)]
+    #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
@@ -705,44 +708,74 @@ pub trait HostRealtime: Send + Sync {
             doc = "One live session of a realtime model.\n\nPlugins implement its commands (``push_audio``, ``generate_reply``, ``truncate``, the updates) and emit its events (``input_speech_started``, ``generation_created``, ``error``)."
         )
     )]
-    async fn session(
+    #[host(await, name = "_core_session")]
+    fn session(
         &self,
         #[python(default = "False")] turn_detection_disabled: bool,
-    ) -> Result<std::sync::Arc<dyn HostRealtimeSession>, crate::errors::ProviderError>;
+    ) -> crate::BoxFuture<
+        '_,
+        Result<std::sync::Arc<dyn HostRealtimeSession>, crate::errors::ProviderError>,
+    >;
 }
 
 /// A host `RealtimeSession`, flattened: the leg orders the commands, the session's callbacks
 /// report one event at a time.
-#[crate::host(proxy(cancel_on_drop))]
-#[async_trait::async_trait]
+// A dropped call cancels its host coroutine.
+#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeSession"))]
 pub trait HostRealtimeSession: Send + Sync {
     /// A command that applies at once (`push_audio`, `interrupt`, `commit_audio`, `clear_audio`,
     /// `truncate`), queued on the host loop in order.
+    #[host(notify, name = "_core_send")]
     fn send(&self, cmd: RealtimeCommand);
 
     /// A session update (`update_instructions`, `update_chat_ctx`, `push_item`, `update_tools`);
     /// the leg awaits each before the next.
-    async fn update(&self, cmd: RealtimeCommand) -> Result<(), crate::errors::HostError>;
+    #[host(await, name = "_core_update")]
+    fn update(
+        &self,
+        cmd: RealtimeCommand,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
     /// Send a reply request (`generate_reply`, `say`): its pending future, as the session returned
     /// it.
-    async fn request(&self, cmd: RealtimeCommand) -> Result<crate::HostRef, RealtimeError>;
+    #[host(await, name = "_core_request")]
+    fn request(
+        &self,
+        cmd: RealtimeCommand,
+    ) -> crate::BoxFuture<'_, Result<crate::HostRef, RealtimeError>>;
 
     /// The generation a request's future resolves to.
-    async fn generation(&self, request: crate::HostRef) -> Result<crate::HostRef, RealtimeError>;
+    #[host(await, name = "_core_generation")]
+    fn generation(
+        &self,
+        request: crate::HostRef,
+    ) -> crate::BoxFuture<'_, Result<crate::HostRef, RealtimeError>>;
 
     /// Drop a request still waiting for its generation (`future.cancel()`).
-    async fn cancel(&self, request: crate::HostRef);
+    #[host(await, name = "_core_cancel")]
+    fn cancel(&self, request: crate::HostRef) -> crate::BoxFuture<'_, ()>;
 
     /// Report a generation's messages and function calls as events; `req_id` names the request it
     /// answers, `None` for one the server started.
-    async fn drain(&self, generation: crate::HostRef, req_id: Option<String>);
+    #[host(await, name = "_core_drain")]
+    fn drain(&self, generation: crate::HostRef, req_id: Option<String>)
+    -> crate::BoxFuture<'_, ()>;
 
     /// The next event; `None` once the session is closed. An `Err` is one event the host could
     /// not report, not the end.
-    async fn next_event(&self) -> Result<Option<Event>, crate::errors::HostError>;
+    #[host(await, name = "_core_next_event")]
+    fn next_event(&self) -> crate::BoxFuture<'_, Result<Option<Event>, crate::errors::HostError>>;
 
-    async fn aclose(&self);
+    #[host(await, name = "_core_aclose")]
+    fn aclose(&self) -> crate::BoxFuture<'_, ()>;
+}
+
+/// A plugin's realtime model as the core's own: its session opens when the driver first asks and
+/// is the same when asked again.
+#[crate::host(class(name = "HostRealtimeModel", native = crate::llm::realtime::Realtime))]
+pub trait HostRealtimeModel: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new(model: std::sync::Arc<dyn HostRealtime>) -> Self;
 }
 
 /// The host's exception as the failure a reply request reports: its message and its `code`.
@@ -753,280 +786,5 @@ impl crate::python::FromHostErr for RealtimeError {
         let value = err.value(py);
         let code = value.getattr("code").ok().and_then(|c| c.extract::<String>().ok());
         RealtimeError { message: value.to_string(), code }
-    }
-}
-
-/// The plugin session opens only when the driver calls `session()`; asked again, it is the same.
-pub struct HostRealtimeModel {
-    host: std::sync::Arc<dyn HostRealtime>,
-    label: String,
-    caps: RealtimeCapabilities,
-    anchor: crate::WallAnchor,
-    spawner: std::sync::Arc<dyn crate::Spawner>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    session: tokio::sync::Mutex<Option<std::sync::Arc<HostRealtimeLeg>>>,
-}
-
-impl HostRealtimeModel {
-    pub fn new(
-        host: std::sync::Arc<dyn HostRealtime>,
-        anchor: crate::WallAnchor,
-        spawner: std::sync::Arc<dyn crate::Spawner>,
-    ) -> Self {
-        HostRealtimeModel {
-            label: host.label(),
-            caps: host.capabilities(),
-            host,
-            anchor,
-            spawner,
-            session: Default::default(),
-        }
-    }
-}
-
-impl Realtime for HostRealtimeModel {
-    fn label(&self) -> String {
-        self.label.clone()
-    }
-
-    fn capabilities(&self) -> RealtimeCapabilities {
-        self.caps
-    }
-
-    fn session(
-        &self,
-        turn_detection_disabled: bool,
-    ) -> crate::BoxFuture<
-        '_,
-        Result<std::sync::Arc<dyn RealtimeSession>, crate::errors::ProviderError>,
-    > {
-        Box::pin(async move {
-            let mut slot = self.session.lock().await;
-            if let Some(leg) = slot.as_ref() {
-                return Ok(std::sync::Arc::clone(leg) as std::sync::Arc<dyn RealtimeSession>);
-            }
-            // The plugin's `session()` raised: the driver's start fails with its message, as the
-            // reference's activity start does.
-            let host = self.host.session(turn_detection_disabled).await.map_err(|e| {
-                crate::errors::ProviderError::Local(crate::errors::ApiError::new(format!(
-                    "realtime session could not be opened: {}",
-                    e.message()
-                )))
-            })?;
-            let leg = HostRealtimeLeg::open(host, self.caps, self.anchor, &self.spawner);
-            *slot = Some(std::sync::Arc::clone(&leg));
-            Ok(leg as std::sync::Arc<dyn RealtimeSession>)
-        })
-    }
-}
-
-/// Requests between being asked for and their generation: a cancelled one is dropped before it is
-/// sent, or its pending future cancelled after.
-#[derive(Default)]
-struct Requests {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    cancelled: std::collections::HashSet<String>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pending: std::collections::HashMap<String, crate::HostRef>,
-}
-
-/// A plugin session as the driver's [`RealtimeSession`]. Updates apply one after the other, and a
-/// reply is requested once the updates sent before it applied (a tool's output reaches the server
-/// before the reply that reads it); each generation is drained in its own task.
-pub struct HostRealtimeLeg {
-    host: std::sync::Arc<dyn HostRealtimeSession>,
-    caps: RealtimeCapabilities,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    lane: tokio::sync::mpsc::UnboundedSender<RealtimeCommand>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    requests: std::sync::Arc<std::sync::Mutex<Requests>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Event>>,
-    spawner: std::sync::Arc<dyn crate::Spawner>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    tasks: std::sync::Mutex<Vec<crate::AbortHandle>>,
-}
-
-impl HostRealtimeLeg {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    fn open(
-        host: std::sync::Arc<dyn HostRealtimeSession>,
-        caps: RealtimeCapabilities,
-        anchor: crate::WallAnchor,
-        spawner: &std::sync::Arc<dyn crate::Spawner>,
-    ) -> std::sync::Arc<Self> {
-        let (lane, lane_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
-        let leg = std::sync::Arc::new(HostRealtimeLeg {
-            host: std::sync::Arc::clone(&host),
-            caps,
-            lane,
-            requests: Default::default(),
-            events: tokio::sync::Mutex::new(events),
-            spawner: std::sync::Arc::clone(spawner),
-            tasks: Default::default(),
-        });
-        let weak = std::sync::Arc::downgrade(&leg);
-        // Not among `tasks`: it runs until the host reports the end, so a close loses no event.
-        let _ = crate::SpawnerExt::spawn_unboxed(
-            &**spawner,
-            Self::forward(weak.clone(), host, anchor, events_tx.clone()),
-        );
-        leg.spawn(Self::run_lane(weak, lane_rx, events_tx));
-        leg
-    }
-
-    fn spawn(&self, f: impl std::future::Future<Output = ()> + Send + 'static) {
-        use crate::SpawnerExt;
-        let mut tasks = self.tasks.lock().unwrap();
-        tasks.retain(|t| !t.is_finished());
-        tasks.push(self.spawner.spawn_unboxed(f));
-    }
-
-    /// The host's events, in order; a server-started generation is drained instead.
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    async fn forward(
-        leg: std::sync::Weak<Self>,
-        host: std::sync::Arc<dyn HostRealtimeSession>,
-        anchor: crate::WallAnchor,
-        events: tokio::sync::mpsc::UnboundedSender<Event>,
-    ) {
-        loop {
-            match host.next_event().await {
-                Ok(Some(Event::ServerGeneration(g))) => {
-                    let Some(leg) = leg.upgrade() else { return };
-                    let host = std::sync::Arc::clone(&host);
-                    leg.spawn(async move { host.drain(g.generation, None).await });
-                }
-                Ok(Some(ev)) => {
-                    if events.send(ev.anchored(Some(anchor))).is_err() {
-                        return;
-                    }
-                }
-                Ok(None) => return,
-                // A malformed event is the plugin's bug; the session goes on.
-                Err(e) => {
-                    log::warn!(target: "livekit.agents", error = e.message.as_str(); "realtime event refused")
-                }
-            }
-        }
-    }
-
-    /// Updates and reply requests, in the order the driver sent them.
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    async fn run_lane(
-        leg: std::sync::Weak<Self>,
-        mut lane: tokio::sync::mpsc::UnboundedReceiver<RealtimeCommand>,
-        events: tokio::sync::mpsc::UnboundedSender<Event>,
-    ) {
-        while let Some(cmd) = lane.recv().await {
-            let Some(leg) = leg.upgrade() else { return };
-            let req_id = match &cmd {
-                RealtimeCommand::GenerateReply(c) => c.req_id.clone(),
-                RealtimeCommand::Say(c) => c.req_id.clone(),
-                _ => {
-                    if let Err(e) = leg.host.update(cmd).await {
-                        log::error!(target: "livekit.agents", error = e.message.as_str(); "failed to update the realtime session");
-                    }
-                    continue;
-                }
-            };
-            if leg.requests.lock().unwrap().cancelled.remove(&req_id) {
-                continue;
-            }
-            let request = match leg.host.request(cmd).await {
-                Ok(request) => request,
-                Err(error) => {
-                    let _ = events
-                        .send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
-                    continue;
-                }
-            };
-            // Cancelled while it was being sent: the future is cancelled instead of awaited.
-            if leg.requests.lock().unwrap().cancelled.remove(&req_id) {
-                leg.host.cancel(request).await;
-                continue;
-            }
-            leg.requests.lock().unwrap().pending.insert(req_id.clone(), request.clone());
-            let host = std::sync::Arc::clone(&leg.host);
-            let requests = std::sync::Arc::clone(&leg.requests);
-            let events = events.clone();
-            leg.spawn(async move {
-                let generation = host.generation(request).await;
-                // Gone from `pending`: cancelled, and a cancelled request reports nothing.
-                let asked = requests.lock().unwrap().pending.remove(&req_id).is_some();
-                match generation {
-                    Ok(generation) => host.drain(generation, Some(req_id)).await,
-                    Err(error) if asked => {
-                        let _ = events.send(Event::GenerateReplyFailed(GenerateReplyFailed {
-                            req_id,
-                            error,
-                        }));
-                    }
-                    Err(_) => {}
-                }
-            });
-        }
-    }
-}
-
-impl RealtimeSession for HostRealtimeLeg {
-    fn capabilities(&self) -> RealtimeCapabilities {
-        self.caps
-    }
-
-    fn send(&self, cmd: RealtimeCommand) {
-        match cmd {
-            RealtimeCommand::CancelReply(CancelReply { req_id }) => {
-                let pending = {
-                    let mut requests = self.requests.lock().unwrap();
-                    let pending = requests.pending.remove(&req_id);
-                    if pending.is_none() {
-                        requests.cancelled.insert(req_id);
-                    }
-                    pending
-                };
-                if let Some(request) = pending {
-                    let host = std::sync::Arc::clone(&self.host);
-                    self.spawn(async move { host.cancel(request).await });
-                }
-            }
-            RealtimeCommand::UpdateInstructions(_)
-            | RealtimeCommand::UpdateChatCtx(_)
-            | RealtimeCommand::UpdateTools(_)
-            | RealtimeCommand::PushItem(_)
-            | RealtimeCommand::GenerateReply(_)
-            | RealtimeCommand::Say(_) => {
-                let _ = self.lane.send(cmd);
-            }
-            RealtimeCommand::PushAudio(_)
-            | RealtimeCommand::CommitAudio(_)
-            | RealtimeCommand::ClearAudio(_)
-            | RealtimeCommand::Interrupt(_)
-            | RealtimeCommand::Truncate(_) => self.host.send(cmd),
-        }
-    }
-
-    fn next_event(&self) -> crate::BoxFuture<'_, Option<Event>> {
-        Box::pin(async move { self.events.lock().await.recv().await })
-    }
-
-    fn chat_ctx(&self) -> crate::BoxFuture<'_, crate::ChatContext> {
-        Box::pin(async move {
-            // Only read when no agent context is bound, which never happens for a host session.
-            crate::ChatContext::default()
-        })
-    }
-
-    fn aclose(&self) -> crate::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
-            // session closes.
-            for task in std::mem::take(&mut *self.tasks.lock().unwrap()) {
-                task.abort();
-            }
-            self.host.aclose().await;
-        })
     }
 }

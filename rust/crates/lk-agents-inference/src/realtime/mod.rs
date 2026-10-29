@@ -2,6 +2,7 @@
 
 pub mod connection;
 pub mod dialect;
+pub mod host;
 pub mod machine;
 pub mod native;
 pub mod protocol;

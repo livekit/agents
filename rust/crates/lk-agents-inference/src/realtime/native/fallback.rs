@@ -10,14 +10,15 @@ use std::sync::{Arc, Mutex};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::fallback::AvailabilityChanged;
 use lk_agents_abi::llm::realtime::{
-    Event, GenerationDone, GenerationStatus, HostRealtime, HostRealtimeModel, MessageDone,
-    MessageModalities, Modalities, RealtimeModelError, TokenUsage,
+    Event, GenerationDone, GenerationStatus, HostRealtime, MessageDone, MessageModalities,
+    Modalities, RealtimeModelError, TokenUsage,
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
 use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest, Modality};
 use crate::fallback::realtime::{FallbackBacklog, RealtimeCapabilities, merge_capabilities};
 use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy};
+use crate::realtime::host::HostRealtimeModel;
 use lk_agents_abi::resources::ResourceId;
 
 /// One model of the chain: the core's own, or a plugin's seen through its host view. A host model

@@ -480,9 +480,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if isinstance(model, llm.RealtimeModel)
             else None
         )
-        # a plugin's model is a host object, any other the core's own
-        realtime = rt if hasattr(rt, "_core_session") else None
-        native = None if hasattr(rt, "_core_session") else rt
+        # a plugin's model is a host object the core adapts, any other the core's own
+        realtime = _core.HostRealtimeModel(rt) if hasattr(rt, "_core_session") else rt
         sampler = self._video_sampler
         keyterm_llm = _detection_llm(self._stt_context)
         self._room = room
@@ -498,8 +497,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 stt=_bindings.core_leg(frame.get("stt", self._stt)),
                 vad=_bindings.core_leg(self._vad),
                 llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
-                realtime=native,
-                realtime_host=realtime,
+                realtime=realtime,
                 tts=_bindings.core_leg(frame.get("tts", self._tts)),
                 host_audio_input=self._input.audio,
                 host_video_input=self._input.video,

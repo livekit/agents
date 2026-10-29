@@ -64,7 +64,6 @@ impl SessionApi {
         vad: Option<Arc<dyn Vad>>,
         llm: Option<Arc<dyn Llm>>,
         realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
-        realtime_host: Option<Arc<dyn lk_agents_abi::llm::realtime::HostRealtime>>,
         tts: Option<Arc<dyn Tts>>,
         on_event: Option<Arc<dyn SessionEvents>>,
         hooks: Option<Arc<dyn super::SessionHooks>>,
@@ -161,15 +160,6 @@ impl SessionApi {
         if let Some(out) = &host_audio_output {
             out.tracker().anchor_to(anchor);
         }
-        let realtime = realtime.or_else(|| {
-            realtime_host.map(|host| {
-                Arc::new(lk_agents_abi::llm::realtime::HostRealtimeModel::new(
-                    host,
-                    anchor,
-                    spawner.clone(),
-                )) as Arc<dyn lk_agents_abi::Realtime>
-            })
-        });
         let expressive = crate::generation::ExpressiveLayers {
             session: options.map(|o| o.expressive()).unwrap_or_default(),
             agent: agent_expressive.given(),

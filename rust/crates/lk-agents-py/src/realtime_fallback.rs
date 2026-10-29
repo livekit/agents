@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::llm::realtime::{HostRealtime, RealtimeCapabilities};
+use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
 use lk_agents_abi::python::{Ambient, HostProxy, native};
 use lk_agents_abi::{HostRef, Realtime, RealtimeSession, Spawner, WallAnchor};
@@ -30,7 +30,7 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
                     let model = model.into_pyobject(py)?;
                     match native::<dyn Realtime>(&model) {
                         Some(native) => Ok(RealtimeChild::Native(native)),
-                        None => <dyn HostRealtime as HostProxy>::from_host(&model, None)
+                        None => crate::generated::llm::HostRealtimeProxy::from_host(&model)
                             .map(|host| RealtimeChild::Host(host, <Arc<dyn Spawner>>::ambient())),
                     }
                 })

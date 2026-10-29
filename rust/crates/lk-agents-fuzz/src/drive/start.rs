@@ -173,7 +173,6 @@ impl Run {
                     ];
                     fakes::FallbackRealtime::new(children, time.clock()) as Arc<dyn Realtime>
                 }),
-                None,
                 tts,
                 Some(Arc::new(WireSink)),
                 // The run answers the hook calls itself (`HookAnswer`).

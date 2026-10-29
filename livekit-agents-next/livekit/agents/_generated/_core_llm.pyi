@@ -12,6 +12,7 @@ from livekit import rtc
 from livekit.agents._core_view import AvailabilityObserver, Duplex
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
+from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.utils import SerializedImage
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
@@ -329,6 +330,12 @@ def strip_thinking(
 ) -> tuple[str | None, str, str | None]: ...
 
 def flatten_delta_text(parts: Sequence[str]) -> str | None: ...
+
+class HostRealtimeModel:
+    """A plugin's realtime model as the core's own: its session opens when the driver first asks and
+    is the same when asked again.
+    """
+    def __init__(self, model: RealtimeModel[Any]) -> None: ...
 
 class NativeRealtimeModel:
     def __init__(self, config: NativeRealtimeConfig) -> None: ...

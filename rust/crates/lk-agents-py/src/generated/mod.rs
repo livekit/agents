@@ -59,6 +59,7 @@ pub trait Implementations: 'static {
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
+    type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;
     type NativeRealtimeModel: ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
@@ -213,6 +214,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::inject_confirm_duplicate, m)?)?;
     m.add_function(wrap_pyfunction!(llm::strip_thinking, m)?)?;
     m.add_function(wrap_pyfunction!(llm::flatten_delta_text, m)?)?;
+    m.add_class::<llm::HostRealtimeModel>()?;
     m.add_class::<llm::NativeRealtimeModel>()?;
     m.add_class::<llm::RealtimeFallbackModel>()?;
     m.add_class::<media::AudioEmitter>()?;

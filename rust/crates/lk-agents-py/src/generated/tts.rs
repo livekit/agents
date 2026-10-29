@@ -362,15 +362,27 @@ impl TtsProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Tts>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::Tts>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
         let label = {
             let v = crate::host::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
@@ -399,7 +411,7 @@ impl TtsProxy {
             let v = crate::host::read(obj, "_core_lowers_markup")?;
             v.extract::<bool>()?
         };
-        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
+        Ok(TtsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), label, capabilities, id, sample_rate, num_channels, markup_provider, lowers_markup, conn: None })
     }
 }
 

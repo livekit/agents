@@ -220,6 +220,7 @@ from ._generated._core_llm import (
     FallbackLlmChunks as FallbackLlmChunks,
     FallbackTts as FallbackTts,
     FixedGate as FixedGate,
+    HostRealtimeModel as HostRealtimeModel,
     InferenceLlm as InferenceLlm,
     InferenceLlmChunks as InferenceLlmChunks,
     LlmChoiceParser as LlmChoiceParser,

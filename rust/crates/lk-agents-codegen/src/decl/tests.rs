@@ -507,7 +507,7 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
         "let v = crate::host::read(obj, \"_core_label\")?;",
-        "context: crate::host::capture_context(obj.py())?",
+        "None => crate::host::capture_context(obj.py())?,",
         "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
         "\"Callbacks.count\", &self.context, &[], ::std::boxed::Box::new(move |py| {",
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
@@ -613,6 +613,34 @@ fn a_native_only_tap_is_registered_by_its_declared_class_and_other_traits_are_re
     assert!(
         read(&plain).unwrap_err().contains("`Tap` is not a #[host(proxy)] trait"),
         "an undeclared trait cannot cross"
+    );
+}
+
+// Catches: a proxy an awaited call returns capturing its context where it is taken, off the host
+// loop (no running loop there), instead of the context the returning call ran in.
+#[test]
+fn a_returned_proxy_runs_in_the_context_of_the_call_that_returned_it() {
+    let decls = read(
+        r#"
+        use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Session"))]
+        pub trait Session: Send + Sync {
+            #[host(await)] fn next(&self) -> crate::BoxFuture<'_, Result<u32, HostError>>;
+        }
+        #[crate::host(proxy(host = "livekit.agents.Model"))]
+        pub trait Model: Send + Sync {
+            #[host(await)] fn open(&self) -> crate::BoxFuture<'_, Result<std::sync::Arc<dyn Session>, HostError>>;
+        }
+    "#,
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();")
+            && llm.contains("super::llm::SessionProxy::in_context(o, context)")
+            && llm.contains("Some(context) => ::std::clone::Clone::clone(context),"),
+        "{llm}"
     );
 }
 

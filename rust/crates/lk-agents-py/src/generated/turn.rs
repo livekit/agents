@@ -302,20 +302,32 @@ impl EotDetectorProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::EotDetector>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::EotDetector>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::EotDetector>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::EotDetector>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::host::capture_context(obj.py())?,
+        };
         let id = {
             let v = crate::host::read(obj, "_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(EotDetectorProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), id })
+        Ok(EotDetectorProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, notifier: ::std::default::Default::default(), id })
     }
 }
 
@@ -406,15 +418,24 @@ impl EotModelsProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModels>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModels>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModels>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModels>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(EotModelsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
@@ -458,15 +479,24 @@ impl EotModelProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModel>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(EotModelProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
@@ -511,15 +541,24 @@ impl EotMetricsObserverProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
     pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
-        Ok(::std::boxed::Box::new(Self::take(obj)?))
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
+        let _ = context;
         Ok(EotMetricsObserverProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }

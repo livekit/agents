@@ -94,7 +94,7 @@ fn assembled(
     let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
     #[rustfmt::skip]
     let api = SessionApi::host_new(
-        Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None, None,
+        Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None,
         None, None, None, None, true, 24_000, 24_000, options, None, None, None, None, None, true,
         Some(lk_agents_voice::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
         None, None,
