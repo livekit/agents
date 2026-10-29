@@ -333,7 +333,7 @@ impl Pump<'_> {
         // audio (none synthesised, a voice lost before its first frame, or its audio switched
         // off) included. The activated binding decides it.
         let leg_state = text_out.map(|leg| *leg.state());
-        if plan(playback.binding).end_unvoiced(&heard, leg_state) {
+        if plan(playback.binding).end_unvoiced(&heard, leg_state, self.handle.interrupted()) {
             let audio = playback.binding.audio().expect("bound audio output");
             end_unvoiced(shared, self.handle.id(), audio.as_ref());
         }

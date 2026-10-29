@@ -12,6 +12,7 @@ mod console_cut_position;
 mod console_delivery;
 mod console_reply_plays_out;
 mod cut_reply_keeps_heard_words;
+mod cut_unvoiced_segment_stays_closed;
 mod determinism;
 mod dtmf_close;
 mod dtmf_read_back_realtime;
