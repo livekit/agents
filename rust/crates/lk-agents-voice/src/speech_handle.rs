@@ -2,7 +2,9 @@ use crate::agent_activity::scheduling::SpeechId;
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 
 pub mod state;
-use state::{Effect as StateEffect, Input as StateInput, Reply, SpeechState};
+use state::{
+    Creation, CreationInterrupt, Effect as StateEffect, Input as StateInput, Reply, SpeechState,
+};
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, Modality, Monotone};
@@ -149,17 +151,6 @@ pub enum CreationError {
     /// A handle constructed directly: no loop will ever create its speech.
     #[error("this speech handle's promise was consumed without being fulfilled")]
     Consumed,
-}
-
-/// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
-/// creates the speech, and a handle constructed directly never gets one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Creation {
-    Pending,
-    Created,
-    /// The session ended before the loop created the speech.
-    Lost,
-    Detached,
 }
 
 enum HandleInput {
@@ -364,13 +355,7 @@ impl SpeechHandle {
     /// The loop answered the host's call: with the speech it created over this handle, or, when
     /// the session ended first, not at all. Wakes whoever awaits the creation.
     pub(crate) fn answered(&self, created: bool) {
-        self.creation.send_if_modified(|c| {
-            let pending = *c == Creation::Pending;
-            if pending {
-                *c = if created { Creation::Created } else { Creation::Lost };
-            }
-            pending
-        });
+        self.creation.send_if_modified(|creation| creation.answered(created));
     }
 
     pub fn id(&self) -> SpeechId {
@@ -395,12 +380,8 @@ impl SpeechHandle {
     /// The created speech, or why there is none to wait on.
     async fn wait_created(&self) -> Result<(), CreationError> {
         let mut rx = self.creation.subscribe();
-        let creation = *rx.wait_for(|c| *c != Creation::Pending).await.expect("held by self");
-        match creation {
-            Creation::Created => Ok(()),
-            Creation::Lost => Err(CreationError::Ended),
-            Creation::Pending | Creation::Detached => Err(CreationError::Consumed),
-        }
+        let creation = *rx.wait_for(Creation::settled).await.expect("held by self");
+        creation.result()
     }
 
     fn attached(&self) -> Result<SpeechId, SpeechRefused> {
@@ -777,11 +758,10 @@ impl SpeechHandle {
             ));
         };
         let creation = *self.creation.borrow();
-        match (created, creation) {
-            (Some(speech), _) => interrupt(&self.api, speech),
-            // Recorded above; a detached handle has no speech to interrupt, now or later.
-            (None, Creation::Detached) => {}
-            (None, _) => {
+        match creation.interrupt(created) {
+            CreationInterrupt::Send(speech) => interrupt(&self.api, speech),
+            CreationInterrupt::Ignore => {}
+            CreationInterrupt::Wait => {
                 let handle = Arc::clone(self);
                 spawner.spawn(Box::pin(async move {
                     if handle.wait_created().await.is_ok() {

@@ -1,7 +1,57 @@
 //! Accepted interruption and completion state. Live handles supply observations and publish effects.
 
-use super::SpeechError;
+use super::{CreationError, SpeechError};
+use crate::agent_activity::scheduling::SpeechId;
 use lk_agents_abi::errors::ProviderError;
+
+/// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
+/// creates the speech, and a handle constructed directly never gets one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Creation {
+    Pending,
+    Created,
+    /// The session ended before the loop created the speech.
+    Lost,
+    Detached,
+}
+
+/// What an accepted host interruption does before or after speech creation.
+pub(super) enum CreationInterrupt {
+    Send(SpeechId),
+    Ignore,
+    Wait,
+}
+
+impl Creation {
+    /// Only the pending promise can settle; repeated answers never replace its outcome.
+    pub(super) fn answered(&mut self, created: bool) -> bool {
+        if *self != Self::Pending {
+            return false;
+        }
+        *self = if created { Self::Created } else { Self::Lost };
+        true
+    }
+
+    pub(super) fn settled(&self) -> bool {
+        *self != Self::Pending
+    }
+
+    pub(super) fn result(self) -> Result<(), CreationError> {
+        match self {
+            Self::Created => Ok(()),
+            Self::Lost => Err(CreationError::Ended),
+            Self::Pending | Self::Detached => Err(CreationError::Consumed),
+        }
+    }
+
+    pub(super) fn interrupt(self, created: Option<SpeechId>) -> CreationInterrupt {
+        match (created, self) {
+            (Some(speech), _) => CreationInterrupt::Send(speech),
+            (None, Self::Detached) => CreationInterrupt::Ignore,
+            (None, _) => CreationInterrupt::Wait,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct SpeechView {
