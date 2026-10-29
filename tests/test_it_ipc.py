@@ -367,7 +367,9 @@ def _worker_main() -> None:
     options.setdefault("multiprocessing_context", "spawn")
     options.setdefault("port", 0)
 
-    server = AgentServer(**options)
+    # the IPC options are private: set them where the CLI does
+    server = AgentServer()
+    server._update_options(**options)
     server.rtc_session()(_entrypoint)
     cli.setup_logging("DEBUG", "json")
     asyncio.run(_drive(server, int(os.environ["IT_JOBS"])))
