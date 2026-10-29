@@ -34,6 +34,7 @@ from ._exceptions import (
 )
 from ._generated.language import LanguageCode
 from ._generated.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
+from ._generated.worker_options import WorkerPermissions
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -150,7 +151,6 @@ from .worker import (
     Plugin,
     RtcDoor,
     ServerType,
-    WorkerPermissions,
     rtc_session,
 )
 
@@ -159,7 +159,7 @@ if typing.TYPE_CHECKING:
     from .llm import mcp  # noqa: F401
 
 
-def __getattr__(name: str) -> typing.Any:
+def __getattr__(name: str) -> object:
     if name == "mcp":
         from .llm import mcp
 
