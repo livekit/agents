@@ -498,7 +498,8 @@ inbox continues to serve endpoint request policies independently.
 
 ## Customizing the pipeline
 
-An `Agent` subclass overrides the steps a reply runs through. Each node
+An `Agent` subclass overrides the steps a reply on a call runs through; `agent.run()`
+and `TextSession` do not run them. Each node
 receives a stream and returns a stream (an async iterable, or a coroutine
 returning one); `super()` runs the default, so an override can wrap it. A
 node's override can narrow its return type to what it actually returns:
@@ -526,7 +527,7 @@ class FrontDesk(Agent):
 | Override | Runs | Receives, returns |
 | --- | --- | --- |
 | `on_user_turn_completed(turn_ctx, new_message)` | when the person's turn ends, before the reply | the turn's `ChatContext` and the new `ChatMessage`, both editable in place; `StopResponse` skips the reply |
-| `llm_node(chat_ctx, tools, model_settings)` | each model request, on a call and in `agent.run()` | `ChatChunk`s or text; a `FlushSentinel` ends the spoken segment there |
+| `llm_node(chat_ctx, tools, model_settings)` | each model request of a reply | `ChatChunk`s or text; a `FlushSentinel` ends the spoken segment there |
 | `stt_node(audio, model_settings)` | the person's audio | `rtc.AudioFrame`s in, `stt.SpeechEvent`s out |
 | `tts_node(text, model_settings)` | each spoken segment | text in, `rtc.AudioFrame`s out |
 | `transcription_node(text, model_settings)` | each segment's transcript before the transcription output | text (or `TimedString`s) in and out |

@@ -749,9 +749,9 @@ class Agent(Generic[Context_T, Output_T]):
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
     ):
-        """One model request: plain text, or ``llm.ChatChunk``s with text and tool calls, in
-        ``agent.run()`` and on a call. Override it to change how the model is called; a
-        ``FlushSentinel`` ends the spoken segment there.
+        """One model request of a reply on a call: plain text, or ``llm.ChatChunk``s with text
+        and tool calls. Override it to change how the model is called; a ``FlushSentinel`` ends
+        the spoken segment there. ``agent.run()`` does not call it.
         """
         return Agent._default.llm_node(self, chat_ctx, tools, model_settings)
 
