@@ -1,4 +1,4 @@
-//! SDK transports with runtime-owned reader and process settlement receipts.
+//! SDK transports whose readers and close the runtime tracks until they drain.
 
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
@@ -61,7 +61,7 @@ impl TransportReceipt {
             })
             .boxed()
     }
-    fn fail(&self, error: McpError) {
+    pub fn fail(&self, error: McpError) {
         self.update(|state| state.fail(error));
     }
     pub async fn closed(&self) {
@@ -115,7 +115,7 @@ async fn finish<T: Transport<RoleClient>>(inner: &mut T, receipt: &TransportRece
     let failed = inner.close().await.err();
     receipt.update(|state| {
         if let Some(error) = failed {
-            state.cleanup_failed(conn(error));
+            state.fail(conn(error));
         }
         state.close();
     });
@@ -199,7 +199,7 @@ impl Transport<RoleClient> for HostStreams {
         match (&mut self.reader).await {
             Ok(()) => {}
             Err(TaskError::Cancelled) => {}
-            Err(error) => self.receipt.update(|state| state.cleanup_failed(conn(error))),
+            Err(error) => self.receipt.fail(conn(error)),
         }
         self.host.close(&self.invocation).await.map_err(McpError::Host)
     }
@@ -208,7 +208,6 @@ impl Transport<RoleClient> for HostStreams {
 pub(super) struct StdioTransport {
     io: AsyncRwTransport<RoleClient, tokio::process::ChildStdout, tokio::process::ChildStdin>,
     child: tokio::process::Child,
-    receipt: Arc<TransportReceipt>,
 }
 impl StdioTransport {
     pub fn spawn(
@@ -216,7 +215,6 @@ impl StdioTransport {
         args: Vec<String>,
         env: Vec<(String, String)>,
         cwd: Option<String>,
-        receipt: Arc<TransportReceipt>,
     ) -> Result<Self, McpError> {
         let inherited = if cfg!(windows) {
             "APPDATA HOMEDRIVE HOMEPATH LOCALAPPDATA PATH PATHEXT PROCESSOR_ARCHITECTURE SYSTEMDRIVE SYSTEMROOT TEMP USERNAME USERPROFILE"
@@ -240,8 +238,7 @@ impl StdioTransport {
         }
         let mut child = command.spawn().map_err(conn)?;
         let io = AsyncRwTransport::new(child.stdout.take().unwrap(), child.stdin.take().unwrap());
-        receipt.update(TransportSettlement::child_spawned);
-        Ok(Self { io, child, receipt })
+        Ok(Self { io, child })
     }
 }
 impl Transport<RoleClient> for StdioTransport {
@@ -258,19 +255,11 @@ impl Transport<RoleClient> for StdioTransport {
     }
     async fn close(&mut self) -> Result<(), McpError> {
         self.io.close().await.map_err(conn)?;
-        let status = match tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
-            Ok(status) => status.map_err(conn)?,
-            Err(_) => {
-                self.child.start_kill().map_err(conn)?;
-                self.child.wait().await.map_err(conn)?
-            }
-        };
-        #[cfg(unix)]
-        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
-        #[cfg(not(unix))]
-        let signal = None;
-        self.receipt.update(|state| state.child_exited(status.code(), signal));
-        Ok(())
+        if let Ok(status) = tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
+            return status.map(drop).map_err(conn);
+        }
+        self.child.start_kill().map_err(conn)?;
+        self.child.wait().await.map(drop).map_err(conn)
     }
 }
 

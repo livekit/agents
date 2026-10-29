@@ -1897,34 +1897,6 @@ pub mod mcp_session {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
-
-    pub fn mcp_cleanup_status_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::mcp::McpCleanupStatus) -> PyResult<Bound<'py, PyAny>> {
-            let value = match value {
-                ::lk_agents_abi::llm::mcp::McpCleanupStatus::Pending => "pending",
-                ::lk_agents_abi::llm::mcp::McpCleanupStatus::Clean => "clean",
-                ::lk_agents_abi::llm::mcp::McpCleanupStatus::Incomplete => "incomplete",
-            };
-            Ok(::pyo3::types::PyString::new(py, value).into_any())
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
-    static MCP_CLEANUP: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn mcp_cleanup_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::mcp::McpCleanup) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::llm::mcp::McpCleanup { status, service_settled, calls_settled, reader_settled, child_exit_code, child_exit_signal, child_reaped } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("status", crate::generated::records::mcp_session::mcp_cleanup_status_to_py(py, status)?)?;
-            kwargs.set_item("service_settled", ::pyo3::IntoPyObjectExt::into_bound_py_any(service_settled, py)?)?;
-            kwargs.set_item("calls_settled", ::pyo3::IntoPyObjectExt::into_bound_py_any(calls_settled, py)?)?;
-            kwargs.set_item("reader_settled", ::pyo3::IntoPyObjectExt::into_bound_py_any(reader_settled, py)?)?;
-            kwargs.set_item("child_exit_code", match child_exit_code { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("child_exit_signal", match child_exit_signal { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("child_reaped", ::pyo3::IntoPyObjectExt::into_bound_py_any(child_reaped, py)?)?;
-            crate::host::construct(MCP_CLEANUP.import(py, "livekit.agents._generated.mcp_session", "McpCleanup")?.as_any(), (), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
     static MCP_INVOCATION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

@@ -99,29 +99,6 @@ pub enum McpError {
 
 pub type McpCause = std::sync::Arc<dyn std::error::Error + Send + Sync>;
 
-/// An observed cleanup outcome; a deadline never implies successful cleanup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[crate::host(record(module = "mcp_session", emit))]
-pub enum McpCleanupStatus {
-    #[default]
-    Pending,
-    Clean,
-    Incomplete,
-}
-
-/// Evidence retained by the session owner after close, including native child wait receipts.
-#[derive(Debug, Clone, Default)]
-#[crate::host(record(module = "mcp_session", emit))]
-pub struct McpCleanup {
-    pub status: McpCleanupStatus,
-    pub service_settled: bool,
-    pub calls_settled: bool,
-    pub reader_settled: bool,
-    pub child_exit_code: Option<i32>,
-    pub child_exit_signal: Option<i32>,
-    pub child_reaped: bool,
-}
-
 /// The host context captured at the MCP operation's entry.
 #[derive(Debug, Clone, Default)]
 #[crate::host(record(module = "mcp_session", emit))]
@@ -220,8 +197,6 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     ) -> Result<serde_json::Value, McpError>;
     #[host(await)]
     async fn close(&self);
-    #[host(getter)]
-    fn cleanup(&self) -> McpCleanup;
 }
 
 /// Pure options and SDK result interpretation used by the Python authoring adapter.

@@ -733,13 +733,6 @@ impl McpSession {
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
-
-    #[getter]
-    fn cleanup<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
-        let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::cleanup(&self.0);
-        Ok(crate::generated::records::mcp_session::mcp_cleanup_to_py(py, out)?)
-    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.

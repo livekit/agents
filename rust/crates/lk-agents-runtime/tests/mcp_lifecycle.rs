@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::llm::mcp::{McpCleanupStatus, McpError, McpSession as _};
+use lk_agents_abi::llm::mcp::{McpError, McpSession as _};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_runtime::mcp::McpSession;
 use serde_json::Map;
@@ -75,9 +75,6 @@ async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
         matches!(call.await?, Err(McpError::Cancelled(_))),
         "borrowed request must settle on close"
     );
-    let cleanup = session.cleanup();
-    assert_eq!(cleanup.status, McpCleanupStatus::Clean);
-    assert!(cleanup.service_settled && cleanup.calls_settled && cleanup.reader_settled);
     assert!(!session.connected());
     Ok(())
 }
@@ -89,9 +86,6 @@ async fn mcp_real_server_lifecycle_stdio() -> Result {
     let result = async {
         session.connect_stdio(peer.python.clone(), peer.args("stdio"), Vec::new(), None).await?;
         exercise(session.clone(), &peer).await?;
-        let cleanup = session.cleanup();
-        assert!(cleanup.child_reaped, "exit must include the native wait/reaping receipt");
-        assert!(cleanup.child_exit_code.is_some() || cleanup.child_exit_signal.is_some());
         let pid: i32 = peer.receipt("pid").await?.parse()?;
         #[cfg(unix)]
         assert!(
@@ -136,39 +130,4 @@ async fn mcp_real_server_lifecycle_http() -> Result {
     child.kill().await?;
     child.wait().await?;
     result
-}
-
-#[tokio::test]
-async fn mcp_http_failed_session_delete_is_incomplete_cleanup() -> Result {
-    let peer = Peer::new("delete_failure");
-    let mut child = tokio::process::Command::new(&peer.python)
-        .args(peer.args("http_delete_failure"))
-        .kill_on_drop(true)
-        .spawn()?;
-    let session = McpSession::new(30.0)?;
-    let result = async {
-        session
-            .connect_http(
-                &ProcessEnv::current_runtime(),
-                peer.receipt("url").await?,
-                Vec::new(),
-                "streamable_http".into(),
-                5.0,
-                30.0,
-            )
-            .await?;
-        session.list_tools().await?;
-        session.close().await;
-        Ok::<_, Box<dyn Error + Send + Sync>>(session.cleanup().status)
-    }
-    .await;
-    session.close().await;
-    child.kill().await?;
-    child.wait().await?;
-    assert_eq!(
-        result?,
-        McpCleanupStatus::Incomplete,
-        "the SDK's swallowed DELETE failure must not be reported Clean"
-    );
-    Ok(())
 }

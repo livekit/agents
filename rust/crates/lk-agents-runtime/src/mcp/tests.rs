@@ -2,6 +2,7 @@ use super::*;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::mcp::McpInvocation;
 use lk_agents_abi::llm::mcp::McpSession as _;
+use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use rmcp::model::*;
 use serde_json::Value;
 use std::error::Error;
@@ -180,22 +181,12 @@ async fn close_joins_the_blocked_host_reader() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn missed_cleanup_deadline_keeps_ownership_and_never_reports_clean() {
+async fn close_returns_at_the_teardown_deadline_when_the_host_close_blocks() {
     let (session, peer) = connected().await;
     peer.block_close.store(true, Ordering::SeqCst);
-    session.close().await;
-    let cleanup = session.cleanup();
-    assert_eq!(cleanup.status, McpCleanupStatus::Incomplete);
-    assert!(!cleanup.service_settled);
+    let closed = tokio::time::timeout(HOST_TEARDOWN_TIMEOUT * 2, session.close()).await;
     peer.release_close.notify_one();
-    session.close().await;
-    let cleanup = session.cleanup();
-    assert!(cleanup.service_settled && cleanup.reader_settled && cleanup.calls_settled);
-    assert_eq!(
-        cleanup.status,
-        McpCleanupStatus::Incomplete,
-        "settlement must not erase a missed deadline"
-    );
+    assert!(closed.is_ok(), "a blocked host close held the session's close past its deadline");
 }
 
 #[tokio::test]
@@ -209,7 +200,6 @@ async fn reader_failure_reaches_the_call_with_its_host_cause() {
     };
     assert_eq!(cause.message, "reader connection reset");
     session.close().await;
-    assert_eq!(session.cleanup().status, McpCleanupStatus::Clean);
 }
 
 struct BlockedProgress(Notify);
@@ -227,7 +217,7 @@ impl McpProgress for BlockedProgress {
 }
 
 #[tokio::test]
-async fn cancelling_a_host_progress_callback_without_a_receipt_is_incomplete() {
+async fn close_cancels_a_call_waiting_on_its_host_progress_callback() {
     let (session, _) = connected().await;
     let sink = Arc::new(BlockedProgress(Notify::new()));
     let caller = session.clone();
@@ -238,7 +228,6 @@ async fn cancelling_a_host_progress_callback_without_a_receipt_is_incomplete() {
     tokio::time::timeout(Duration::from_secs(1), sink.0.notified()).await.unwrap();
     session.close().await;
     assert!(matches!(call.await.unwrap(), Err(McpError::Cancelled(_))));
-    assert_eq!(session.cleanup().status, McpCleanupStatus::Incomplete);
 }
 
 #[tokio::test(start_paused = true)]

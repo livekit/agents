@@ -30,7 +30,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use super::transport::{HostStreams, Observed, StdioTransport, TransportReceipt, connect_http};
-use super::{McpCleanup, McpError, McpProgress, McpTransport};
+use super::{McpError, McpProgress, McpTransport};
 
 #[derive(Clone, Default)]
 struct Progress(ProgressDispatcher);
@@ -56,24 +56,18 @@ struct Connection {
     closing: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
 }
 
-struct Call {
-    connection: Arc<Connection>,
-    host_callback_pending: bool,
-}
+struct Call(Arc<Connection>);
 impl Drop for Call {
     fn drop(&mut self) {
-        self.connection.state.lock().unwrap().release(self.host_callback_pending);
-        if self.host_callback_pending {
-            log::error!("MCP host callback cancellation lacks a settlement receipt");
-        }
-        self.connection.changed.notify_waiters();
+        self.0.state.lock().unwrap().release();
+        self.0.changed.notify_waiters();
     }
 }
 
 impl Connection {
     fn borrow(self: &Arc<Self>) -> Result<Call, McpError> {
         self.state.lock().unwrap().borrow()?;
-        Ok(Call { connection: self.clone(), host_callback_pending: false })
+        Ok(Call(self.clone()))
     }
 
     fn close(self: &Arc<Self>) {
@@ -83,15 +77,8 @@ impl Connection {
         let owner = self.clone();
         // The owner outlives a cancelled close waiter or a missed cleanup deadline.
         let closing = TokioSpawner::current().spawn(async move {
-            let joined = service.waiting().await;
+            let _ = service.waiting().await;
             owner.receipt.closed().await;
-            let clean = matches!(
-                joined,
-                Ok(rmcp::service::QuitReason::Cancelled | rmcp::service::QuitReason::Closed)
-            );
-            owner
-                .receipt
-                .read(|transport| owner.state.lock().unwrap().service_joined(clean, transport));
             loop {
                 let changed = owner.changed.notified();
                 if owner.state.lock().unwrap().settle_when_idle() {
@@ -118,10 +105,6 @@ impl Connection {
         self.receipt
             .read(TransportSettlement::failure)
             .map_or_else(|| service_error(error), |cause| McpError::Transport(cause))
-    }
-
-    fn cleanup(&self) -> McpCleanup {
-        self.receipt.read(|transport| self.state.lock().unwrap().cleanup(transport))
     }
 }
 
@@ -199,7 +182,7 @@ impl McpSessionPort for McpSession {
         }
         let cancel = self.begin_connect();
         let receipt = Arc::new(TransportReceipt::default());
-        let transport = StdioTransport::spawn(command, args, env, cwd, receipt.clone())?;
+        let transport = StdioTransport::spawn(command, args, env, cwd)?;
         self.serve(transport, receipt, cancel).await
     }
     async fn connect_host(
@@ -252,7 +235,7 @@ impl McpSessionPort for McpSession {
         host_context: Option<HostRef>,
     ) -> Result<Value, McpError> {
         let connection = self.live(McpError::Unavailable)?;
-        let mut call = connection.borrow()?;
+        let _call = connection.borrow()?;
         let mut params = CallToolRequestParams::new(name);
         params.arguments = Some(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
@@ -271,13 +254,9 @@ impl McpSessionPort for McpSession {
                 Some(update) = updates.next() => {
                     if let (Some(sink), Some(message)) = (&progress, progress_message(update.message.as_deref())) {
                         let invocation = McpInvocation { host_context: host_context.clone() };
-                        call.host_callback_pending = true;
                         tokio::select! {
                             _ = connection.cancel.cancelled() => continue,
-                            result = sink.update(&invocation, message) => {
-                                call.host_callback_pending = false;
-                                result?;
-                            },
+                            result = sink.update(&invocation, message) => result?,
                         }
                     }
                 }
@@ -303,26 +282,14 @@ impl McpSessionPort for McpSession {
         if let Some(connection) = previous
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
         {
-            connection.state.lock().unwrap().missed_deadline();
             log::error!("MCP incomplete cleanup; runtime retains ownership");
         }
         let initializing = self.initializing.lock().unwrap().clone();
         if let Some(receipt) = initializing
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
         {
-            receipt.update(TransportSettlement::missed_deadline);
             log::error!("MCP incomplete initialization cleanup; runtime retains ownership");
         }
-    }
-    fn cleanup(&self) -> McpCleanup {
-        if let Some(connection) = self.previous.lock().unwrap().as_ref() {
-            return connection.cleanup();
-        }
-        self.initializing
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map_or_else(McpCleanup::default, |receipt| receipt.read(TransportSettlement::cleanup))
     }
 }
 
@@ -351,7 +318,6 @@ impl McpSession {
             Err(error) => {
                 // Observed owns the transport even if the SDK handshake is cancelled.
                 if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err() {
-                    receipt.update(TransportSettlement::missed_deadline);
                     log::error!("MCP incomplete initialization cleanup; runtime retains ownership");
                 }
                 return Err(McpError::Initialization(Arc::new(error)));

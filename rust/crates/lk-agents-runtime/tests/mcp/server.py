@@ -63,11 +63,6 @@ def http():
 
     class Endpoint:
         async def __call__(self, scope, receive, send):
-            if mode == "http_delete_failure" and scope["method"] == "DELETE":
-                from starlette.responses import Response
-
-                await Response(status_code=500)(scope, receive, send)
-                return
             await manager.handle_request(scope, receive, send)
 
     sse = SseServerTransport("/messages/")

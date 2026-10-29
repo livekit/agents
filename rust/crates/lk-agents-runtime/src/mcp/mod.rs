@@ -5,9 +5,7 @@ mod http;
 mod session;
 mod transport;
 
-pub use lk_agents_abi::llm::mcp::{
-    McpCleanup, McpCleanupStatus, McpError, McpProgress, McpTransport,
-};
+pub use lk_agents_abi::llm::mcp::{McpError, McpProgress, McpTransport};
 pub use lk_agents_core::mcp::McpTools;
 pub use session::McpSession;
 

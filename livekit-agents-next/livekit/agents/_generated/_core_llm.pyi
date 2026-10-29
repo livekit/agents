@@ -21,7 +21,6 @@ from livekit.rtc import AudioFrame
 from .._core import ChatItem, FallbackTtsStream
 from .llm import ChatChunk
 from .mcp import MCPToolOptions, ResolvedToolOptions
-from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 
 def chat_ctx_copy_plan(
@@ -273,8 +272,6 @@ class McpSession:
         host_context: object | None,
     ) -> object: ...
     async def close(self) -> None: ...
-    @property
-    def cleanup(self) -> McpCleanup: ...
 
 def resolve_mcp_tool_options(config: MCPToolOptions | None) -> ResolvedToolOptions: ...
 

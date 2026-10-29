@@ -330,7 +330,6 @@ impl StreamableHttpClient for CleanupClient {
         auth: Option<String>,
         custom: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), Error> {
-        self.receipt.update(|state| state.remote_session(true));
         let result = async {
             let headers = headers(Some(&session), None, auth, custom)?;
             let response = self.request(Method::DELETE, &uri, Vec::new(), headers).await?;
@@ -339,10 +338,7 @@ impl StreamableHttpClient for CleanupClient {
         }
         .await;
         match result {
-            Ok(()) => {
-                self.receipt.update(|state| state.remote_session(false));
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(error) => {
                 let cause = Arc::new(error);
                 self.receipt.update(|state| state.fail(McpError::Transport(cause.clone())));
