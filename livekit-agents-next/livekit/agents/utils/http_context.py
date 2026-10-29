@@ -6,12 +6,13 @@ import contextvars
 import functools
 import os
 import ssl
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from typing import Any, Literal
 
 import aiohttp
 import aiohttp.payload
 import certifi
+from aiohttp._websocket.writer import WebSocketWriter
 from aiohttp.abc import AbstractStreamWriter
 from yarl import URL
 
@@ -39,7 +40,17 @@ class _Phases:
 
     def arm(self, phase: _Phase | None) -> None:
         self.armed = phase
-        limit = None if phase is None else getattr(self._options, f"{phase}_timeout")
+        match phase:
+            case "pool":
+                limit = self._options.pool_timeout
+            case "connect":
+                limit = self._options.connect_timeout
+            case "write":
+                limit = self._options.write_timeout
+            case "read":
+                limit = self._options.read_timeout
+            case None:
+                limit = None
         self._deadline.reschedule(
             None if limit is None else asyncio.get_running_loop().time() + limit
         )
@@ -73,14 +84,14 @@ class _WriteProgress:
         self._writer = writer
         self._phases = phases
 
-    async def write(self, chunk: Any) -> None:
+    async def write(self, chunk: bytes | bytearray | memoryview) -> None:
         self._phases.arm("write")
         try:
             await self._writer.write(chunk)
         finally:
             self._phases.arm(None)
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._writer, name)
 
 
@@ -129,8 +140,8 @@ async def request(
     url: str | URL,
     *,
     conn_options: APIConnectOptions,
-    data: Any = None,
-    json: Any = None,
+    data: object = None,
+    json: object = None,
     **kwargs: Any,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
     """``session.request`` under the pool, connect, write and read limits of ``conn_options``.
@@ -147,6 +158,8 @@ async def request(
             try:
                 body = aiohttp.payload.get_payload(data)
             except aiohttp.payload.LookupError:
+                if not isinstance(data, Iterable):
+                    raise TypeError(f"unsupported request body: {type(data).__name__}") from None
                 body = aiohttp.FormData(data)()
             data = _TimedBody(body, phases)
         # aiohttp disables a zero limit; the smallest positive one expires at the first wait.
@@ -184,7 +197,7 @@ class _TimedFrameWriter:
     """A websocket's frame writer whose every frame waiting for the transport (a peer that stopped
     reading) runs under the write limit."""
 
-    def __init__(self, writer: Any, limit: float | None) -> None:
+    def __init__(self, writer: WebSocketWriter, limit: float | None) -> None:
         self._writer = writer
         self._limit = limit
 
@@ -195,7 +208,7 @@ class _TimedFrameWriter:
         except TimeoutError as e:
             raise APITimeoutError("write timed out", phase="write") from e
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._writer, name)
 
 
