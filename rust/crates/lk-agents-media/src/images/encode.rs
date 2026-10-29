@@ -55,38 +55,16 @@ pub enum ImageFormat {
     Png,
 }
 
-impl ImageFormat {
-    pub const ALL: [ImageFormat; 2] = [ImageFormat::Jpeg, ImageFormat::Png];
-
-    /// PIL's format names, upper case.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ImageFormat::Jpeg => "JPEG",
-            ImageFormat::Png => "PNG",
-        }
-    }
-}
-
-/// `Display` is the binding's message, verbatim; a typo must not default to JPEG.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownImageFormat(pub String);
-
-impl std::fmt::Display for UnknownImageFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown image format {:?}: expected 'JPEG' or 'PNG'", self.0)
-    }
-}
-
-impl std::error::Error for UnknownImageFormat {}
-
+/// PIL's format names, upper case; a typo must not default to JPEG.
 impl std::str::FromStr for ImageFormat {
-    type Err = UnknownImageFormat;
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|f| f.as_str() == s)
-            .ok_or_else(|| UnknownImageFormat(s.to_owned()))
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "JPEG" => Ok(ImageFormat::Jpeg),
+            "PNG" => Ok(ImageFormat::Png),
+            _ => Err(format!("unknown image format {s:?}: expected 'JPEG' or 'PNG'")),
+        }
     }
 }
 
@@ -120,51 +98,23 @@ pub enum ResizeStrategy {
     Skew,
 }
 
-impl ResizeStrategy {
-    pub const ALL: [ResizeStrategy; 5] = [
-        ResizeStrategy::CenterAspectFit,
-        ResizeStrategy::CenterAspectCover,
-        ResizeStrategy::ScaleAspectFit,
-        ResizeStrategy::ScaleAspectCover,
-        ResizeStrategy::Skew,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ResizeStrategy::CenterAspectFit => "center_aspect_fit",
-            ResizeStrategy::CenterAspectCover => "center_aspect_cover",
-            ResizeStrategy::ScaleAspectFit => "scale_aspect_fit",
-            ResizeStrategy::ScaleAspectCover => "scale_aspect_cover",
-            ResizeStrategy::Skew => "skew",
-        }
-    }
-}
-
-/// `Display` is the binding's message, verbatim.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownResizeStrategy(pub String);
-
-impl std::fmt::Display for UnknownResizeStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "unknown resize strategy {:?}: expected one of 'center_aspect_fit', \
-             'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew'",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for UnknownResizeStrategy {}
-
 impl std::str::FromStr for ResizeStrategy {
-    type Err = UnknownResizeStrategy;
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|r| r.as_str() == s)
-            .ok_or_else(|| UnknownResizeStrategy(s.to_owned()))
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "center_aspect_fit" => ResizeStrategy::CenterAspectFit,
+            "center_aspect_cover" => ResizeStrategy::CenterAspectCover,
+            "scale_aspect_fit" => ResizeStrategy::ScaleAspectFit,
+            "scale_aspect_cover" => ResizeStrategy::ScaleAspectCover,
+            "skew" => ResizeStrategy::Skew,
+            _ => {
+                return Err(format!(
+                    "unknown resize strategy {s:?}: expected one of 'center_aspect_fit', \
+                     'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew'"
+                ));
+            }
+        })
     }
 }
 

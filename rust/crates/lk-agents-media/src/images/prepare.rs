@@ -34,12 +34,12 @@ pub fn prepare(
     if frame.buffer_type != 0 {
         return Err("image encoder requires an RGBA frame".into());
     }
-    let format = options.format.parse::<ImageFormat>().map_err(|e| e.to_string())?;
+    let format = options.format.parse::<ImageFormat>()?;
     let resize_options =
         match (options.resize_width, options.resize_height, options.resize_strategy) {
             (Some(width), Some(height), Some(strategy)) => {
                 validate_dimensions(width, height)?;
-                let strategy = strategy.parse::<ResizeStrategy>().map_err(|e| e.to_string())?;
+                let strategy = strategy.parse::<ResizeStrategy>()?;
                 Some(ResizeOptions { width, height, strategy })
             }
             (None, None, None) => None,
