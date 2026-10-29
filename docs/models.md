@@ -86,6 +86,10 @@ plugin's classes, not these bases.
 | `livekit.agents.utils` | `ConnectionPool`, `AudioBuffer`, `http_context`, `aio` |
 | `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)` |
 
+`ChoiceDelta.extra` and `FunctionToolCall.extra` carry provider data (such as
+Google thought signatures) as a JSON object: a value that is not JSON fails the
+stream when the framework reads the chunk.
+
 A plugin keeps the cause of the errors it raises, redacted:
 `raise APIConnectionError(...) from redacted_cause(error)` chains the original
 error's type and traceback without its message, which can carry credentials or
