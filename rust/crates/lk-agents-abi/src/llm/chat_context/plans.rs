@@ -41,4 +41,9 @@ pub trait ChatContextPlans {
         #[host(default = false)] exclude_instructions: bool,
         #[host(default = false)] exclude_config_update: bool,
     ) -> Result<Vec<(usize, usize)>, ChatFactsError>;
+
+    /// `remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
+    /// ascending, given the items' ids.
+    #[host(function, name = "remove_instructions")]
+    fn instructions_plan(item_ids: Vec<String>) -> Vec<usize>;
 }

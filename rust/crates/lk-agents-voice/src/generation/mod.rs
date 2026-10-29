@@ -32,13 +32,6 @@ pub const RUNNING_PLACEHOLDER_KEY: &str = "__lk_running_placeholder__";
 /// The id of the rendered prompt in every request. Must not change (persisted contexts carry it).
 pub const INSTRUCTIONS_MESSAGE_ID: &str = lk_agents_core::request::INSTRUCTIONS_MESSAGE_ID;
 
-/// `remove_instructions(chat_ctx)` as a plan: the positions of every
-/// [`INSTRUCTIONS_MESSAGE_ID`] item, ascending, given the items' ids.
-#[lk_agents_abi::host(export(name = "remove_instructions", pid = false))]
-pub fn instructions_positions(item_ids: impl IntoIterator<Item = impl Into<String>>) -> Vec<usize> {
-    crate::tts::markup::positions_of(item_ids.into_iter().map(Into::into), INSTRUCTIONS_MESSAGE_ID)
-}
-
 /// Python truthiness for an `f64`: zero is "absent".
 fn truthy(v: f64) -> bool {
     v != 0.0

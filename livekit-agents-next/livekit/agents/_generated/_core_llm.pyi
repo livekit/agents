@@ -51,6 +51,11 @@ def chat_ctx_merge_plan(
 ) -> list[tuple[int, int]]:
     """`ChatContext.merge` as `(index, j)` insertions."""
 
+def remove_instructions(item_ids: Sequence[str]) -> list[int]:
+    """`remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
+    ascending, given the items' ids.
+    """
+
 def compute_chat_ctx_diff(
     old: Sequence[ChatItem],
     new: Sequence[ChatItem],
