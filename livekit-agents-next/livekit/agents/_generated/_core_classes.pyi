@@ -567,30 +567,6 @@ class SpeechHandle:
     async def wait_until_created(self) -> None: ...
 
 
-class WarmTransfer:
-    def __init__(
-        self,
-        *,
-        sip_call_to: str | None = None,
-        sip_trunk_id: NotGivenOr[str | None] = ...,
-        has_sip_connection: bool = False,
-        sip_number: NotGivenOr[str] = ...,
-        sip_headers: dict[str, str] | None = None,
-        dtmf: str | None = None,
-        ringing_timeout: float | None = None,
-        instructions: NotGivenOr[Any] = ...,
-        conversation: list[tuple[str, str]] | None = None,
-        env_sip_trunk: str | None = None,
-        env_sip_number: str = ...,
-        twilio: Any | None = None,
-    ) -> None: ...
-    @property
-    def instructions(self) -> str: ...
-    def tools(self) -> list[Any]: ...
-    async def run(self, host: Any, caller: _core_RoomSession) -> str: ...
-    async def call_tool(self, name: str, arguments: Any) -> None: ...
-
-
 class GetDOBResult:
     """GetDOBResult(date_of_birth: 'date', time_of_birth: 'time | None' = None)"""
 

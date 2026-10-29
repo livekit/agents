@@ -248,7 +248,7 @@ pub struct WarmTransferResult {
 /// `CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`
 /// when empty and `dtmf` `""` when absent, as in the reference.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit)]
+#[binding(emit, from_items)]
 pub struct SipParticipantRequest {
     pub sip_trunk_id: Option<String>,
     pub sip_call_to: String,
@@ -298,18 +298,19 @@ pub struct TwilioDial {
 }
 
 /// `WorkflowInstructions` as the host passes it: the two fields a workflow's template reads.
-#[derive(Clone, PartialEq, Eq, Host)]
-#[binding(extract)]
+#[derive(Clone, PartialEq, Eq)]
+#[crate::host(record(module = "workflows", name = "WorkflowInstructions", extract))]
 pub struct WorkflowInstructionsArg {
     /// `NOT_GIVEN` keeps the workflow's built-in persona; `""` removes the section.
     pub persona: crate::Maybe<String>,
+    #[host(default = "")]
     pub extra: String,
 }
 
 /// A workflow's `instructions: WorkflowInstructions | str`: a
 /// `WorkflowInstructions` fills the built-in template, anything else is fixed instructions.
-#[derive(Clone, PartialEq, Eq, Host)]
-#[binding(extract, untagged)]
+#[derive(Clone, PartialEq, Eq)]
+#[crate::host(record(module = "workflows", extract, transparent))]
 pub enum InstructionsArg {
     Workflow(WorkflowInstructionsArg),
     Fixed(String),
@@ -329,3 +330,5 @@ const _: () = {
 };
 
 pub mod dtmf;
+
+pub mod warm_transfer;

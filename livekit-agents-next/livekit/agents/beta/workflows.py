@@ -26,6 +26,7 @@ from .._generated.workflows import (
     GetPhoneNumberResult,
     GetSecurityCodeResult,
     WarmTransferResult,
+    WorkflowInstructions as WorkflowInstructions,
 )
 from ..job import JobContext, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
@@ -181,18 +182,6 @@ class GetEmailTask(VoiceTask[GetEmailResult]):
 
     def __init__(self) -> None:
         super().__init__(agent=_email_collector)
-
-
-class WorkflowInstructions:
-    """Static sections inserted into a built-in workflow's instructions.
-
-    Leave ``persona`` as ``NOT_GIVEN`` to keep the workflow's default; an empty
-    string removes the section.
-    """
-
-    def __init__(self, *, persona: NotGivenOr[str] = NOT_GIVEN, extra: str = "") -> None:
-        self.persona = persona
-        self.extra = extra
 
 
 class WarmTransfer:

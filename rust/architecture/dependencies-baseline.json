@@ -15,7 +15,6 @@
   "dependency:lk-agents-abi:pyo3-macros-backend",
   "dependency:lk-agents-abi:tokio",
   "dependency:lk-agents-abi:tokio-macros",
-  "dependency:lk-agents-voice:async-trait",
   "dependency:lk-agents-voice:futures-channel",
   "dependency:lk-agents-voice:futures-core",
   "dependency:lk-agents-voice:futures-io",

@@ -1,5 +1,4 @@
 {
-  "async-trait-use:rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs:TransferHost:async_trait::async_trait": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/a2a/auth.rs:auth_error_to_py:pyo3::PyErr": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/a2a/door.rs:door_error_to_py:pyo3::PyErr": 1,
   "pyo3-use:rust/crates/lk-agents-abi/src/errors/api.rs:api_error_to_py:pyo3::PyErr": 1,

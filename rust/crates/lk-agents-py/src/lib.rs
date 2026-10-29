@@ -63,6 +63,7 @@ impl generated::Implementations for Selected {
 
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
+    type WarmTransfer = lk_agents_runtime::voice::workflows::warm_transfer::WarmTransfer;
     type DtmfResult = lk_agents_runtime::voice::workflows::dtmf::DtmfResult;
     type DtmfIo = lk_agents_runtime::voice::workflows::dtmf::DtmfIo;
     type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;

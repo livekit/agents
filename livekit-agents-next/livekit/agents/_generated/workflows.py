@@ -10,6 +10,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, time
+from typing import TYPE_CHECKING, TypeAlias
+
+from ..types import NOT_GIVEN
+
+if TYPE_CHECKING:
+    from ..types import NotGivenOr
+
+
+# The declared records.
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class WorkflowInstructions:
+    """`WorkflowInstructions` as the host passes it: the two fields a workflow's template reads."""
+
+    persona: NotGivenOr[str] = NOT_GIVEN
+    """`NOT_GIVEN` keeps the workflow's built-in persona; `""` removes the section."""
+    extra: str = ""
+
+
+InstructionsArg: TypeAlias = WorkflowInstructions | str
+"""A workflow's `instructions: WorkflowInstructions | str`: a
+`WorkflowInstructions` fills the built-in template, anything else is fixed instructions.
+"""
 
 
 @dataclass

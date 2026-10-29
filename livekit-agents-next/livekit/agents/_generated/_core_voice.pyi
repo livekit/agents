@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
+from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.voice.avatar import AudioReceiver
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 
 from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, Sound, _core_RoomSession
+from ..types import NotGivenOr
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
+from .workflows import InstructionsArg
 
 class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""
@@ -213,6 +216,30 @@ async def receive_dtmf(
     timeout: float,
     stop_event: str,
 ) -> GetDtmfResult: ...
+
+class WarmTransfer:
+    """A transfer plan and the runtime ownership of its current dial."""
+    def __init__(
+        self,
+        *,
+        sip_call_to: str | None = None,
+        sip_trunk_id: NotGivenOr[str | None] = ...,
+        has_sip_connection: bool = False,
+        sip_number: NotGivenOr[str] = ...,
+        sip_headers: Mapping[str, str] | None = None,
+        dtmf: str | None = None,
+        ringing_timeout: float | None = None,
+        instructions: NotGivenOr[InstructionsArg] = ...,
+        conversation: Sequence[tuple[str, str]] | None = None,
+        env_sip_trunk: str | None = None,
+        env_sip_number: str = "",
+        twilio: dict[str, object] | None = None,
+    ) -> None: ...
+    @property
+    def instructions(self) -> str: ...
+    def tools(self) -> list[dict[str, object]]: ...
+    async def run(self, host: _TransferHost, caller: _core_RoomSession) -> str: ...
+    async def call_tool(self, name: str, arguments: object) -> None: ...
 
 class ConsoleIo:
     """`lk agent console`'s socket, opened when the session starts."""

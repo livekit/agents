@@ -3097,3 +3097,34 @@ pub mod worker_server {
             })
     }
 }
+
+pub mod workflows {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    static WORKFLOW_INSTRUCTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn workflow_instructions_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::workflows::WorkflowInstructionsArg> {
+        let py = obj.py();
+            if !obj.is_instance(WORKFLOW_INSTRUCTIONS.import(py, "livekit.agents._generated.workflows", "WorkflowInstructions")?)? {
+                return Err(super::not_a(obj, "WorkflowInstructions"));
+            }
+            Ok(::lk_agents_abi::voice::workflows::WorkflowInstructionsArg {
+                persona: ::lk_agents_abi::python::attr_with(obj, "WorkflowInstructions", "persona", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) })?,
+                extra: ::lk_agents_abi::python::attr_with(obj, "WorkflowInstructions", "extra", |v| v.extract::<::std::string::String>())?,
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+
+    pub fn instructions_arg_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::workflows::InstructionsArg> {
+        if obj.is_instance(&obj.py().import("livekit.agents._generated.workflows")?.getattr("WorkflowInstructions")?)? {
+            return Ok(::lk_agents_abi::voice::workflows::InstructionsArg::Workflow(crate::generated::records::workflows::workflow_instructions_from_py(obj)?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::voice::workflows::InstructionsArg::Fixed(obj.extract::<::std::string::String>()?));
+        }
+        Err(super::not_a(obj, "InstructionsArg"))
+    }
+}
