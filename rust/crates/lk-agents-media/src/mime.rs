@@ -82,7 +82,10 @@ mod tests {
     // "we decode containers now" -- and the sentence, which a plugin author reads in a traceback.
     #[test]
     fn a_known_container_is_decoded_under_its_normalised_name_and_an_unknown_one_is_refused() {
-        assert_eq!(audio_decoding(" Audio/MPEG "), Ok(AudioDecoding::Decode("audio/mpeg".to_owned())));
+        assert_eq!(
+            audio_decoding(" Audio/MPEG "),
+            Ok(AudioDecoding::Decode("audio/mpeg".to_owned()))
+        );
         assert_eq!(
             audio_decoding("audio/webm;codecs=opus"),
             Ok(AudioDecoding::Decode("audio/webm;codecs=opus".to_owned())),

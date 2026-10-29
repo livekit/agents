@@ -18,6 +18,7 @@ pub mod frame_resampler;
 pub mod images;
 pub mod mime;
 pub mod mixer;
+pub mod pool;
 pub mod recorder;
 pub mod resample;
 pub mod source;
@@ -25,7 +26,6 @@ pub mod source;
 pub mod soxr;
 pub mod stream_buffer;
 pub mod wav;
-pub mod pool;
 
 pub use byte_stream::{AudioByteStream, Frame};
 pub use decoder::Decoder;

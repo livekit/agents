@@ -100,8 +100,7 @@ fn models_and_decoders_share_the_total_ceiling() {
     let media_pool = media_pool(2);
     let (release_decoder, decoder_wait) = mpsc::channel::<()>();
     let (release_model, model_wait) = mpsc::channel::<()>();
-    let decoder =
-        media_pool.try_spawn(JobClass::Decoder, move || decoder_wait.recv()).unwrap();
+    let decoder = media_pool.try_spawn(JobClass::Decoder, move || decoder_wait.recv()).unwrap();
     let model = media_pool.try_spawn(JobClass::EotModel, move || model_wait.recv()).unwrap();
     assert!(matches!(
         media_pool.try_spawn(JobClass::Image, || ()),

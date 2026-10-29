@@ -11,9 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-pub use lk_agents_abi::media::pool::{
-    MediaExecutor, JobClass, MediaPoolError,
-};
+pub use lk_agents_abi::media::pool::{JobClass, MediaExecutor, MediaPoolError};
 
 /// An idle thread waits this long for its next job before it exits.
 const IDLE_KEEPALIVE: Duration = Duration::from_secs(10);
@@ -260,10 +258,7 @@ impl MediaPool {
     }
 
     /// Refuse overload synchronously without retaining a job or an admission waiter.
-    pub fn try_admit(
-        &self,
-        class: JobClass,
-    ) -> Result<MediaPermit, MediaPoolError> {
+    pub fn try_admit(&self, class: JobClass) -> Result<MediaPermit, MediaPoolError> {
         self.pool.admit(class)?;
         Ok(MediaPermit { pool: self.pool.clone(), class })
     }
@@ -292,8 +287,7 @@ impl MediaPool {
         let slot = Arc::new((Mutex::new(Slot { result: None, waker: None }), Condvar::new()));
         let settled = slot.clone();
         let job: Job = Box::new(move || {
-            let result =
-                std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|_| JobPanicked);
+            let result = std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|_| JobPanicked);
             // Capacity is released by settlement, before the caller observes the result.
             drop(permit);
             let waker = {
