@@ -28,7 +28,7 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
-use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest, Modality};
+use crate::fallback::machine::{ChainEffect, ChainEvent, ChainRequest};
 use crate::fallback::{ChainObserver, ChainPolicy, FallbackPolicy, backend_resource};
 use crate::realtime::host::HostRealtimeModel;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;

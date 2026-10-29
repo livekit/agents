@@ -17,7 +17,6 @@ fn request(deadline: Option<Ts>) -> ChainRequest {
         ..ChainPolicy::stt_defaults()
     };
     ChainRequest::new(
-        Modality::Stt,
         vec![(0, ResourceId(10), "primary".into()), (1, ResourceId(20), "backup".into())],
         policy,
         deadline,
@@ -32,10 +31,10 @@ fn fallback_chain_vectors_execute_allowances_and_retain_every_failure() {
         let now = Ts::from_nanos((attempt - 1) * 100_000_000);
         assert_eq!(
             request.handle(ChainEvent::Wake, now),
-            vec![ChainEffect::SttStreamOpen {
+            vec![ChainEffect::Start {
                 attempt,
                 index,
-                stt: ResourceId(if index == 0 { 10 } else { 20 })
+                backend: ResourceId(if index == 0 { 10 } else { 20 })
             }]
         );
         let effects = request.handle(fail(attempt), now);
@@ -86,7 +85,7 @@ fn fallback_retries_share_the_request_attempt_backoff() {
     assert!(request.handle(ChainEvent::Wake, Ts::from_nanos(99_000_000)).is_empty());
     assert!(matches!(
         request.handle(ChainEvent::Wake, Ts::from_nanos(100_000_000))[0],
-        ChainEffect::SttStreamOpen { index: 0, .. }
+        ChainEffect::Start { index: 0, .. }
     ));
 }
 
@@ -110,7 +109,7 @@ fn a_host_error_outside_the_api_taxonomy_does_not_retry_the_same_backend() {
     assert_eq!(effects, vec![ChainEffect::WakeAt(at(0))]);
     assert!(matches!(
         request.handle(ChainEvent::Wake, at(0))[0],
-        ChainEffect::SttStreamOpen { index: 1, .. }
+        ChainEffect::Start { index: 1, .. }
     ));
 }
 

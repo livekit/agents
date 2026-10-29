@@ -174,21 +174,17 @@ impl FallbackPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Modality {
-    Llm,
-    Stt,
-    Tts,
-    Realtime,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainEffect {
-    LlmRequestStart { attempt: u64, index: usize, llm: ResourceId },
-    SttStreamOpen { attempt: u64, index: usize, stt: ResourceId },
-    TtsSynthesisStart { attempt: u64, index: usize, tts: ResourceId },
-    RealtimeSessionOpen { attempt: u64, index: usize, model: ResourceId },
-    Cancel { attempt: u64 },
+    /// Open entry `index`: its request, stream, synthesis or session.
+    Start {
+        attempt: u64,
+        index: usize,
+        backend: ResourceId,
+    },
+    Cancel {
+        attempt: u64,
+    },
     WakeAt(Ts),
     Finished(Result<(), ProviderError>),
 }
@@ -211,7 +207,6 @@ enum Phase {
 
 #[derive(Debug)]
 pub struct ChainRequest {
-    modality: Modality,
     entries: Vec<(usize, ResourceId, String)>,
     cursor: usize,
     attempts: Option<Attempts>,
@@ -225,7 +220,6 @@ pub struct ChainRequest {
 
 impl ChainRequest {
     pub fn new(
-        modality: Modality,
         mut entries: Vec<(usize, ResourceId, String)>,
         policy: ChainPolicy,
         deadline: Option<Ts>,
@@ -237,7 +231,6 @@ impl ChainRequest {
             if candidates.is_empty() { health.order(&priority, policy.sticky) } else { candidates };
         entries = order.into_iter().map(|index| entries[index].clone()).collect();
         Self {
-            modality,
             entries,
             cursor: 0,
             attempts: None,
@@ -389,14 +382,7 @@ impl ChainRequest {
         self.next_attempt += 1;
         let attempt = self.next_attempt;
         self.phase = Phase::Active(attempt);
-        vec![match self.modality {
-            Modality::Llm => ChainEffect::LlmRequestStart { attempt, index, llm: backend },
-            Modality::Stt => ChainEffect::SttStreamOpen { attempt, index, stt: backend },
-            Modality::Tts => ChainEffect::TtsSynthesisStart { attempt, index, tts: backend },
-            Modality::Realtime => {
-                ChainEffect::RealtimeSessionOpen { attempt, index, model: backend }
-            }
-        }]
+        vec![ChainEffect::Start { attempt, index, backend }]
     }
 }
 

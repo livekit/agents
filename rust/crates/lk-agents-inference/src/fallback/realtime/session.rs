@@ -111,7 +111,6 @@ impl FallbackSession {
                 .map(|index| (index, self.priority[index], self.children[index].label()))
                 .collect();
             ChainRequest::new(
-                Modality::Realtime,
                 entries,
                 ChainPolicy {
                     max_retry_per_backend: 0,
@@ -129,7 +128,7 @@ impl FallbackSession {
         let outcome = loop {
             let Some(effect) = effects.pop_front() else { unreachable!("fallback must settle") };
             match effect {
-                ChainEffect::RealtimeSessionOpen { attempt, index, .. } => {
+                ChainEffect::Start { attempt, index, .. } => {
                     if self.lock().closed {
                         effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
                         continue;
@@ -187,7 +186,6 @@ impl FallbackSession {
                         session.aclose().await;
                     }
                 }
-                _ => unreachable!("realtime fallback only opens realtime sessions"),
             }
         };
         // Adoption and close share the state lock. A late session is released outside it.

@@ -230,9 +230,6 @@ fn no_duplex(label: &str) -> ProviderError {
 impl Backend for SttBackend {
     type Req = SttReq;
 
-    fn modality(&self) -> super::machine::Modality {
-        super::machine::Modality::Stt
-    }
     type Session = SttSession;
 
     fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {

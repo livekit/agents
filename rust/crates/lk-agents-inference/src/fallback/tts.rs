@@ -208,9 +208,6 @@ impl TtsBackend {
 impl Backend for TtsBackend {
     type Req = TtsReq;
 
-    fn modality(&self) -> super::machine::Modality {
-        super::machine::Modality::Tts
-    }
     type Session = TtsSource;
 
     fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
