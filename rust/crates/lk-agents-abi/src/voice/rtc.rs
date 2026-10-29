@@ -19,7 +19,9 @@ pub use capabilities::{
     TextStreamWriter, TrackPublication,
 };
 pub use events::{RoomEvent, RoomEventBus, RoomEventSink};
-pub use ports::{ByteStream, ByteStreamSender, Receiver, RpcHandler, TextStream, TextStreamSender};
+pub use ports::{
+    ByteStream, ByteStreamIngress, Receiver, RpcCallback, TextStream, TextStreamIngress,
+};
 
 pub use error::RtcError;
 

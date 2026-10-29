@@ -1,52 +1,11 @@
-//! A host object plus its event loop, as the generated `#[host(proxy)]` impls and the host-stream
-//! halves drive it.
+//! The binding's async runtime the in-place expansions await on, host failures as the core's
+//! errors, and the native classes a generated proxy takes as themselves.
 
 use pyo3::prelude::*;
 
 use crate::errors::ProviderError;
 
 use super::host_errors::capture;
-
-pub trait HostBridge: Send + Sync + 'static {
-    fn object(&self) -> &Py<PyAny>;
-    fn task_locals(&self) -> &pyo3_async_runtimes::TaskLocals;
-
-    fn await_call(
-        &self,
-        f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>,
-    ) -> impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send {
-        let future = Python::attach(|py| -> PyResult<_> {
-            let coro = f(self.object().bind(py))?;
-            pyo3_async_runtimes::into_future_with_locals(self.task_locals(), coro)
-        });
-        async move { future?.await }
-    }
-
-    /// The only teardown of a host stream (dropping does not cancel it).
-    fn aclose(&self) -> impl std::future::Future<Output = ()> + Send {
-        let close = self.await_call(|o| o.call_method0("aclose"));
-        async move {
-            let _ = close.await;
-        }
-    }
-
-    /// `StopAsyncIteration` is `Ok(None)`, a clean end. So is `CancelledError`: a host stream
-    /// cancelled under the core (its task cancelled at close) ended, it did not fail; the
-    /// reference never reports its own cancellation as a provider error.
-    fn anext(&self) -> impl std::future::Future<Output = PyResult<Option<Py<PyAny>>>> + Send {
-        let next = self.await_call(|o| o.call_method0("__anext__"));
-        async move {
-            match next.await {
-                Ok(item) => Ok(Some(item)),
-                Err(err) => Python::attach(|py| {
-                    let ended = err.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py)
-                        || err.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py);
-                    if ended { Ok(None) } else { Err(err) }
-                }),
-            }
-        }
-    }
-}
 
 /// The binding's async runtime, submitted by `lk-agents-py`: the in-place expansions await on it.
 pub struct HostRuntime {
@@ -55,22 +14,12 @@ pub struct HostRuntime {
         Python<'py>,
         crate::BoxFuture<'static, PyResult<Py<PyAny>>>,
     ) -> PyResult<Bound<'py, PyAny>>,
-    /// The running loop's clock when it is on virtual time.
-    pub loop_clock: fn(Python<'_>) -> Option<std::sync::Arc<dyn crate::Clock>>,
 }
 
 inventory::collect!(HostRuntime);
 
 fn linked() -> Option<&'static HostRuntime> {
     inventory::iter::<HostRuntime>.into_iter().next()
-}
-
-/// The running loop's clock on virtual time, else the wall clock: what a host stream an in-place
-/// export takes is closed against.
-pub fn loop_clock() -> std::sync::Arc<dyn crate::Clock> {
-    linked()
-        .and_then(|runtime| Python::try_attach(runtime.loop_clock).flatten())
-        .unwrap_or_else(|| std::sync::Arc::new(crate::RealClock::new()))
 }
 
 fn host_runtime() -> &'static HostRuntime {
@@ -84,257 +33,6 @@ pub fn future_into_py(
     fut: impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
 ) -> PyResult<Bound<'_, PyAny>> {
     (host_runtime().future_into_py)(py, Box::pin(fut))
-}
-
-// --------------------------------------------------------------------- the host stream bridge
-
-/// Task-locals are captured once, at construction: a provider's stream opens on a tokio worker
-/// with no running loop to capture, and without them the Python stream looks empty.
-pub struct HostHandle {
-    obj: Py<PyAny>,
-    locals: pyo3_async_runtimes::TaskLocals,
-}
-
-impl HostHandle {
-    pub fn from_parts(obj: Py<PyAny>, locals: pyo3_async_runtimes::TaskLocals) -> Self {
-        Self { obj, locals }
-    }
-
-    /// Captures the loop that is running *now*.
-    pub fn new(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Self> {
-        Ok(HostHandle {
-            obj,
-            locals: pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?,
-        })
-    }
-
-    pub fn child(&self, obj: Py<PyAny>) -> Self {
-        HostHandle { obj, locals: self.locals.clone() }
-    }
-
-    pub fn clone_ref(&self, py: Python<'_>) -> Self {
-        self.child(self.obj.clone_ref(py))
-    }
-
-    pub fn bind<'py>(&self, py: Python<'py>) -> &Bound<'py, PyAny> {
-        self.obj.bind(py)
-    }
-
-    pub fn locals(&self) -> &pyo3_async_runtimes::TaskLocals {
-        &self.locals
-    }
-}
-
-impl HostBridge for HostHandle {
-    fn object(&self) -> &Py<PyAny> {
-        &self.obj
-    }
-    fn task_locals(&self) -> &pyo3_async_runtimes::TaskLocals {
-        &self.locals
-    }
-}
-
-/// Awaited coroutines are **cancelled** when the Rust future is dropped: `into_future_with_locals`
-/// leaves the task running, so an abandoned handler would keep `session.run` going.
-pub struct CancellingHandle {
-    obj: Py<PyAny>,
-    locals: pyo3_async_runtimes::TaskLocals,
-}
-
-impl CancellingHandle {
-    /// Captures the loop that is running *now*.
-    pub fn new(py: Python<'_>, obj: Py<PyAny>) -> PyResult<Self> {
-        Ok(CancellingHandle {
-            obj,
-            locals: pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?,
-        })
-    }
-
-    /// Another object on the same loop and context (one this object's call returned).
-    pub fn child(&self, obj: Py<PyAny>) -> Self {
-        CancellingHandle { obj, locals: self.locals.clone() }
-    }
-
-    /// `obj` on a loop and context the caller captured.
-    pub fn from_parts(obj: Py<PyAny>, locals: pyo3_async_runtimes::TaskLocals) -> Self {
-        CancellingHandle { obj, locals }
-    }
-}
-
-/// The same object and loop, its awaits cancelled on drop.
-impl From<HostHandle> for CancellingHandle {
-    fn from(handle: HostHandle) -> Self {
-        CancellingHandle { obj: handle.obj, locals: handle.locals }
-    }
-}
-
-impl HostBridge for CancellingHandle {
-    fn object(&self) -> &Py<PyAny> {
-        &self.obj
-    }
-
-    fn task_locals(&self) -> &pyo3_async_runtimes::TaskLocals {
-        &self.locals
-    }
-
-    fn await_call(
-        &self,
-        f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>,
-    ) -> impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send {
-        let submitted = Python::attach(|py| -> PyResult<_> {
-            cancelling::submit(&self.locals, f(self.obj.bind(py))?)
-        });
-        async move { submitted?.await }
-    }
-}
-
-mod cancelling {
-    use std::future::Future;
-    use std::pin::Pin;
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    use std::sync::{Arc, Mutex};
-    use std::task::{Context, Poll};
-
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
-    use tokio::sync::oneshot;
-
-    #[derive(Default)]
-    struct Slot {
-        task: Option<Py<PyAny>>,
-        cancelled: bool,
-    }
-
-    type Outcome = PyResult<Py<PyAny>>;
-
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// In the captured context: the job's context variables are visible to it.
-    pub(super) fn submit(
-        locals: &pyo3_async_runtimes::TaskLocals,
-        awaitable: Bound<'_, PyAny>,
-    ) -> PyResult<Submitted> {
-        let py = awaitable.py();
-        let slot = Arc::new(Mutex::new(Slot::default()));
-        let (tx, rx) = oneshot::channel();
-        let starter =
-            Starter { awaitable: Some(awaitable.unbind()), tx: Some(tx), slot: Arc::clone(&slot) };
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("context", locals.context(py))?;
-        let event_loop = locals.event_loop(py);
-        event_loop.call_method("call_soon_threadsafe", (Py::new(py, starter)?,), Some(&kwargs))?;
-        Ok(Submitted { rx, slot, event_loop: event_loop.unbind(), done: false })
-    }
-
-    /// Runs on the loop: `ensure_future`, remember the task, report its outcome.
-    #[pyclass]
-    struct Starter {
-        awaitable: Option<Py<PyAny>>,
-        tx: Option<oneshot::Sender<Outcome>>,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        slot: Arc<Mutex<Slot>>,
-    }
-
-    #[pymethods]
-    impl Starter {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        fn __call__(&mut self, py: Python<'_>) -> PyResult<()> {
-            let (Some(awaitable), Some(tx)) = (self.awaitable.take(), self.tx.take()) else {
-                return Ok(());
-            };
-            if self.slot.lock().expect("slot").cancelled {
-                // nobody is waiting any more: never start it
-                let _ = awaitable.bind(py).call_method0("close");
-                return Ok(());
-            }
-            let task = match py.import("asyncio")?.call_method1("ensure_future", (awaitable,)) {
-                Ok(task) => task,
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                    return Ok(());
-                }
-            };
-            task.call_method1("add_done_callback", (Completer { tx: Mutex::new(Some(tx)) },))?;
-            let cancel_now = {
-                let mut slot = self.slot.lock().expect("slot");
-                if !slot.cancelled {
-                    slot.task = Some(task.clone().unbind());
-                }
-                slot.cancelled
-            };
-            if cancel_now {
-                task.call_method0("cancel")?;
-            }
-            Ok(())
-        }
-    }
-
-    #[pyclass(frozen)]
-    struct Completer {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        tx: Mutex<Option<oneshot::Sender<Outcome>>>,
-    }
-
-    #[pymethods]
-    impl Completer {
-        fn __call__(&self, task: &Bound<'_, PyAny>) -> PyResult<()> {
-            let outcome = if task.call_method0("cancelled")?.is_truthy()? {
-                Err(pyo3::exceptions::asyncio::CancelledError::new_err(()))
-            } else {
-                task.call_method0("result").map(Bound::unbind)
-            };
-            if let Some(tx) = self.tx.lock().expect("completer").take() {
-                let _ = tx.send(outcome);
-            }
-            Ok(())
-        }
-    }
-
-    pub(super) struct Submitted {
-        rx: oneshot::Receiver<Outcome>,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        slot: Arc<Mutex<Slot>>,
-        event_loop: Py<PyAny>,
-        done: bool,
-    }
-
-    impl Future for Submitted {
-        type Output = Outcome;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Outcome> {
-            match Pin::new(&mut self.rx).poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(outcome) => {
-                    self.done = true;
-                    Poll::Ready(outcome.unwrap_or_else(|_| {
-                        Err(pyo3::exceptions::asyncio::CancelledError::new_err(()))
-                    }))
-                }
-            }
-        }
-    }
-
-    impl Drop for Submitted {
-        fn drop(&mut self) {
-            if self.done {
-                return;
-            }
-            // Released before the GIL is taken: the starter holds the GIL while it locks the slot.
-            let task = {
-                let mut slot = self.slot.lock().expect("slot");
-                slot.cancelled = true;
-                slot.task.take()
-            };
-            if let Some(task) = task {
-                let event_loop = &self.event_loop;
-                Python::try_attach(|py| {
-                    if let Ok(cancel) = task.bind(py).getattr("cancel") {
-                        // a closed loop has nothing left to cancel
-                        let _ = event_loop.bind(py).call_method1("call_soon_threadsafe", (cancel,));
-                    }
-                });
-            }
-        }
-    }
 }
 
 // --------------------------------------------------------------------- proxies (`#[host(proxy)]`)
@@ -355,10 +53,6 @@ impl FromHostErr for crate::errors::HostError {
     fn from_host(py: Python<'_>, err: &PyErr) -> Self {
         super::host_errors::capture_host(py, err)
     }
-}
-
-pub fn host_err<E: FromHostErr>(err: PyErr) -> E {
-    Python::attach(|py| E::from_host(py, &err))
 }
 
 /// A `_core` class whose value the core uses as it is rather than proxying; submitted
@@ -384,60 +78,4 @@ pub fn native<T: ?Sized + 'static>(obj: &Bound<'_, PyAny>) -> Option<std::sync::
         }
     }
     None
-}
-
-// --------------------------------------------------------------------- a host coroutine from any thread
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// From any thread, in the captured context. The guard cancels the Python task when dropped.
-///
-/// The context is entered through a copy: a `Context` is entered by one thread at a time, and the
-/// loop thread enters the captured one for each callback scheduled in it, so entering it here
-/// races those ("cannot enter context: ... is already entered").
-pub fn schedule_coroutine(
-    py: Python<'_>,
-    locals: &pyo3_async_runtimes::TaskLocals,
-    coro: Bound<'_, PyAny>,
-) -> PyResult<(CancelPythonTask, tokio::sync::oneshot::Receiver<PyResult<Py<PyAny>>>)> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let asyncio = py.import("asyncio")?;
-    let event_loop = locals.event_loop(py);
-    // A loop that stopped runs nothing more: the coroutine is closed here, not left to the
-    // collector's "coroutine ... was never awaited" (the worker's periodic calls at shutdown).
-    let scheduled = if event_loop.call_method0("is_running")?.is_truthy()? {
-        locals
-            .context(py)
-            .call_method0("copy")?
-            .call_method1("run", (asyncio.getattr("run_coroutine_threadsafe")?, &coro, event_loop))
-    } else {
-        Err(pyo3::exceptions::PyRuntimeError::new_err("the event loop is not running"))
-    };
-    let future = match scheduled {
-        Ok(future) => future,
-        Err(e) => {
-            let _ = coro.call_method0("close");
-            return Err(e);
-        }
-    };
-    let sender = std::sync::Mutex::new(Some(sender));
-    let callback = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _kwargs| {
-        let result = args.get_item(0)?.call_method0("result").map(Bound::unbind);
-        if let Some(sender) = sender.lock().unwrap().take() {
-            let _ = sender.send(result);
-        }
-        Ok::<_, PyErr>(())
-    })?;
-    future.call_method1("add_done_callback", (callback,))?;
-    Ok((CancelPythonTask(future.unbind()), receiver))
-}
-
-/// `concurrent.futures.Future.cancel` is thread-safe and propagates to the asyncio task.
-pub struct CancelPythonTask(Py<PyAny>);
-
-impl Drop for CancelPythonTask {
-    fn drop(&mut self) {
-        Python::attach(|py| {
-            let _ = self.0.bind(py).call_method0("cancel");
-        });
-    }
 }

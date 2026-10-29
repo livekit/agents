@@ -1,12 +1,13 @@
 //! The avatar worker's audio receiver (`DataStreamAudioReceiver`): executes the pure receive
 //! state's streams and reports, and implements its ABI class and host receiver directly.
 
+use crate::rtc::events::RpcHandler;
 use crate::rtc::wait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
-use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
+use lk_agents_abi::voice::rtc::{ParticipantIdentity, RtcRoom};
 use lk_agents_abi::{BoxFuture, Clock, OwnedTask, Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportStep, frame_size};

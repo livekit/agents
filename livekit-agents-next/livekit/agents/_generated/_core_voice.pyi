@@ -39,6 +39,7 @@ from .amd import AMDPredictionEvent, AmdConstants
 from .avatar import AudioReceiverFrame
 from .background_audio_wire import Sound
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
+from .room_io import _StreamInfo
 from .session_options import SessionKwargs, SessionLegs, UpdateKwargs
 from .session_wire import StartPlan
 from .tool_report import ToolReport
@@ -362,6 +363,20 @@ class PlayoutLedger:
     def add_discarded(self, duration: float) -> None: ...
     def snapshot(self, queued: float) -> PlaybackInfo: ...
     def settle(self) -> PlaybackInfo: ...
+
+class ByteStreamSender:
+    def open(
+        self,
+        info: _StreamInfo,
+        sender: str,
+        chunks: AsyncIterable[bytes | bytearray | memoryview | list[int]],
+    ) -> bool: ...
+
+class TextStreamSender:
+    def open(self, info: _StreamInfo, sender: str, chunks: AsyncIterable[str]) -> bool: ...
+
+class RpcHandler:
+    def call(self, caller_identity: str, payload: str) -> str: ...
 
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,

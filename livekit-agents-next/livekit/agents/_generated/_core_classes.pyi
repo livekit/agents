@@ -528,18 +528,6 @@ class RoomEventBus:
     def subscriber_count(self) -> int: ...
 
 
-class ByteStreamSender:
-    def open(self, info: Any, sender: str, chunks: Any) -> bool: ...
-
-
-class TextStreamSender:
-    def open(self, info: Any, sender: str, chunks: Any) -> bool: ...
-
-
-class RpcHandler:
-    def call(self, caller_identity: str, payload: str) -> str: ...
-
-
 class RoomAudioInput:
     @property
     def reading(self) -> str | None: ...

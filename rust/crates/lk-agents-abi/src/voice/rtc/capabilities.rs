@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::VideoFrameRef;
 use super::events::RoomEventBus;
-use super::ports::{ByteStreamSender, RpcHandler, TextStreamSender};
+use super::ports::{ByteStreamIngress, RpcCallback, TextStreamIngress};
 use super::{
     AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity, ParticipantKind,
     PlaybackInfo, RtcError, StreamBytesOptions, StreamTextOptions, TrackPublishOptions, TrackSid,
@@ -58,7 +58,7 @@ pub trait RtcRoom: Send + Sync {
     fn register_byte_stream_handler(
         &self,
         topic: &str,
-        streams: ByteStreamSender,
+        streams: Arc<dyn ByteStreamIngress>,
     ) -> Result<(), RtcError>;
     /// Idempotent: unregistering a topic with no handler is a no-op, because `aclose` runs on
     /// paths where `register` may never have succeeded.
@@ -68,7 +68,7 @@ pub trait RtcRoom: Send + Sync {
     fn register_text_stream_handler(
         &self,
         topic: &str,
-        streams: TextStreamSender,
+        streams: Arc<dyn TextStreamIngress>,
     ) -> Result<(), RtcError>;
     #[host(call, name = "_core_unregister_text_stream_handler")]
     fn unregister_text_stream_handler(&self, topic: &str) -> Result<(), RtcError>;
@@ -168,7 +168,7 @@ pub trait LocalParticipant: Send + Sync {
 
     /// `register_rpc_method(method, handler)`: the SDK keeps one handler per method, the last one.
     #[host(call, name = "_core_register_rpc_method")]
-    fn register_rpc_method(&self, method: String, handler: RpcHandler) -> Result<(), RtcError> {
+    fn register_rpc_method(&self, method: String, handler: Arc<dyn RpcCallback>) -> Result<(), RtcError> {
         Err(RtcError::Unsupported("register_rpc_method"))
     }
 

@@ -4,13 +4,13 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::rtc::events::RpcHandler;
 use lk_agents_abi::voice::io::{
     AudioOutput, AvatarPlaybackSegment, IoError, PlaybackFinished, PlaybackSegment,
     PlaybackTracker, Result,
 };
 use lk_agents_abi::voice::rtc::{
-    AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RpcHandler, RtcRoom,
-    StreamBytesOptions,
+    AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RtcRoom, StreamBytesOptions,
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts, unix_secs};
 use lk_agents_net::task::{TaskId, TaskSet};

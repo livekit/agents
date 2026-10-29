@@ -4,8 +4,8 @@ use super::*;
 use crate::test_support_rtc::{FakeRoom, FakeRtc};
 use lk_agents_abi::RealClock;
 use lk_agents_abi::voice::rtc::{
-    AudioSource, ByteStreamSender, ConnectionState, LocalParticipant, ParticipantKind,
-    RemoteParticipant, RoomEventBus, RtcError, TextStreamSender, TrackPublication,
+    AudioSource, ByteStreamIngress, ConnectionState, LocalParticipant, ParticipantKind,
+    RemoteParticipant, RoomEventBus, RtcError, TextStreamIngress, TrackPublication,
     TrackPublishOptions,
 };
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID};
@@ -127,7 +127,7 @@ impl RtcRoom for StalledRoom {
     fn register_byte_stream_handler(
         &self,
         topic: &str,
-        streams: ByteStreamSender,
+        streams: Arc<dyn ByteStreamIngress>,
     ) -> std::result::Result<(), RtcError> {
         self.inner.register_byte_stream_handler(topic, streams)
     }
@@ -137,7 +137,7 @@ impl RtcRoom for StalledRoom {
     fn register_text_stream_handler(
         &self,
         topic: &str,
-        streams: TextStreamSender,
+        streams: Arc<dyn TextStreamIngress>,
     ) -> std::result::Result<(), RtcError> {
         self.inner.register_text_stream_handler(topic, streams)
     }

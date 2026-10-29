@@ -326,7 +326,9 @@ pub struct HostTime;
 impl lk_agents_runtime::process::HostTime for HostTime {
     /// The running loop's clock on virtual time, else the wall clock.
     fn clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
-        lk_agents_abi::python::loop_clock()
+        Python::try_attach(loop_clock)
+            .flatten()
+            .unwrap_or_else(|| Arc::new(lk_agents_abi::RealClock::new()))
     }
 
     fn spawner(&self) -> Option<Arc<dyn lk_agents_abi::Spawner>> {
@@ -342,7 +344,6 @@ pub fn host_spawner() -> PyResult<Arc<dyn lk_agents_abi::Spawner>> {
 lk_agents_abi::python::inventory::submit! {
     lk_agents_abi::python::HostRuntime {
         future_into_py: erased_future_into_py,
-        loop_clock,
     }
 }
 

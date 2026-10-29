@@ -144,6 +144,9 @@ pub trait Implementations: 'static {
     type SpeechHandle: ::lk_agents_abi::voice::speech_handle::SpeechHandle;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
+    type ByteStreamSender: ::lk_agents_abi::voice::rtc::ports::ByteStreamSender;
+    type TextStreamSender: ::lk_agents_abi::voice::rtc::ports::TextStreamSender;
+    type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
     type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<Options = Self::SessionOptions>;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
@@ -380,6 +383,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_room_disconnected, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_sip_dtmf_received, m)?)?;
     m.add_class::<voice::PlayoutLedger>()?;
+    m.add_class::<voice::ByteStreamSender>()?;
+    m.add_class::<voice::TextStreamSender>()?;
+    m.add_class::<voice::RpcHandler>()?;
     m.add_class::<voice::SessionOptions>()?;
     m.add_class::<voice::VoiceSession>()?;
     m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;
@@ -440,6 +446,36 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::nodes::ProviderCalls {
         match native.downcast::<<crate::Selected as Implementations>::NodeCalls>() {
             Ok(native) => Ok(Py::new(py, voice::_core_NodeCalls(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::nodes::ProviderCalls` is no declared class")),
+        }
+    }
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::ByteStreamSender>() {
+            Ok(native) => Ok(Py::new(py, voice::ByteStreamSender(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::ByteStreamIngress` is no declared class")),
+        }
+    }
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::RpcCallback {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::RpcHandler>() {
+            Ok(native) => Ok(Py::new(py, voice::RpcHandler(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::RpcCallback` is no declared class")),
+        }
+    }
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::TextStreamIngress {
+    fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::Selected as Implementations>::TextStreamSender>() {
+            Ok(native) => Ok(Py::new(py, voice::TextStreamSender(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::TextStreamIngress` is no declared class")),
         }
     }
 }

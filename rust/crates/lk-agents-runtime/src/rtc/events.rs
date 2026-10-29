@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::voice::rtc::capabilities::{RemoteParticipant, RtcRoom, TrackPublication};
 use lk_agents_abi::voice::rtc::ports::{
-    self, ByteStream, ByteStreamIngress, Receiver, TextStream, TextStreamIngress,
+    self, ByteStream, ByteStreamIngress, Receiver, RpcCallback, TextStream, TextStreamIngress,
 };
 use lk_agents_abi::voice::rtc::{
     ConnectionState, DisconnectReason, ParticipantIdentity, RoomEvent, RoomEventSink, RtcError,
@@ -218,10 +218,10 @@ pub struct ByteStreamSender {
 }
 
 impl ByteStreamSender {
-    pub fn channel() -> (ports::ByteStreamSender, Receiver<ByteStream>) {
+    pub fn channel() -> (Arc<dyn ByteStreamIngress>, Receiver<ByteStream>) {
         let (streams, receiver) = mpsc::channel(MAX_INCOMING_STREAMS);
         let sender = Self { streams, admission: Arc::new(Semaphore::new(MAX_INCOMING_STREAMS)) };
-        (ports::ByteStreamSender(Arc::new(sender)), Box::new(StreamReceiver { streams: receiver }))
+        (Arc::new(sender), Box::new(StreamReceiver { streams: receiver }))
     }
 }
 
@@ -255,10 +255,10 @@ pub struct TextStreamSender {
 }
 
 impl TextStreamSender {
-    pub fn channel() -> (ports::TextStreamSender, Receiver<TextStream>) {
+    pub fn channel() -> (Arc<dyn TextStreamIngress>, Receiver<TextStream>) {
         let (streams, receiver) = mpsc::channel(MAX_INCOMING_STREAMS);
         let sender = Self { streams, admission: Arc::new(Semaphore::new(MAX_INCOMING_STREAMS)) };
-        (ports::TextStreamSender(Arc::new(sender)), Box::new(StreamReceiver { streams: receiver }))
+        (Arc::new(sender), Box::new(StreamReceiver { streams: receiver }))
     }
 }
 
@@ -283,6 +283,52 @@ impl TextStreamIngress for TextStreamSender {
             }),
         });
         true
+    }
+}
+
+/// `_core.ByteStreamSender`.
+impl ports::ByteStreamSender for ByteStreamSender {
+    fn open(
+        &self,
+        info: StreamInfo,
+        sender: ParticipantIdentity,
+        chunks: Receiver<Vec<u8>>,
+    ) -> bool {
+        ByteStreamIngress::open(self, info, sender, chunks)
+    }
+}
+
+/// `_core.TextStreamSender`.
+impl ports::TextStreamSender for TextStreamSender {
+    fn open(
+        &self,
+        info: StreamInfo,
+        sender: ParticipantIdentity,
+        chunks: Receiver<String>,
+    ) -> bool {
+        TextStreamIngress::open(self, info, sender, chunks)
+    }
+}
+
+/// An RPC method's handler: `(caller_identity, payload)` to the response payload.
+pub struct RpcHandler(Box<dyn Fn(&str, &str) -> String + Send + Sync>);
+
+impl RpcHandler {
+    pub fn new(callback: impl Fn(&str, &str) -> String + Send + Sync + 'static) -> Arc<Self> {
+        Arc::new(Self(Box::new(callback)))
+    }
+}
+
+impl RpcCallback for RpcHandler {
+    fn call(&self, caller_identity: &str, payload: &str) -> String {
+        (self.0)(caller_identity, payload)
+    }
+}
+
+/// `_core.RpcHandler`.
+impl ports::RpcHandler for RpcHandler {
+    fn respond(&self, caller_identity: String, payload: String) -> String {
+        (self.0)(&caller_identity, &payload)
     }
 }
 

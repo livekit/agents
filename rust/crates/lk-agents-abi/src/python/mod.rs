@@ -6,7 +6,6 @@ mod buffers;
 mod host_errors;
 #[cfg(test)]
 mod host_tests;
-mod node;
 mod values;
 #[cfg(test)]
 mod conversion_tests;
@@ -14,7 +13,6 @@ mod conversion_tests;
 pub use bridge::*;
 pub use buffers::*;
 pub use host_errors::*;
-pub use node::{Convert, HostSource};
 pub use values::*;
 
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]

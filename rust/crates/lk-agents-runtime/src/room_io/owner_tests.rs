@@ -99,7 +99,7 @@ async fn repeated_room_start_keeps_one_event_subscription() {
 struct StreamingRoom {
     room: Arc<crate::test_support_rtc::FakeRoom>,
     local: Arc<dyn LocalParticipant>,
-    text: watch::Sender<Option<lk_agents_abi::voice::rtc::TextStreamSender>>,
+    text: watch::Sender<Option<Arc<dyn lk_agents_abi::voice::rtc::TextStreamIngress>>>,
 }
 
 struct TextChunks(mpsc::Receiver<String>);
@@ -146,7 +146,7 @@ impl RtcRoom for StreamingRoom {
     fn register_byte_stream_handler(
         &self,
         topic: &str,
-        streams: lk_agents_abi::voice::rtc::ByteStreamSender,
+        streams: Arc<dyn lk_agents_abi::voice::rtc::ByteStreamIngress>,
     ) -> std::result::Result<(), RtcError> {
         self.room.register_byte_stream_handler(topic, streams)
     }
@@ -156,7 +156,7 @@ impl RtcRoom for StreamingRoom {
     fn register_text_stream_handler(
         &self,
         _topic: &str,
-        streams: lk_agents_abi::voice::rtc::TextStreamSender,
+        streams: Arc<dyn lk_agents_abi::voice::rtc::TextStreamIngress>,
     ) -> std::result::Result<(), RtcError> {
         self.text.send_replace(Some(streams));
         Ok(())

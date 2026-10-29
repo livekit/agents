@@ -83,6 +83,9 @@ impl generated::Implementations for Selected {
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSession = lk_agents_runtime::voice::VoiceSession;
     type SpeechHandle = lk_agents_runtime::voice::SpeechHandle;
+    type ByteStreamSender = lk_agents_runtime::rtc::events::ByteStreamSender;
+    type TextStreamSender = lk_agents_runtime::rtc::events::TextStreamSender;
+    type RpcHandler = lk_agents_runtime::rtc::events::RpcHandler;
     type AgentNodes = lk_agents_runtime::voice::nodes::AgentNodes;
     type NodeCalls = lk_agents_runtime::voice::nodes::NodeCalls;
     type TtsNodeFrames =

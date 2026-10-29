@@ -5,7 +5,7 @@ use super::traits::{
     AudioSource, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
     TrackPublication,
 };
-use super::{ByteStreamSender, Receiver, RoomEvent, TextStreamSender};
+use super::{ByteStreamIngress, Receiver, RoomEvent, RpcCallback, TextStreamIngress};
 use super::{
     ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind, StreamInfo,
     StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
@@ -165,8 +165,8 @@ struct RoomState {
     closed: bool,
     participants: Vec<Arc<FakeRemoteParticipant>>,
     next_participant_id: u64,
-    byte_handlers: BTreeMap<String, ByteStreamSender>,
-    text_handlers: BTreeMap<String, TextStreamSender>,
+    byte_handlers: BTreeMap<String, Arc<dyn ByteStreamIngress>>,
+    text_handlers: BTreeMap<String, Arc<dyn TextStreamIngress>>,
 }
 
 impl Default for RoomState {
@@ -404,7 +404,11 @@ impl RtcRoom for FakeRoom {
         &self.bus_port
     }
 
-    fn register_byte_stream_handler(&self, topic: &str, streams: ByteStreamSender) -> Result<()> {
+    fn register_byte_stream_handler(
+        &self,
+        topic: &str,
+        streams: Arc<dyn ByteStreamIngress>,
+    ) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         if state.byte_handlers.contains_key(topic) {
             return Err(RtcError::TopicInUse { topic: topic.to_owned() });
@@ -418,7 +422,11 @@ impl RtcRoom for FakeRoom {
         Ok(())
     }
 
-    fn register_text_stream_handler(&self, topic: &str, streams: TextStreamSender) -> Result<()> {
+    fn register_text_stream_handler(
+        &self,
+        topic: &str,
+        streams: Arc<dyn TextStreamIngress>,
+    ) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         if state.text_handlers.contains_key(topic) {
             return Err(RtcError::TopicInUse { topic: topic.to_owned() });
@@ -486,7 +494,7 @@ struct LocalState {
     rpc_calls: Vec<(ParticipantIdentity, String, String)>,
     /// What the next `perform_rpc` answers; `(0, "")` when unset.
     rpc_reply: Option<(u32, String)>,
-    rpc_handlers: BTreeMap<String, super::RpcHandler>,
+    rpc_handlers: BTreeMap<String, Arc<dyn RpcCallback>>,
     dtmf: Vec<(u32, String)>,
     fail_with: Option<RtcError>,
 }
@@ -605,7 +613,7 @@ impl FakeLocalParticipant {
     /// `caller` invokes `method` on the agent; `None` when no handler is registered.
     pub fn invoke_rpc(&self, method: &str, caller: &str, payload: &str) -> Option<String> {
         let handler = self.state.lock().unwrap().rpc_handlers.get(method).cloned()?;
-        Some(handler.call(caller.to_owned(), payload.to_owned()))
+        Some(handler.call(caller, payload))
     }
 
     /// Fail every subsequent control call.
@@ -805,7 +813,7 @@ impl LocalParticipant for FakeLocalParticipant {
         })
     }
 
-    fn register_rpc_method(&self, method: String, handler: super::RpcHandler) -> Result<()> {
+    fn register_rpc_method(&self, method: String, handler: Arc<dyn RpcCallback>) -> Result<()> {
         self.state.lock().unwrap().rpc_handlers.insert(method, handler);
         Ok(())
     }

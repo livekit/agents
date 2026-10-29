@@ -3,7 +3,7 @@
 
 use super::{ParticipantIdentity, StreamInfo};
 use crate::{Closed, StreamSource, Ts};
-use std::sync::Arc;
+use std::any::Any;
 
 pub type Receiver<T> = Box<dyn StreamSource<T>>;
 
@@ -31,8 +31,10 @@ impl TextStream {
     }
 }
 
-/// The callback's reader is accepted before any asynchronous pull or payload copy.
-pub trait ByteStreamIngress: Send + Sync {
+/// Where the host hands each byte stream opened on a topic; the reader is accepted before any
+/// asynchronous pull or payload copy.
+#[crate::host(native(refused = "expected a _core.ByteStreamSender"))]
+pub trait ByteStreamIngress: Any + Send + Sync {
     fn open(
         &self,
         info: StreamInfo,
@@ -41,60 +43,43 @@ pub trait ByteStreamIngress: Send + Sync {
     ) -> bool;
 }
 
-#[crate::class(from_py_object)]
-#[derive(Clone)]
-pub struct ByteStreamSender(pub Arc<dyn ByteStreamIngress>);
-
-#[crate::host(object)]
-impl ByteStreamSender {
-    #[host(method)]
-    pub fn open(
+#[crate::host(class(name = "ByteStreamSender", native = ByteStreamIngress))]
+pub trait ByteStreamSender: Send + Sync + Sized + 'static {
+    #[host(call)]
+    fn open(
         &self,
         info: StreamInfo,
         sender: ParticipantIdentity,
         chunks: Box<dyn StreamSource<Vec<u8>>>,
-    ) -> bool {
-        self.0.open(info, sender, chunks)
-    }
+    ) -> bool;
 }
 
-pub trait TextStreamIngress: Send + Sync {
+/// [`ByteStreamIngress`] for text streams.
+#[crate::host(native(refused = "expected a _core.TextStreamSender"))]
+pub trait TextStreamIngress: Any + Send + Sync {
     fn open(&self, info: StreamInfo, sender: ParticipantIdentity, chunks: Receiver<String>)
     -> bool;
 }
 
-#[crate::class(from_py_object)]
-#[derive(Clone)]
-pub struct TextStreamSender(pub Arc<dyn TextStreamIngress>);
-
-#[crate::host(object)]
-impl TextStreamSender {
-    #[host(method)]
-    pub fn open(
+#[crate::host(class(name = "TextStreamSender", native = TextStreamIngress))]
+pub trait TextStreamSender: Send + Sync + Sized + 'static {
+    #[host(call)]
+    fn open(
         &self,
         info: StreamInfo,
         sender: ParticipantIdentity,
         chunks: Box<dyn StreamSource<String>>,
-    ) -> bool {
-        self.0.open(info, sender, chunks)
-    }
+    ) -> bool;
 }
 
-/// The SDK's registered RPC callback.
-#[crate::class(from_py_object)]
-#[derive(Clone)]
-pub struct RpcHandler(pub Arc<dyn Fn(&str, &str) -> String + Send + Sync>);
-
-impl RpcHandler {
-    pub fn new(callback: impl Fn(&str, &str) -> String + Send + Sync + 'static) -> Self {
-        Self(Arc::new(callback))
-    }
+/// The SDK's registered RPC callback: `(caller_identity, payload)` to the response payload.
+#[crate::host(native(refused = "expected a _core.RpcHandler"))]
+pub trait RpcCallback: Any + Send + Sync {
+    fn call(&self, caller_identity: &str, payload: &str) -> String;
 }
 
-#[crate::host(object)]
-impl RpcHandler {
-    #[host(method)]
-    pub fn call(&self, caller_identity: String, payload: String) -> String {
-        (self.0)(&caller_identity, &payload)
-    }
+#[crate::host(class(name = "RpcHandler", native = RpcCallback))]
+pub trait RpcHandler: Send + Sync + Sized + 'static {
+    #[host(call, name = "call")]
+    fn respond(&self, caller_identity: String, payload: String) -> String;
 }

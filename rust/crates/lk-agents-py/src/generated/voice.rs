@@ -1004,6 +1004,93 @@ impl PlayoutLedger {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/rtc/ports.rs.
+type ByteStreamSenderImpl = <crate::Selected as super::Implementations>::ByteStreamSender;
+
+#[pyclass(frozen, name = "ByteStreamSender", module = "livekit.agents._core")]
+pub struct ByteStreamSender(pub(crate) ::std::sync::Arc<ByteStreamSenderImpl>);
+
+#[pymethods]
+impl ByteStreamSender {
+    #[pyo3(signature = (info, sender, chunks))]
+    fn open(&self, info: ::lk_agents_abi::voice::room_io::StreamInfo, sender: ::lk_agents_abi::voice::room_io::ParticipantIdentity, chunks: Bound<'_, PyAny>) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let chunks = crate::host::capture_context(chunks.py()).and_then(|context| crate::host::stream::HostStream::open(chunks.py(), &chunks, &context, |o| Ok({ if o.is_instance_of::<::pyo3::types::PyBytes>() || o.is_instance_of::<::pyo3::types::PyByteArray>() || o.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&o, "chunks") } else { o.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "chunks") }).collect::<PyResult<Vec<_>>>()) } }?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::vec::Vec<u8>>>)?;
+        let out = <ByteStreamSenderImpl as ::lk_agents_abi::voice::rtc::ports::ByteStreamSender>::open(&self.0, info, sender, chunks);
+        Ok(out)
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::rtc::ByteStreamIngress`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress>(),
+        read: |obj| {
+            let this = obj.cast::<ByteStreamSender>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/rtc/ports.rs.
+type TextStreamSenderImpl = <crate::Selected as super::Implementations>::TextStreamSender;
+
+#[pyclass(frozen, name = "TextStreamSender", module = "livekit.agents._core")]
+pub struct TextStreamSender(pub(crate) ::std::sync::Arc<TextStreamSenderImpl>);
+
+#[pymethods]
+impl TextStreamSender {
+    #[pyo3(signature = (info, sender, chunks))]
+    fn open(&self, info: ::lk_agents_abi::voice::room_io::StreamInfo, sender: ::lk_agents_abi::voice::room_io::ParticipantIdentity, chunks: Bound<'_, PyAny>) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let chunks = crate::host::capture_context(chunks.py()).and_then(|context| crate::host::stream::HostStream::open(chunks.py(), &chunks, &context, |o| Ok(o.extract::<::std::string::String>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::string::String>>)?;
+        let out = <TextStreamSenderImpl as ::lk_agents_abi::voice::rtc::ports::TextStreamSender>::open(&self.0, info, sender, chunks);
+        Ok(out)
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::rtc::TextStreamIngress`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::TextStreamIngress>(),
+        read: |obj| {
+            let this = obj.cast::<TextStreamSender>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TextStreamIngress> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/rtc/ports.rs.
+type RpcHandlerImpl = <crate::Selected as super::Implementations>::RpcHandler;
+
+#[pyclass(frozen, name = "RpcHandler", module = "livekit.agents._core")]
+pub struct RpcHandler(pub(crate) ::std::sync::Arc<RpcHandlerImpl>);
+
+#[pymethods]
+impl RpcHandler {
+    #[pyo3(name = "call")]
+    #[pyo3(signature = (caller_identity, payload))]
+    fn respond(&self, caller_identity: ::std::string::String, payload: ::std::string::String) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RpcHandlerImpl as ::lk_agents_abi::voice::rtc::ports::RpcHandler>::respond(&self.0, caller_identity, payload);
+        Ok(out)
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::rtc::RpcCallback`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::RpcCallback>(),
+        read: |obj| {
+            let this = obj.cast::<RpcHandler>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RpcCallback> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
 type SessionOptionsImpl = <crate::Selected as super::Implementations>::SessionOptions;
 
@@ -3376,12 +3463,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         &self.event_bus
     }
 
-    fn register_byte_stream_handler(&self, topic: &str, streams: ::lk_agents_abi::voice::rtc::ByteStreamSender) -> ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError> {
+    fn register_byte_stream_handler(&self, topic: &str, streams: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress>) -> ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let topic_arg = topic.to_owned();
         let streams_arg = streams;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(streams_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?, <dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress as super::NativeToHost>::to_host(py, streams_arg)?];
                 Ok((host.bind(py).getattr("_core_register_byte_stream_handler")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
@@ -3417,12 +3504,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         })
     }
 
-    fn register_text_stream_handler(&self, topic: &str, streams: ::lk_agents_abi::voice::rtc::TextStreamSender) -> ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError> {
+    fn register_text_stream_handler(&self, topic: &str, streams: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::TextStreamIngress>) -> ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let topic_arg = topic.to_owned();
         let streams_arg = streams;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(streams_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?, <dyn ::lk_agents_abi::voice::rtc::TextStreamIngress as super::NativeToHost>::to_host(py, streams_arg)?];
                 Ok((host.bind(py).getattr("_core_register_text_stream_handler")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
@@ -3721,12 +3808,12 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         })
     }
 
-    fn register_rpc_method(&self, method: ::std::string::String, handler: ::lk_agents_abi::voice::rtc::RpcHandler) -> ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError> {
+    fn register_rpc_method(&self, method: ::std::string::String, handler: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RpcCallback>) -> ::std::result::Result<(), ::lk_agents_abi::voice::rtc::RtcError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let method_arg = method;
         let handler_arg = handler;
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(method_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(handler_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(method_arg, py)?, <dyn ::lk_agents_abi::voice::rtc::RpcCallback as super::NativeToHost>::to_host(py, handler_arg)?];
                 Ok((host.bind(py).getattr("_core_register_rpc_method")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::pyo3::Python::attach(|py| {
