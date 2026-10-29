@@ -216,10 +216,10 @@ class ToolSearchToolset(Toolset):
     def tools(self) -> list[Tool | Toolset]:
         return [self._search_tool, *self._loaded_tools]
 
-    async def setup(self, *, reload: bool = False) -> Self:
+    async def setup(self) -> Self:
         await super().setup()
         async with self._lock:
-            if not reload and self._initialized:
+            if self._initialized:
                 return self
 
             # setup wrapped toolsets
@@ -418,8 +418,8 @@ class ToolProxyToolset(ToolSearchToolset):
         # constant tool list — only tool_search and call_tool
         return [self._search_tool, self._call_tool]
 
-    async def setup(self, *, reload: bool = False) -> Self:
-        await super().setup(reload=reload)
+    async def setup(self) -> Self:
+        await super().setup()
 
         # build a ToolContext from all wrapped tools for call_tool execution
         self._tool_ctx = ToolContext(self._tools)
