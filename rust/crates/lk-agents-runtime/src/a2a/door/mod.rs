@@ -9,16 +9,16 @@ use std::any::Any;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a2a::JsonRpcId;
-use lk_agents_abi::a2a::auth::{AuthError, AuthOperation, AuthPrincipal};
+use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage::{StorageError, StorageNamespace};
-use lk_agents_core::a2a::auth::{allows, allows_first_message};
+use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_storage::db::TaskQuery;
 use lk_agents_storage::host::HostStorage;
-use lk_agents_storage::run::{REASON_KEY, REASON_THREAD_NOT_FOUND};
+use lk_agents_storage::run::REASON_KEY;
 use lk_agents_storage::schema::TaskRow;
 use lk_agents_storage::{Storage, Thread, now_ms, shortuuid};
 use serde_json::Value;
@@ -245,22 +245,6 @@ impl Inner {
         }
     }
 
-    fn authorize(
-        principal: &AuthPrincipal,
-        operation: AuthOperation,
-        id: &str,
-        scope: Option<&str>,
-    ) -> Result<(), AuthError> {
-        let grant = principal.grant.as_ref().ok_or_else(|| {
-            AuthError::Forbidden("endpoint call permission does not grant thread access".into())
-        })?;
-        if allows(grant, operation, id, scope) {
-            Ok(())
-        } else {
-            Err(AuthError::Forbidden(format!("the thread grant does not allow {operation:?}")))
-        }
-    }
-
     async fn thread(
         &self,
         principal: &AuthPrincipal,
@@ -268,7 +252,7 @@ impl Inner {
         operation: AuthOperation,
     ) -> Result<Thread, DoorError> {
         let info = self.storage().await?.get_thread(id).await?;
-        Self::authorize(principal, operation, id, Some(&info.scope))?;
+        authorize(principal, operation, id, Some(&info.scope))?;
         Ok(self.storage().await?.open(id, &self.holder).await?)
     }
 
@@ -349,40 +333,30 @@ impl Inner {
         thread.lane(&row.lane).cancel_task(&task.id, metadata).await
     }
 
-    /// The thread a message is for: the one it names, else a new one in the grant's scope.
+    /// The thread a message is for: the one it names, else a new one in the grant's scope;
+    /// `Err` names a thread that does not exist.
     async fn context(
         &self,
         principal: &AuthPrincipal,
         context: Option<&str>,
     ) -> Result<Result<String, String>, DoorError> {
-        let Some(context) = context else {
-            let grant =
-                principal.grant.as_ref().filter(|grant| allows_first_message(grant)).ok_or_else(
-                    || {
-                        AuthError::Forbidden(
-                            "the first message requires scoped create and write authority".into(),
-                        )
-                    },
-                )?;
-            let request = livekit_protocol::agent::agent_thread::CreateRequest {
-                scope: grant.scope.clone(),
-                ..Default::default()
-            };
-            let info = self.storage().await?.create_thread(request).await?;
-            Self::authorize(principal, AuthOperation::Write, &info.thread_id, Some(&info.scope))?;
-            return Ok(Ok(info.thread_id));
+        let (id, scope) = match context {
+            None => {
+                let request = livekit_protocol::agent::agent_thread::CreateRequest {
+                    scope: first_message_scope(principal)?.to_owned(),
+                    ..Default::default()
+                };
+                let info = self.storage().await?.create_thread(request).await?;
+                (info.thread_id, Some(info.scope))
+            }
+            Some(context) => match self.storage().await?.get_thread(context).await {
+                Ok(info) => (context.to_owned(), Some(info.scope)),
+                Err(StorageError::NotFound(_)) => (context.to_owned(), None),
+                Err(error) => return Err(error.into()),
+            },
         };
-        match self.storage().await?.get_thread(context).await {
-            Ok(info) => {
-                Self::authorize(principal, AuthOperation::Write, context, Some(&info.scope))?;
-                Ok(Ok(context.to_owned()))
-            }
-            Err(StorageError::NotFound(_)) => {
-                Self::authorize(principal, AuthOperation::Write, context, None)?;
-                Ok(Err(context.to_owned()))
-            }
-            Err(error) => Err(error.into()),
-        }
+        authorize(principal, AuthOperation::Write, &id, scope.as_deref())?;
+        Ok(if scope.is_some() { Ok(id) } else { Err(id) })
     }
 
     #[allow(clippy::too_many_arguments, reason = "one request's exchange")]
@@ -399,11 +373,9 @@ impl Inner {
         let context = match self.context(principal, message.context_id.as_deref()).await? {
             Ok(context) => context,
             Err(unknown) => {
-                let row = lk_agents_core::a2a::unpersisted_failed(
+                let row = rpc::unknown_thread_task(
                     &shortuuid("AST_"),
                     &self.lane,
-                    None,
-                    REASON_THREAD_NOT_FOUND,
                     now_ms(),
                     shortuuid("msg_"),
                 );

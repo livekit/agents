@@ -1,7 +1,7 @@
 //! Authorization decisions over verified claims. Header selection preserves carrier precedence;
 //! token cryptography and wall-clock validation execute in runtime.
 
-use lk_agents_abi::a2a::auth::{AuthError, AuthGrant, AuthOperation};
+use lk_agents_abi::a2a::auth::{AuthError, AuthGrant, AuthOperation, AuthPrincipal};
 
 /// A malformed selected carrier refuses, rather than falling back to another credential.
 pub fn selected_token<'a>(
@@ -32,6 +32,38 @@ pub fn has_subject(grant: &AuthGrant) -> bool {
 /// A first message must be able to create its scoped thread and write that message.
 pub fn allows_first_message(grant: &AuthGrant) -> bool {
     allows(grant, AuthOperation::Create, "", None) && grant.write
+}
+
+/// A principal's `operation` on thread `thread_id` in `scope` (`None`: a thread that does not
+/// exist), refused without a thread grant or beyond it.
+pub fn authorize(
+    principal: &AuthPrincipal,
+    operation: AuthOperation,
+    thread_id: &str,
+    scope: Option<&str>,
+) -> Result<(), AuthError> {
+    let grant = principal.grant.as_ref().ok_or_else(|| {
+        AuthError::Forbidden("endpoint call permission does not grant thread access".into())
+    })?;
+    if allows(grant, operation, thread_id, scope) {
+        Ok(())
+    } else {
+        Err(AuthError::Forbidden(format!("the thread grant does not allow {operation:?}")))
+    }
+}
+
+/// The scope a message naming no thread creates its thread in, when the grant allows it.
+pub fn first_message_scope(principal: &AuthPrincipal) -> Result<&str, AuthError> {
+    principal
+        .grant
+        .as_ref()
+        .filter(|grant| allows_first_message(grant))
+        .map(|grant| grant.scope.as_str())
+        .ok_or_else(|| {
+            AuthError::Forbidden(
+                "the first message requires scoped create and write authority".into(),
+            )
+        })
 }
 
 pub fn allows(

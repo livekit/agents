@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 use lk_agents_abi::a2a::door::DoorFrame;
 use lk_agents_abi::a2a::metadata::REASON_KEY;
-use lk_agents_abi::storage::thread::TaskRow;
+use lk_agents_abi::storage::thread::{REASON_THREAD_NOT_FOUND, TaskRow};
 use lk_agents_abi::storage::{StorageError, StreamInfo, TaskState};
 
 use crate::a2a::wire;
@@ -410,6 +410,12 @@ pub fn follow_up(
             && row.internal.as_ref().is_some_and(|internal| internal.ask.is_some()))
         .then(|| task.id.clone())),
     }
+}
+
+/// The task of a message for a thread that does not exist: failed `thread-not-found`, never
+/// stored.
+pub fn unknown_thread_task(task_id: &str, lane: &str, now_ms: i64, message_id: String) -> TaskRow {
+    crate::a2a::unpersisted_failed(task_id, lane, None, REASON_THREAD_NOT_FOUND, now_ms, message_id)
 }
 
 /// The answer to a message whose task failed before any storage held it (an unknown thread):
