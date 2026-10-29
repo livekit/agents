@@ -64,7 +64,7 @@ fn question() -> TaskRow {
             call_id: Some("call_1".into()),
             ..Default::default()
         }),
-        streams: Vec::new(),
+        ..Default::default()
     });
     row
 }
@@ -176,8 +176,9 @@ fn a_task_failure_the_database_could_not_store_answers_its_error() {
     );
 }
 
-/// A dead holder's `working` rows fail worker-lost, except the message's own task; a named task
-/// that already ended is not failed.
+/// A dead holder's `working` rows fail worker-lost, except the message's own task and a task a
+/// handler answered `Working`, which no run holds (A2A DST, 2821 of 32768 seeds once its handler
+/// answered `Working`); a named task that already ended is not failed.
 #[test]
 fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
     let mut m = machine(Policy::Queue);
@@ -185,7 +186,12 @@ fn recovery_fails_exactly_the_orphans_and_never_an_ended_task() {
     m.pending = Some(1);
     assert!(matches!(step(&mut m, opened(false, true)), Operation::ReadWorking));
     let working = |id: &str| TaskRow { task_id: id.into(), ..row(TaskState::Working) };
-    let fail = step(&mut m, Completion::Tasks(vec![working("receipt"), working("dead")]));
+    let answered = TaskRow {
+        internal: Some(TaskInternal { answered: true, ..Default::default() }),
+        ..working("answered")
+    };
+    let rows = vec![working("receipt"), working("dead"), answered];
+    let fail = step(&mut m, Completion::Tasks(rows));
     assert!(
         matches!(&fail, Operation::FailOrphans { reason: REASON_WORKER_LOST, failed }
             if failed.iter().map(|f| f.0.as_str()).eq(["dead"])),
@@ -395,9 +401,9 @@ fn row_of(status: TaskState) -> TaskRow {
 /// A2A_SEED=154 239 (message_executes_once, Continuation): a continuation whose commit was
 /// rejected was answered by the task it continued while its own receipt stayed `working`, later
 /// failing worker-lost on its own. The rejected save fails the message's own task, the answer
-/// names it, and the question it tried to answer stays pending. Any refusal does (review10 on
-/// d47805ad2): a commit refused `TooLarge`, `Invalid` or `Unauthorized` left the run open, the
-/// task `working` and the client with the raw error.
+/// names it, and the question it tried to answer stays pending. Any refusal does: a commit
+/// refused `TooLarge`, `Invalid` or `Unauthorized` left the run open, the task `working` and the
+/// client with the raw error.
 #[test]
 fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() {
     for error in [
@@ -525,4 +531,21 @@ fn a_raised_handler_commits_none_of_its_staged_writes() {
     assert_eq!(end.outcome, RunOutcome::Failed);
     assert!(end.scope_writes.is_empty(), "the saved context rolls back");
     assert!(end.app_writes.is_empty(), "the managed transaction rolls back");
+}
+
+/// A2A DST (request_answered_once, Inbox; 317 of 32768 seeds once its handler answered
+/// `Working`): a batch receipt whose drain the handler answered `Working` was watched forever,
+/// its row never reading answered. The request answers the task as it stands.
+#[test]
+fn a_receipt_answered_working_is_answered() {
+    let mut m = machine(Policy::Batch);
+    m.phase = Phase::Observe;
+    m.pending = Some(1);
+    let row = TaskRow {
+        internal: Some(TaskInternal { answered: true, ..Default::default() }),
+        ..row(TaskState::Working)
+    };
+    let effects = at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row))));
+    let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+    assert_eq!(answer.task.as_ref().map(|t| t.status), Some(TaskState::Working));
 }

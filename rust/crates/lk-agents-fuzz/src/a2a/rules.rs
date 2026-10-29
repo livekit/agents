@@ -147,8 +147,8 @@ pub fn one_question_pending(record: &Record) -> Vec<Violation> {
 /// A committed run's terminal rows end as its commit wrote them, unless a client canceled one: no
 /// other turn overwrites them. A request its committed run answered reads its answer settled:
 /// no write of the run's settlement was dropped on its way to the database. A commit leaves no
-/// row `working`: the run that held it ended. (A write storage refuses fails the turn
-/// `Invalid`, which [`answer_is_an_outcome`] rejects.)
+/// row `working` but one its handler answered `Working`: the run that held it ended. (A write
+/// storage refuses fails the turn `Invalid`, which [`answer_is_an_outcome`] rejects.)
 pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
     let overwritten =
         record.ledger.staged_terminal.iter().filter_map(|(commit, task_id, staged)| {
@@ -161,7 +161,9 @@ pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
     let unsettled = record.requests.iter().filter_map(|r| {
         let Some(Ok(answer)) = &r.answer else { return None };
         let task = &answer.task;
-        let settled = task.terminal() || task.status == TaskState::InputRequired;
+        let settled = task.terminal()
+            || task.status == TaskState::InputRequired
+            || record.ledger.answered_working.contains(&task.task_id);
         (answer.run_id.is_some() && !settled).then(|| Violation {
             subject: subject_of(r),
             text: format!(
@@ -170,9 +172,11 @@ pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
             ),
         })
     });
-    let working = record.ledger.left_working.iter().map(|(commit, task_id)| Violation {
-        subject: "Run",
-        text: format!("commit {commit}: left {task_id} working"),
+    let working = record.ledger.left_working.iter().filter_map(|(commit, task_id)| {
+        (!record.ledger.answered_working.contains(task_id)).then(|| Violation {
+            subject: "Run",
+            text: format!("commit {commit}: left {task_id} working"),
+        })
     });
     overwritten.chain(unsettled).chain(working).collect()
 }
@@ -238,27 +242,31 @@ pub fn terminal_task_never_changes(record: &Record) -> Vec<Violation> {
 
 /// A commit that applied with its acknowledgment lost is never followed by the framework failing
 /// its message's task (`livekit/reason` on a failure only the framework writes): it reports no
-/// failure it did not observe. A later turn's own outcome is that turn's.
+/// failure it did not observe. Nor is a task a committed handler answered `Working`: no worker
+/// holds it, so none died holding it. A later turn's own outcome is that turn's.
 pub fn no_failure_nobody_observed(record: &Record) -> Vec<Violation> {
-    record
-        .ledger
-        .applied_unacknowledged
-        .iter()
-        .filter_map(|(task_id, staged)| {
-            let row = record.tasks.get(task_id)?;
-            let reason = row
-                .data
-                .status_message
-                .as_ref()
-                .and_then(|m| m.metadata.as_ref())
-                .and_then(|m| m.get(REASON_KEY))
-                .and_then(|r| r.as_str());
-            (row.status == TaskState::Failed && reason.is_some()).then(|| Violation {
+    let failed = |task_id: &str| {
+        let row = record.tasks.get(task_id).filter(|r| r.status == TaskState::Failed)?;
+        let message = row.data.status_message.as_ref()?;
+        message.metadata.as_ref()?.get(REASON_KEY)?.as_str()
+    };
+    let unacknowledged =
+        record.ledger.applied_unacknowledged.iter().filter_map(|(task_id, staged)| {
+            failed(task_id).map(|reason| Violation {
                 subject: "LostAck",
                 text: format!("{task_id} applied as {staged:?}, then failed {reason:?}"),
             })
+        });
+    let continued =
+        |task_id: &str| record.requests.iter().any(|r| r.continues.as_deref() == Some(task_id));
+    let working = record.ledger.answered_working.iter().filter_map(|task_id| {
+        let reason = failed(task_id).filter(|_| !continued(task_id))?;
+        Some(Violation {
+            subject: "Working",
+            text: format!("{task_id} answered Working, then failed {reason:?}"),
         })
-        .collect()
+    });
+    unacknowledged.chain(working).collect()
 }
 
 /// Every answer to one message names the task its first send created.
@@ -384,10 +392,26 @@ mod tests {
     }
 
     #[test]
+    fn a_handler_working_task_failed_by_the_framework_is_rejected() {
+        let mut r = record();
+        let (id, row) = r.tasks.iter_mut().next().unwrap();
+        row.status = TaskState::Failed;
+        row.data.status_message =
+            Some(lk_agents_core::a2a::failed_message(id, "worker-lost", "m".into()));
+        let id = id.clone();
+        r.requests.retain(|q| q.continues.as_deref() != Some(id.as_str()));
+        r.ledger.answered_working.insert(id);
+        assert!(!no_failure_nobody_observed(&r).is_empty());
+    }
+
+    #[test]
     fn a_row_a_commit_left_working_is_rejected() {
         let mut r = record();
         r.ledger.left_working.push((1, "AST_1".into()));
         assert!(!commit_is_what_the_run_staged(&r).is_empty());
+        // unless its handler answered it `Working`
+        r.ledger.answered_working.insert("AST_1".into());
+        assert!(commit_is_what_the_run_staged(&r).iter().all(|v| !v.text.contains("AST_1")));
     }
 
     #[test]

@@ -99,6 +99,8 @@ class TaskInternal:
 
     ask: Ask | None
     streams: list[StreamInfo]
+    answered: bool
+    """A turn answered the task `working` (its handler's `Working` outcome): no run holds it."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

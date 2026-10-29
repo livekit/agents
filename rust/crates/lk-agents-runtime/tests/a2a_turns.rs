@@ -1022,8 +1022,8 @@ lk_agents_storage::contract!(
 // -- I-7: commit outcomes reach the caller as they are (SQLite, injected faults) --
 
 /// A refused save fails the original task `storage-unavailable`, its staged changes absent: no
-/// new task, no answer in the history. A save refused as too large does too (review10 on
-/// d47805ad2: the client got the raw `TooLarge` and the task stayed `working`).
+/// new task, no answer in the history. A save refused as too large does too: it reached the
+/// client as the raw `TooLarge`, the task left `working`.
 #[tokio::test]
 async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
     use lk_agents_storage::testing::CommitFault;

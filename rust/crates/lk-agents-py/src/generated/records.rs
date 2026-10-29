@@ -2443,10 +2443,11 @@ pub mod storage_class {
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn task_internal_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::storage::TaskInternal) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::storage::TaskInternal { ask, streams } = value;
+            let ::lk_agents_abi::storage::TaskInternal { ask, streams, answered } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
             kwargs.set_item("ask", match ask { None => py.None().into_bound(py), Some(x) => crate::generated::records::storage_class::ask_to_py(py, x)? })?;
             kwargs.set_item("streams", ::pyo3::types::PyList::new(py, streams.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::stream_info_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("answered", ::pyo3::IntoPyObjectExt::into_bound_py_any(answered, py)?)?;
             crate::host::construct(TASK_INTERNAL.import(py, "livekit.agents._generated.storage_class", "TaskInternal")?.as_any(), (), Some(&kwargs))
     }
 

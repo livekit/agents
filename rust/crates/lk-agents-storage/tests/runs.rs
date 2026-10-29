@@ -355,6 +355,26 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
+/// A2A_SEED=3497 (no_failure_nobody_observed, Working): a row a turn answered `working` (its
+/// handler's `Working` outcome) is no run's; a later pickup took it as a dead holder's and the
+/// framework failed it `worker-lost`. A pickup leaves it as the turn answered it.
+async fn a_pickup_leaves_a_row_answered_working(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    lane.submit(&submitted("AST_1")).await.unwrap();
+    let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let answered = TaskPatch { answered: true, ..TaskPatch::default() };
+    run.tasks.write("AST_1", TaskState::Working, answered).await.unwrap();
+    run.commit(CommitOptions::default()).await.unwrap();
+
+    assert_eq!(lane.pickup("AST_1").await.unwrap(), None, "no dead holder's row");
+    let row = lane.task("AST_1").await.unwrap().unwrap();
+    assert_eq!(row.status, TaskState::Working);
+    assert!(row.internal.is_some_and(|i| i.answered));
+    fx.cleanup(&[&s]).await;
+}
+
 /// A2A_SEED=50 60 267 (answer_is_an_outcome, Concurrent): a concurrent run reads its rows live, so
 /// a client's cancel mid-turn is the base of its write. The write keeps the client's row, as the
 /// commit would, instead of refusing the whole turn.
@@ -649,6 +669,7 @@ lk_agents_storage::contract!(
     a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost,
     a_dropped_run_stops_renewing_and_its_lease_lapses,
     a_cancel_never_overwrites_a_terminal_task,
+    a_pickup_leaves_a_row_answered_working,
     a_commit_never_overwrites_a_canceled_task,
     a_concurrent_write_keeps_a_row_canceled_mid_turn,
     the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit,

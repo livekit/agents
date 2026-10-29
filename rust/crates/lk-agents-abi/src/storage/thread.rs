@@ -223,6 +223,8 @@ pub struct TaskPatch {
     pub status_message: Option<a2a::Message>,
     pub history: Option<Vec<a2a::Message>>,
     pub artifacts: Option<Vec<a2a::Artifact>>,
+    /// The turn answers the row `working`: no run holds it once committed.
+    pub answered: bool,
 }
 
 /// The pending transition a task waits on.
@@ -318,7 +320,12 @@ pub fn merge_write(
                     streams.push(stream);
                 }
             }
-            (ask.is_some() || !streams.is_empty()).then_some(TaskInternal { ask, streams })
+            let answered = patch.answered;
+            (ask.is_some() || !streams.is_empty() || answered).then_some(TaskInternal {
+                ask,
+                streams,
+                answered,
+            })
         },
     })
 }

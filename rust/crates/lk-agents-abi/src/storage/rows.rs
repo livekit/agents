@@ -96,6 +96,9 @@ pub struct TaskInternal {
     pub ask: Option<Ask>,
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
     pub streams: Vec<StreamInfo>,
+    /// A turn answered the task `working` (its handler's `Working` outcome): no run holds it.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "std::ops::Not::not"))]
+    pub answered: bool,
 }
 
 /// One history item of a lane; `payload` is the `ChatContext.ChatItem`.

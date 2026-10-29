@@ -378,7 +378,8 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
                 )));
             }
         };
-        let patch = TaskPatch { status_message, metadata, ..base };
+        let answered = status == TaskState::Working;
+        let patch = TaskPatch { status_message, metadata, answered, ..base };
         settled.transitions.push(TaskTransition { task_id: answer, status, patch });
         return Ok(settled);
     }
@@ -592,6 +593,7 @@ mod tests {
             let answer = s.transitions.last().unwrap();
             assert_eq!((answer.task_id.as_str(), answer.status), ("AST_2", status));
             assert_eq!(answer.patch.artifacts, None, "no artifact");
+            assert_eq!(answer.patch.answered, status == TaskState::Working, "no run holds it");
             let message = answer.patch.status_message.as_ref().expect("its text");
             assert_eq!(message.parts[0], a2a::Part::text("not for me"));
             assert_eq!((s.outcome, s.output), (outcome, None));
@@ -639,7 +641,7 @@ mod tests {
                 question: "Your name?".into(),
                 ..Default::default()
             }),
-            streams: Vec::new(),
+            ..Default::default()
         });
         let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("Ada")]);
         wire.message_id = "answer".into();
@@ -664,7 +666,7 @@ mod tests {
                 question: "For how many?".into(),
                 ..Default::default()
             }),
-            streams: Vec::new(),
+            ..Default::default()
         });
         let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("two")]);
         wire.message_id = "answer".into();

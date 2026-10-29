@@ -525,7 +525,7 @@ impl TaskMachine {
             internal: self
                 .stream
                 .as_ref()
-                .map(|stream| TaskInternal { ask: None, streams: vec![stream.clone()] }),
+                .map(|stream| TaskInternal { streams: vec![stream.clone()], ..Default::default() }),
         }
     }
 
@@ -681,9 +681,12 @@ impl TaskMachine {
             (FailTarget::Named(task_id), Completion::Picked(was)) => {
                 was.map(|_| task_id.clone()).into_iter().collect()
             }
-            (FailTarget::Orphans { skip }, Completion::Tasks(rows)) => {
-                rows.into_iter().map(|r| r.task_id).filter(|t| !skip.contains(t)).collect()
-            }
+            (FailTarget::Orphans { skip }, Completion::Tasks(rows)) => rows
+                .into_iter()
+                .filter(|r| !answered(r))
+                .map(|r| r.task_id)
+                .filter(|t| !skip.contains(t))
+                .collect(),
             (_, Completion::Done) => Vec::new(),
             (_, completion) => {
                 return Err(Finish::Error(StorageError::Invalid(format!(
@@ -1066,9 +1069,12 @@ pub fn rejected_commit(error: &StorageError) -> bool {
     matches!(error, StorageError::VersionConflict { .. })
 }
 
-/// Whether a turn answered the row: it ended, or it asks a question.
+/// Whether a turn answered the row: it ended, it asks a question, or its handler answered it
+/// `Working`.
 fn answered(row: &TaskRow) -> bool {
-    row.terminal() || row.status == TaskState::InputRequired
+    row.terminal()
+        || row.status == TaskState::InputRequired
+        || row.internal.as_ref().is_some_and(|i| i.answered)
 }
 
 /// How a step ends the machine.

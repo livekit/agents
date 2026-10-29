@@ -723,8 +723,8 @@ mod tests {
         let mut running = row(TaskState::Working);
         let stream = |id: &str| StreamInfo { stream_id: id.into(), expires_at: 0 };
         running.internal = Some(lk_agents_abi::storage::TaskInternal {
-            ask: None,
             streams: vec![stream("s1"), stream("s2")],
+            ..Default::default()
         });
         let other =
             wire::Cursor { task_id: "AST_2".into(), stream_id: "s1".into(), offset: "3".into() };

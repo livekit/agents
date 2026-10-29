@@ -315,10 +315,11 @@ WHERE lane = :lane AND message_id = :message_id AND task_id = :task_id
 
 statement! {
     /// The pickup's first half: the status of a row still runnable (`working` means a dead
-    /// holder had it).
+    /// holder had it; a row a turn answered `working` is no run's).
     SelectPickupStatus<'a> { lane: &'a str, task_id: &'a str } => r#"
 SELECT status FROM tasks
 WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working')
+  AND NOT COALESCE(json_extract(internal, '$.answered'), 0)
 "#
 }
 
@@ -328,6 +329,7 @@ statement! {
 UPDATE tasks
 SET status = 'working', updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
 WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working')
+  AND NOT COALESCE(json_extract(internal, '$.answered'), 0)
 "#
 }
 
@@ -337,6 +339,7 @@ statement! {
 UPDATE tasks
 SET status = 'working', updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
 WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working')
+  AND NOT COALESCE(json_extract(internal, '$.answered'), 0)
   AND EXISTS (SELECT 1 FROM lanes WHERE lane = :lane AND lease_token = :token)
 "#
 }

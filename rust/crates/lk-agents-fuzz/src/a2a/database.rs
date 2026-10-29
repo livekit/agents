@@ -29,6 +29,8 @@ pub struct Ledger {
     pub staged_terminal: Vec<(u64, String, TaskState)>,
     /// Rows an applied commit left `working`: `(commit, task_id)`.
     pub left_working: Vec<(u64, String)>,
+    /// Tasks a committed handler invocation answered `Working`.
+    pub answered_working: BTreeSet<String>,
     /// The most questions pending at once, and which.
     pub most_pending: Vec<String>,
     pub lost_acks: u64,

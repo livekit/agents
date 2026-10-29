@@ -1,12 +1,12 @@
 //! The fake handler: an application's `a2a_session` handler at the turn's host port
 //! (`TurnHost`). It works a while before each step, reaches a few checkpoints, yields once told
 //! to, and ends with a text answer, a conversation tool's question (its call and placeholder
-//! output in the new items, as an agent run records them), a transport `Rejected` transition or
-//! a raise; while faults are on it may lose the lane, be cancelled by its host, or lose the
-//! database. Its output carries a marker
+//! output in the new items, as an agent run records them), a transport `Rejected` or `Working`
+//! transition, or a raise; while faults are on it may lose the lane, be cancelled by its host, or
+//! lose the database. Its output carries a marker
 //! item naming the invocation, so the history shows which invocations' commits applied.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::a2a::turn::{TurnContext, TurnEvent, TurnHost, Verdict};
@@ -29,8 +29,8 @@ enum Ending {
     Text,
     Ask,
     Raise,
-    /// The transport transition `Rejected`.
-    Reject,
+    /// A transport transition: `Rejected` or `Working`.
+    Status(TaskState),
 }
 
 /// The handlers of every request: which run now, and what each invocation handled.
@@ -41,11 +41,19 @@ pub struct Handlers {
     pub open: Mutex<BTreeSet<usize>>,
     /// By invocation: the `messageId`s of the batch it handled.
     pub invocations: Mutex<Vec<Vec<String>>>,
+    /// The invocations that answered `Working`, and the task each answered.
+    pub working: Mutex<BTreeMap<usize, String>>,
 }
 
 impl Handlers {
     pub fn new(world: Arc<World>, faults: Faults) -> Arc<Self> {
-        Arc::new(Handlers { world, faults, open: Mutex::default(), invocations: Mutex::default() })
+        Arc::new(Handlers {
+            world,
+            faults,
+            open: Mutex::default(),
+            invocations: Mutex::default(),
+            working: Mutex::default(),
+        })
     }
 }
 
@@ -77,7 +85,8 @@ impl TurnHost for Host {
             let ending = match world.draw(|r| r.u8(0..20)) {
                 0..=10 => Ending::Text,
                 11..=16 => Ending::Ask,
-                17..=18 => Ending::Reject,
+                17 => Ending::Status(TaskState::Rejected),
+                18 => Ending::Status(TaskState::Working),
                 _ => Ending::Raise,
             };
             let handler = Handler {
@@ -165,11 +174,16 @@ impl StreamSource<TurnEvent> for Handler {
             let output = self.output(world.wall_secs());
             let reached = match (&output.input_required, output.status) {
                 (Some(_), _) => Some("Question"),
+                (None, Some(TaskState::Working)) => Some("HandlerWorking"),
                 (None, Some(_)) => Some("HandlerRejected"),
                 _ => None,
             };
             if let Some(kind) = reached {
                 *world.ledger.lock().unwrap().injected.entry(kind).or_default() += 1;
+            }
+            if output.status == Some(TaskState::Working) {
+                let mut working = self.handlers.working.lock().unwrap();
+                working.insert(self.invocation, self.task_id.clone());
             }
             Ok(Some(TurnEvent::Output { output: output.into() }))
         })
@@ -198,9 +212,9 @@ impl Handler {
         match self.ending {
             Ending::Text => out.output = Some(format!("answer for {}", self.task_id).into()),
             Ending::Raise => out.error = Some("RuntimeError: the tool failed".into()),
-            Ending::Reject => {
-                out.output = Some(format!("not for me: {}", self.task_id).into());
-                out.status = Some(TaskState::Rejected);
+            Ending::Status(status) => {
+                out.output = Some(format!("{status:?}: {}", self.task_id).into());
+                out.status = Some(status);
             }
             Ending::Ask => {
                 let call_id = format!("call_{}", self.invocation);

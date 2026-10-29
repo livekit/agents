@@ -483,9 +483,10 @@ A task row is the A2A `Task`: `id` is `task_id`, `contextId` the thread id,
 `status` is `status`, `status_message` and `updated_at`, and `data` holds
 the rest under the A2A names (`history`, `artifacts`, `metadata`).
 `internal` holds framework transport metadata, including the pending question
-(`ask`), `deadline`, `parent` and durable references to the task's delivery
-streams. The task id is minted by the framework, independent of any stream id.
-A row found `working` when a new run picks it up belonged to a worker that died.
+(`ask`), `deadline`, `parent`, durable references to the task's delivery
+streams, and `answered` when a handler answered the turn `Working`. The task id is minted by
+the framework, independent of any stream id. A row found `working` when a new run picks it up
+belonged to a worker that died, unless a handler answered it `Working`: no run holds that one.
 
 ## Journal
 

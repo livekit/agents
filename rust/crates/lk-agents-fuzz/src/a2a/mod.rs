@@ -92,7 +92,8 @@ pub struct Record {
     pub requests: Vec<Request>,
     /// Every task row as the run left it.
     pub tasks: BTreeMap<String, TaskRow>,
-    /// The messages of inbox rows whose task no turn answered (not ended, not asking).
+    /// The messages of inbox rows whose task no turn answered (not ended, not asking, not
+    /// answered `Working` by its handler).
     pub unanswered_receipts: Vec<String>,
     pub ledger: Ledger,
     pub now: Duration,
@@ -333,7 +334,8 @@ fn inject(database: &Database, world: &World, f: &Faults, rng: &mut Rng) -> bool
 }
 
 /// What the run left: every task row, the receipts no turn answered, and which invocations'
-/// commits applied, by the markers their outputs left in the history.
+/// commits applied, by the markers their outputs left in the history: what they executed, and
+/// the tasks they answered `Working`.
 async fn finish<F, Fut>(
     requests: Vec<Request>,
     database: &Database,
@@ -357,17 +359,9 @@ where
             tasks.insert(task_id, task);
         }
     }
-    let unanswered_receipts = database
-        .select(
-            "SELECT i.message_id FROM inbox i JOIN tasks t ON t.task_id = i.task_id \
-             WHERE t.status IN ('submitted', 'working')",
-        )
-        .await
-        .iter()
-        .map(text)
-        .collect();
     let mut ledger = world.ledger.lock().unwrap().clone();
     let invocations = handlers.invocations.lock().unwrap().clone();
+    let working = handlers.working.lock().unwrap().clone();
     for row in database.select("SELECT id FROM items").await {
         let Some(n) = text(&row).strip_prefix(MARKER).and_then(|n| n.parse::<usize>().ok()) else {
             continue;
@@ -375,6 +369,17 @@ where
         for message in &invocations[n] {
             ledger.executions.entry(message.clone()).or_default().insert(n);
         }
+        ledger.answered_working.extend(working.get(&n).cloned());
     }
+    let unanswered_receipts = database
+        .select(
+            "SELECT i.message_id, t.task_id FROM inbox i JOIN tasks t ON t.task_id = i.task_id \
+             WHERE t.status IN ('submitted', 'working')",
+        )
+        .await
+        .into_iter()
+        .filter(|row| !ledger.answered_working.contains(row[1].as_str().unwrap_or_default()))
+        .map(|row| text(&row))
+        .collect();
     Record { requests, tasks, unanswered_receipts, ledger, now }
 }
