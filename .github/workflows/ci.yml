@@ -75,9 +75,6 @@ jobs:
             mypy-${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-
             mypy-${{ matrix.python-version }}-
 
-      - name: Check Types
-        run: uv run python scripts/check_types.py
-
       - name: Check native tokenizer source types
         run: >-
           uv run --no-sync mypy --strict --namespace-packages --explicit-package-bases
@@ -85,3 +82,6 @@ jobs:
           livekit-blingfire/src/lk_blingfire.pyi livekit-blingfire/tests/qualify.py
         env:
           MYPYPATH: livekit-blingfire/python:livekit-blingfire/src
+
+      - name: Check Types
+        run: uv run python scripts/check_types.py
