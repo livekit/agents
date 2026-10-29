@@ -10,9 +10,9 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Annotated, Any, Literal, NotRequired, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Literal, NotRequired, TypeAlias
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, JsonValue, PrivateAttr
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -20,7 +20,7 @@ from livekit import rtc
 from .. import _bindings, utils
 
 if TYPE_CHECKING:
-    from livekit.agents.llm.tool_context import Tool
+    from ..llm.tool_context import Tool
 
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
@@ -167,7 +167,7 @@ class ChatMessage(BaseModel):
     content: list[ChatContent]
     interrupted: bool = False
     transcript_confidence: float | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, JsonValue] = Field(default_factory=dict)
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
 
@@ -198,7 +198,7 @@ class FunctionCall(BaseModel):
     arguments: str
     name: str
     created_at: float = Field(default_factory=time.time)
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, JsonValue] = Field(default_factory=dict)
     """Extra data for this function call. Can include provider-specific data
     (e.g., extra["google"] for thought signatures).
     """

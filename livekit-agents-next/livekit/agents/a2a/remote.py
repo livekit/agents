@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from typing import cast
+
+from pydantic import JsonValue
 
 from .. import _core
 from .._generated.a2a_client import AgentCard
@@ -121,7 +124,7 @@ class _RemoteTool(Toolset):
                 event: RemoteEvent | None = None
                 async for update in reply:
                     event = interaction.update(update)
-                    ctx.function_call.extra.update(interaction.extra)
+                    ctx.function_call.extra.update(_json_object(interaction.extra))
                     if isinstance(event, RemoteEventProgress):
                         await ctx.update(event.text)
                     elif isinstance(
@@ -145,7 +148,7 @@ class _RemoteTool(Toolset):
                     raise RuntimeError("the remote interaction ended without an outcome")
         except asyncio.CancelledError:
             interaction.cancelled()
-            ctx.function_call.extra.update(interaction.extra)
+            ctx.function_call.extra.update(_json_object(interaction.extra))
             raise
         finally:
             if reply is not None:
@@ -170,3 +173,8 @@ async def _ask_the_person(ctx: RunContext, event: RemoteEventInputRequired) -> s
 
 
 __all__ = ["RemoteAgent"]
+
+
+def _json_object(value: dict[str, object]) -> dict[str, JsonValue]:
+    """The core's JSON object; its stub types every JSON output as ``object``."""
+    return cast("dict[str, JsonValue]", value)

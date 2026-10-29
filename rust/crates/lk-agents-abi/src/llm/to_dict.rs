@@ -1,4 +1,4 @@
-//! `ChatContext.to_dict` (`chat_context.py:629`) records: `model_dump(mode="json", exclude_none=True)`,
+//! `ChatContext.to_dict` records: `model_dump(mode="json", exclude_none=True)`,
 //! generated per record (`#[binding(model_dump)]`), and the declared host function. The item
 //! filters are `lk_agents_core::llm::chat_dict`.
 
@@ -11,7 +11,7 @@ use crate::llm::chat_context::{
     ChatContent, ChatItem, ChatMessage, Extra, ImageSource, InferenceDetail, Role,
 };
 
-/// `chat_context.py:630`. The seventh flag, `strip_markup`, is [`ToDictHost::strip_expr_markup`]:
+/// The seventh flag, `strip_markup`, is [`ToDictHost::strip_expr_markup`]:
 /// the flag and the stripper are one decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToDictOptions {
@@ -170,7 +170,7 @@ impl ModelDump for ImageSource {
     }
 }
 
-/// `ChatMessage.content`, filtered (`chat_context.py:653`). Markup is stripped from assistant
+/// `ChatMessage.content`, filtered. Markup is stripped from assistant
 /// messages only (`:658`): a user turn may contain the literal text of a tag.
 pub(crate) fn content_dump(m: &ChatMessage, cx: &DumpCx<'_>) -> Dumped {
     let mut content = Vec::with_capacity(m.content.len());
@@ -189,7 +189,7 @@ pub(crate) fn content_dump(m: &ChatMessage, cx: &DumpCx<'_>) -> Dumped {
     Ok(Some(Value::Array(content)))
 }
 
-/// `ChatContext.to_dict` (`chat_context.py:629`) as the host calls it.
+/// `ChatContext.to_dict` as the host calls it.
 #[crate::host(functions)]
 pub trait ChatContextDict {
     /// ``{"items": [...]}``, each item's JSON dump. Media content needs its exclusion; with

@@ -265,7 +265,7 @@ async def _upload_session_report(
                 chat_history=[],
             ),
             destination.upload_gate.disabled,
-            lambda item: _chat_item_span_attribute(item),
+            _chat_item_span_attribute,
             capture_content=capture_content,
         )
         for record in records:

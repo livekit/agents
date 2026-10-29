@@ -697,7 +697,7 @@ fn union_alias(name: &str, members: &[&str]) -> String {
     format!("{head}(\n    {}\n)", members.join("\n    | "))
 }
 
-/// `any`: JSON reads `Any` (a pydantic model's public annotation), else `object`.
+/// `any`: JSON reads `JsonValue` (a pydantic model's public annotation), else `object`.
 fn annotation(
     ty: &Ty,
     module: &str,
@@ -712,8 +712,8 @@ fn annotation(
         Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),
         Ty::Str => "str".into(),
         Ty::Json | Ty::JsonObject if any => {
-            typing.add("typing", "Any");
-            if matches!(ty, Ty::Json) { "Any".into() } else { "dict[str, Any]".into() }
+            typing.add("pydantic", "JsonValue");
+            if matches!(ty, Ty::Json) { "JsonValue".into() } else { "dict[str, JsonValue]".into() }
         }
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),

@@ -291,7 +291,11 @@ pub(crate) fn annotation_names(text: &str) -> Vec<(std::ops::Range<usize>, &str)
                     break;
                 }
             }
-        } else if ch.is_alphabetic() || ch == '_' {
+        } else if ch.is_alphabetic() || ch == '_' || (ch == '.' && chars.get(i).is_some_and(|c| c.1 == '.')) {
+            // A relative path (`..llm.tool_context.Tool`) keeps its leading dots.
+            while i < chars.len() && chars[i].1 == '.' {
+                i += 1;
+            }
             while i < chars.len()
                 && (chars[i].1.is_alphanumeric() || matches!(chars[i].1, '_' | '.'))
             {

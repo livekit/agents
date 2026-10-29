@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, Never
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import Self, TypeVar
 
 from livekit import rtc
@@ -68,7 +68,7 @@ class FunctionToolCall(BaseModel):
     name: str
     arguments: str
     call_id: str
-    extra: dict[str, Any] | None = None
+    extra: dict[str, JsonValue] | None = None
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
@@ -76,7 +76,7 @@ class ChoiceDelta(BaseModel):
     role: ChatRole | None = None
     content: str | None = None
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
-    extra: dict[str, Any] | None = None
+    extra: dict[str, JsonValue] | None = None
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
@@ -84,7 +84,7 @@ class CollectedResponse(BaseModel):
     text: str = ""
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
     usage: CompletionUsage | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, JsonValue] = Field(default_factory=dict)
     """Provider-specific extra data accumulated across chunks
     (e.g., xAI encrypted reasoning, Google thought signatures).
     """

@@ -5,7 +5,7 @@ pub mod protocol;
 
 use std::time::SystemTime;
 
-/// JSON, not an opaque ref: the reference branches on it (`chat_context.py:814`).
+/// JSON, not an opaque ref: the reference branches on it.
 pub type Extra = serde_json::Map<String, serde_json::Value>;
 
 use crate::{HostRef, MediaRef};
@@ -14,7 +14,7 @@ use crate::{HostRef, MediaRef};
 #[crate::host(file(module = "chat_items", path = "livekit.agents.llm.chat_context"))]
 const _: () = ();
 
-// `ChatRole` (`chat_context.py:222`). Declaration order matches the reference's; the wire strings
+// `ChatRole`. Declaration order matches the reference's; the wire strings
 // are the exact `Literal`s.
 #[crate::host(record(module = "chat_items", name = "ChatRole", extract, emit))]
 #[crate::host(wire_strs)]
@@ -74,7 +74,7 @@ impl ItemKind {
     }
 }
 
-// `ImageContent.inference_detail` (`chat_context.py:203`). OpenAI-only today. An unknown value is
+// `ImageContent.inference_detail`. OpenAI-only today. An unknown value is
 // refused, never defaulted: it reaches OpenAI's request body verbatim.
 #[crate::host(record(module = "chat_items", extract, emit))]
 #[crate::host(wire_strs)]
@@ -164,7 +164,7 @@ pub struct ImageContent {
     pub mime_type: Option<String>,
 }
 
-// `chat_context.py:216`: `type` comes first, and pydantic field order is `model_dump()` key order.
+// `type` comes first, and pydantic field order is `model_dump()` key order.
 #[crate::host(record(
     module = "chat_items",
     pydantic,
@@ -194,7 +194,7 @@ pub enum ChatContent {
     Text(String),
 }
 
-// `MetricsMetadata` (`chat_context.py:226`). A field with no value contributes no key.
+// A field with no value contributes no key.
 #[crate::host(record(module = "chat_items", typed_dict, extract, emit, model_dump))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -205,7 +205,7 @@ pub struct MetricsMetadata {
     pub model_provider: Option<String>,
 }
 
-// `chat_context.py:231`, `total=False`: absent is distinct from null (and an absent list from an
+// `total=False`: absent is distinct from null (and an absent list from an
 // empty one), so every field is absent when `None`.
 #[crate::host(record(module = "chat_items", typed_dict, extract, emit, model_dump))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -285,7 +285,7 @@ pub struct MetricsReport {
     pub stt_metadata: Option<MetricsMetadata>,
 }
 
-// `chat_context.py:310`. The text properties keep their bodies in `_bindings` (`text_content`
+// The text properties keep their bodies in `_bindings` (`text_content`
 // imports `strip_expr_markup` lazily: a cycle).
 #[crate::host(record(
     module = "chat_items",
@@ -333,7 +333,7 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    /// Every text part joined by `"\n"`, `None` if there are none (`chat_context.py:340`).
+    /// Every text part joined by `"\n"`, `None` if there are none.
     pub fn raw_text_content(&self) -> Option<String> {
         let mut parts = self.content.iter().filter_map(|c| match c {
             ChatContent::Text(t) => Some(t.as_str()),
@@ -393,7 +393,6 @@ impl ChatMessage {
     }
 }
 
-// `chat_context.py:361`.
 #[crate::host(record(
     module = "chat_items",
     pydantic,
@@ -426,7 +425,6 @@ pub struct FunctionCall {
     pub group_id: Option<String>,
 }
 
-// `chat_context.py:374`.
 #[crate::host(record(
     module = "chat_items",
     pydantic,
@@ -478,7 +476,7 @@ impl FunctionCallOutput {
     }
 }
 
-// `chat_context.py:389`; `...Item` to stay apart from `AgentHandoffEvent`. `chat_context.py`
+// `...Item` to stay apart from `AgentHandoffEvent`. The model
 // writes `id` then `type`, and field order is user-visible (`model_dump()` and `repr`).
 #[crate::host(record(
     module = "chat_items",
@@ -503,7 +501,6 @@ pub struct AgentHandoffItem {
     pub created_at: SystemTime,
 }
 
-// `chat_context.py:397`.
 #[crate::host(record(
     module = "chat_items",
     pydantic,
@@ -528,7 +525,7 @@ pub struct AgentConfigUpdate {
     pub created_at: SystemTime,
     /// Full tool definitions (in-memory only, not serialized).
     // The live callables, interned whole: `agent_activity.py:599` mutates the same list later.
-    #[host(private, default_factory = "list", annotation = "list[livekit.agents.llm.tool_context.Tool]")]
+    #[host(private, default_factory = "list", annotation = "list[..llm.tool_context.Tool]")]
     #[cfg_attr(feature = "serde", serde(skip))]
     pub tools: Option<HostRef>,
 }
@@ -638,7 +635,7 @@ pub struct ChatContext {
     pub items: Vec<ChatItem>,
 }
 
-/// Filters for [`ChatContext::copy`] (`chat_context.py:495`).
+/// Filters for [`ChatContext::copy`] (`ChatContext.copy`).
 #[derive(Debug, Clone, Default)]
 pub struct CopyOptions {
     pub exclude_function_call: bool,
@@ -690,12 +687,12 @@ impl ChatContext {
     }
 
     /// Append, without consulting `created_at`: `add_message` with no `created_at`
-    /// (`chat_context.py:465`). Not the same as [`insert`](Self::insert) on an unsorted list.
+    /// (`ChatContext.add_message`). Not the same as [`insert`](Self::insert) on an unsorted list.
     pub fn push(&mut self, item: impl Into<ChatItem>) {
         self.items.push(item.into());
     }
 
-    /// `chat_context.py:472`.
+    /// `ChatContext.insert`.
     pub fn insert(&mut self, item: impl Into<ChatItem>) {
         let item = item.into();
         let idx = self.find_insertion_index(item.created_at());
@@ -709,7 +706,7 @@ impl ChatContext {
         }
     }
 
-    /// After the last item with `created_at <=` it (`chat_context.py:749`). A reverse scan, not a
+    /// After the last item with `created_at <=` it (`ChatContext.find_insertion_index`). A reverse scan, not a
     /// bisect: the list may be unsorted, and ties keep arrival order.
     pub fn find_insertion_index(&self, created_at: SystemTime) -> usize {
         for (i, item) in self.items.iter().enumerate().rev() {
@@ -720,7 +717,7 @@ impl ChatContext {
         0
     }
 
-    /// A filtered copy (`chat_context.py:495`); deep, where the reference shares items.
+    /// A filtered copy (`ChatContext.copy`); deep, where the reference shares items.
     pub fn copy(&self, opts: &CopyOptions) -> ChatContext {
         let plan = copy_plan(&self.facts(), opts);
         ChatContext { items: plan.into_iter().map(|i| self.items[i].clone()).collect() }
