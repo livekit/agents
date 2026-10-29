@@ -127,6 +127,10 @@ application context. It returns an envelope with two members:
 | `turn.result` | `RunResult[Output]`: invocation status, output/question, history, and usage |
 | `turn.state` | `TextSessionState`: frames, active conversation, and parent tool-call relationships |
 
+`turn.result.usage` is an immutable snapshot of this turn's consumption across
+its local agent frames, counted once. The next reconstructed turn starts fresh
+accounting. See [usage scope](usage.md#scope-and-delegation).
+
 Read `turn.result.status` to handle the outcome. Save `turn.state` and
 changed application fields before accepting the next turn, including
 turns whose status is `"input_required"`.

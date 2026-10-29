@@ -1,5 +1,10 @@
 # Telemetry
 
+Read consumption directly from `result.usage`, `stream.usage`, or
+`session.usage`; no exporter or event subscription is required.
+[Usage and metrics](usage.md) defines accounting records, scopes, and measurement
+availability. This page defines how observations reach telemetry destinations.
+
 The framework adopts the application's configured OpenTelemetry tracer
 provider. Configure it before starting jobs, or select an explicit provider
 with `livekit.agents.telemetry.set_tracer_provider(provider)`. The application's

@@ -49,6 +49,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a `ChatContext`; empty on a new thread |
 | `current_agent` | the agent speaking now |
+| `usage` | latest immutable `Usage` snapshot; retained after shutdown; see [usage and metrics](usage.md) |
 | `on(event, callback)` | subscribe to a session event, below |
 | `aclose()`, `async with` | end the call's session |
 
@@ -60,11 +61,15 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `"speech_created"` | `SpeechCreatedEvent`: `speech_handle`, `source`, `user_initiated` | the agent scheduled a speech |
 | `"agent_state_changed"` | `AgentStateChangedEvent`: `old_state`, `new_state` | the agent moved between `initializing`, `idle`, `listening`, `thinking` and `speaking` |
 | `"user_state_changed"` | `UserStateChangedEvent`: `old_state`, `new_state` | the person moved between `speaking`, `listening` and `away` |
-| `"session_usage_updated"` | `SessionUsageUpdatedEvent`: `usage` | model usage grew |
 | `"error"` | `ErrorEvent`: `error`, `source` | a provider failed; `error.recoverable` says whether the call goes on |
 | `"close"` | `CloseEvent`: `reason`, `error` | the session closed |
 
 The event types are exported from `livekit.agents`.
+
+Usage is read through `session.usage`, without an update event. Intermediate
+snapshots contain measurements received so far; after awaiting `aclose()`, the
+snapshot describes settled local accounting and any missing measurements. See
+[voice usage](usage.md#voice-sessions).
 
 ## Updating a live session
 

@@ -80,7 +80,6 @@ async def quick_balance(ctx: RunContext[CustomerContext], account_number: str) -
     result = await billing.run(
         f"Look up the balance for account {account_number}. Do not ask follow-up questions.",
         context=ctx.context,
-        usage=ctx.usage,
     )
     if result.status == "input_required":
         return f"Balance lookup needs more information: {result.question}"

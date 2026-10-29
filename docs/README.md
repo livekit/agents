@@ -24,6 +24,7 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [tools.md](tools.md) | Tools, toolsets/MCP, approvals, human input, errors, and local/remote agents as tools |
 | [models.md](models.md) | Model connection options, timeout phases, errors, retries, and provider streams |
 | [telemetry.md](telemetry.md) | Application tracer providers, capture consent, export destinations, and diagnostics |
+| [usage.md](usage.md) | Usage snapshots, token and billing units, accounting scope, measurement availability, and performance metrics |
 | [context.md](context.md) | Runtime dependencies, persisted fields, explicit load/save, scope, concurrency, and schema evolution |
 | [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |

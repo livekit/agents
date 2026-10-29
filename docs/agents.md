@@ -105,7 +105,6 @@ result = await scheduler.run(
     message,                             # str, or a ChatMessage
     message_history=history,             # the conversation so far; omit for a fresh one
     context=context,                     # typed application data and dependencies
-    usage=None,                          # a RunUsage to add this run's usage to
     retries=None,                        # this run's retry budgets; see "Retries"
 )
 result.status                            # "completed", "input_required" or "no_output"
@@ -114,7 +113,7 @@ result.status                            # "completed", "input_required" or "no_
 # result.question                        # str when input_required
 result.new_messages()                    # this invocation’s input and recorded messages
 result.all_messages()                    # supplied history plus this invocation, without instructions
-result.usage                             # requests, input/output/total_tokens, tool_calls
+result.usage                             # immutable Usage snapshot; see usage.md
 ```
 
 `RunResult[Output]` separates framework status from the application's output.
@@ -142,10 +141,11 @@ the application's final-result contract. See the
 | `usage` | Usage accumulated by this invocation |
 | `expect` | Event assertions over this invocation; see [testing](testing.md#programmatic-tests) |
 
-`RunUsage` records `requests`, `input_tokens`, `output_tokens` and `tool_calls`;
-`total_tokens` is `input_tokens + output_tokens`. Pass a shared `RunUsage` as
-`usage=` to accumulate usage across delegated runs. Each result still reports
-that invocation's usage.
+`result.usage` is an immutable `Usage` snapshot for this invocation. It exposes
+token totals, execution counts, per-model consumption, and measurement
+completeness. Collection is automatic; callers do not supply a mutable
+accumulator. See [usage and metrics](usage.md) for fields, delegation scope,
+and accounting after failure or cancellation.
 
 These methods return this agent invocation's model history, including tool
 calls and results. `new_messages()` includes the incoming message recorded for
@@ -188,7 +188,7 @@ Every tool, instruction function and output function receives
 | `ctx.thread` | the durable thread this run belongs to, the same object an `a2a_session` handler gets; see [threads.md](threads.md) |
 | `ctx.live_session` | the `VoiceSession` of the call, `None` outside a call |
 | `ctx.task_id` | the A2A task ID of the turn, or `None` outside A2A; external operations need an operation-specific idempotency key |
-| `ctx.usage` | token usage so far; pass it to a delegated `run(usage=ctx.usage)` |
+| `ctx.usage` | latest immutable usage snapshot of the owning execution scope; see [usage](usage.md#scope-and-delegation) |
 | `ctx.function_call` | the call being executed, inside a tool |
 | `await ctx.update(text)` | a progress message while the tool runs: a `working` frame on the text door, speech on a call |
 
@@ -376,7 +376,7 @@ current run works on, and outside them it raises.
 
 `agent.run_stream(...)` runs the same model/tool loop as `agent.run(...)` and
 exposes incremental events through an async context manager. It accepts the
-same message, history, context, usage, and retries arguments. Streaming
+same message, history, context, and retries arguments. Streaming
 does not change tool execution, output validation, approval, or human-input
 semantics.
 
@@ -429,6 +429,7 @@ The stream does not put session metadata into the contained `RunResult`.
 
 | Member | Contract |
 | --- | --- |
+| `usage` | Latest immutable `Usage` snapshot; retained after completion, failure, and cancellation; see [usage](usage.md#streaming-and-cancellation) |
 | `stream_text(*, delta=False)` | Async iterator of user-visible assistant text; one presentation view of this run |
 | `stream_events()` | Async iterator of typed semantic `StreamEvent` records from this run |
 | `await result()` | Finish any unconsumed work and return the settled typed result; repeat calls return that same result |
