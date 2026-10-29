@@ -64,6 +64,7 @@ mod realtime_onset_reply_heard;
 mod realtime_outputs_before_next_reply;
 mod realtime_reply_answered_closing;
 mod realtime_reply_asked_when_authorized;
+mod realtime_reply_ends_after_its_playout;
 mod realtime_reply_queued;
 mod realtime_server_onset_interrupts;
 mod realtime_tool_steps_bounded;

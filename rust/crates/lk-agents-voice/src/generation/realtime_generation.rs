@@ -184,6 +184,21 @@ pub(crate) async fn realtime_generation_task(
         if !heard.complete || generation.finished || handle.interrupted() {
             break;
         }
+        // A binding is for a message: the server may end the generation instead of sending one.
+        {
+            let mut interrupted = std::pin::pin!(handle.wait_for_interrupted());
+            let mut next = std::pin::pin!(generation.playout_controls());
+            std::future::poll_fn(|cx| {
+                if interrupted.as_mut().poll(cx).is_ready() {
+                    return std::task::Poll::Ready(());
+                }
+                next.as_mut().poll(cx)
+            })
+            .await;
+        }
+        if generation.finished || handle.interrupted() {
+            break;
+        }
     }
     let interrupted = !heard.complete || handle.interrupted();
     if interrupted {
@@ -546,6 +561,7 @@ impl Segment for Generation<'_> {
         true
     }
 
+    /// Ends once the generation is over or its next message's first event is held back.
     async fn playout_controls(&mut self) {
         // Service one cancellation-safe control event per poll, so even a continuously ready
         // provider cannot starve the playback receipt/deadline polled beside this future.
@@ -553,7 +569,7 @@ impl Segment for Generation<'_> {
         let mut deferred_media = false;
         std::future::poll_fn(|cx| {
             if self.finished || deferred_media {
-                return std::task::Poll::Pending::<()>;
+                return std::task::Poll::Ready(());
             }
             let event = match self.backlog.pop_front() {
                 Some(event) => event,
@@ -561,7 +577,7 @@ impl Segment for Generation<'_> {
                     std::task::Poll::Ready(Some(event)) => event,
                     std::task::Poll::Ready(None) => {
                         self.finished = true;
-                        return std::task::Poll::Pending;
+                        return std::task::Poll::Ready(());
                     }
                     std::task::Poll::Pending => return std::task::Poll::Pending,
                 },
@@ -586,9 +602,10 @@ impl Segment for Generation<'_> {
                 }
                 _ => {}
             }
-            if !self.finished && !deferred_media {
-                cx.waker().wake_by_ref();
+            if self.finished || deferred_media {
+                return std::task::Poll::Ready(());
             }
+            cx.waker().wake_by_ref();
             std::task::Poll::Pending
         })
         .await;
