@@ -467,7 +467,8 @@ async fn main_task_inner(
             num_retries += 1;
         } else {
             ctx.emit_error(err.request, err.error.clone(), false);
-            return match RequestKind::Interruption.terminal_failure(
+            return match lk_agents_net::attempts::terminal_failure(
+                RequestKind::Interruption,
                 &err.error,
                 ctx.config.conn_options.max_retry,
                 num_retries,

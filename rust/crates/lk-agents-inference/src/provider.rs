@@ -5,7 +5,7 @@ use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::ProviderAttempts as Port;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
-use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
 
 #[derive(Debug)]
 pub struct ProviderAttempts {
@@ -110,7 +110,7 @@ impl Port for ProviderAttempts {
         }
         // The callback still owns the original exception; it supplies the terminal cause.
         let error = self.error.take().expect("the attempt owner gave up");
-        Ok(self.kind.terminal_failure(&error, self.options.max_retry, self.attempts.retries()))
+        Ok(terminal_failure(self.kind, &error, self.options.max_retry, self.attempts.retries()))
     }
 
     fn wake_at(&self) -> Option<u64> {

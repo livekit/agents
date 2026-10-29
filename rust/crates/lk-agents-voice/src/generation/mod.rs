@@ -603,28 +603,26 @@ impl Attempt {
         self.produced = true;
     }
 
-    /// The attempt failed; on [`Retry::After`] the counter has advanced. The policy is the one
-    /// every provider retry follows (`types::retry::decide`); output already produced forbids a
-    /// retry on top of it.
+    /// The attempt failed; on [`Retry::After`] the counter has advanced. A client cancellation
+    /// (499) of a completion or synthesis, output already produced, a non-retryable error or a
+    /// spent allowance ends it; the delay is the connection options' schedule.
     pub fn failed(
         &mut self,
         error: &lk_agents_abi::errors::ProviderError,
         kind: lk_agents_abi::types::retry::RequestKind,
     ) -> Retry {
-        use lk_agents_abi::types::retry::{RetryDecision, decide};
-        if self.produced {
+        use lk_agents_abi::types::retry::RequestKind::{Llm, TtsBatch, TtsStream};
+        let retries_so_far = self.attempt - 1;
+        let cancelled =
+            matches!(kind, Llm | TtsBatch | TtsStream) && error.status_code() == Some(499);
+        if self.produced
+            || cancelled
+            || !error.retryable()
+            || retries_so_far >= self.budget.max_retry
+        {
             return Retry::Never;
         }
-        let retries_so_far = self.attempt - 1;
-        let decision = decide(
-            kind,
-            &self.budget,
-            retries_so_far,
-            error.retryable(),
-            error.status_code(),
-            false,
-        );
-        let RetryDecision::Retry(delay) = decision else { return Retry::Never };
+        let delay = self.budget.interval_for_retry(retries_so_far);
         let failed = self.attempt;
         self.attempt += 1;
         Retry::After { attempt: failed, after: Duration::from_secs_f64(delay.max(0.0)) }

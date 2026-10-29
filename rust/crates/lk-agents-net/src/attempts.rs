@@ -18,7 +18,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
+use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 
 /// How long an attempt's transport task may take to settle once asked to stop. Dropping an HTTP
@@ -68,6 +69,31 @@ impl RequestPolicy {
             retry_interval: Duration::from_secs_f64(options.retry_interval),
         }
     }
+}
+
+/// The attempt owner gave up. Timeouts keep their class/phase and caller-owned cause; other
+/// exhausted recognition/completion allowances carry one shared diagnostic.
+pub fn terminal_failure(
+    kind: RequestKind,
+    error: &ApiError,
+    max_retry: u32,
+    retries: u32,
+) -> RetryDecision {
+    if max_retry == 0 || !error.retryable || error.kind == ApiErrorKind::Timeout {
+        return RetryDecision::Raise;
+    }
+    let action = match kind {
+        RequestKind::Llm => "generate LLM completion",
+        RequestKind::SttBatch | RequestKind::SttStream => "recognize speech",
+        RequestKind::Interruption => "detect interruption",
+        RequestKind::TtsBatch | RequestKind::TtsStream | RequestKind::Avatar => {
+            return RetryDecision::Raise;
+        }
+    };
+    RetryDecision::Exhausted(format!(
+        "failed to {action} after {} attempts",
+        u64::from(retries) + 1
+    ))
 }
 
 /// Why an attempt failed, as the transport saw it.

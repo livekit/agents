@@ -93,9 +93,12 @@ impl Failure<'_> {
             Ok(())
         } else {
             report.failed(error.clone(), false);
-            if let RetryDecision::Exhausted(message) =
-                kind.terminal_failure(&adapted, options.max_retry, attempts.retries())
-            {
+            if let RetryDecision::Exhausted(message) = lk_agents_net::attempts::terminal_failure(
+                kind,
+                &adapted,
+                options.max_retry,
+                attempts.retries(),
+            ) {
                 Err(chained_connection_error(message, &error))
             } else {
                 Err(error)
