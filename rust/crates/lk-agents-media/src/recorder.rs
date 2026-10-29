@@ -8,7 +8,7 @@ use lk_agents_abi::AudioFrame;
 use crate::{FrameResampler, OnChange, Quality, ResampleError};
 
 mod file;
-pub use file::{BetweenBlocks, FileLimits, RecordingCommand, RecordingFile};
+pub use file::{BetweenBlocks, FileLimits, RecordingCommand, RecordingFile, RecordingLimits};
 
 /// Python's `round()` is half-to-even; a one-sample disagreement at `.5` is an overlap or gap.
 #[inline]

@@ -80,6 +80,80 @@ pub struct FileLimits {
     pub block_seconds: f64,
 }
 
+/// A recording's bounds: what its ingress admits ahead of the worker and what the worker may
+/// retain.
+#[derive(Debug, Clone, Copy)]
+pub struct RecordingLimits {
+    pub queued_commands: usize,
+    pub queued_bytes: usize,
+    pub frame_bytes: usize,
+    pub retained_bytes: usize,
+    pub segment_bytes: usize,
+    /// Bounds silence generation and encoding work per worker iteration.
+    pub block_duration: std::time::Duration,
+}
+
+impl Default for RecordingLimits {
+    /// A session recording's budget.
+    fn default() -> Self {
+        Self {
+            queued_commands: 256,
+            queued_bytes: 8 * 1024 * 1024,
+            frame_bytes: 2 * 1024 * 1024,
+            retained_bytes: 16 * 1024 * 1024,
+            segment_bytes: 8 * 1024 * 1024,
+            block_duration: std::time::Duration::from_millis(20),
+        }
+    }
+}
+
+impl RecordingLimits {
+    /// Refuses a format or bounds no worker can honor: an empty bound, a block shorter than a
+    /// sample, or a retention smaller than four blocks.
+    pub fn validate(&self, sample_rate: u32, t0: Option<f64>) -> Result<(), RecordingFailure> {
+        let block_samples = self.block_duration.as_secs_f64() * f64::from(sample_rate);
+        if sample_rate == 0
+            || t0.is_some_and(|time| !time.is_finite())
+            || self.queued_commands == 0
+            || self.queued_bytes == 0
+            || self.frame_bytes == 0
+            || self.retained_bytes == 0
+            || self.segment_bytes == 0
+            || self.block_duration.is_zero()
+            || block_samples < 1.0
+            || block_samples * 4.0 > self.retained_bytes as f64
+        {
+            return Err(RecordingFailure::Invalid("recording format or limits"));
+        }
+        Ok(())
+    }
+
+    /// The bounds the file works under.
+    pub fn file(&self) -> FileLimits {
+        FileLimits {
+            retained_bytes: self.retained_bytes,
+            segment_bytes: self.segment_bytes,
+            block_seconds: self.block_duration.as_secs_f64(),
+        }
+    }
+
+    /// A frame of `bytes` is refused outright when it exceeds the per-frame bound.
+    pub fn admit_frame(&self, bytes: usize) -> Result<(), RecordingFailure> {
+        if bytes > self.frame_bytes {
+            return Err(RecordingFailure::Overflow("frame bytes"));
+        }
+        Ok(())
+    }
+
+    /// The recording fails once the worker retains more PCM than its bound.
+    pub fn check_retained(&self, retained: usize) -> Result<(), RecordingFailure> {
+        if retained > self.retained_bytes {
+            return Err(RecordingFailure::Overflow("retained PCM"));
+        }
+        Ok(())
+    }
+}
+
 /// Between two blocks the caller may stop the file (a failure elsewhere) and yield its thread.
 pub type BetweenBlocks<'a> = &'a mut dyn FnMut() -> Result<(), RecordingFailure>;
 

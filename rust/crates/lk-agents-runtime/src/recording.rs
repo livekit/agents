@@ -10,22 +10,12 @@ use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::AudioRecorder;
-use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingCommand, RecordingFile};
+use lk_agents_media::recorder::{
+    FileLimits, OggOpusEncoder, RecordingCommand, RecordingFile, RecordingLimits,
+};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 use lk_agents_media::workers::{MediaWorkerClass, MediaWorkers};
-
-/// Limits are supplied by the runtime's media budget, rather than selected by an audio callback.
-#[derive(Debug, Clone, Copy)]
-struct RecordingLimits {
-    pub queued_commands: usize,
-    pub queued_bytes: usize,
-    pub frame_bytes: usize,
-    pub retained_bytes: usize,
-    pub segment_bytes: usize,
-    /// Bound silence generation and encoding work per worker iteration.
-    pub block_duration: Duration,
-}
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
 
@@ -132,19 +122,8 @@ impl SessionRecorder {
         E: OggOpusEncoder + Send + 'static,
         W: Write + Send + 'static,
     {
-        if sample_rate == 0
-            || t0.is_some_and(|time| !time.is_finite())
-            || limits.queued_commands == 0
-            || limits.queued_commands >= tokio::sync::Semaphore::MAX_PERMITS
-            || limits.queued_bytes == 0
-            || limits.frame_bytes == 0
-            || limits.retained_bytes == 0
-            || limits.segment_bytes == 0
-            || limits.block_duration.is_zero()
-            || limits.block_duration.as_secs_f64() * f64::from(sample_rate) < 1.0
-            || limits.block_duration.as_secs_f64() * f64::from(sample_rate) * 4.0
-                > limits.retained_bytes as f64
-        {
+        limits.validate(sample_rate, t0)?;
+        if limits.queued_commands >= tokio::sync::Semaphore::MAX_PERMITS {
             return Err(RecordingFailure::Invalid("recording format or limits"));
         }
         let (status, _) = watch::channel(RecordingStatus::Open);
@@ -171,11 +150,7 @@ impl SessionRecorder {
         let worker_shared = shared.clone();
         let worker = workers
             .try_spawn(MediaWorkerClass::Recording, move || {
-                let file = FileLimits {
-                    retained_bytes: limits.retained_bytes,
-                    segment_bytes: limits.segment_bytes,
-                    block_seconds: limits.block_duration.as_secs_f64(),
-                };
+                let file = limits.file();
                 let file = match open(file) {
                     Ok(file) => file,
                     Err(error) => {
@@ -272,9 +247,7 @@ impl SessionRecorder {
         if self.shared.finishing.load(Ordering::Acquire) {
             return Err(RecordingFailure::Closed);
         }
-        if bytes > self.shared.limits.frame_bytes {
-            return Err(self.fail(RecordingFailure::Overflow("frame bytes")));
-        }
+        self.shared.limits.admit_frame(bytes).map_err(|error| self.fail(error))?;
         if self
             .shared
             .commands
@@ -473,9 +446,7 @@ fn process<E: OggOpusEncoder, W: Write>(
         let retained = file.retained_bytes();
         shared.summary.send_replace(file.summary().clone());
         shared.retained_bytes.store(retained, Ordering::Release);
-        if retained > shared.limits.retained_bytes {
-            return Err(RecordingFailure::Overflow("retained PCM"));
-        }
+        shared.limits.check_retained(retained)?;
     }
     Err(RecordingFailure::Closed)
 }
@@ -494,21 +465,7 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
         {
             let workers =
                 crate::process::workers().map_err(|e| RecordingFailure::Worker(e.to_string()))?;
-            Self::start(
-                &workers,
-                path.into(),
-                sample_rate,
-                t0,
-                bitrate,
-                RecordingLimits {
-                    queued_commands: 256,
-                    queued_bytes: 8 * 1024 * 1024,
-                    frame_bytes: 2 * 1024 * 1024,
-                    retained_bytes: 16 * 1024 * 1024,
-                    segment_bytes: 8 * 1024 * 1024,
-                    block_duration: Duration::from_millis(20),
-                },
-            )
+            Self::start(&workers, path.into(), sample_rate, t0, bitrate, RecordingLimits::default())
         }
         #[cfg(not(feature = "media-ffmpeg"))]
         {
