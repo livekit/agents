@@ -25,8 +25,8 @@ use crate::{
     EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, JobDecision, JobId, JobRequest, RunningJobInfo,
     TransportConfig, WorkerCommand, WorkerHost, protocol,
 };
-use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::blocking_io::BlockingIo;
+use lk_agents_net::env::ProcessEnv;
 
 pub struct Configuration {
     settings: Arc<Mutex<ServerSettings>>,

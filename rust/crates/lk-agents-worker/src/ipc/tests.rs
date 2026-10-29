@@ -7,13 +7,13 @@ use tokio::io::{AsyncWriteExt, DuplexStream};
 use tokio::net::UnixStream;
 use tokio::time::Instant;
 
-use lk_agents_abi::unix_now_ms;
 use super::supervisor::{
     Extra, KILL_GRACE, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB, WarnGate,
 };
 use super::wire::{MAX_FRAME, decode, encode, read, write};
 use super::*;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::unix_now_ms;
 
 mod writer;
 

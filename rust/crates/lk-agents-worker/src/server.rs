@@ -4,7 +4,7 @@
 //! processes and the user's callbacks.
 
 use crate::agent_server::ServerCallbacks;
-use crate::{Worker, WorkerCommand, WorkerClient, WorkerHost, WorkerNotification};
+use crate::{Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lifecycle::{ServerEffect, ServerInput, ServerLifecycle};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
@@ -171,7 +171,10 @@ pub struct ServerRuntime {
 }
 
 impl ServerRuntime {
-    pub fn new(host: ServerCallbacks, blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>) -> Self {
+    pub fn new(
+        host: ServerCallbacks,
+        blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
+    ) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
@@ -460,8 +463,10 @@ impl ServerRuntime {
         let discover_cpus = settings.num_idle_processes.is_none();
         let blocking_io = match &self.blocking_io {
             Some(blocking_io) => blocking_io.clone(),
-            None => lk_agents_net::blocking_io::BlockingIo::new(tokio::runtime::Handle::current(), 4)
-                .map_err(|error| error.to_string())?,
+            None => {
+                lk_agents_net::blocking_io::BlockingIo::new(tokio::runtime::Handle::current(), 4)
+                    .map_err(|error| error.to_string())?
+            }
         };
         let admission_deadline =
             Duration::try_from_secs_f64(settings.initialize_process_timeout)

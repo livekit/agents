@@ -8,6 +8,7 @@ pub use load::{DefaultLoadCalc, LoadInputs, WorkerStatus};
 /// Logger shared by native worker diagnostics and host adapters.
 pub(crate) const LOG: &str = "livekit.agents";
 
+pub mod agent_server;
 pub mod auth;
 pub mod cli;
 pub mod cli_signals;
@@ -18,7 +19,6 @@ pub mod hw;
 pub mod ipc;
 pub mod protocol;
 pub mod server;
-pub mod agent_server;
 pub mod state;
 #[cfg(test)]
 mod state_tests;
@@ -45,7 +45,7 @@ pub use transport::{
 };
 pub use worker::{
     EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig, RuntimeError,
-    Snapshot, Worker, WorkerCommand, WorkerClient, WorkerHost, WorkerNotification, retry_delay,
+    Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification, retry_delay,
 };
 
 #[cfg(test)]

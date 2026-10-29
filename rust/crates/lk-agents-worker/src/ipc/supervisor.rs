@@ -251,7 +251,8 @@ struct Driver {
     status: watch::Sender<Status>,
 }
 
-type Sampling = Option<lk_agents_net::blocking_io::BlockingIoTask<Result<(f64, String), MemoryError>>>;
+type Sampling =
+    Option<lk_agents_net::blocking_io::BlockingIoTask<Result<(f64, String), MemoryError>>>;
 
 impl Driver {
     #[allow(clippy::too_many_arguments)]
