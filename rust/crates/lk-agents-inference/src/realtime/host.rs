@@ -188,9 +188,7 @@ impl HostRealtimeLeg {
                 RealtimeCommand::GenerateReply(c) => c.req_id.clone(),
                 RealtimeCommand::Say(c) => c.req_id.clone(),
                 _ => {
-                    if let Err(e) = leg.host.update(cmd).await {
-                        log::error!(target: "livekit.agents", error = e.message.as_str(); "failed to update the realtime session");
-                    }
+                    leg.update(cmd).await;
                     continue;
                 }
             };
@@ -229,6 +227,26 @@ impl HostRealtimeLeg {
                     Err(_) => {}
                 }
             });
+        }
+    }
+}
+
+impl HostRealtimeLeg {
+    /// A session update, awaited before the next command; a failure is logged.
+    async fn update(&self, cmd: RealtimeCommand) {
+        let host = &self.host;
+        let updated = match cmd {
+            RealtimeCommand::UpdateInstructions(c) => host.update_instructions(c.instructions).await,
+            RealtimeCommand::UpdateChatCtx(c) => host.update_chat_ctx(c.chat_ctx.items).await,
+            RealtimeCommand::PushItem(c) => host.push_item(*c.item).await,
+            RealtimeCommand::UpdateTools(c) => {
+                host.update_tools(c.tools.into_iter().map(|t| t.name).collect()).await
+            }
+            // `send` routes the rest here only as updates.
+            _ => Ok(()),
+        };
+        if let Err(e) = updated {
+            log::error!(target: "livekit.agents", error = e.message.as_str(); "failed to update the realtime session");
         }
     }
 }

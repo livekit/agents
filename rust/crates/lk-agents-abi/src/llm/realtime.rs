@@ -63,16 +63,12 @@ pub struct RealtimeCapabilities {
 }
 
 /// `RealtimeError` (`llm/realtime.py:88`): the failure a request reports.
-///
-/// `fields_only`: nothing crosses as this payload; `generate_reply_failed` spreads its keys flat.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Host)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[crate::host(error(kind = "RuntimeError"))]
-#[binding(fields_only)]
 #[error("{message}")]
 pub struct RealtimeError {
     pub message: String,
     /// The provider's error code, when it gave one (callers branch on it).
-    #[binding(default)]
     pub code: Option<String>,
 }
 
@@ -88,225 +84,215 @@ impl RealtimeError {
 
 /// `RealtimeModelError` (`llm/realtime.py:48`), the payload of the `"error"` event. A host session
 /// reports it as a [`HostRealtimeError`], whose wall-clock stamp the leg places on the session's.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[binding(fields_only)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RealtimeModelError {
     /// When the host raised it, on the session's clock.
-    #[binding(extract_skip)]
     pub timestamp: Ts,
     pub label: String,
     pub message: String,
     pub recoverable: bool,
     /// The request this error answers, when the server echoed its `client_event_id`; `None` for a
     /// session-level error.
-    #[binding(default)]
     pub req_id: Option<String>,
     /// The provider's error code, when it has one -- the same reason [`RealtimeError::code`] exists.
-    #[binding(default)]
     pub code: Option<String>,
     /// Native transport failure, emitted with its category and timeout phase. Host failures
     /// already carry their captured exception through the host-error boundary.
-    #[binding(extract_skip)]
     pub provider_error: Option<crate::errors::ApiError>,
 }
 
-/// The wire contract of `remote_item_added`: the mirror gained an item the server created.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "remote_item_added")]
+// --- the events a host session reports and the commands it is sent (`_generated/realtime_wire.py`)
+
+/// The mirror gained an item the server created.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemoteItemAdded {
-    /// The item this one was inserted after; absent and `None` both mean "appended".
-    #[binding(default)]
+    /// The item this one was inserted after; `None` means "appended".
+    #[host(default = None)]
     pub previous_item_id: Option<String>,
-    /// A host `_core.ChatItem`.
     pub item: Box<ChatItem>,
 }
 
-/// `metrics_collected`: what the model measured (each response's `RealtimeModelMetrics`, the
-/// connection's, the input transcription's `STTMetrics`), for the session's metrics and usage.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "metrics")]
+/// What the model measured (each response's `RealtimeModelMetrics`, the connection's, the input
+/// transcription's `STTMetrics`), for the session's metrics and usage.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RealtimeMetrics {
     pub metrics: Box<crate::metrics::base::AgentMetrics>,
 }
 
-/// A `response.create` will never be answered. `generate_reply_failed`, with the error flattened.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "generate_reply_failed")]
+/// A `response.create` will never be answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerateReplyFailed {
     pub req_id: String,
-    #[binding(flatten)]
     pub error: RealtimeError,
 }
 
-/// The wire contract of `function_call`: the key `call` and the event name.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "function_call")]
+/// A function call the model made.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionCallReady {
-    /// A host `ChatItem` that must be a `FunctionCall`; `FunctionCall`'s reader checks it.
-    #[binding(skip)]
+    /// The plugin's `llm.FunctionCall`, not the legacy model its derive generates.
+    #[host(host_type = "livekit.agents.llm.chat_context.FunctionCall")]
     pub call: Box<FunctionCall>,
 }
 
-/// One chunk of assistant audio. `audio_delta`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "audio_delta")]
+/// One chunk of assistant audio.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AudioDelta {
     pub message_id: String,
     /// The generation this frame belongs to, when the plugin says.
-    #[binding(default)]
+    #[host(default = None)]
     pub response_id: Option<String>,
-    /// An `rtc.AudioFrame`, read by the same twin every other frame on this seam goes through.
     pub frame: AudioFrame,
 }
 
-/// What a message turned out to contain. `message_modalities`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "message_modalities")]
+/// What a message turned out to contain.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageModalities {
     pub message_id: String,
     /// The generation this message belongs to; see `AudioDelta::response_id`.
-    #[binding(default)]
+    #[host(default = None)]
     pub response_id: Option<String>,
-    /// `"audio"` when the host's `list[str]` has it, else `"text"`: the only question asked of it.
     pub modalities: Modalities,
 }
 
-/// The turn is over. Carries what `response.done` reported. `generation_done`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "generation_done")]
+/// The turn is over. Carries what `response.done` reported.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GenerationDone {
     pub response_id: String,
-    /// Absent or unrecognised means `completed`, as in the reference (`GenerationStatus`' reader).
-    #[binding(default)]
+    /// Not reported by a host session (a plugin's generation has no status): `completed`.
+    #[host(skip)]
     pub status: GenerationStatus,
-    /// Not on this wire: the host-backed path reports usage through its own metrics events.
-    #[binding(extract_skip)]
+    /// Not reported by a host session: it reports usage through its own metrics events.
+    #[host(skip)]
     pub usage: TokenUsage,
 }
 
 /// A generation the server started by itself (`generation_created` with `user_initiated=False`):
-/// the host leg drains it like a requested one. `server_generation`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "server_generation")]
+/// the host leg drains it like a requested one.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerGeneration {
     /// The plugin's `GenerationCreatedEvent`, handed back to `_core_drain`.
     pub generation: crate::HostRef,
 }
 
-/// A turn has begun. `generation_created`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "generation_created")]
+/// A turn has begun.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationCreated {
     pub response_id: String,
     /// `Some` exactly when this answers a [`RealtimeCommand::GenerateReply`].
-    #[binding(default)]
+    #[host(default = None)]
     pub req_id: Option<String>,
 }
 
 /// A transcript generation whose audio belonged to an already completed speech generation.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "transcript_attribution")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptAttribution {
     pub response_id: String,
     pub source_response_id: String,
 }
 
-/// A new assistant message inside the current generation. `message_started`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "message_started")]
+/// A new assistant message inside the current generation.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageStarted {
     pub message_id: String,
     /// The generation this message belongs to; lets the driver drop deltas of a refused one.
-    #[binding(default)]
+    #[host(default = None)]
     pub response_id: Option<String>,
 }
 
-/// A transcript or text delta. `text_delta`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "text_delta")]
+/// A transcript or text delta.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextDelta {
     pub message_id: String,
     /// The generation this delta belongs to; see `AudioDelta::response_id`.
-    #[binding(default)]
+    #[host(default = None)]
     pub response_id: Option<String>,
     pub delta: String,
     /// The `io.TimedString` stamp when the provider sends one; never synthesised.
-    #[binding(default)]
+    #[host(default = None)]
     pub start_time: Option<f64>,
 }
 
-/// The message is complete. `message_done`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "message_done")]
+/// The message is complete.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageDone {
     pub message_id: String,
     /// The generation this message belongs to; see `AudioDelta::response_id`.
-    #[binding(default)]
+    #[host(default = None)]
     pub response_id: Option<String>,
 }
 
-/// `InputSpeechStoppedEvent` (`llm/realtime.py:53`). `user_transcription_enabled` is required.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "input_speech_stopped")]
+/// `InputSpeechStoppedEvent` (`llm/realtime.py:53`).
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSpeechStopped {
     pub user_transcription_enabled: bool,
 }
 
 /// `InputTranscriptionCompleted` (`llm/realtime.py:152`); also emitted for partials (`is_final`).
-/// `input_transcription`.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "input_transcription")]
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct InputTranscription {
     pub item_id: String,
     pub transcript: String,
     pub is_final: bool,
     /// Geometric mean of the per-token probabilities, when the provider returns logprobs.
-    #[binding(default)]
+    #[host(default = None)]
     pub confidence: Option<f64>,
     /// When the turn began, as `time.time()`: final transcripts only, when server VAD reported an
     /// onset for `item_id`. Wall seconds, whatever clock the session runs on: it may precede the
-    /// session (the message is placed at it, `agent_activity.py:2040`). Absent or `None` reads as
-    /// no turn start; a wrongly typed value raises.
-    #[binding(default)]
+    /// session (the message is placed at it, `agent_activity.py:2040`).
+    #[host(default = None)]
     pub turn_started_at: Option<f64>,
 }
 
-/// `input_speech_started`: the kind is the whole event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "input_speech_started")]
+/// Server-side VAD heard the caller start speaking.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputSpeechStarted {}
 
-/// `session_reconnected`: the kind is the whole event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "session_reconnected")]
+/// The session reconnected to the server.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionReconnected {}
 
-/// `error` as a host session reports it: the error, and `timestamp` as the host's `time.time()`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "error")]
+/// `error` as a host session reports it, `timestamp` the host's `time.time()`.
+#[crate::host(record(module = "realtime_wire", extract))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HostRealtimeError {
-    #[binding(flatten)]
-    pub error: RealtimeModelError,
-    /// Required; with no anchor yet it lands on `Ts::ZERO`, so the error still forwards.
+    pub label: String,
+    pub message: String,
+    pub recoverable: bool,
+    /// With no anchor yet it lands on `Ts::ZERO`, so the error still forwards.
     pub timestamp: f64,
+    #[host(default = None)]
+    pub req_id: Option<String>,
+    #[host(default = None)]
+    pub code: Option<String>,
 }
 
-#[crate::host(wire_strs(msg = format!("unknown modalities {s:?}: expected 'audio' or 'text'")))]
+/// What a message contains: audio always comes with its transcript.
+#[crate::host(record(module = "realtime_wire", extract))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Modalities {
     #[default]
     #[host(rename = "text")]
     TextOnly,
-    /// `["audio", "text"]`. Audio always comes with its transcript.
     #[host(rename = "audio")]
     AudioAndText,
 }
 
-#[cfg(feature = "python")]
-crate::python::from_host_str!(Modalities);
-
 /// `response.done`'s `status`.
-#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GenerationStatus {
     #[default]
@@ -314,24 +300,6 @@ pub enum GenerationStatus {
     Cancelled,
     Incomplete,
     Failed,
-}
-
-/// Lenient: anything that is not a status this build knows (a newer plugin's word, a non-string)
-/// reads as `completed`, as the reference's does.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for GenerationStatus {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Ok(obj.extract::<String>().map(|s| GenerationStatus::parse(&s)).unwrap_or_default())
-    }
-}
-
-impl GenerationStatus {
-    /// The reference logs "Unknown response status" and treats it as complete.
-    pub fn parse(s: &str) -> GenerationStatus {
-        Self::from_wire(s).unwrap_or_default()
-    }
 }
 
 /// Only the fields `response.done` fills; the host stamps the rest.
@@ -353,11 +321,10 @@ pub struct TokenUsage {
 }
 
 /// `MessageStarted` through `GenerationDone` are the inside of the host's one `"generation_created"`.
-/// A host session reports one flat event at a time, picked by its `kind`: the reference's stream of
-/// streams, flattened by `llm/realtime.py`'s `RealtimeSession._core_next_event`. The native-only
-/// variants are not on that wire.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items)]
+/// A host session reports one event at a time, the reference's stream of streams flattened by the
+/// generated `RealtimeSession._core_drain`. The native variants are not on that wire.
+#[crate::host(record(module = "realtime_wire", extract, transparent))]
+#[derive(Debug, Clone, PartialEq)]
 #[derive(lk_agents_host_derive::Vocabulary)]
 pub enum Event {
     /// Server-side VAD; also what drives interruption.
@@ -367,12 +334,14 @@ pub enum Event {
 
     GenerationCreated(GenerationCreated),
     /// A `response.create` will never be answered: rejected, timed out, cancelled, or closed.
+    #[host(native)]
     GenerateReplyFailed(GenerateReplyFailed),
     /// Consumed by [`HostRealtimeLeg`], which drains it; never reaches the driver.
     ServerGeneration(ServerGeneration),
 
     MessageStarted(MessageStarted),
     TextDelta(TextDelta),
+    #[host(native)]
     TranscriptAttribution(TranscriptAttribution),
     AudioDelta(AudioDelta),
     /// Settled once per message, as early as the provider allows.
@@ -388,14 +357,14 @@ pub enum Event {
     /// A new session replaced the one that failed or was restarted (the fallback adapter's
     /// swap): it holds no instructions, conversation or tools until the driver gives it its frame,
     /// and takes no request before. `regenerate`: ask again for a reply the swap cut.
-    #[binding(skip)]
+    #[host(native)]
     SessionSwapped {
         regenerate: bool,
     },
     /// The host session's `metrics_collected`, and the native session's measurements.
     Metrics(RealtimeMetrics),
     /// A host session reports it as [`Event::HostError`].
-    #[binding(skip)]
+    #[host(native)]
     Error(RealtimeModelError),
 
     /// The wall-clock twin of `Error`, as a host session reports it. [`HostRealtimeLeg`] places its
@@ -408,27 +377,24 @@ impl Event {
     pub fn anchored(self, anchor: Option<crate::WallAnchor>) -> Event {
         match self {
             // Forwarded, not dropped: the host's `error` subscription owns the recoverable policy.
-            Event::HostError(HostRealtimeError { mut error, timestamp }) => {
-                error.timestamp = anchor.map(|a| a.ts(timestamp)).unwrap_or(Ts::ZERO);
-                Event::Error(error)
-            }
+            Event::HostError(HostRealtimeError {
+                label,
+                message,
+                recoverable,
+                timestamp,
+                req_id,
+                code,
+            }) => Event::Error(RealtimeModelError {
+                timestamp: anchor.map(|a| a.ts(timestamp)).unwrap_or(Ts::ZERO),
+                label,
+                message,
+                recoverable,
+                req_id,
+                code,
+                provider_error: None,
+            }),
             ev => ev,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: an unknown `response.done` status mapped to `Failed` instead of `Completed`.
-    #[test]
-    fn an_unknown_response_status_is_not_a_failure() {
-        assert_eq!(GenerationStatus::parse("completed"), GenerationStatus::Completed);
-        assert_eq!(GenerationStatus::parse("failed"), GenerationStatus::Failed);
-        assert_eq!(GenerationStatus::parse("cancelled"), GenerationStatus::Cancelled);
-        assert_eq!(GenerationStatus::parse("incomplete"), GenerationStatus::Incomplete);
-        assert_eq!(GenerationStatus::parse("in_progress"), GenerationStatus::Completed);
     }
 }
 
@@ -472,23 +438,29 @@ pub trait RealtimeSession: Send + Sync {
     fn aclose(&self) -> crate::BoxFuture<'_, ()>;
 }
 
-/// **The `tag_value` strings below are the wire.** A host session reads each as its member's
-/// dict, `kind` included.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, from_items)]
+/// What the driver sends a session. A host session is sent the ones it applies at once
+/// (`HostRealtimeSession::send`) and the reply requests; the leg answers the native ones itself or
+/// through the session's update calls.
+#[crate::host(record(module = "realtime_wire", emit, transparent))]
+#[derive(Debug, Clone)]
 #[derive(lk_agents_host_derive::Vocabulary)]
 #[vocabulary(kind = RealtimeCommandKind)]
 pub enum RealtimeCommand {
     /// The handoff's three: a new agent's frame goes over the same socket, keeping the mirror.
+    #[host(native)]
     UpdateInstructions(UpdateInstructions),
+    #[host(native)]
     UpdateChatCtx(UpdateChatCtx),
+    #[host(native)]
     UpdateTools(UpdateTools),
 
     PushAudio(PushAudio),
+    #[host(native)]
     PushItem(PushItem),
     GenerateReply(GenerateReply),
     /// `say()`: speak these exact words. Only when the capabilities report `supports_say`.
     Say(Say),
+    #[host(native)]
     CancelReply(CancelReply),
     /// End the user's turn explicitly. Only meaningful with server turn detection off.
     CommitAudio(CommitAudio),
@@ -519,88 +491,30 @@ impl RealtimeCommand {
 }
 
 /// The new agent's instructions. The whole system prompt, not a delta.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "update_instructions")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateInstructions {
     pub instructions: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateChatCtx {
-    /// The chat context's items; the host reconciles them into its plugin's `llm.ChatContext`.
     pub chat_ctx: crate::ChatContext,
-}
-
-impl UpdateChatCtx {
-    pub const KIND: &'static str = "update_chat_ctx";
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &UpdateChatCtx {
-    type Target = pyo3::types::PyDict;
-    type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(
-        self,
-        py: pyo3::Python<'py>,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
-        use pyo3::types::PyDictMethods as _;
-        let d = pyo3::types::PyDict::new(py);
-        d.set_item("kind", UpdateChatCtx::KIND)?;
-        d.set_item("items", &self.chat_ctx.items)?;
-        Ok(d)
-    }
-}
-
-#[cfg(feature = "python")]
-impl crate::python::HostEmitTag for UpdateChatCtx {
-    const TAG: Option<&'static str> = Some(UpdateChatCtx::KIND);
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateTools {
-    /// Tool names only: the host owns the `FunctionTool` objects.
     pub tools: Vec<ToolSpec>,
 }
 
-impl UpdateTools {
-    pub const KIND: &'static str = "update_tools";
-}
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for &UpdateTools {
-    type Target = pyo3::types::PyDict;
-    type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(
-        self,
-        py: pyo3::Python<'py>,
-    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
-        use pyo3::types::PyDictMethods as _;
-        let d = pyo3::types::PyDict::new(py);
-        d.set_item("kind", UpdateTools::KIND)?;
-        d.set_item("names", self.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>())?;
-        Ok(d)
-    }
-}
-
-#[cfg(feature = "python")]
-impl crate::python::HostEmitTag for UpdateTools {
-    const TAG: Option<&'static str> = Some(UpdateTools::KIND);
-}
-
 /// One frame of microphone audio.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "kind", tag_value = "push_audio")]
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct PushAudio {
     pub frame: AudioFrame,
 }
 
 /// A whole item to append to the mirror.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "kind", tag_value = "push_item")]
+#[derive(Debug, Clone)]
 pub struct PushItem {
     /// Boxed: the one large variant.
     pub item: Box<ChatItem>,
@@ -609,8 +523,8 @@ pub struct PushItem {
 }
 
 /// Ask for a turn.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "kind", tag_value = "generate_reply")]
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone)]
 pub struct GenerateReply {
     pub req_id: String,
     pub instructions: Option<String>,
@@ -619,8 +533,8 @@ pub struct GenerateReply {
 }
 
 /// Speak these exact words.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "say")]
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Say {
     pub req_id: String,
     pub text: String,
@@ -628,39 +542,37 @@ pub struct Say {
     pub add_to_chat_ctx: bool,
 }
 
-/// `commit_audio`: end the user's turn explicitly. The kind is the whole message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "commit_audio")]
+/// End the user's turn explicitly.
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitAudio {}
 
-/// `clear_audio`: discard audio the server has buffered but not yet turned into a turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "clear_audio")]
+/// Discard audio the server has buffered but not yet turned into a turn.
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClearAudio {}
 
 /// Cancel the open generation. See [`RealtimeCommand::Interrupt`].
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "interrupt")]
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interrupt {
-    /// The generation being cancelled; `None` is "whatever is in progress". Written as explicit `None`.
+    /// The generation being cancelled; `None` is "whatever is in progress".
     pub response_id: Option<String>,
 }
 
 /// The caller dropped the reply it was waiting for.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "cancel_reply")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CancelReply {
     pub req_id: String,
 }
 
 /// How much of a message the user actually heard.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "truncate")]
+#[crate::host(record(module = "realtime_wire", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Truncate {
     pub message_id: String,
     pub has_audio: bool,
     pub audio_end_ms: u64,
-    /// Written as an explicit `None`, not an absent key: the host reads it unconditionally.
     pub audio_transcript: Option<String>,
 }
 
@@ -736,20 +648,37 @@ pub trait HostRealtime: Send + Sync {
 // A dropped call cancels its host coroutine.
 #[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeSession"))]
 pub trait HostRealtimeSession: Send + Sync {
-    /// A command that applies at once (`push_audio`, `interrupt`, `commit_audio`, `clear_audio`,
-    /// `truncate`), queued on the host loop in order.
+    /// A command that applies at once (`PushAudio`, `Interrupt`, `CommitAudio`, `ClearAudio`,
+    /// `Truncate`), queued on the host loop in order.
     #[host(notify, name = "_core_send")]
     fn send(&self, cmd: RealtimeCommand);
 
-    /// A session update (`update_instructions`, `update_chat_ctx`, `push_item`, `update_tools`);
-    /// the leg awaits each before the next.
-    #[host(await, name = "_core_update")]
-    fn update(
+    /// The new agent's instructions; the leg awaits each update before the next.
+    #[host(await, name = "_core_update_instructions")]
+    fn update_instructions(
         &self,
-        cmd: RealtimeCommand,
+        instructions: String,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
-    /// Send a reply request (`generate_reply`, `say`): its pending future, as the session returned
+    /// The conversation, reconciled into the plugin's `llm.ChatContext`.
+    #[host(await, name = "_core_update_chat_ctx")]
+    fn update_chat_ctx(
+        &self,
+        items: Vec<ChatItem>,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+
+    /// One item appended to the plugin's chat context.
+    #[host(await, name = "_core_push_item")]
+    fn push_item(&self, item: ChatItem) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+
+    /// The tools the session offers, by name: the host owns the `FunctionTool` objects.
+    #[host(await, name = "_core_update_tools")]
+    fn update_tools(
+        &self,
+        names: Vec<String>,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+
+    /// Send a reply request (`GenerateReply`, `Say`): its pending future, as the session returned
     /// it.
     #[host(await, name = "_core_request")]
     fn request(

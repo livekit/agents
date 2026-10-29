@@ -85,7 +85,7 @@ pub(crate) fn fields(body: &RecordBody) -> Vec<&Field> {
         RecordBody::Variants(variants) => variants
             .iter()
             .flat_map(|v| match &v.shape {
-                VariantShape::Unit | VariantShape::Tuple(None) => Vec::new(),
+                VariantShape::Unit | VariantShape::Tuple(None) | VariantShape::Native => Vec::new(),
                 VariantShape::Tuple(Some(f)) => vec![f],
                 VariantShape::Named(fields) => fields.iter().collect(),
             })
@@ -102,7 +102,9 @@ pub(crate) fn holds_record(ty: &Ty) -> bool {
         Ty::Record(r) => {
             matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs)
         }
-        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) => holds_record(t),
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => {
+            holds_record(t)
+        }
         Ty::Map(k, t) => holds_record(k) || holds_record(t),
         Ty::OrderedMap(..) => true,
         Ty::Tuple(ts) => ts.iter().any(holds_record),
@@ -179,6 +181,10 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             let mut extract = String::new();
             let mut emit = String::from("        match self {\n");
             for v in variants {
+                if let VariantShape::Native = v.shape {
+                    emit.push_str(&never_crosses(&r.rust, &v.rust_name));
+                    continue;
+                }
                 classes.push(v.name.clone());
                 let class = class_ref(&module, &v.name);
                 let (read, arm, sets) = variant(v)?;
@@ -196,7 +202,11 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                 };
                 emit.push_str(&format!("            Self::{}{arm} => {call},\n", v.rust_name));
             }
-            let names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
+            let names: Vec<&str> = variants
+                .iter()
+                .filter(|v| !matches!(v.shape, VariantShape::Native))
+                .map(|v| v.name.as_str())
+                .collect();
             extract.push_str(&format!("        Err(super::not_a(obj, {:?}))\n", names.join(" | ")));
             emit.push_str("        }\n");
             (extract, emit)
@@ -348,10 +358,11 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
 /// `field: read,` lines of a struct literal read off `obj`.
 fn struct_reads(owner: &str, fields: &[Field], obj: &str) -> Result<String, String> {
     let mut s = String::new();
-    for f in fields.iter().filter(|f| f.modeled()) {
-        let read = match f.omitted {
-            Some(_) => "::std::default::Default::default()".to_owned(),
-            None => attr_read(owner, f, obj)?,
+    for f in fields {
+        // Computed after the read, or not crossing at all: Rust's default.
+        let read = match f.omitted.is_some() || !f.modeled() {
+            true => "::std::default::Default::default()".to_owned(),
+            false => attr_read(owner, f, obj)?,
         };
         s.push_str(&format!("            {}: {read},\n", f.rust_name));
     }
@@ -392,6 +403,7 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
     Ok(match &v.shape {
         VariantShape::Unit => (String::new(), String::new(), String::new()),
         VariantShape::Tuple(None) => (String::new(), "(_)".into(), String::new()),
+        VariantShape::Native => unreachable!("a native variant never crosses"),
         VariantShape::Tuple(Some(f)) => (
             format!("({})", attr_read(&v.name, f, "obj")?),
             format!("({})", f.rust_name),
@@ -400,8 +412,10 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
         VariantShape::Named(fields) => {
             let reads: Vec<String> = fields
                 .iter()
-                .filter(|f| f.modeled())
-                .map(|f| Ok(format!("{}: {}", f.rust_name, attr_read(&v.name, f, "obj")?)))
+                .map(|f| match f.modeled() {
+                    true => Ok(format!("{}: {}", f.rust_name, attr_read(&v.name, f, "obj")?)),
+                    false => Ok(format!("{}: ::std::default::Default::default()", f.rust_name)),
+                })
                 .collect::<Result<_, String>>()?;
             let mut pattern = Vec::new();
             let mut sets = String::new();
@@ -437,6 +451,7 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::Optional(t) => {
             format!("if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}", read(t, v, path)?)
         }
+        Ty::Boxed(t) => format!("({}).map(::std::boxed::Box::new)", read(t, v, path)?),
         Ty::Maybe(t) => format!(
             "if ::lk_agents_abi::python::is_not_given({v})? {{ Ok(::lk_agents_abi::Maybe::NotGiven) }} else {{ ({}).map(::lk_agents_abi::Maybe::Given) }}",
             read(t, v, path)?
@@ -495,6 +510,10 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
     let mut kinds: Vec<String> = Vec::new();
     for v in variants {
         let f = match &v.shape {
+            VariantShape::Native => {
+                arms.push_str(&never_crosses(rust, &v.rust_name));
+                continue;
+            }
             VariantShape::Tuple(Some(f)) => f,
             VariantShape::Unit => {
                 if let Some((module, name)) = &v.host_type {
@@ -608,4 +627,12 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
         ));
     }
     Ok(s)
+}
+
+/// The emit arm of a native-only variant: emitting it is a bug of the code that sent it.
+fn never_crosses(rust: &str, variant: &str) -> String {
+    format!(
+        "        {rust}::{variant} {{ .. }} => return Err(::pyo3::exceptions::PyTypeError::new_err({:?})),\n",
+        format!("{variant} never crosses to the host")
+    )
 }

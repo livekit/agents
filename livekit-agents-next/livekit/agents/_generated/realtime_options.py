@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from livekit.agents.llm.tool_context import ToolChoice
     from livekit.agents.types import APIConnectOptions
 
 
@@ -25,7 +26,7 @@ class RealtimeJsonOption:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class RealtimeToolChoice:
-    value: str | dict[str, object] | None
+    value: ToolChoice | None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

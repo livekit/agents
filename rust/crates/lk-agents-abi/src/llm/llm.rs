@@ -84,7 +84,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolSpec {
     }
 }
 
-#[crate::host(handwritten(extract, emit, host = "str | dict[str, object]"))]
+#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolChoice"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolChoice {
     Auto,

@@ -481,7 +481,7 @@ impl ChatMessage {
     tag_value = "function_call",
     tag_after = "id"
 )]
-#[binding(emit, model_dump)]
+#[binding(emit, extract, model_dump)]
 pub struct FunctionCall {
     #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
     pub id: String,
@@ -501,19 +501,6 @@ pub struct FunctionCall {
     /// set this to a shared value. If not set, falls back to using id for grouping.
     #[python(default = "None")]
     pub group_id: Option<String>,
-}
-
-/// Anything else is a plugin bug that would otherwise become a tool call that never runs.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for FunctionCall {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        match obj.extract::<ChatItem>()? {
-            ChatItem::FunctionCall(call) => Ok(call),
-            _ => Err(pyo3::exceptions::PyValueError::new_err("`call` is not a FunctionCall")),
-        }
-    }
 }
 
 // `chat_context.py:374`.

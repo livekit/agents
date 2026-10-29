@@ -38,6 +38,10 @@ impl Resolver<'_> {
         }
         // One-value tuple variants, and at most one unit variant (the host's `None`).
         let values = |en: &syn::ItemEnum| {
+            let en = syn::ItemEnum {
+                variants: en.variants.iter().filter(|v| !native(v)).cloned().collect(),
+                ..en.clone()
+            };
             en.variants.iter().all(|v| match &v.fields {
                 syn::Fields::Unnamed(f) => f.unnamed.len() == 1,
                 syn::Fields::Unit => true,
@@ -167,6 +171,10 @@ impl Resolver<'_> {
         let mut entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
         let route = route(&at, &mut entries, dispatched)?;
         let shape = match &v.fields {
+            _ if native(v) => {
+                voc::only(&at, &entries, &["native"])?;
+                VariantShape::Native
+            }
             syn::Fields::Unit => {
                 voc::only(
                     &at,
@@ -219,6 +227,7 @@ impl Resolver<'_> {
                         skip: false,
                         omitted: None,
                         factory: None,
+                        host_type: None,
                         doc: Vec::new(),
                     }))
                 }
@@ -254,7 +263,18 @@ impl Resolver<'_> {
             let ident = f.ident.as_ref().expect("named").to_string();
             let at = format!("{}({owner}.{ident})", self.at);
             let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-            voc::only(&at, &entries, &["default", "skip", "omitted", "default_factory"])?;
+            voc::only(
+                &at,
+                &entries,
+                &["default", "skip", "omitted", "default_factory", "host_type"],
+            )?;
+            let host_type = voc::text(&at, &entries, "host_type")?
+                .map(|path| {
+                    path.rsplit_once('.')
+                        .map(|(module, name)| (module.to_owned(), name.to_owned()))
+                        .ok_or_else(|| format!("{at}: host_type is a dotted class path"))
+                })
+                .transpose()?;
             let skip = voc::find(&entries, "skip").is_some();
             let factory = voc::text(&at, &entries, "default_factory")?;
             if factory.as_ref().is_some_and(|f| !f.contains('.')) {
@@ -269,9 +289,6 @@ impl Resolver<'_> {
                     None => path,
                 }
             });
-            if skip && dirs.0 && factory.is_none() {
-                return Err(format!("{at}: an extracted record reads every field: no `skip`"));
-            }
             let ty = if skip && factory.is_none() { Ty::Unit } else { self.ty(&f.ty, &at)? };
             let default = literal_default(&at, &entries)?;
             if factory.is_some() && (default.is_some() || omitted.is_some()) {
@@ -304,11 +321,16 @@ impl Resolver<'_> {
                 skip,
                 omitted,
                 factory,
+                host_type,
                 doc: doc(&f.attrs),
             });
         }
         Ok(out)
     }
+}
+
+fn native(v: &syn::Variant) -> bool {
+    voc::read(&v.attrs).is_ok_and(|entries| voc::find(&entries, "native").is_some())
 }
 
 /// A dispatched member's `event` / `event(mirror = "..")` / `ignored`, taken out of `entries`.

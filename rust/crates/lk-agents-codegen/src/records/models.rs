@@ -382,7 +382,13 @@ fn model(
                 (None, None) if matches!(f.ty, Ty::Maybe(_)) => " = NOT_GIVEN".to_owned(),
                 (None, None) => String::new(),
             };
-            let ann = annotation(&f.ty, module, own, out, typing);
+            let ann = match &f.host_type {
+                Some((m, name)) => {
+                    typing.add(m, name);
+                    name.clone()
+                }
+                None => annotation(&f.ty, module, own, out, typing),
+            };
             s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
         }
@@ -489,13 +495,18 @@ fn model(
             let mut s = String::new();
             for v in variants {
                 let fields: Vec<&Field> = match &v.shape {
+                    VariantShape::Native => continue,
                     VariantShape::Unit | VariantShape::Tuple(None) => Vec::new(),
                     VariantShape::Tuple(Some(f)) => vec![f],
                     VariantShape::Named(fs) => fs.iter().collect(),
                 };
                 s.push_str(&class(&v.name, &v.doc, &fields, ""));
             }
-            let names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
+            let names: Vec<&str> = variants
+                .iter()
+                .filter(|v| !matches!(v.shape, VariantShape::Native))
+                .map(|v| v.name.as_str())
+                .collect();
             s.push_str(&format!("\n\n{}\n", union_alias(&r.name, &names)));
             s.push_str(&docstring(&r.doc, ""));
             s
@@ -550,6 +561,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(t, module, own, out, typing)),
+        Ty::Boxed(t) => annotation(t, module, own, out, typing),
         Ty::Tuple(items) => format!(
             "tuple[{}]",
             items

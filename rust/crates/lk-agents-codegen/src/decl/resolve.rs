@@ -692,6 +692,9 @@ impl Resolver<'_> {
                         let (class, family) = self.arc_object(*module, *item, at)?.expect("checked");
                         Ty::Shared { rust: self.krate.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?, class, family }
                     }
+                    (["std", "boxed", "Box"], [inner @ Shape::Named { .. }]) => {
+                        Ty::Boxed(Box::new(self.classify(inner, at)?))
+                    }
                     (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
                         if args.is_empty() && !self.is_stream_source(*module, *item) =>
                     {
@@ -1063,7 +1066,9 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
             "{at}: record `{}` is not declared for input (#[binding(extract)])",
             r.rust
         )),
-        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) => check_input(at, t),
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => {
+            check_input(at, t)
+        }
         Ty::Map(k, v) | Ty::OrderedMap(k, v) => {
             check_input(at, k)?;
             check_input(at, v)
@@ -1090,7 +1095,7 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         Ty::Record(r) if !r.emit => {
             Err(format!("{at}: record `{}` is not declared for output (#[binding(emit)])", r.rust))
         }
-        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => check_output(at, t),
+        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => check_output(at, t),
         Ty::Map(k, v) | Ty::OrderedMap(k, v) => {
             check_output(at, k)?;
             check_output(at, v)

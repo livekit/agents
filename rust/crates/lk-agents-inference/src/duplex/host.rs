@@ -10,7 +10,6 @@ use lk_agents_abi::llm::duplex as abi;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, HostRealtimeError, RealtimeCapabilities, RealtimeError,
-    RealtimeModelError,
 };
 use lk_agents_abi::{AudioFrame, OwnedTask, Realtime, Spawner, SpawnerExt, WallAnchor};
 use tokio::sync::mpsc;
@@ -225,15 +224,13 @@ impl HostSession {
                 log::error!(target: "livekit.agents", error = e.message.as_str(); "failed to update the duplex session");
                 continue;
             }
-            let error = RealtimeModelError {
+            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError {
                 label: label.clone(),
                 message: e.message,
                 recoverable: false,
-                ..Default::default()
-            };
-            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError {
-                error,
                 timestamp: lk_agents_abi::unix_now(),
+                req_id: None,
+                code: None,
             }))));
             view.close_plugin().await;
         }

@@ -2069,17 +2069,86 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let host = ::std::sync::Arc::clone(&self.host);
         let cmd_arg = cmd;
         ::lk_agents_runtime::host::notify(&self.notifier, "HostRealtimeSession._core_send", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(cmd_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::realtime_wire::realtime_command_to_py(py, cmd_arg)?];
                 Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
     }
 
-    fn update(&self, cmd: ::lk_agents_abi::RealtimeCommand) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+    fn update_instructions(&self, instructions: ::std::string::String) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let cmd_arg = cmd;
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_update", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(cmd_arg, py)?];
-                Ok((host.bind(py).getattr("_core_update")?, ::pyo3::types::PyTuple::new(py, args)?))
+        let instructions_arg = instructions;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_update_instructions", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update_instructions")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn update_chat_ctx(&self, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let items_arg = items;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_update_chat_ctx", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(items_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update_chat_ctx")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn push_item(&self, item: ::lk_agents_abi::ChatItem) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let item_arg = item;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_push_item", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(item_arg, py)?];
+                Ok((host.bind(py).getattr("_core_push_item")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn update_tools(&self, names: ::std::vec::Vec<::std::string::String>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let names_arg = names;
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_update_tools", &self.context, &[], ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update_tools")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
         let out = started.await;
@@ -2101,7 +2170,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         let host = ::std::sync::Arc::clone(&self.host);
         let cmd_arg = cmd;
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostRealtimeSession._core_request", &self.context, &[], ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(cmd_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::realtime_wire::realtime_command_to_py(py, cmd_arg)?];
                 Ok((host.bind(py).getattr("_core_request")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
         ::std::boxed::Box::pin(async move {
@@ -2188,7 +2257,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::llm::realtime::Event>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::realtime_wire::event_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

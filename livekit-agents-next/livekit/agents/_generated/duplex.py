@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
+from .realtime_wire import Event
+
 if TYPE_CHECKING:
     from livekit.rtc import AudioFrame
 
@@ -44,5 +46,5 @@ class DuplexTranscript:
     end_ms: int | None = None
 
 
-DuplexEvent: TypeAlias = DuplexTranscript | dict[str, object]
+DuplexEvent: TypeAlias = DuplexTranscript | Event
 """One event of a plugin session: its transcript, or what a realtime session reports."""

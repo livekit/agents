@@ -106,6 +106,9 @@ pub enum VariantShape {
     /// `Variant(T)`: one field, named by `#[host(field = "..")]`; `None` when it is `skip`ped.
     Tuple(Option<Field>),
     Named(Vec<Field>),
+    /// `#[host(native)]`: a variant only native code produces or takes; it never crosses (no
+    /// model, never read, emitting it raises).
+    Native,
 }
 
 /// A record field. Presence is declared: an `Option<T>` field takes the explicit null, any other
@@ -123,6 +126,9 @@ pub struct Field {
     /// `default_factory = "time.time"`: the model's default, the host callable called at
     /// construction (a host timestamp). With `skip`, Rust never sends it: the host stamps it.
     pub factory: Option<String>,
+    /// `host_type = "module.Name"`: the class the host holds, when the type's own model is not it
+    /// (a legacy model beside its handwritten public class).
+    pub host_type: Option<(String, String)>,
     pub doc: Vec<String>,
 }
 
@@ -456,6 +462,8 @@ pub enum Ty {
     OrderedMap(Box<Ty>, Box<Ty>),
     /// `BTreeSet<T>`: a set (a `frozenset` on a model).
     Set(Box<Ty>),
+    /// `Box<T>` of a record field: crosses as `T`.
+    Boxed(Box<Ty>),
     Tuple(Vec<Ty>),
     /// A `#[derive(Host)]` record, crossing by its generated conversions.
     Record(Record),
@@ -630,6 +638,7 @@ impl Ty {
             Ty::Map(k, v) => format!("::std::collections::BTreeMap<{}, {}>", k.rust(), v.rust()),
             Ty::OrderedMap(k, v) => format!("::indexmap::IndexMap<{}, {}>", k.rust(), v.rust()),
             Ty::Set(t) => format!("::std::collections::BTreeSet<{}>", t.rust()),
+            Ty::Boxed(t) => format!("::std::boxed::Box<{}>", t.rust()),
             Ty::Tuple(ts) if ts.len() == 1 => format!("({},)", ts[0].rust()),
             Ty::Tuple(ts) => {
                 format!("({})", ts.iter().map(Ty::rust).collect::<Vec<_>>().join(", "))

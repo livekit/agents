@@ -12,6 +12,7 @@ from livekit.agents._core_view import AvailabilityObserver, Duplex
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.llm.realtime import RealtimeModel
+from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.llm.utils import SerializedImage
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
@@ -216,7 +217,7 @@ class InferenceLlm:
         tools: Sequence[dict[str, object]],
         conn_options: APIConnectOptions,
         parallel_tool_calls: bool | None = None,
-        tool_choice: str | dict[str, object] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: object | None = None,
         extra_kwargs: dict[str, object] | None = None,
         headers: Sequence[tuple[str, str]] | None = None,

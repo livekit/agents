@@ -778,112 +778,75 @@ class {Stream}(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
     def _core_attach(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> None:
         """Report this session's events to the framework, which offers it the tools ``tools``
         names."""
-        from .._core_view import to_core_item
+        from .._core_view import forward_session_events, to_core_item
 
         self._core_tools = tools
-        self._core_events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        self._core_events: asyncio.Queue[wire.Event | None] = asyncio.Queue()
         put = self._core_events.put_nowait
-        self.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
-        self.on(
-            "input_speech_stopped",
-            lambda ev: put(
-                {
-                    "kind": "input_speech_stopped",
-                    "user_transcription_enabled": ev.user_transcription_enabled,
-                }
-            ),
-        )
-        self.on(
-            "input_audio_transcription_completed",
-            lambda ev: put(
-                {
-                    "kind": "input_transcription",
-                    "item_id": ev.item_id,
-                    "transcript": ev.transcript,
-                    "is_final": ev.is_final,
-                    "confidence": ev.confidence,
-                    "turn_started_at": ev.turn_started_at,
-                }
-            ),
-        )
-        self.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
-        self.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
-        self.on(
-            "error",
-            lambda ev: put(
-                {
-                    "kind": "error",
-                    "label": ev.label,
-                    "message": str(ev.error),
-                    "recoverable": ev.recoverable,
-                    "timestamp": ev.timestamp,
-                }
-            ),
-        )
+        forward_session_events(self, put)
         self.on(
             "generation_created",
-            lambda ev: (
-                None if ev.user_initiated else put({"kind": "server_generation", "generation": ev})
-            ),
+            lambda ev: None if ev.user_initiated else put(wire.ServerGeneration(generation=ev)),
         )
         self.on(
             "remote_item_added",
             lambda ev: put(
-                {
-                    "kind": "remote_item_added",
-                    "previous_item_id": ev.previous_item_id,
-                    "item": to_core_item(ev.item),
-                }
+                wire.RemoteItemAdded(
+                    previous_item_id=ev.previous_item_id, item=to_core_item(ev.item)
+                )
             ),
         )
 
-    def _core_send(self, cmd: dict[str, Any]) -> None:
-        match cmd["kind"]:
-            case "push_audio":
-                self.push_audio(cmd["frame"])
-            case "interrupt":
+    def _core_send(self, cmd: wire.RealtimeCommand) -> None:
+        match cmd:
+            case wire.PushAudio(frame=frame):
+                self.push_audio(frame)
+            case wire.Interrupt():
                 self.interrupt()
-            case "commit_audio":
+            case wire.CommitAudio():
                 self.commit_audio()
-            case "clear_audio":
+            case wire.ClearAudio():
                 self.clear_audio()
-            case "truncate":
-                transcript = cmd["audio_transcript"]
+            case wire.Truncate():
                 self.truncate(
-                    message_id=cmd["message_id"],
-                    modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
-                    audio_end_ms=cmd["audio_end_ms"],
-                    audio_transcript=NOT_GIVEN if transcript is None else transcript,
+                    message_id=cmd.message_id,
+                    modalities=["audio", "text"] if cmd.has_audio else ["text"],
+                    audio_end_ms=cmd.audio_end_ms,
+                    audio_transcript=cmd.audio_transcript or NOT_GIVEN,
                 )
-            case kind:
-                raise ValueError(f"unknown session command {kind!r}")
+            case _:
+                raise ValueError(f"unknown session command {cmd!r}")
 
-    async def _core_update(self, cmd: dict[str, Any]) -> None:
-        from .._core_view import from_core_item, offered_tools
-        from ..llm.chat_context import ChatContext
+    async def _core_update_instructions(self, instructions: str) -> None:
+        await self.update_instructions(instructions)
 
-        match cmd["kind"]:
-            case "update_instructions":
-                await self.update_instructions(cmd["instructions"])
-            case "update_chat_ctx":
-                await self.update_chat_ctx(ChatContext([from_core_item(i) for i in cmd["items"]]))
-            case "push_item":
-                ctx = self.chat_ctx.copy()
-                ctx.insert(from_core_item(cmd["item"]))
-                await self.update_chat_ctx(ctx)
-            case "update_tools":
-                await self.update_tools(offered_tools(self._core_tools(), cmd["names"]))
-            case kind:
-                raise ValueError(f"unknown session update {kind!r}")
+    async def _core_update_chat_ctx(self, items: list[Any]) -> None:
+        from .._core_view import from_core_item
 
-    async def _core_request(self, cmd: dict[str, Any]) -> asyncio.Future[Any]:
-        if cmd["kind"] == "say":
-            return self.say(cmd["text"])
-        choice = cmd["tool_choice"]
-        return self.generate_reply(
-            instructions=cmd["instructions"] or NOT_GIVEN,
-            tool_choice=NOT_GIVEN if choice is None else choice,
-        )
+        await self.update_chat_ctx(ChatContext([from_core_item(i) for i in items]))
+
+    async def _core_push_item(self, item: Any) -> None:
+        from .._core_view import from_core_item
+
+        ctx = self.chat_ctx.copy()
+        ctx.insert(from_core_item(item))
+        await self.update_chat_ctx(ctx)
+
+    async def _core_update_tools(self, names: list[str]) -> None:
+        from .._core_view import offered_tools
+
+        await self.update_tools(offered_tools(self._core_tools(), names))
+
+    async def _core_request(self, cmd: wire.RealtimeCommand) -> asyncio.Future[Any]:
+        match cmd:
+            case wire.Say(text=text):
+                return self.say(text)
+            case wire.GenerateReply(instructions=instructions, tool_choice=choice):
+                return self.generate_reply(
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=NOT_GIVEN if choice is None else choice,
+                )
+        raise ValueError(f"unknown reply request {cmd!r}")
 
     async def _core_generation(
         self, request: asyncio.Future[GenerationCreatedEvent]
@@ -894,32 +857,29 @@ class {Stream}(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
         request.cancel()
 
     async def _core_drain(self, ev: GenerationCreatedEvent, req_id: str | None) -> None:
-        from .._core_view import to_core_item
-
         put = self._core_events.put_nowait
         response_id = ev.response_id or ""
-        put({"kind": "generation_created", "response_id": response_id, "req_id": req_id})
-        ids = {"response_id": ev.response_id}
+        put(wire.GenerationCreated(response_id=response_id, req_id=req_id))
 
         async def _message(msg: Any) -> None:
-            mid = {"message_id": msg.message_id, **ids}
-            put({"kind": "message_started", **mid})
+            ids = {"message_id": msg.message_id, "response_id": ev.response_id}
+            put(wire.MessageStarted(**ids))
 
             async def _text() -> None:
                 async for delta in msg.text_stream:
-                    put({"kind": "text_delta", "delta": str(delta), **mid})
+                    put(wire.TextDelta(delta=str(delta), **ids))
 
             async def _audio() -> None:
                 async for frame in msg.audio_stream:
-                    put({"kind": "audio_delta", "frame": frame, **mid})
+                    put(wire.AudioDelta(frame=frame, **ids))
 
             async def _modalities() -> None:
                 modalities = await msg.modalities
-                kind = "audio" if "audio" in modalities else "text"
-                put({"kind": "message_modalities", "modalities": kind, **mid})
+                kind: wire.Modalities = "audio" if "audio" in modalities else "text"
+                put(wire.MessageModalities(modalities=kind, **ids))
 
             await asyncio.gather(_text(), _audio(), _modalities())
-            put({"kind": "message_done", **mid})
+            put(wire.MessageDone(**ids))
 
         async def _messages() -> None:
             # each message forwards as it arrives, not once the server has sent them all
@@ -930,12 +890,12 @@ class {Stream}(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
 
         async def _calls() -> None:
             async for call in ev.function_stream:
-                put({"kind": "function_call", "call": to_core_item(call)})
+                put(wire.FunctionCallReady(call=call))
 
         await asyncio.gather(_messages(), _calls())
-        put({"kind": "generation_done", "response_id": response_id})
+        put(wire.GenerationDone(response_id=response_id))
 
-    async def _core_next_event(self) -> dict[str, Any] | None:
+    async def _core_next_event(self) -> wire.Event | None:
         return await self._core_events.get()
 
     async def _core_aclose(self) -> None:

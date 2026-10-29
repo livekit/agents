@@ -475,6 +475,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(this, t, dir, imports)),
+        Ty::Boxed(t) => annotation(this, t, dir, imports),
         Ty::Maybe(t) => {
             imports.add("..types", "NotGivenOr");
             format!("NotGivenOr[{}]", annotation(this, t, dir, imports))

@@ -12,6 +12,7 @@ from datetime import date
 from livekit.agents import VAD
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.llm import LLM
+from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions, TimedString
@@ -497,7 +498,7 @@ class VoiceSession:
         user_input: str | None = None,
         instructions: str | None = None,
         allow_interruptions: bool | None = None,
-        tool_choice: str | dict[str, object] | None = None,
+        tool_choice: ToolChoice | None = None,
         chat_ctx: Sequence[ChatItem] | None = None,
         tools: Sequence[dict[str, object]] | None = None,
         tools_host: object | None = None,

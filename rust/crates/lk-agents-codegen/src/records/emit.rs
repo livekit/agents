@@ -23,6 +23,7 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
                 items.join(", ")
             )
         }
+        Ty::Boxed(t) => emit(t, &format!("(*{x})"))?,
         Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{x})?"),
         Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{x})?.into_any()"),
         Ty::Optional(t) => format!(

@@ -57,7 +57,9 @@
 //! | record struct | `record(.., default)` | Rust `Default` from the fields' `default = <literal>` (a `Maybe` field: not given): one list of defaults for both languages; the one Rust the record marker expands to |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains private `_to_json()`/`_from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |
-//! | record field, tuple variant | `skip` | does not cross (emit-only records) |
+//! | record field, tuple variant | `skip` | does not cross: an extracted record's field reads as its Rust `Default` |
+//! | record field | `host_type = "module.Name"` | the class the host holds, when the type's own model is not it (a legacy model beside its handwritten public class) |
+//! | record enum variant | `native` | only native code produces or takes it: no model, never read, emitting it raises |
 //! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`); with `skip`, Rust never sends it and the host stamps it, read back on extract |
 //! | record enum | `record(.., enum)` | a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`, `.value` its string), not a `Literal` |
 //! | record struct field | `omitted = path` | an extracted scalar the host may leave out: `path(&record)` computes it from the record read (the model's `__post_init__` asks `_core` for it), an explicit value stays |

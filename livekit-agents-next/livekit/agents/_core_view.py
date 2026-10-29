@@ -21,7 +21,7 @@ from pydantic import TypeAdapter
 from livekit import rtc
 
 from . import _core, llm
-from ._generated import duplex
+from ._generated import duplex, realtime_wire
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.turn_events import EotPrediction
 from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
@@ -86,46 +86,44 @@ def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool |
     return model._core_with_tools(tools)
 
 
-def _forward_session_events(
+def forward_session_events(
     session: llm.RealtimeSession | llm.DuplexSession,
-    put: Callable[[dict[str, object]], None],
+    put: Callable[[realtime_wire.Event], None],
 ) -> None:
-    """A realtime or duplex session's caller events, reconnects and errors, as kind-tagged dicts."""
-    session.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
+    """A realtime or duplex session's caller events, reconnects and errors, as the core reads
+    them."""
+    session.on("input_speech_started", lambda _: put(realtime_wire.InputSpeechStarted()))
     session.on(
         "input_speech_stopped",
         lambda ev: put(
-            {
-                "kind": "input_speech_stopped",
-                "user_transcription_enabled": ev.user_transcription_enabled,
-            }
+            realtime_wire.InputSpeechStopped(
+                user_transcription_enabled=ev.user_transcription_enabled
+            )
         ),
     )
     session.on(
         "input_audio_transcription_completed",
         lambda ev: put(
-            {
-                "kind": "input_transcription",
-                "item_id": ev.item_id,
-                "transcript": ev.transcript,
-                "is_final": ev.is_final,
-                "confidence": ev.confidence,
-                "turn_started_at": ev.turn_started_at,
-            }
+            realtime_wire.InputTranscription(
+                item_id=ev.item_id,
+                transcript=ev.transcript,
+                is_final=ev.is_final,
+                confidence=ev.confidence,
+                turn_started_at=ev.turn_started_at,
+            )
         ),
     )
-    session.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
-    session.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
+    session.on("session_reconnected", lambda _: put(realtime_wire.SessionReconnected()))
+    session.on("metrics_collected", lambda ev: put(realtime_wire.RealtimeMetrics(metrics=ev)))
     session.on(
         "error",
         lambda ev: put(
-            {
-                "kind": "error",
-                "label": ev.label,
-                "message": str(ev.error),
-                "recoverable": ev.recoverable,
-                "timestamp": ev.timestamp,
-            }
+            realtime_wire.HostRealtimeError(
+                label=ev.label,
+                message=str(ev.error),
+                recoverable=ev.recoverable,
+                timestamp=ev.timestamp,
+            )
         ),
     )
 
@@ -173,16 +171,14 @@ class _DuplexSession:
         self._audio = aiter(session.audio_stream)
         self._events: asyncio.Queue[Any] = asyncio.Queue()
         put = self._events.put_nowait
-        _forward_session_events(session, put)
+        forward_session_events(session, put)
         session.on(
             "transcript_delta",
             lambda ev: put(
                 duplex.DuplexTranscript(text=ev.text, start_ms=ev.start_ms, end_ms=ev.end_ms)
             ),
         )
-        session.on(
-            "function_call", lambda call: put({"kind": "function_call", "call": to_core_item(call)})
-        )
+        session.on("function_call", lambda call: put(realtime_wire.FunctionCallReady(call=call)))
 
     def _core_push_audio(self, frame: rtc.AudioFrame) -> None:
         self._session.push_audio(frame)
