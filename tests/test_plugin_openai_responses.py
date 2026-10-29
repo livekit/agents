@@ -553,6 +553,54 @@ async def test_generated_text_is_not_retried() -> None:
     assert await _attempts_until_stall([_RESPONSE_CREATED, _TEXT_DELTA], max_retry=2) == 1
 
 
+class _QuietWS(_RecordingWS):
+    """Delivers ``frames``, then the socket goes quiet without closing."""
+
+    def __init__(self, frames: list[dict]) -> None:
+        super().__init__({})
+        self._frames = list(frames)
+        self.requests = 0
+
+    async def send_str(self, data: str) -> None:
+        self.requests += 1
+        self._queued = list(self._frames)
+
+    async def receive(self) -> _FakeWSMsg:
+        if self._queued:
+            return _FakeWSMsg(json.dumps(self._queued.pop(0)))
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+@pytest.mark.parametrize(
+    "frames, requests",
+    [([_RESPONSE_CREATED], 3), ([_RESPONSE_CREATED, _TEXT_DELTA], 1)],
+    ids=["before-output", "after-output"],
+)
+async def test_a_read_deadline_replays_only_a_request_with_no_delivered_output(
+    frames: list[dict], requests: int
+) -> None:
+    """Decision 99: the WebSocket read deadline runs in the attempt machine; once text was
+    delivered, a quiet socket raises instead of regenerating the response."""
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    assert llm_model._ws is not None
+    ws = _QuietWS(frames)
+    _use_connections(llm_model._ws, ws)
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+    try:
+        with pytest.raises(APIConnectionError):
+            async with llm_model.chat(
+                chat_ctx=chat_ctx,
+                conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0, read_timeout=0.2),
+            ) as stream:
+                async for _ in stream:
+                    pass
+        assert ws.requests == requests
+    finally:
+        await llm_model.aclose()
+
+
 class _CachingResponsesWS:
     base_url = "https://api.openai.com/v1"
 
