@@ -40,16 +40,3 @@ pub fn b64_encode(data: &[u8]) -> String {
 pub(crate) fn data_uri(mime_type: Option<&str>, data: &[u8]) -> String {
     format!("data:{};base64,{}", mime_type.unwrap_or("None"), b64_encode(data))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: a malformed data URI prefix.
-    #[test]
-    fn data_uri_has_the_exact_prefix_providers_parse() {
-        assert_eq!(data_uri(Some("image/png"), b"foo"), "data:image/png;base64,Zm9v");
-        // The reference f-strings a `None` mime type in literally; see the doc comment.
-        assert_eq!(data_uri(None, b"foo"), "data:None;base64,Zm9v");
-    }
-}

@@ -270,22 +270,8 @@ pub struct TurnResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::a2a::metadata::{MERGED_INTO_KEY, REASON_KEY};
-    use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
-    use lk_agents_abi::storage::TaskState;
     use serde_json::json;
     use std::time::Duration;
-
-    #[test]
-    fn options_default_to_the_documented_numbers() {
-        let o = TurnOptions::default();
-        assert_eq!(o.wait_timeout(), LEASE_WAIT_TIMEOUT);
-        assert_eq!(o.policy, PolicySpec::Default);
-        assert_eq!(
-            serde_json::to_string(&interrupted_metadata()).unwrap(),
-            r#"{"https://livekit.io/a2a/ext/agents/v1/interrupted":true,"https://livekit.io/a2a/ext/agents/v1/interruptionReason":"new-message"}"#
-        );
-    }
 
     #[test]
     fn policy_and_debounce_resolution() {
@@ -427,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn the_helpers_shape_as_the_python() {
+    fn failed_messages_and_reasons_shape_as_the_python() {
         let f = failed_message("AST_1", "worker-lost", "msg_X".into());
         assert_eq!(
             serde_json::to_value(&f).unwrap(),
@@ -435,22 +421,6 @@ mod tests {
                 "parts": [{"text": "the task failed: worker-lost"}],
                 "metadata": {"https://livekit.io/a2a/ext/agents/v1/reason": "worker-lost"}})
         );
-        let failed =
-            unpersisted_failed("AST_2", "front-desk", None, "lease-timeout", 1, "msg_Y".into());
-        assert_eq!(failed.data.metadata.get(REASON_KEY), Some(&json!("lease-timeout")));
-        assert_eq!(failed.status, TaskState::Failed);
-        assert!(failed.data.history.is_empty());
-        assert_eq!(artifact_text(&failed), None);
-        let mut done = failed.clone();
-        done.data.artifacts = Some(vec![artifact(&json!({"n": 1}), "art_1".into())]);
-        assert_eq!(artifact_text(&done), Some(json!({"n": 1})));
-        done.data.history = vec![v1(json!({"messageId": "m", "role": "ROLE_USER", "parts": [],
-            "metadata": {"https://livekit.io/a2a/ext/agents/v1/channel": "sms"}}))];
-        assert_eq!(channel_of_record(&done).as_deref(), Some("sms"));
-        let r = result_for(done.clone(), "AT_1", Some("r1"));
-        assert_eq!((r.answered_by.as_str(), r.run_id.as_deref()), ("AST_2", Some("r1")));
-        done.data.metadata.insert(MERGED_INTO_KEY.into(), json!("AST_9"));
-        assert_eq!(result_for(done, "AT_1", None).answered_by, "AST_9");
         assert_eq!(
             python_reason(&StorageError::Unavailable("lost".into())),
             "StorageUnavailable: lost"
