@@ -7,17 +7,23 @@
 //!   the tail and rotates about every minute, so the reader reconnects from its offset.
 
 use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::StreamExt as _;
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt as _};
+use lk_agents_abi::{ApiConnectOptions, Clock, DEFAULT_API_CONNECT_OPTIONS};
+use lk_agents_net::http::exchange::{Exchange, HttpEvent, ResponsePolicy};
+use lk_agents_net::http::{GatewayHttp, HeaderMap, Method};
+use lk_agents_net::sse::{SseDecoder, SseEvent};
+use lk_agents_net::transport::HttpRequest;
 
 use crate::StorageError;
 use crate::streams::{CONTENT_TYPE, DEFAULT_TTL, ResponseStreams, START, StreamInfo, StreamRead};
 
 use super::conn::TokenMinter;
-use super::http_ok;
-use lk_agents_net::sse::{SseDecoder, SseEvent};
 
 mod cursor;
 use cursor::{MAX_BYTES, MAX_RECORDS, Position, invalid};
@@ -29,25 +35,89 @@ struct Created {
     expires_at: i64,
 }
 
-/// The streams client, shared by every session a worker serves.
+/// One attempt with net's phase deadlines: storage owns retries, and an append is not idempotent.
+const ATTEMPT: ApiConnectOptions =
+    ApiConnectOptions { max_retry: 0, ..DEFAULT_API_CONNECT_OPTIONS };
+
+type Body = Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>;
+
+/// The streams client over the process's HTTP transport, shared by every session a worker serves.
 #[derive(Clone)]
 pub struct Streams {
-    http: reqwest::Client,
+    http: Arc<GatewayHttp>,
+    clock: Arc<dyn Clock>,
     base: String,
     minter: TokenMinter,
 }
 
 impl Streams {
-    pub fn new(http: reqwest::Client, base: impl Into<String>, minter: TokenMinter) -> Self {
-        Self { http, base: base.into().trim_end_matches('/').to_owned(), minter }
+    pub fn new(
+        http: Arc<GatewayHttp>,
+        clock: Arc<dyn Clock>,
+        base: impl Into<String>,
+        minter: TokenMinter,
+    ) -> Self {
+        Self { http, clock, base: base.into().trim_end_matches('/').to_owned(), minter }
     }
 
-    fn url(&self, id: &str) -> String {
-        format!("{}/{id}", self.base)
+    fn url(&self, id: &str, query: &[(&str, &str)]) -> Result<String, StorageError> {
+        let url = format!("{}/{id}", self.base);
+        if query.is_empty() {
+            return Ok(url);
+        }
+        url::Url::parse_with_params(&url, query)
+            .map(String::from)
+            .map_err(|e| StorageError::Invalid(format!("stream url: {e}")))
     }
 
-    fn token(&self) -> Result<String, StorageError> {
-        self.minter.mint()
+    /// A successful answer; any other status is mapped to its typed error. A `live` answer is
+    /// listened to passively: only the total deadline bounds the wait for its next event.
+    async fn send(
+        &self,
+        method: Method,
+        url: String,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+        live: bool,
+    ) -> Result<Answer, StorageError> {
+        let headers = std::iter::once((
+            "authorization".to_owned(),
+            format!("Bearer {}", self.minter.mint()?),
+        ))
+        .chain(headers.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())))
+        .collect();
+        let mut exchange = Exchange::with_response_policy(
+            self.http.clone(),
+            method,
+            HttpRequest { url, headers, body },
+            &ATTEMPT,
+            self.clock.clone(),
+            ResponsePolicy::Protocol,
+        );
+        let headers = loop {
+            match exchange.next().await.map_err(unavailable)? {
+                HttpEvent::Headers(headers) => break headers,
+                HttpEvent::Started => {}
+                HttpEvent::Bytes(_) | HttpEvent::End => {
+                    return Err(malformed("no response headers"));
+                }
+            }
+        };
+        exchange.expect_response(!live);
+        let status = exchange.status().expect("a response carries its status");
+        let body: Body = Box::pin(futures_util::stream::unfold(Some(exchange), |exchange| async {
+            let mut exchange = exchange?;
+            loop {
+                match exchange.next().await {
+                    Ok(HttpEvent::Bytes(bytes)) => return Some((Ok(bytes), Some(exchange))),
+                    Ok(HttpEvent::End) => return None,
+                    Ok(HttpEvent::Started | HttpEvent::Headers(_)) => {}
+                    Err(error) => return Some((Err(unavailable(error)), None)),
+                }
+            }
+        }));
+        let answer = Answer { headers, body };
+        if status.is_success() { Ok(answer) } else { Err(answer.rejected(status.as_u16()).await) }
     }
 
     /// Reads from `from` (`None`: the beginning). With `live`, follows the tail until the stream
@@ -78,6 +148,62 @@ impl Streams {
     }
 }
 
+/// A response: its headers, and its body as it arrives.
+struct Answer {
+    headers: HeaderMap,
+    body: Body,
+}
+
+impl Answer {
+    fn header(&self, name: &str) -> Option<String> {
+        self.headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_owned)
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        self.header(name).is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    }
+
+    fn required_next(&self) -> Result<String, StorageError> {
+        self.header("Stream-Next-Offset").ok_or_else(|| malformed("response omitted next offset"))
+    }
+
+    /// The body read to its end, within the response byte budget.
+    async fn bytes(mut self) -> Result<Vec<u8>, StorageError> {
+        let mut body = Vec::new();
+        while let Some(chunk) = self.body.next().await {
+            let chunk = chunk?;
+            if chunk.len() > MAX_BYTES.saturating_sub(body.len()) {
+                return Err(malformed("response exceeds byte budget"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+
+    /// A non-2xx with its body's message: 503 is retryable (`Unavailable`), 404 is `NotFound`.
+    async fn rejected(self, status: u16) -> StorageError {
+        let message = match self.bytes().await {
+            Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+            Err(error) => error.to_string(),
+        };
+        let message = serde_json::from_str::<serde_json::Value>(&message)
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .or_else(|| v.get("msg"))
+                    .and_then(|m| m.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or(message);
+        match status {
+            404 => StorageError::NotFound(message),
+            401 | 403 => StorageError::Unauthorized(message),
+            500..=599 => StorageError::Unavailable(message),
+            s => StorageError::Invalid(format!("http {s}: {message}")),
+        }
+    }
+}
+
 /// A read position over one stream.
 pub struct StreamReader {
     streams: Streams,
@@ -102,9 +228,7 @@ struct Boundary {
 }
 
 struct Sse {
-    body: std::pin::Pin<
-        Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>,
-    >,
+    body: Body,
     decoder: SseDecoder,
     events: VecDeque<SseEvent>,
 }
@@ -129,58 +253,33 @@ impl ResponseStreams for Streams {
             "ttl_seconds": ttl.unwrap_or(DEFAULT_TTL).as_secs(),
             "region": "",
         });
-        let resp = self
-            .http
-            .post(&self.base)
-            .bearer_auth(self.token()?)
-            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
-            .body(body.to_string())
-            .send()
-            .await
-            .map_err(transport)?;
-        let resp = http_ok(resp).await?;
-        let created: Created =
-            resp.json().await.map_err(|e| StorageError::Unavailable(e.to_string()))?;
+        let headers = [("content-type", CONTENT_TYPE)];
+        let answer =
+            self.send(Method::POST, self.base.clone(), &headers, body.to_string().into(), false);
+        let created: Created = serde_json::from_slice(&answer.await?.bytes().await?)
+            .map_err(|e| StorageError::Unavailable(e.to_string()))?;
         Ok(StreamInfo { stream_id: created.stream_id, expires_at: created.expires_at })
     }
 
     /// The resume cursor is immediately after the record.
     async fn append(&self, stream_id: &str, record: &[u8]) -> Result<String, StorageError> {
-        let resp = self
-            .http
-            .post(self.url(stream_id))
-            .bearer_auth(self.token()?)
-            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
-            .body(record.to_vec())
-            .send()
-            .await
-            .map_err(transport)?;
-        let resp = http_ok(resp).await?;
-        Ok(Position::at(required_next(&resp)?)?.encode())
+        let headers = [("content-type", CONTENT_TYPE)];
+        let url = self.url(stream_id, &[])?;
+        let answer = self.send(Method::POST, url, &headers, record.to_vec(), false).await?;
+        Ok(Position::at(answer.required_next()?)?.encode())
     }
 
     /// Its terminal frame marks the commit.
     async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
-        let resp = self
-            .http
-            .post(self.url(stream_id))
-            .bearer_auth(self.token()?)
-            .header("Stream-Closed", "true")
-            .send()
-            .await
-            .map_err(transport)?;
-        http_ok(resp).await.map(|_| ())
+        let url = self.url(stream_id, &[])?;
+        self.send(Method::POST, url, &[("Stream-Closed", "true")], Vec::new(), false).await?;
+        Ok(())
     }
 
     async fn delete(&self, stream_id: &str) -> Result<(), StorageError> {
-        let resp = self
-            .http
-            .delete(self.url(stream_id))
-            .bearer_auth(self.token()?)
-            .send()
-            .await
-            .map_err(transport)?;
-        http_ok(resp).await.map(|_| ())
+        let url = self.url(stream_id, &[])?;
+        self.send(Method::DELETE, url, &[], Vec::new(), false).await?;
+        Ok(())
     }
 
     fn read(&self, stream_id: &str, after: Option<&str>, live: bool) -> Box<dyn StreamRead> {
@@ -277,32 +376,14 @@ impl StreamReader {
     /// One bounded `GET`. Its official boundary is installed only after buffered records drain.
     async fn catch_up(&mut self) -> Result<(), StorageError> {
         self.replay_page()?;
-        let resp = self
-            .streams
-            .http
-            .get(self.streams.url(&self.id))
-            .query(&[("offset", self.position.anchor.as_str())])
-            .bearer_auth(self.streams.token()?)
-            .send()
-            .await
-            .map_err(transport)?;
-        let resp = http_ok(resp).await?;
+        let url = self.streams.url(&self.id, &[("offset", &self.position.anchor)])?;
+        let answer = self.streams.send(Method::GET, url, &[], Vec::new(), false).await?;
         let boundary = Boundary {
-            next: required_next(&resp)?,
-            up_to_date: header(&resp, "Stream-Up-To-Date")
-                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
-            closed: header(&resp, "Stream-Closed").is_some_and(|v| v.eq_ignore_ascii_case("true")),
+            next: answer.required_next()?,
+            up_to_date: answer.flag("Stream-Up-To-Date"),
+            closed: answer.flag("Stream-Closed"),
         };
-        let mut body = Vec::new();
-        let mut chunks = resp.bytes_stream();
-        while let Some(chunk) = chunks.next().await {
-            let chunk = chunk.map_err(transport)?;
-            if chunk.len() > MAX_BYTES.saturating_sub(body.len()) {
-                return Err(malformed("response exceeds byte budget"));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        self.records(&body)?;
+        self.records(&answer.bytes().await?)?;
         self.boundary = Some(boundary);
         Ok(())
     }
@@ -335,18 +416,11 @@ impl StreamReader {
 
     async fn pump_live_inner(&mut self) -> Result<(), StorageError> {
         if self.sse.is_none() {
-            let resp = self
-                .streams
-                .http
-                .get(self.streams.url(&self.id))
-                .query(&[("offset", self.position.anchor.as_str()), ("live", "sse")])
-                .bearer_auth(self.streams.token()?)
-                .send()
-                .await
-                .map_err(transport)?;
-            let resp = http_ok(resp).await?;
+            let query = [("offset", self.position.anchor.as_str()), ("live", "sse")];
+            let url = self.streams.url(&self.id, &query)?;
+            let answer = self.streams.send(Method::GET, url, &[], Vec::new(), true).await?;
             self.sse = Some(Sse {
-                body: Box::pin(resp.bytes_stream()),
+                body: answer.body,
                 decoder: SseDecoder::new(),
                 events: VecDeque::new(),
             });
@@ -393,7 +467,7 @@ impl StreamReader {
                 }
                 Some(Err(e)) => {
                     self.sse = None;
-                    return Err(transport(e));
+                    return Err(e);
                 }
                 None => {
                     let finished = sse.decoder.finish();
@@ -419,47 +493,13 @@ fn split_records(body: &[u8]) -> Result<Vec<Vec<u8>>, StorageError> {
     Ok(records.into_iter().map(|r| r.get().as_bytes().to_vec()).collect())
 }
 
-fn required_next(resp: &reqwest::Response) -> Result<String, StorageError> {
-    header(resp, "Stream-Next-Offset").ok_or_else(|| malformed("response omitted next offset"))
-}
-
-fn header(resp: &reqwest::Response, name: &str) -> Option<String> {
-    resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned)
-}
-
 /// An answer the streams service should not have given: refused, not retried.
 fn malformed(message: &str) -> StorageError {
     StorageError::Unavailable(format!("stream answer: {message}"))
 }
 
-fn transport(e: reqwest::Error) -> StorageError {
+fn unavailable(e: lk_agents_abi::errors::ApiError) -> StorageError {
     StorageError::Unavailable(e.to_string())
-}
-
-#[cfg(test)]
-mod framing_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn a_live_stream_accepts_utf8_and_crlf_split_across_chunks() {
-        super::super::install_tls_provider();
-        let streams = Streams::new(
-            reqwest::Client::new(),
-            "http://unused/streams",
-            TokenMinter::new("key", "secret").unwrap(),
-        );
-        let mut reader = streams.read("AST_test", None, true);
-        let body = "event: data\r\ndata: [\"café\"]\r\n\r\n".as_bytes();
-        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> =
-            body.iter().map(|b| Ok(bytes::Bytes::copy_from_slice(&[*b]))).collect();
-        reader.sse = Some(Sse {
-            body: Box::pin(futures_util::stream::iter(chunks)),
-            decoder: SseDecoder::new(),
-            events: VecDeque::new(),
-        });
-        reader.pump_live().await.unwrap();
-        assert_eq!(reader.buffered.pop_front().unwrap(), "\"café\"".as_bytes());
-    }
 }
 
 #[cfg(test)]

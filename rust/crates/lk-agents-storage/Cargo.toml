@@ -19,7 +19,8 @@ doctest = false
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 # `StorageError` and the host-visible rows, declared with the host vocabulary.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
-# Owned renewal tasks and the SSE decoder of AgentDB's response streams.
+# Owned renewal tasks, and the HTTP transport, WebSocket and SSE decoder AgentDB reaches the
+# network through.
 lk-agents-net = { path = "../lk-agents-net" }
 # The chat items and the thread schema: `livekit.agent` records; threads through the Cloud API.
 livekit-protocol.workspace = true
@@ -33,10 +34,6 @@ thiserror.workspace = true
 log.workspace = true
 async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
-# AgentDB's streams API (HTTP; the data plane's WebSocket is lk-agents-net's); one crypto
-# provider (`ring`).
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
 url = "2"

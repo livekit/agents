@@ -1,6 +1,12 @@
 use super::*;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+fn streams(base: &str) -> Streams {
+    let http = Arc::new(GatewayHttp::new().unwrap());
+    let minter = TokenMinter::new("key", "secret").unwrap();
+    Streams::new(http, Arc::new(lk_agents_abi::RealClock::new()), base, minter)
+}
+
 /// The documented HTTP stream boundary, with deliberately opaque upstream tokens.
 struct Peer {
     streams: Streams,
@@ -19,7 +25,6 @@ impl Peer {
     }
 
     async fn paginated(paginated: bool) -> Self {
-        super::super::install_tls_provider();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/streams", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
@@ -105,9 +110,7 @@ impl Peer {
                 let _ = socket.write_all(response.as_bytes()).await;
             }
         });
-        let streams =
-            Streams::new(reqwest::Client::new(), base, TokenMinter::new("key", "secret").unwrap());
-        Self { streams, task }
+        Self { streams: streams(&base), task }
     }
 }
 
@@ -136,8 +139,8 @@ async fn live_resume_before_control_does_not_repeat_split_utf8_records() {
     let peer = Peer::start().await;
     let mut reader = peer.streams.read("AST_test", None, true);
     let body = "event: data\r\ndata: [\"café\",2,3]\r\n\r\n";
-    let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> =
-        body.as_bytes().iter().map(|b| Ok(bytes::Bytes::copy_from_slice(&[*b]))).collect();
+    let chunks: Vec<Result<Bytes, StorageError>> =
+        body.as_bytes().iter().map(|b| Ok(Bytes::copy_from_slice(&[*b]))).collect();
     reader.sse = Some(Sse {
         body: Box::pin(futures_util::stream::iter(chunks)),
         decoder: SseDecoder::new(),
@@ -186,12 +189,7 @@ async fn invalid_and_expired_positions_fail_explicitly() {
 
 #[test]
 fn replay_and_response_budgets_are_finite() {
-    super::super::install_tls_provider();
-    let streams = Streams::new(
-        reqwest::Client::new(),
-        "http://unused",
-        TokenMinter::new("key", "secret").unwrap(),
-    );
+    let streams = streams("http://unused");
     let mut reader = streams.read("AST_test", None, false);
     assert!(reader.records(&vec![b' '; MAX_BYTES + 1]).is_err());
     reader.replay = 1;

@@ -18,6 +18,7 @@ use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_ur
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
+use lk_agents_net::env::ProcessEnv;
 
 use crate::engine::{LeaseTiming, SchemaCell, Thread};
 use crate::{SqliteConnection, Storage};
@@ -70,37 +71,6 @@ pub fn service_error(e: ServiceError) -> StorageError {
     }
 }
 
-/// A non-2xx with the body read: 503 is retryable (`Unavailable`), 404 is `NotFound`.
-pub(crate) async fn http_ok(resp: reqwest::Response) -> Result<reqwest::Response, StorageError> {
-    let status = resp.status();
-    if status.is_success() {
-        return Ok(resp);
-    }
-    let message = resp.text().await.unwrap_or_default();
-    let message = serde_json::from_str::<serde_json::Value>(&message)
-        .ok()
-        .and_then(|v| {
-            v.get("message").or_else(|| v.get("msg")).and_then(|m| m.as_str()).map(str::to_owned)
-        })
-        .unwrap_or(message);
-    Err(match status.as_u16() {
-        404 => StorageError::NotFound(message),
-        502..=504 => StorageError::Unavailable(message),
-        401 | 403 => StorageError::Unauthorized(message),
-        500..=599 => StorageError::Unavailable(message),
-        s => StorageError::Invalid(format!("http {s}: {message}")),
-    })
-}
-
-/// Make `ring` the process TLS provider, once: `reqwest` and `tokio-tungstenite` use
-/// `rustls-no-provider` here, as in `lk-agents-inference`, and panic without one.
-pub fn install_tls_provider() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let _already_installed = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
 /// Where agentstore is and how leases behave. The data plane is
 /// `wss://<public API>/v0/agentstore/db`, the streams `https://<public API>/v0/agentstore/streams`.
 #[derive(Debug, Clone)]
@@ -137,24 +107,23 @@ pub struct AgentDbStorage {
 }
 
 impl AgentDbStorage {
+    /// Its connections run on the process runtime and its streams use the process HTTP transport.
     pub fn new(
         opts: AgentDbOptions,
         minter: TokenMinter,
-        runtime: tokio::runtime::Handle,
+        env: &ProcessEnv,
     ) -> Result<Self, StorageError> {
+        let unavailable = |what: &str, e: String| StorageError::Unavailable(format!("{what}: {e}"));
+        let runtime = (env.runtime)().map_err(|e| unavailable("storage runtime", e))?;
+        let http = (env.http)().map_err(|e| unavailable("http transport", e))?;
         let url = &opts.url;
         let data_plane = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
             (Some(host), _) => format!("wss://{host}/v0/agentstore/db"),
             (_, Some(host)) => format!("ws://{host}/v0/agentstore/db"),
             _ => return Err(StorageError::Invalid(format!("agentstore url {url} is not http(s)"))),
         };
-        install_tls_provider();
-        let http = reqwest::Client::builder()
-            .use_rustls_tls()
-            .build()
-            .map_err(|e| StorageError::Invalid(format!("http client: {e}")))?;
         let base = format!("{url}/v0/agentstore/streams");
-        let streams = Streams::new(http, base, minter.clone());
+        let streams = Streams::new(http, env.clock.clone(), base, minter.clone());
         let api =
             Arc::new(LiveKitApi::with_api_key(&opts.url, minter.api_key(), minter.api_secret()));
         Ok(Self { data_plane, opts, minter, streams, api, pool: Arc::default(), runtime })
@@ -365,8 +334,7 @@ mod tests {
     async fn the_data_plane_sits_under_the_project_public_api() {
         let minter = || TokenMinter::new("devkey", "secret").unwrap();
         let storage = |url: &str| {
-            let runtime = tokio::runtime::Handle::current();
-            AgentDbStorage::new(AgentDbOptions::new(url), minter(), runtime)
+            AgentDbStorage::new(AgentDbOptions::new(url), minter(), &ProcessEnv::current_runtime())
         };
         let staging = storage("wss://my-app.staging.livekit.cloud").unwrap();
         assert_eq!(staging.opts.url, "https://beta-api.staging.livekit.cloud");

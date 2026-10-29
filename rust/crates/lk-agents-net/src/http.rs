@@ -4,6 +4,9 @@
 
 pub mod exchange;
 
+/// The HTTP vocabulary of [`GatewayHttp`]'s callers.
+pub use reqwest::{Method, StatusCode, header::HeaderMap};
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};

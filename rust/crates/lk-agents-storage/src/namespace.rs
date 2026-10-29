@@ -275,15 +275,7 @@ impl HostStorageClass for Namespace {
             (None, Some(url), Some(key), Some(secret)) => {
                 let mut opts = AgentDbOptions::new(&url);
                 opts.lease = lease;
-                {
-                    let runtime = (env.runtime)()
-                        .map_err(|e| StorageError::Unavailable(format!("storage runtime: {e}")))?;
-                    Config::Cloud(AgentDbStorage::new(
-                        opts,
-                        TokenMinter::new(key, secret)?,
-                        runtime,
-                    )?)
-                }
+                Config::Cloud(AgentDbStorage::new(opts, TokenMinter::new(key, secret)?, env)?)
             }
             _ => {
                 return Err(StorageError::Invalid(

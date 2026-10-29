@@ -65,8 +65,12 @@ impl Backend {
                     TokenMinter::new(env("LIVEKIT_API_KEY"), env("LIVEKIT_API_SECRET")).unwrap();
                 Store {
                     storage: Arc::new(
-                        AgentDbStorage::new(opts, minter, tokio::runtime::Handle::current())
-                            .unwrap(),
+                        AgentDbStorage::new(
+                            opts,
+                            minter,
+                            &lk_agents_net::env::ProcessEnv::current_runtime(),
+                        )
+                        .unwrap(),
                     ),
                     dir: None,
                 }
