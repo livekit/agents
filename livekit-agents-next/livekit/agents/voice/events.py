@@ -58,6 +58,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
+    from .agent import Agent
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
     from .run_result import RunUsage
@@ -292,6 +293,17 @@ class RunContext(Generic[Context_T]):
         if self._speech_handle is None:
             raise RuntimeError("no speech handle: this RunContext is not on a call")
         return self._speech_handle
+
+    @property
+    def agent(self) -> Agent[Context_T, Any]:
+        """The agent this invocation runs; in a session's pipeline callback, the agent holding
+        the call."""
+        from .agent import _BindingContextVar
+
+        binding = _BindingContextVar.get(None)
+        if binding is None:
+            raise RuntimeError("no agent runs in this context")
+        return binding.agent  # type: ignore[no-any-return]
 
     @property
     def store(self) -> ContextStore:

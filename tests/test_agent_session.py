@@ -1,8 +1,10 @@
 import asyncio
+from collections.abc import AsyncIterable
 
 import pytest
 
-from livekit.agents import Agent, APIConnectOptions, VoiceSession, utils
+from livekit import rtc
+from livekit.agents import Agent, APIConnectOptions, ModelSettings, RunContext, VoiceSession, utils
 from livekit.agents.llm import ChatContext
 
 from .fake_io import FakeAudioOutput
@@ -184,3 +186,32 @@ async def test_recording_failure_does_not_fail_session_close() -> None:
     await session.aclose()
     assert session._recording_finished is not None
     assert session._recording_finished.exception() is failure, "the job still reports this failure"
+
+
+async def test_a_session_tts_node_runs_for_each_agent_holding_the_call() -> None:
+    tts = FakeTTS(fake_audio_duration=0.1)
+    spoken_for: list[str] = []
+    session = _voiced_session(tts)
+
+    @session.tts_node
+    def voice(
+        ctx: RunContext, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        spoken_for.append(ctx.agent.name)
+        return session.default.tts_node(ctx, text, model_settings)
+
+    async with session:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        await asyncio.wait_for(session.say("One moment."), timeout=5)
+        handed_off = asyncio.Event()
+        session.on(
+            "conversation_item_added",
+            lambda ev: ev.item.type == "agent_handoff" and handed_off.set(),
+        )
+        session.update_agent(Agent(instructions="Help with bookings.", name="bookings"))
+        await asyncio.wait_for(handed_off.wait(), timeout=5)
+        await asyncio.wait_for(session.say("Anything else?"), timeout=5)
+        with pytest.raises(RuntimeError, match="before the session starts"):
+            session.tts_node(voice)
+    assert spoken_for == ["reception", "bookings"]
+    assert _synthesized(tts) == 2

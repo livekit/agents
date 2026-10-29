@@ -292,7 +292,7 @@ Only transient failures retry, with no audio emitted from incomplete attempts.
 `examples/microsoft/microsoft_ai_echo.py` receives a browser microphone track
 through a real LiveKit room, transcribes it with `microsoft_ai.STT`, then echoes
 the completed user turn with `microsoft_ai.TTS`. It uses
-`Agent.on_user_turn_completed` and `AgentSession.say()`; `StopResponse` suppresses
+`@session.on_user_turn_completed` and `VoiceSession.say()`; `StopResponse` suppresses
 an additional model reply. There is no LLM, manual transcription injection,
 per-utterance `flush()` call, or paid LiveKit Inference.
 

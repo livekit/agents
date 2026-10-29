@@ -16,7 +16,7 @@ from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions, TimedString
-from livekit.agents.voice.agent_session import _AgentNodes
+from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
@@ -213,10 +213,10 @@ def _core_playback_finished(
 ) -> bool: ...
 
 class AgentNodes:
-    """`_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
-    the agent's binding.
+    """`_core.AgentNodes(host)`: the session's registered nodes over the host's `_SessionNodes`, taken
+    in the binding of the agent they run for.
     """
-    def __init__(self, host: _AgentNodes) -> None: ...
+    def __init__(self, host: _SessionNodes) -> None: ...
 
 class _core_NodeCalls:
     ...

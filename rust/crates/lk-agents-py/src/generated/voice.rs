@@ -551,8 +551,8 @@ pub fn _core_playback_finished(tracker: Bound<'_, PyAny>, segment: Bound<'_, PyA
 // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
 type AgentNodesImpl = <crate::Selected as super::Implementations>::AgentNodes;
 
-/// `_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
-/// the agent's binding.
+/// `_core.AgentNodes(host)`: the session's registered nodes over the host's `_SessionNodes`, taken
+/// in the binding of the agent they run for.
 #[pyclass(frozen, name = "AgentNodes", module = "livekit.agents._core")]
 pub struct AgentNodes(pub(crate) ::std::sync::Arc<AgentNodesImpl>);
 
@@ -563,7 +563,7 @@ impl AgentNodes {
     fn new(host: Bound<'_, PyAny>) -> PyResult<AgentNodes> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let host = crate::generated::voice::OverriddenNodesProxy::from_host(&host)?;
+        let host = crate::generated::voice::SessionNodesProxy::from_host(&host)?;
         let out = <AgentNodesImpl as ::lk_agents_abi::voice::nodes::AgentNodes>::new(&env, host);
         Ok(AgentNodes(::std::sync::Arc::new(out)))
     }
@@ -665,7 +665,7 @@ pub fn tts_node(tts: Bound<'_, PyAny>, text: Bound<'_, PyAny>, conn_options: ::s
     let env = crate::process::env();
     let tts = crate::generated::tts::TtsProxy::from_host(&tts)?;
     let text = crate::host::capture_context(text.py()).and_then(|context| crate::host::stream::HostStream::open(text.py(), &text, &context, |o| Ok(o.extract::<::std::string::String>()?), ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::std::string::String>>)?;
-    let calls = calls.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("calls", ": expected the calls of an agent's tts_node")))).transpose()?;
+    let calls = calls.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("calls", ": expected the calls of a registered tts_node")))).transpose()?;
     let out = <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::tts_node(&env, tts, text, conn_options, calls).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(super::voice::TtsNodeFrames(::std::sync::Arc::new(out)))
 }
@@ -1294,9 +1294,9 @@ impl VoiceSession {
         let tts = match tts { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((if value.is_none() { Ok(None) } else { (crate::generated::tts::TtsProxy::from_host(&value)).map(Some) })?) };
         let stt = match stt { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((if value.is_none() { Ok(None) } else { (crate::generated::stt::SttProxy::from_host(&value)).map(Some) })?) };
         let vad = match vad { ::lk_agents_abi::Maybe::NotGiven => ::lk_agents_abi::Maybe::NotGiven, ::lk_agents_abi::Maybe::Given(value) => ::lk_agents_abi::Maybe::Given((if value.is_none() { Ok(None) } else { (crate::generated::vad::VadProxy::from_host(&value)).map(Some) })?) };
-        let llm_node = llm_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("llm_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let tts_node = tts_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tts_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
-        let stt_node = stt_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("stt_node", ": expected an agent's nodes (`_core.AgentNodes`)")))).transpose()?;
+        let llm_node = llm_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("llm_node", ": expected the session's nodes (`_core.AgentNodes`)")))).transpose()?;
+        let tts_node = tts_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("tts_node", ": expected the session's nodes (`_core.AgentNodes`)")))).transpose()?;
+        let stt_node = stt_node.map(|v| ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::NodeFactory>(&v).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("stt_node", ": expected the session's nodes (`_core.AgentNodes`)")))).transpose()?;
         <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_models(&self.0, llm, tts, stt, vad, llm_node, tts_node, stt_node).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
@@ -3290,33 +3290,33 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
 
-/// [`::lk_agents_abi::voice::nodes::OverriddenNodes`] over a host `livekit.agents.voice.agent_session._AgentNodes`.
+/// [`::lk_agents_abi::voice::nodes::SessionNodes`] over a host `livekit.agents.voice.agent_session._SessionNodes`.
 #[derive(Clone)]
-pub struct OverriddenNodesProxy {
+pub struct SessionNodesProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
 }
 
-impl OverriddenNodesProxy {
+impl SessionNodesProxy {
     /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>(obj) {
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
     }
 
     /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>(obj) {
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::voice::nodes::SessionNodes>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::nodes::OverriddenNodes>> {
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
@@ -3325,16 +3325,16 @@ impl OverriddenNodesProxy {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::host::capture_context(obj.py())?,
         };
-        Ok(OverriddenNodesProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+        Ok(SessionNodesProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
 }
 
-impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
+impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
     fn llm<'a>(&'a self, req: &::lk_agents_abi::ChatRequest) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::voice::nodes::NodeChunk>>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let req_arg = ::std::clone::Clone::clone(req);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.llm", &self.context, &[], ::std::boxed::Box::new(move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionNodes.llm", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(req_arg, py)?];
                 Ok((host.bind(py).getattr("llm")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -3348,7 +3348,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
                 }
             };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.llm: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.llm: the call captured no host context")));
                 };
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::agent_nodes::node_chunk_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::voice::nodes::NodeChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
@@ -3362,7 +3362,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
         let text_arg = text;
         let calls_arg = calls;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.tts", &self.context, &[], ::std::boxed::Box::new(move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionNodes.tts", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, NodeText(::lk_agents_runtime::net::source::NativeSource::new(text_arg)))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
                 Ok((host.bind(py).getattr("tts")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -3376,7 +3376,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
                 }
             };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.tts: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.tts: the call captured no host context")));
                 };
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::SynthesizedAudio>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
@@ -3389,7 +3389,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let audio_arg = audio;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.stt", &self.context, &[], ::std::boxed::Box::new(move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionNodes.stt", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, NodeAudio(::lk_agents_runtime::net::source::NativeSource::new(audio_arg)))?.into_any()];
                 Ok((host.bind(py).getattr("stt")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -3403,7 +3403,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
                 }
             };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.stt: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.stt: the call captured no host context")));
                 };
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::SpeechEvent>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
@@ -3416,7 +3416,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.transcription", &self.context, &[], ::std::boxed::Box::new(move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionNodes.transcription", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, NodeTranscript(::lk_agents_runtime::net::source::NativeSource::new(text_arg)))?.into_any()];
                 Ok((host.bind(py).getattr("transcription")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -3430,7 +3430,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
                 }
             };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.transcription: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.transcription: the call captured no host context")));
                 };
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::TimedString>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::TimedString>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
@@ -3443,7 +3443,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let audio_arg = audio;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "OverriddenNodes.realtime_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionNodes.realtime_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(py, NodeAudio(::lk_agents_runtime::net::source::NativeSource::new(audio_arg)))?.into_any()];
                 Ok((host.bind(py).getattr("realtime_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
             }));
@@ -3457,7 +3457,7 @@ impl ::lk_agents_abi::voice::nodes::OverriddenNodes for OverriddenNodesProxy {
                 }
             };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("OverriddenNodes.realtime_audio: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.realtime_audio: the call captured no host context")));
                 };
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::AudioFrame>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::AudioFrame>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;

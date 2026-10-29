@@ -1,4 +1,4 @@
-//! An agent's overridden nodes, as the core opens them over the host's `_AgentNodes`
+//! The session's registered nodes, as the core opens them over the host's `_SessionNodes`
 //! (`_core.AgentNodes`), and the default `tts_node` and `stt_node` the host's nodes may call.
 
 use std::any::Any;
@@ -13,12 +13,12 @@ use crate::{
     SttSource, SynthesizedAudio, TimedString, Tts, TtsSink, TtsSource, Vad,
 };
 
-/// The host's `_AgentNodes`: the agent's own `llm_node`, `tts_node`, `stt_node`,
-/// `transcription_node` and `realtime_audio_output_node`, each call in a copy of the agent's
-/// binding. Whatever a node returns (an async iterable, an awaitable of one, one value or `None`)
+/// The host's `_SessionNodes`: the `llm_node`, `tts_node`, `stt_node`, `transcription_node` and
+/// `realtime_audio_output_node` registered on the session, each call in a copy of the binding of
+/// the agent holding the call. Whatever a node returns (an async iterable, an awaitable of one, one value or `None`)
 /// reaches the core as an async iterable.
-#[crate::host(proxy(host = "livekit.agents.voice.agent_session._AgentNodes"))]
-pub trait OverriddenNodes: Send + Sync {
+#[crate::host(proxy(host = "livekit.agents.voice.agent_session._SessionNodes"))]
+pub trait SessionNodes: Send + Sync {
     #[host(await)]
     fn llm<'a>(
         &'a self,
@@ -63,8 +63,8 @@ pub enum NodeChunk {
     Chunk(LlmChunk),
 }
 
-/// `_core.AgentNodes(host)`: an agent's overridden nodes over the host's `_AgentNodes`, taken in
-/// the agent's binding.
+/// `_core.AgentNodes(host)`: the session's registered nodes over the host's `_SessionNodes`, taken
+/// in the binding of the agent they run for.
 #[crate::host(class(name = "AgentNodes", native = NodeFactory))]
 pub trait AgentNodes: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -72,12 +72,12 @@ pub trait AgentNodes: Send + Sync + Sized + 'static {
     type Env;
 
     #[host(new)]
-    fn new(env: &Self::Env, host: Arc<dyn OverriddenNodes>) -> Self;
+    fn new(env: &Self::Env, host: Arc<dyn SessionNodes>) -> Self;
 }
 
-/// The provider calls of the default `tts_node` an agent's `tts_node` runs: metered for the
+/// The provider calls of the default `tts_node` a registered `tts_node` runs: metered for the
 /// speech in place of the node's output, as the reference meters the TTS's own streams.
-#[crate::host(native(refused = "expected the calls of an agent's tts_node"))]
+#[crate::host(native(refused = "expected the calls of a registered tts_node"))]
 pub trait ProviderCalls: Any + Send + Sync {}
 
 #[crate::host(class(name = "_core_NodeCalls", native = ProviderCalls))]
@@ -142,13 +142,13 @@ pub trait DefaultNodes {
     ) -> Result<Self::Events, ApiConnectOptionsError>;
 }
 
-/// An agent's overridden nodes, as the core calls them. `transcription_node` and
+/// The session's registered nodes, as the core calls them. `transcription_node` and
 /// `realtime_audio_output_node` are opened per segment and per realtime generation over the core
 /// leg below (what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
 /// `stt_node` are opened per request in place of the provider: one completion, one segment's
 /// synthesis, one recognition stream.
 #[crate::host(native(
-    refused = "expected an agent's nodes (`_core.AgentNodes`)",
+    refused = "expected the session's nodes (`_core.AgentNodes`)",
     class = "AgentNodes"
 ))]
 pub trait NodeFactory: Send + Sync {

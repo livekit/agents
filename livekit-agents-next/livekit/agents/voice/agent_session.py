@@ -17,7 +17,7 @@ import inspect
 import time
 import weakref
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
@@ -78,8 +78,12 @@ from ..telemetry.metrics import collect_usage, record_span_metric
 from ..telemetry.traces import capture_content_enabled, tracer
 from ..tts import TTS
 from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
     APIConnectOptions,
+    FlushSentinel,
     NotGivenOr,
     TimedString,
 )
@@ -90,7 +94,6 @@ from .agent import (
     ModelSettings,
     Output_T,
     _BindingContextVar,
-    _NodeCallsVar,
     _VoiceBinding,
 )
 from .agent_run import run_error, tool_infos
@@ -154,6 +157,35 @@ _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
 # on_exit and the other callbacks are awaited by the core this long before it moves on;
 # on_user_turn_completed is awaited until it returns
 _HOOK_BOUND = 15.0
+
+# the calls of the `tts_node` running in this context, which `session.default.tts_node` reports
+# its provider's to (`_core.tts_node(calls=)`)
+_NodeCallsVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_node_calls")
+
+# the session's pipeline callbacks (voice-session.md "Customizing the pipeline"): each receives
+# the call's `RunContext`, whose `agent` is the agent holding the call
+_C = TypeVar("_C")
+_Item = TypeVar("_Item")
+_Node = AsyncIterable[_Item] | Coroutine[Any, Any, AsyncIterable[_Item] | None]
+LLMNode = Callable[
+    [RunContext[_C], ChatContext, list[llm.Tool], ModelSettings],
+    AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+    | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel] | str | None],
+]
+STTNode = Callable[
+    [RunContext[_C], AsyncIterable[rtc.AudioFrame], ModelSettings], _Node[stt.SpeechEvent]
+]
+TTSNode = Callable[[RunContext[_C], AsyncIterable[str], ModelSettings], _Node[rtc.AudioFrame]]
+TranscriptionNode = Callable[
+    [RunContext[_C], AsyncIterable[str | TimedString], ModelSettings], _Node[str | TimedString]
+]
+RealtimeAudioOutputNode = Callable[
+    [RunContext[_C], AsyncIterable[rtc.AudioFrame], ModelSettings], _Node[rtc.AudioFrame]
+]
+UserTurnCompletedHook = Callable[
+    [RunContext[_C], ChatContext, llm.ChatMessage], Coroutine[Any, Any, None]
+]
+UserTurnExceededHook = Callable[[RunContext[_C], UserTurnExceededEvent], Coroutine[Any, Any, None]]
 
 # the session option keywords (`SessionKwargs` less `conn_options`, a parameter of its own) and
 # the required ones' defaults; the core resolves them (`_core.SessionOptions`). An unsaid
@@ -326,6 +358,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._text_input_cb: TextInputCallback | None = None
         # the session's audio recording, written by the core; finished once it closes
         self._recorder: _core.SessionRecorder | None = None
+        # the pipeline callbacks registered on this session, by step name
+        self._steps: dict[str, Callable[..., Any]] = {}
         self._recording_path: Path | None = None
         self._recording_finished: asyncio.Future[None] | None = None
         self._audio_input_options: AudioInputOptions | None = None
@@ -449,6 +483,63 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._core is None:
             raise RuntimeError("VoiceSession isn't running")
         return self._core
+
+    # --- the pipeline ----------------------------------------------------------------------
+
+    def _register(self, step: str, f: Callable[..., Any]) -> None:
+        if self._core is not None:
+            raise RuntimeError(f"register {step} before the session starts")
+        if step in self._steps:
+            raise RuntimeError(f"this session already has a {step}")
+        self._steps[step] = f
+
+    @property
+    def default(self) -> DefaultPipeline:
+        """The built-in steps, for a registered callback to wrap."""
+        return DefaultPipeline(self)
+
+    def llm_node(self, f: LLMNode[Userdata_T]) -> LLMNode[Userdata_T]:
+        """Register the model request of every reply."""
+        self._register("llm_node", f)
+        return f
+
+    def stt_node(self, f: STTNode[Userdata_T]) -> STTNode[Userdata_T]:
+        """Register the recognition of the person's audio."""
+        self._register("stt_node", f)
+        return f
+
+    def tts_node(self, f: TTSNode[Userdata_T]) -> TTSNode[Userdata_T]:
+        """Register the synthesis of each spoken segment."""
+        self._register("tts_node", f)
+        return f
+
+    def transcription_node(self, f: TranscriptionNode[Userdata_T]) -> TranscriptionNode[Userdata_T]:
+        """Register the transcript of each spoken segment, before the transcription output."""
+        self._register("transcription_node", f)
+        return f
+
+    def realtime_audio_output_node(
+        self, f: RealtimeAudioOutputNode[Userdata_T]
+    ) -> RealtimeAudioOutputNode[Userdata_T]:
+        """Register a realtime model's audio, before playout."""
+        self._register("realtime_audio_output_node", f)
+        return f
+
+    def on_user_turn_completed(
+        self, f: UserTurnCompletedHook[Userdata_T]
+    ) -> UserTurnCompletedHook[Userdata_T]:
+        """Register the hook run when the person's turn ends, before the reply; it edits the turn
+        in place, or raises ``StopResponse`` to skip the reply."""
+        self._register("on_user_turn_completed", f)
+        return f
+
+    def on_user_turn_exceeded(
+        self, f: UserTurnExceededHook[Userdata_T]
+    ) -> UserTurnExceededHook[Userdata_T]:
+        """Register the hook run when the person spoke past the turn limit without a reply,
+        in place of the default short reply."""
+        self._register("on_user_turn_exceeded", f)
+        return f
 
     # --- lifecycle -----------------------------------------------------------------------
 
@@ -999,15 +1090,15 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return {**frame, **self._nodes(agent)}
 
     def _nodes(self, agent: Agent) -> dict[str, Any]:
-        """The nodes ``agent`` overrides, as the core opens them, each call in the agent's
+        """The registered nodes, as the core opens them for ``agent``, each call in its
         binding."""
-        overridden = [n for n in _NODES if getattr(type(agent), n) is not getattr(Agent, n)]
-        if not overridden:
+        registered = [n for n in _NODES if n in self._steps]
+        if not registered:
             return {}
         context = contextvars.copy_context()
         context.run(_BindingContextVar.set, _VoiceBinding(self, agent))
         # taken in the agent's binding: each node call runs in a copy of it
-        return dict.fromkeys(overridden, context.run(_core.AgentNodes, _AgentNodes(agent)))
+        return dict.fromkeys(registered, context.run(_core.AgentNodes, _SessionNodes(self)))
 
     def _legs(self) -> dict[str, Any]:
         return {
@@ -1398,8 +1489,12 @@ class _AgentHooks:
             await agent.on_exit()
 
     async def _core_on_user_turn_exceeded(self, agent: Agent, ev: UserTurnExceededEvent) -> None:
-        with _in_hook("on_user_turn_exceeded", self._session, agent):
-            await agent.on_user_turn_exceeded(ev)
+        session = self._session
+        hook: UserTurnExceededHook[Any] = session._steps.get(
+            "on_user_turn_exceeded", session.default.on_user_turn_exceeded
+        )
+        with _in_hook("on_user_turn_exceeded", session, agent):
+            await hook(RunContext(function_call=None, session=session), ev)
 
     async def _core_close_toolsets(self, agent: Agent | None) -> None:
         """Release what ``agent``'s activation held, or, as the session closes, everything."""
@@ -1443,11 +1538,12 @@ class _AgentHooks:
         )
         before = [i.id for i in turn_ctx.items]
         stop = False
-        with _in_hook("on_user_turn_completed", session, agent):
-            try:
-                await agent.on_user_turn_completed(turn_ctx, message)
-            except StopResponse:
-                stop = True
+        if (hook := session._steps.get("on_user_turn_completed")) is not None:
+            with _in_hook("on_user_turn_completed", session, agent):
+                try:
+                    await hook(RunContext(function_call=None, session=session), turn_ctx, message)
+                except StopResponse:
+                    stop = True
         changed = [i.id for i in turn_ctx.items] != before
         return message.text_content, to_core_items(turn_ctx.items) if changed else None, stop
 
@@ -1492,38 +1588,141 @@ def _tts_model(model: NotGivenOr[tts.TTS | str | None]) -> NotGivenOr[tts.TTS | 
     return inference.TTS.from_model_string(model) if isinstance(model, str) else model
 
 
-class _AgentNodes:
-    """An agent's overridden nodes as the core calls them (``_core.AgentNodes``), each call in a
-    copy of the agent's binding: one completion, one spoken segment, one recognition stream, one
+class _SessionNodes:
+    """The session's registered nodes as the core calls them (``_core.AgentNodes``), each call in
+    a copy of the agent's binding: one completion, one spoken segment, one recognition stream, one
     segment's transcript, one realtime generation's audio. The core feeds what they read (its
     streams, read with ``recv()``) and drains what they return."""
 
-    def __init__(self, agent: Agent) -> None:
-        self._agent = agent
+    def __init__(self, session: VoiceSession[Any]) -> None:
+        self._session = session
+
+    def _call(self, step: str, *args: Any, settings: ModelSettings | None = None) -> Any:
+        ctx = RunContext(function_call=None, session=self._session)
+        return self._session._steps[step](ctx, *args, settings or ModelSettings())
 
     def llm(self, req: _core.ChatRequest) -> AsyncIterator[Any]:
         chat_ctx, tools = chat_request(req)
         choice = req.tool_choice
         settings = ModelSettings(tool_choice=NOT_GIVEN if choice is None else choice)
-        return _node_output(lambda: self._agent.llm_node(chat_ctx, tools, settings))
+        return _node_output(lambda: self._call("llm_node", chat_ctx, tools, settings=settings))
 
     def tts(self, text: Any, calls: Any) -> AsyncIterator[Any]:
         def node() -> Any:
             _NodeCallsVar.set(calls)
-            return self._agent.tts_node(_node_input(text), ModelSettings())
+            return self._call("tts_node", _node_input(text))
 
         return _node_output(node, lambda frame: tts.SynthesizedAudio(frame=frame, request_id=""))
 
     def stt(self, audio: Any) -> AsyncIterator[Any]:
-        return _node_output(lambda: self._agent.stt_node(_node_input(audio), ModelSettings()))
+        return _node_output(lambda: self._call("stt_node", _node_input(audio)))
 
     def transcription(self, text: Any) -> AsyncIterator[Any]:
         words = _node_input(text, _plain_text)
-        return _node_output(lambda: self._agent.transcription_node(words, ModelSettings()))
+        return _node_output(lambda: self._call("transcription_node", words))
 
     def realtime_audio(self, audio: Any) -> AsyncIterator[Any]:
         frames = _node_input(audio)
-        return _node_output(lambda: self._agent.realtime_audio_output_node(frames, ModelSettings()))
+        return _node_output(lambda: self._call("realtime_audio_output_node", frames))
+
+
+class DefaultPipeline:
+    """``session.default``: the built-in pipeline steps, with the callbacks' signatures."""
+
+    def __init__(self, session: VoiceSession[Any]) -> None:
+        self._session = session
+
+    async def llm_node(
+        self,
+        ctx: RunContext[Any],
+        chat_ctx: ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterator[llm.ChatChunk | str | FlushSentinel]:
+        """A request to the session's LLM."""
+        model = self._session.llm
+        assert isinstance(model, llm.LLM), "llm_node needs an LLM (not a realtime model)"
+        conn_options = self._session.conn_options.llm_conn_options or DEFAULT_API_CONNECT_OPTIONS
+        async with model.chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            tool_choice=model_settings.tool_choice,
+            conn_options=conn_options,
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
+
+    def stt_node(
+        self,
+        ctx: RunContext[Any],
+        audio: AsyncIterable[rtc.AudioFrame],
+        model_settings: ModelSettings,
+    ) -> AsyncIterator[stt.SpeechEvent]:
+        """The session's STT; one that does not stream is wrapped with its VAD."""
+        session = self._session
+        if session.stt is None:
+            raise RuntimeError("stt_node called but no STT is available")
+        events = _core.stt_node(
+            session.stt, audio, conn_options=session.conn_options.stt_conn_options, vad=session.vad
+        )
+        return (stt._speech_event_from_core(ev) async for ev in events)
+
+    def tts_node(
+        self, ctx: RunContext[Any], text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterator[rtc.AudioFrame]:
+        """The session's TTS; one that does not stream is fed sentence by sentence."""
+        session = self._session
+        if session.tts is None:
+            raise RuntimeError("tts_node called but no TTS is available")
+        conn_options = session.conn_options.tts_conn_options
+        calls = _NodeCallsVar.get(None)
+        frames = _core.tts_node(session.tts, text, conn_options=conn_options, calls=calls)
+        return (_stamped(frame) async for frame in frames)
+
+    async def transcription_node(
+        self,
+        ctx: RunContext[Any],
+        text: AsyncIterable[str | TimedString],
+        model_settings: ModelSettings,
+    ) -> AsyncIterator[str | TimedString]:
+        """The transcript as spoken."""
+        async for delta in text:
+            yield delta
+
+    async def realtime_audio_output_node(
+        self,
+        ctx: RunContext[Any],
+        audio: AsyncIterable[rtc.AudioFrame],
+        model_settings: ModelSettings,
+    ) -> AsyncIterator[rtc.AudioFrame]:
+        """The realtime model's audio as generated."""
+        async for frame in audio:
+            yield frame
+
+    async def on_user_turn_exceeded(self, ctx: RunContext[Any], ev: UserTurnExceededEvent) -> None:
+        """A short reply cutting in on the person, from the turn's transcript."""
+        await self._session.generate_reply(
+            user_input=ev.transcript,
+            instructions=(
+                "The user has been speaking too long without giving a chance to reply. "
+                "Politely cut in with a short reply or notice. Keep it short since the user "
+                "cannot interrupt it."
+            ),
+            allow_interruptions=False,
+            tool_choice="none",
+        )
+
+
+def _stamped(node_frame: Any) -> rtc.AudioFrame:
+    """A default `tts_node` frame as the reference yields it: its `userdata` carries the words it
+    covers and when its synthesis started (a `perf_counter()` stamp)."""
+    frame: rtc.AudioFrame = node_frame.frame
+    if node_frame.timed_transcript:
+        frame.userdata[USERDATA_TIMED_TRANSCRIPT] = node_frame.timed_transcript
+    if node_frame.started_time is not None:
+        elapsed = time.time() - node_frame.started_time
+        frame.userdata[USERDATA_TTS_STARTED_TIME] = time.perf_counter() - elapsed
+    return frame
 
 
 async def _node_input(stream: Any, item: Callable[[Any], Any] = lambda x: x) -> AsyncIterator[Any]:

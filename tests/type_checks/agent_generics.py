@@ -14,7 +14,16 @@ from typing import Any
 
 from typing_extensions import assert_type
 
-from livekit.agents import Agent, ModelSettings, RunContext, RunResult, StopResponse, llm
+from livekit import rtc
+from livekit.agents import (
+    Agent,
+    ModelSettings,
+    RunContext,
+    RunResult,
+    StopResponse,
+    VoiceSession,
+    llm,
+)
 
 
 @dataclass
@@ -96,19 +105,41 @@ async def runs(patient: Patient) -> None:
 
 
 class FrontDesk(Agent):
-    """The node overrides of voice-session.md "Customizing the pipeline"."""
+    pass
 
-    async def on_user_turn_completed(
-        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
-    ) -> None:
-        if (new_message.text_content or "").strip().lower() == "hold on":
-            raise StopResponse()
 
-    async def transcription_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[str]:
-        async for chunk in text:
-            yield chunk.replace("Live Kit", "LiveKit")
+session = VoiceSession[AppContext]()
+
+
+@session.on_user_turn_completed
+async def hold_on(
+    ctx: RunContext[AppContext], turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+) -> None:
+    if (new_message.text_content or "").strip().lower() == "hold on":
+        raise StopResponse()
+
+
+@session.tts_node
+def voice(
+    ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings
+) -> AsyncIterable[rtc.AudioFrame]:
+    _ = ctx.agent.name
+    return session.default.tts_node(ctx, text, model_settings)
+
+
+@session.transcription_node
+async def caption(
+    ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings
+) -> AsyncIterable[str]:
+    async for chunk in text:
+        yield chunk.replace("Live Kit", "LiveKit")
+
+
+@session.tts_node  # type: ignore[arg-type]
+def wrong_context(
+    ctx: RunContext[Patient], text: AsyncIterable[str], model_settings: ModelSettings
+) -> AsyncIterable[rtc.AudioFrame]:
+    return session.default.tts_node(ctx, text, model_settings)
 
 
 def any_agent(agent: Agent) -> None: ...

@@ -1,6 +1,6 @@
-//! An agent's overridden nodes over the host's `_AgentNodes` (`_core.AgentNodes`), and the default
-//! `tts_node` and `stt_node` those nodes may run. The core feeds each node its input, drains its
-//! output and calls nothing but the node. [`Nodes`]: an overridden `llm_node`, `tts_node` or
+//! The session's registered nodes over the host's `_SessionNodes` (`_core.AgentNodes`), and the
+//! default `tts_node` and `stt_node` those nodes may run. The core feeds each node its input,
+//! drains its output and calls nothing but the node. [`Nodes`]: a registered `llm_node`, `tts_node` or
 //! `stt_node` as the leg the session runs, speaking as the provider below it.
 
 use std::any::Any;
@@ -13,7 +13,7 @@ use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::utils::stream::CallLedger;
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, IoError, TextOutput};
 use lk_agents_abi::voice::nodes::{
-    NodeChunk, NodeFactory, NodeFrame, OverriddenNodes, ProviderCalls, RealtimeAudioNode, TextNode,
+    NodeChunk, NodeFactory, NodeFrame, SessionNodes, ProviderCalls, RealtimeAudioNode, TextNode,
 };
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT,
@@ -33,7 +33,7 @@ fn node_id(prefix: &str) -> String {
 }
 
 pub struct AgentNodes {
-    host: Arc<dyn OverriddenNodes>,
+    host: Arc<dyn SessionNodes>,
     clock: Arc<dyn Clock>,
     spawner: fn() -> Result<Arc<dyn Spawner>, String>,
 }
@@ -41,7 +41,7 @@ pub struct AgentNodes {
 impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
     type Env = ProcessEnv;
 
-    fn new(env: &ProcessEnv, host: Arc<dyn OverriddenNodes>) -> Self {
+    fn new(env: &ProcessEnv, host: Arc<dyn SessionNodes>) -> Self {
         AgentNodes { host, clock: Arc::clone(&env.clock), spawner: env.spawner }
     }
 }
@@ -139,7 +139,7 @@ fn llm_chunk(chunk: NodeChunk) -> LlmChunk {
 
 /// Opens the node invocations of one transcription or realtime audio leg.
 struct Opener {
-    host: Arc<dyn OverriddenNodes>,
+    host: Arc<dyn SessionNodes>,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
 }
@@ -164,7 +164,7 @@ impl Opener {
     where
         I: Send + 'static,
         T: Send + 'static,
-        O: FnOnce(Arc<dyn OverriddenNodes>, ChannelSource<I>) -> OpenNode<T> + Send + 'static,
+        O: FnOnce(Arc<dyn SessionNodes>, ChannelSource<I>) -> OpenNode<T> + Send + 'static,
         D: Fn(T) -> F + Send + 'static,
         F: std::future::Future<Output = Result<bool, IoError>> + Send,
     {
@@ -695,7 +695,7 @@ where
     NodeOutput(tokio::sync::Mutex::new(rx))
 }
 
-/// The nodes an agent overrides; a leg without one is the provider itself.
+/// The nodes the session registers; a leg without one is the provider itself.
 #[derive(Default, Clone)]
 pub struct Nodes {
     pub llm: Option<Arc<dyn NodeFactory>>,

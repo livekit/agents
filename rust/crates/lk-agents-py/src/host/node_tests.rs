@@ -12,7 +12,7 @@ use lk_agents_runtime::voice::nodes::AgentNodes;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::generated::voice::OverriddenNodesProxy;
+use crate::generated::voice::SessionNodesProxy;
 
 struct Destination;
 
@@ -60,7 +60,7 @@ fn nodes(source: &std::ffi::CStr) -> (Py<PyDict>, AgentNodes) {
         py.run(HOST_TYPES, None, None).unwrap();
         py.run(source, Some(g.bind(py)), None).unwrap();
         let processing = g.bind(py).get_item("processing").unwrap().unwrap();
-        OverriddenNodesProxy::in_context(&processing, &captured).unwrap()
+        SessionNodesProxy::in_context(&processing, &captured).unwrap()
     });
     (g, AgentNodes::new(&ProcessEnv::current_runtime(), host))
 }
