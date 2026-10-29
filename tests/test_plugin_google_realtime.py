@@ -1190,7 +1190,7 @@ def test_mutable_tools_and_labels_in_connect_config(monkeypatch: pytest.MonkeyPa
     assert session._build_connect_config().labels == {"env": "prod", "workload": "voice"}
 
 
-async def test_vertex_gemini_3_8_context_update_fifo_and_resumption_handle_guards(
+async def test_vertex_gemini_3_8_context_update_order_and_resume_resend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from google.genai.live import AsyncLive
@@ -1245,33 +1245,18 @@ async def test_vertex_gemini_3_8_context_update_fifo_and_resumption_handle_guard
     try:
         while not opened or session._active_session is None:
             await asyncio.sleep(0.01)
+        assert session._context_updated is False
 
-        # Block send_context_update so we can test in-flight handle gating
+        # updates go out in order; update_tools([]) sends tools=[] rather than dropping the field
         opened[0].block_send.clear()
         await session.update_instructions("Speak concisely.")
         await session.update_tools([_restart_tool])
-        assert session._pending_context_updates == 2
-        assert session._context_changed_since_handle is True
-
-        # A handle arriving while _pending_context_updates > 0 must be ignored
-        await opened[0].incoming.put(
-            types.LiveServerMessage(
-                session_resumption_update=types.LiveServerSessionResumptionUpdate(
-                    new_handle="stale-in-flight-handle", resumable=True
-                )
-            )
-        )
-        await asyncio.sleep(0.05)
-        assert session._session_resumption_handle == "resume-initial"
-
-        # Unblock send_context_update and clear tools with update_tools([])
         opened[0].block_send.set()
         await session.update_tools([])
         while len(opened[0].sent) < 3:
             await asyncio.sleep(0.01)
-        assert session._pending_context_updates == 0
+        assert session._context_updated is True
 
-        # Verify FIFO order and non-null tools=[] payload for tool clearing
         assert [kind for kind, _ in opened[0].sent] == [
             "context_update",
             "context_update",
@@ -1287,29 +1272,33 @@ async def test_vertex_gemini_3_8_context_update_fifo_and_resumption_handle_guard
         ctx_2: tuple[Any, Any] = opened[0].sent[2][1]  # type: ignore[assignment]
         assert ctx_2[1] == []
 
-        # If an error restart happens before any post-update handle arrives,
-        # _context_changed_since_handle forces a fresh session (handle=None)
-        session._mark_restart_needed(on_error=True)
-        while len(opened) < 2 or session._active_session is None:
-            await asyncio.sleep(0.01)
-        assert handles == ["resume-initial", None]
-
-        # On socket 2, send a context_update, let it drain, then receive a fresh handle
-        await session.update_instructions("Updated instructions.")
-        while len(opened[1].sent) < 1:
-            await asyncio.sleep(0.01)
-        assert session._pending_context_updates == 0
-        assert session._context_changed_since_handle is True
-
-        await opened[1].incoming.put(
+        # a handle is still accepted after an update: it keeps the spoken conversation
+        await opened[0].incoming.put(
             types.LiveServerMessage(
                 session_resumption_update=types.LiveServerSessionResumptionUpdate(
-                    new_handle="post-update-handle", resumable=True
+                    new_handle="handle-after-update", resumable=True
                 )
             )
         )
-        while session._session_resumption_handle != "post-update-handle":
+        while session._session_resumption_handle != "handle-after-update":
             await asyncio.sleep(0.01)
-        assert session._context_changed_since_handle is False
+
+        # a reconnect resumes that handle and re-sends the current instructions and tools
+        # before anything else, since the handle may predate the last context_update
+        await session.update_tools([_restart_tool])
+        while len(opened[0].sent) < 4:
+            await asyncio.sleep(0.01)
+        session._mark_restart_needed(on_error=True)
+        while len(opened) < 2 or session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert handles == ["resume-initial", "handle-after-update"]
+        while len(opened[1].sent) < 1:
+            await asyncio.sleep(0.01)
+        kind, payload = opened[1].sent[0]
+        assert kind == "context_update"
+        resent: tuple[Any, Any] = payload  # type: ignore[assignment]
+        assert resent[0].parts[0].text == "Speak concisely."
+        assert len(resent[1]) == 1
+        assert resent[1][0].function_declarations[0].name == _restart_tool.info.name
     finally:
         await session.aclose()

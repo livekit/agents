@@ -565,9 +565,9 @@ class RealtimeSession(llm.RealtimeSession):
         # not carry an id, since the server never issued it. kept for the session's lifetime: a
         # resumption can replay a response long after it was first queued
         self._synthetic_call_ids: set[str] = set()
-        # a mid-session context_update changed instructions/tools since the last handle
-        self._context_changed_since_handle = False
-        self._pending_context_updates = 0
+        # a context_update changed the instructions/tools of this session. a resumed
+        # session keeps the ones it was created with, so they are sent again on resume
+        self._context_updated = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -612,7 +612,6 @@ class RealtimeSession(llm.RealtimeSession):
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
-        self._pending_context_updates = 0
 
     def update_options(
         self,
@@ -678,8 +677,7 @@ class RealtimeSession(llm.RealtimeSession):
 
                 if _supports_context_update(self._opts.model, self._opts.vertexai):
                     logger.debug("Updating instructions mid-session via context_update")
-                    self._context_changed_since_handle = True
-                    self._pending_context_updates += 1
+                    self._context_updated = True
                     self._send_client_event(
                         types.LiveClientContextUpdate(
                             system_instruction=types.Content(parts=[types.Part(text=instructions)])
@@ -820,17 +818,11 @@ class RealtimeSession(llm.RealtimeSession):
                 self._mark_restart_needed()
                 return
 
-            tools_config, _ = create_tools_config(
-                self._tools,
-                tool_behavior=self._opts.tool_behavior,
-                use_parameters_json_schema=False,
-            )
             logger.debug("Updating tools mid-session via context_update")
-            self._context_changed_since_handle = True
-            self._pending_context_updates += 1
+            self._context_updated = True
             self._send_client_event(
                 types.LiveClientContextUpdate(
-                    tools=types.LiveClientContextUpdateTools(tools=tools_config)
+                    tools=types.LiveClientContextUpdateTools(tools=self._tools_config())
                 )
             )
 
@@ -1029,14 +1021,6 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
-            self._pending_context_updates = 0
-            if self._context_changed_since_handle:
-                # a resumed session would keep the instructions/tools from before the
-                # context_update, so start fresh. cleared only now, after the old receive
-                # task can no longer store a handle
-                self._context_changed_since_handle = False
-                self._session_resumption_handle = None
-                self._resumption_chat_ctx = None
             session = None
             try:
                 config = self._build_connect_config()
@@ -1051,6 +1035,19 @@ class RealtimeSession(llm.RealtimeSession):
 
                         pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
+                            if self._context_updated:
+                                # the handle restores the conversation, but with the
+                                # instructions/tools the session had when it was created.
+                                # a handle may also predate the last context_update, so
+                                # the current ones are sent again rather than trusting it
+                                await session.send_context_update(
+                                    system_instruction=types.Content(
+                                        parts=[types.Part(text=self._opts.instructions)]
+                                    )
+                                    if is_given(self._opts.instructions)
+                                    else None,
+                                    tools=list(self._tools_config()),
+                                )
                             # the handle restores the conversation; send only what came after it
                             target = pending_ctx if pending_ctx is not None else self._chat_ctx
                             if self._resumption_chat_ctx is None:
@@ -1207,13 +1204,10 @@ class RealtimeSession(llm.RealtimeSession):
                     elif msg.activity_end:
                         await session.send_realtime_input(activity_end=msg.activity_end)
                 elif isinstance(msg, types.LiveClientContextUpdate):
-                    try:
-                        await session.send_context_update(
-                            system_instruction=msg.system_instruction,
-                            tools=msg.tools.tools if msg.tools is not None else None,
-                        )
-                    finally:
-                        self._pending_context_updates = max(0, self._pending_context_updates - 1)
+                    await session.send_context_update(
+                        system_instruction=msg.system_instruction,
+                        tools=msg.tools.tools if msg.tools is not None else None,
+                    )
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
@@ -1302,13 +1296,10 @@ class RealtimeSession(llm.RealtimeSession):
                         if (
                             response.session_resumption_update.resumable
                             and response.session_resumption_update.new_handle
-                            and self._pending_context_updates == 0
-                            and not self._session_should_close.is_set()
                         ):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
                             )
-                            self._context_changed_since_handle = False
                             self._resumption_chat_ctx = llm.ChatContext(
                                 [
                                     item
@@ -1340,14 +1331,18 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             self._mark_current_generation_done()
 
-    def _build_connect_config(self) -> types.LiveConnectConfig:
-        temp = self._opts.temperature if is_given(self._opts.temperature) else None
-
+    def _tools_config(self) -> list[types.Tool]:
         tools_config, _ = create_tools_config(
             self._tools,
             tool_behavior=self._opts.tool_behavior,
             use_parameters_json_schema=False,
         )
+        return tools_config
+
+    def _build_connect_config(self) -> types.LiveConnectConfig:
+        temp = self._opts.temperature if is_given(self._opts.temperature) else None
+
+        tools_config = self._tools_config()
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             history_config=types.HistoryConfig(initial_history_in_client_content=True)
