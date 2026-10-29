@@ -1,0 +1,35 @@
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_b6ebb92b33ee85::t_3930a7d9635311 55,98-99,130,241-242,245-246,248,348-349
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_b6ebb92b33ee85::t_ce32176d029b34 124,391,431-432
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_b6ebb92b33ee85::t_c9e61b01e049d0 2094-2095
+livekit-agents/livekit/agents/voice/turn.py
+  s_b6ebb92b33ee85::t_2d2852dc0db3a3 75
+tests/test_audio_eot_local_transport.py
+  s_b6ebb92b33ee85::t_3143319b09b85f 2,57,62,73,77,85,95,97
+tests/test_audio_turn_detector_fallback.py
+  s_b6ebb92b33ee85::t_6d62d6b12ddb23 112-113
+tests/test_speech_start_time_persistence.py
+  s_b6ebb92b33ee85::t_21d0a39bfa5aad 163-182
+tests/test_transcription_delay_anchor.py
+  s_b6ebb92b33ee85::t_0293dccb54445b 89
+tests/test_turn_detection_fsm.py
+  s_b6ebb92b33ee85::t_6c82ac5d69b2f7 16,55-56,97-100,107,114-119,121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c494fdc09eb98d2d9756840855a1fcc8919121b",
+  "prompts": {},
+  "sessions": {
+    "s_b6ebb92b33ee85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ffd5347-5f1e-4331-bcb5-8dce87ae0dd4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+examples/telephony/amd.md
+  s_537610c4f1c4c2::t_6cbc8d205adb1f 299-301
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_537610c4f1c4c2::t_4355000e2470f0 201-203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33b4893f8901e04c4b551533e3cfd6589d7c87cc",
+  "prompts": {},
+  "sessions": {
+    "s_537610c4f1c4c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "facb5b5b-e70d-48c2-a084-6889130faaae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

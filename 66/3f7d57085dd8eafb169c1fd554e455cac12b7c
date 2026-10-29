@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/tts/tts.py
+  s_dce7d737ac3586::t_41aaf23338d169 1166,1169,1171,1174
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/tts.py
+  s_dce7d737ac3586::t_41aaf23338d169 103-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "663f7d57085dd8eafb169c1fd554e455cac12b7c",
+  "prompts": {},
+  "sessions": {
+    "s_dce7d737ac3586": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17355-2377-76e1-b843-496db0272dc5",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
