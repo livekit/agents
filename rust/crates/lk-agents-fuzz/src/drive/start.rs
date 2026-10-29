@@ -315,7 +315,8 @@ impl Run {
         // The answering-machine detector, as `AMD.__aenter__` attaches it once the call is up:
         // its config as the host resolves it; it then awaits the callee in the room.
         if let Some(amd) = setup.amd {
-            use lk_agents_abi::voice::amd::{AmdConfigKwargs, TranscriptSource};
+            use lk_agents_abi::voice::amd::{AmdConfigKwargs, AmdFunctions, TranscriptSource};
+            use lk_agents_voice::amd::classifier::AmdRules;
             let llm = fakes::FakeLlm::new(registry.clone());
             let stt =
                 amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
@@ -323,10 +324,7 @@ impl Run {
                 api.resolved_options().map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
             let cfg = AmdConfigKwargs {
                 max_endpointing_delay: Some(
-                    <lk_agents_voice::amd::classifier::AmdRules as lk_agents_abi::voice::amd::AmdFunctions>::amd_resolve_max_endpointing_delay(
-                        None, activity,
-                    )
-                    .as_secs_f64(),
+                    AmdRules::amd_resolve_max_endpointing_delay(None, activity).as_secs_f64(),
                 ),
                 source: Some(if amd.own_stt {
                     TranscriptSource::AmdStt
