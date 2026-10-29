@@ -268,8 +268,10 @@ class BaselineContracts(unittest.TestCase):
 
     def test_a_row_no_violation_matches_is_stale(self):
         self.assertEqual(stale({"kept"}, {"kept", "gone"}), ["stale baseline row: gone"])
-        self.assertEqual(stale({"kept.rs": 1300}, {"kept.rs": 1400, "gone.rs": 1300}),
-                         ["stale baseline row: gone.rs"])
+        self.assertEqual(
+            stale({"kept.rs": 1300}, {"kept.rs": 1400, "gone.rs": 1300}),
+            ["stale baseline row: gone.rs"],
+        )
         self.assertFalse(stale({"kept"}, {"kept"}))
 
     @patch("check.check_history", return_value=[])
