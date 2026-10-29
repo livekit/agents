@@ -8,11 +8,11 @@ import platform
 import re
 import time
 import uuid
-from collections.abc import Callable
-from typing import Any, TypeVar, cast
+from collections.abc import Callable, Coroutine
+from typing import Protocol, TypeVar, overload
 from urllib.parse import urlparse
 
-from typing_extensions import TypeIs
+from typing_extensions import ParamSpec, TypeIs
 
 from ..types import NotGiven, NotGivenOr
 
@@ -91,15 +91,31 @@ def resolve_env_var(val: NotGivenOr[str], *env_vars: str, default: str = "") -> 
     return default
 
 
-F = TypeVar("F", bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., object])
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
-def log_exceptions(msg: str = "", logger: logging.Logger = logging.getLogger()) -> Callable[[F], F]:  # noqa: B008
-    def deco(fn: F) -> F:
+class _ExceptionDecorator(Protocol):
+    def __call__(self, fn: Callable[_P, _R], /) -> Callable[_P, _R]: ...
+
+
+def log_exceptions(
+    msg: str = "", logger: logging.Logger = logging.getLogger()
+) -> _ExceptionDecorator:  # noqa: B008
+    @overload
+    def deco(
+        fn: Callable[_P, Coroutine[object, object, _R]],
+    ) -> Callable[_P, Coroutine[object, object, _R]]: ...
+
+    @overload
+    def deco(fn: Callable[_P, _R]) -> Callable[_P, _R]: ...
+
+    def deco(fn: Callable[..., object]) -> Callable[..., object]:
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
-            async def async_fn_logs(*args: Any, **kwargs: Any) -> Any:
+            async def async_fn_logs(*args: object, **kwargs: object) -> object:
                 try:
                     return await fn(*args, **kwargs)
                 except Exception:
@@ -109,12 +125,12 @@ def log_exceptions(msg: str = "", logger: logging.Logger = logging.getLogger()) 
                     logger.exception(err)
                     raise
 
-            return cast(F, async_fn_logs)
+            return async_fn_logs
 
         else:
 
             @functools.wraps(fn)
-            def fn_logs(*args: Any, **kwargs: Any) -> Any:
+            def fn_logs(*args: object, **kwargs: object) -> object:
                 try:
                     return fn(*args, **kwargs)
                 except Exception:
@@ -124,6 +140,6 @@ def log_exceptions(msg: str = "", logger: logging.Logger = logging.getLogger()) 
                     logger.exception(err)
                     raise
 
-            return cast(F, fn_logs)
+            return fn_logs
 
     return deco
