@@ -6,7 +6,8 @@ use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RpcHandler, RtcRoom};
-use lk_agents_abi::{AbortHandle, BoxFuture, Clock, Spawner, SpawnerExt, TokioSpawner};
+use lk_agents_abi::{AbortHandle, BoxFuture, Clock, Spawner, SpawnerExt};
+use lk_agents_net::env::Env;
 use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportStep, frame_size};
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
@@ -383,7 +384,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
         on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
     ) -> Result<Self, ProviderError> {
         let frame_size = frame_size(frame_size_ms).map_err(failure)?;
-        let handle = crate::process::handle().map_err(|error| ApiError::new(error.to_string()))?;
+        let spawner = crate::process::Process::spawner().map_err(ApiError::new)?;
         let on_clear = on_clear_buffer.map(|listener| {
             Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
         });
@@ -393,8 +394,8 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
             frame_size,
             rpc_max_retries,
             on_clear,
-            crate::process::host_clock(),
-            Arc::new(TokioSpawner::new(handle)),
+            crate::process::Process::clock(),
+            spawner,
         ))
     }
 
