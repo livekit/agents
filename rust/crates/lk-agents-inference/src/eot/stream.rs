@@ -15,12 +15,12 @@ use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
     AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
-    EotWarning, SinkEvent, TransportPrediction, TransportShell,
+    EotWarning, SinkEvent, TransportPrediction, MountedTransport,
 };
 use lk_agents_net::env::MediaPoolSource;
 
 /// Mounts the transport for a model: the gateway for `turn-detector-v1`, the mini model otherwise.
-pub type TransportFactory = Arc<dyn Fn(TurnDetectorModel) -> Arc<TransportShell> + Send + Sync>;
+pub type TransportFactory = Arc<dyn Fn(TurnDetectorModel) -> Arc<MountedTransport> + Send + Sync>;
 
 /// `self._detector.emit("metrics_collected", ...)`.
 pub type MetricsCallback = Arc<dyn Fn(EotInferenceMetrics) + Send + Sync>;
@@ -60,11 +60,11 @@ fn sentence(warning: &EotWarning) -> String {
 
 struct Inner {
     session: EotSession,
-    shell: Option<Arc<TransportShell>>,
+    shell: Option<Arc<MountedTransport>>,
     /// While the local model loads, retain only its trailing prediction window.
     replacement_audio: AudioRingBuffer,
     replacement_request: Option<(EotRequestId, Vec<i16>)>,
-    retired: Option<Arc<TransportShell>>,
+    retired: Option<Arc<MountedTransport>>,
     waiters: HashMap<String, oneshot::Sender<EotPrediction>>,
     resampler: Option<Box<dyn Resampler>>,
     input_format: Option<(u32, u16)>,
@@ -199,7 +199,7 @@ impl EotStream {
         }
     }
 
-    fn on_event(&self, shell: &Arc<TransportShell>, event: SinkEvent) {
+    fn on_event(&self, shell: &Arc<MountedTransport>, event: SinkEvent) {
         match event {
             SinkEvent::Prediction(p) => {
                 let mut inner = self.lock();

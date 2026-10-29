@@ -22,7 +22,7 @@ use crate::eot::session::{
     EotAction, EotDegrade, EotFlush, EotSession, EotStartInference, EotSwapToLocal,
     TransportPrediction,
 };
-use crate::eot::transport::{EotTransport, PredictionSink};
+use crate::eot::transport::{EotTransport, PredictionListener};
 use crate::eot::{CancelReason, EotRequestId, EotWarning};
 
 // ---------------------------------------------------------------------------------------------
@@ -318,7 +318,7 @@ struct RecordingSink {
     reject_defaults: bool,
 }
 
-impl PredictionSink for RecordingSink {
+impl PredictionListener for RecordingSink {
     fn resolve(&self, request_id: &str, prediction: TransportPrediction) {
         self.resolves.lock().unwrap().push((request_id.to_owned(), prediction));
     }
@@ -444,7 +444,7 @@ fn hanging_cloud_fixture(sink: Arc<RecordingSink>, hang: bool) -> CloudFixture {
         hang,
     });
     let transport =
-        Arc::new(CloudTransport::new(cloud_options(), sink as Arc<dyn PredictionSink>, connector));
+        Arc::new(CloudTransport::new(cloud_options(), sink as Arc<dyn PredictionListener>, connector));
     CloudFixture { transport, sent, urls, headers, server }
 }
 
@@ -807,7 +807,7 @@ async fn the_local_transport_scores_the_audio_it_was_holding_when_the_request_wa
     let sink = Arc::new(RecordingSink::default());
     let transport = Arc::new(LocalTransport::new(
         Arc::new(RecordingModel { seen: seen.clone(), answer: Ok(0.9) }),
-        sink.clone() as Arc<dyn PredictionSink>,
+        sink.clone() as Arc<dyn PredictionListener>,
     ));
     assert_eq!(transport.session_id(), None, "there is no connection to name");
 
@@ -844,7 +844,7 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
             seen: Arc::new(Mutex::new(Vec::new())),
             answer: Err("weights not loaded".to_owned()),
         }),
-        sink.clone() as Arc<dyn PredictionSink>,
+        sink.clone() as Arc<dyn PredictionListener>,
     );
     transport.run_inference(&id("turn_request_1"));
     transport.end_input();

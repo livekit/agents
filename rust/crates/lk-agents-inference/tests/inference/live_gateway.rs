@@ -36,7 +36,7 @@ fn credentials() -> Option<(String, String, String)> {
 async fn an_stt_session_opens_and_accepts_audio() {
     use lk_agents_abi::SpeechEventType;
     use lk_agents_inference::abi::{AudioFrame, Stt};
-    use lk_agents_inference::stt::{NativeStt, SttOptions};
+    use lk_agents_inference::stt::{GatewayStt, SttOptions};
     use lk_agents_net::websocket::TungsteniteTransport;
 
     let Some((api_key, api_secret, base_url)) = credentials() else {
@@ -44,7 +44,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
         return;
     };
 
-    let stt: NativeStt = NativeStt::new(
+    let stt: GatewayStt = GatewayStt::new(
         SttOptions {
             model: Some("deepgram/nova-3".into()),
             language: None,

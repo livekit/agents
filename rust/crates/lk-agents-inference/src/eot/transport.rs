@@ -15,7 +15,7 @@ use crate::eot::session::TransportPrediction;
 use crate::eot::{EotRequestId, EotWarning};
 
 /// Every method is `&self` and synchronous: they are called from the receive path.
-pub trait PredictionSink: Send + Sync {
+pub trait PredictionListener: Send + Sync {
     /// `stream._resolve_prediction(...)`. The sink decides whether `request_id` is still current.
     fn resolve(&self, request_id: &str, prediction: TransportPrediction);
 

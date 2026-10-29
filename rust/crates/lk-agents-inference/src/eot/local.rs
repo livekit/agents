@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use lk_agents_abi::AudioFrame;
 
 use crate::eot::session::TransportPrediction;
-use crate::eot::transport::{EotTransport, PredictionSink};
+use crate::eot::transport::{EotTransport, PredictionListener};
 use crate::eot::{DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning};
 
 /// `_CLIENT_BUFFER_SECONDS` (`transports.py:70`). How much recent audio one prediction sees.
@@ -67,7 +67,7 @@ type Job = (EotRequestId, Vec<i16>);
 
 pub struct LocalTransport {
     model: std::sync::Arc<dyn LocalEotModel>,
-    sink: std::sync::Arc<dyn PredictionSink>,
+    sink: std::sync::Arc<dyn PredictionListener>,
     buf: Mutex<AudioRingBuffer>,
     /// `None` once the input has ended, which is what lets [`run`](EotTransport::run) return.
     tx: Mutex<Option<mpsc::UnboundedSender<Job>>>,
@@ -77,7 +77,7 @@ pub struct LocalTransport {
 impl LocalTransport {
     pub fn new(
         model: std::sync::Arc<dyn LocalEotModel>,
-        sink: std::sync::Arc<dyn PredictionSink>,
+        sink: std::sync::Arc<dyn PredictionListener>,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         LocalTransport {

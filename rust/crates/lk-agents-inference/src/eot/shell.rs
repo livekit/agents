@@ -1,4 +1,4 @@
-//! The host-facing shell around one mounted [`EotTransport`]. [`PredictionSink`] methods run on
+//! The host-facing shell around one mounted [`EotTransport`]. [`PredictionListener`] methods run on
 //! the transport's task, so all but `session_created` only post to a channel; taking the host's
 //! lock there is how deadlocks happen.
 
@@ -12,7 +12,7 @@ use lk_agents_abi::tokenize::language::{ThresholdError, ThresholdOptions};
 use lk_agents_abi::turn::eot::PredictionEvent;
 use tokio::sync::mpsc;
 
-use crate::eot::{EotTransport, EotWarning, PredictionSink, TransportPrediction};
+use crate::eot::{EotTransport, EotWarning, PredictionListener, TransportPrediction};
 
 /// `provider` (`base.py:65`): both native backends are the same vendor.
 pub const PROVIDER: &str = "livekit";
@@ -27,14 +27,14 @@ pub enum SinkEvent {
     End,
 }
 
-pub struct ChannelSink {
+pub struct PredictionChannel {
     events: mpsc::UnboundedSender<SinkEvent>,
     thresholds: Arc<Mutex<ThresholdOptions>>,
     /// The model this transport is, for [`EotInferenceMetrics::metadata`]; constant per transport.
     model: &'static str,
 }
 
-impl PredictionSink for ChannelSink {
+impl PredictionListener for PredictionChannel {
     fn resolve(&self, request_id: &str, prediction: TransportPrediction) {
         let _ = self.events.send(SinkEvent::Prediction(PredictionEvent {
             id: request_id.to_owned(),
@@ -78,7 +78,7 @@ impl PredictionSink for ChannelSink {
     }
 }
 
-pub struct TransportShell {
+pub struct MountedTransport {
     pub transport: Arc<dyn EotTransport>,
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<SinkEvent>>,
     /// The shell's own handle on the sink's channel, for posting [`SinkEvent::End`].
@@ -89,17 +89,17 @@ pub struct TransportShell {
     ended: AtomicBool,
 }
 
-impl TransportShell {
+impl MountedTransport {
     /// Mount the transport `build` makes over a sink reporting as `model`. One owner holds both
     /// channel ends, so [`SinkEvent::End`] follows the last report.
     pub fn mount(
         model: &'static str,
         thresholds: Arc<Mutex<ThresholdOptions>>,
-        build: impl FnOnce(Arc<dyn PredictionSink>) -> Arc<dyn EotTransport>,
+        build: impl FnOnce(Arc<dyn PredictionListener>) -> Arc<dyn EotTransport>,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::unbounded_channel();
-        let sink = Arc::new(ChannelSink { events: tx.clone(), thresholds, model });
-        Arc::new(TransportShell {
+        let sink = Arc::new(PredictionChannel { events: tx.clone(), thresholds, model });
+        Arc::new(MountedTransport {
             transport: build(sink),
             events: tokio::sync::Mutex::new(rx),
             end: tx,

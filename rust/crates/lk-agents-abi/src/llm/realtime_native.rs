@@ -97,7 +97,7 @@ pub enum RealtimeConfigurationError {
 }
 
 #[crate::host(class(name = "NativeRealtimeModel", native = crate::llm::realtime::Realtime))]
-pub trait NativeRealtimeModel: Send + Sync + Sized + 'static {
+pub trait WebSocketRealtimeModel: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;

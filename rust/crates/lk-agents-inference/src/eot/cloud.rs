@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use crate::eot::proto;
 use crate::eot::session::TransportPrediction;
-use crate::eot::transport::{EotTransport, PredictionSink};
+use crate::eot::transport::{EotTransport, PredictionListener};
 use crate::eot::{EotRequestId, EotWarning};
 
 /// `HEADER_SESSION_ID` (`_utils.py:21`): one per connection, and the request-id prefix.
@@ -71,7 +71,7 @@ struct CloudState {
 
 pub struct CloudTransport {
     opts: CloudOptions,
-    sink: Arc<dyn PredictionSink>,
+    sink: Arc<dyn PredictionListener>,
     transport: Arc<dyn WsTransport>,
     state: Mutex<CloudState>,
     clock: Arc<dyn Clock>,
@@ -80,7 +80,7 @@ pub struct CloudTransport {
 impl CloudTransport {
     pub fn new(
         opts: CloudOptions,
-        sink: Arc<dyn PredictionSink>,
+        sink: Arc<dyn PredictionListener>,
         transport: Arc<dyn WsTransport>,
     ) -> Self {
         CloudTransport {

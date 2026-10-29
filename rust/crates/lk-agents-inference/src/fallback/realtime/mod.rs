@@ -37,13 +37,13 @@ use lk_agents_abi::resources::ResourceId;
 /// One model of the chain: the core's own, or a plugin's seen through its host view. A host model
 /// is wrapped afresh at each open: `HostRealtimeModel` keeps the session it opened.
 #[derive(Clone)]
-pub enum RealtimeChild {
+pub enum ChainModel {
     Native(Arc<dyn Realtime>),
     /// With the spawner its leg's tasks run on.
     Host(Arc<dyn HostRealtime>, Arc<dyn lk_agents_abi::Spawner>),
 }
 
-impl RealtimeChild {
+impl ChainModel {
     fn resource_id(&self) -> ResourceId {
         match self {
             Self::Native(model) => backend_resource(model.as_ref(), model.instance_id()),
@@ -53,15 +53,15 @@ impl RealtimeChild {
 
     fn capabilities(&self) -> RealtimeCapabilities {
         match self {
-            RealtimeChild::Native(m) => m.capabilities(),
-            RealtimeChild::Host(h, _) => h.capabilities(),
+            ChainModel::Native(m) => m.capabilities(),
+            ChainModel::Host(h, _) => h.capabilities(),
         }
     }
 
     fn label(&self) -> String {
         match self {
-            RealtimeChild::Native(m) => m.label(),
-            RealtimeChild::Host(h, _) => h.label(),
+            ChainModel::Native(m) => m.label(),
+            ChainModel::Host(h, _) => h.label(),
         }
     }
 
@@ -71,9 +71,9 @@ impl RealtimeChild {
         anchor: WallAnchor,
     ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         match self {
-            RealtimeChild::Native(m) => m.session(turn_detection_disabled).await,
+            ChainModel::Native(m) => m.session(turn_detection_disabled).await,
             // Given its anchor and spawner, it needs no environment.
-            RealtimeChild::Host(h, spawner) => {
+            ChainModel::Host(h, spawner) => {
                 <HostRealtimeModel>::new(Arc::clone(h), anchor, Arc::clone(spawner))
                     .session(turn_detection_disabled)
                     .await
@@ -87,7 +87,7 @@ impl RealtimeChild {
 /// playing, gives the new model its frame (instructions, the conversation the caller heard,
 /// tools), and asks again for a reply the swap cut (`_swap`).
 pub struct RealtimeFallbackModel {
-    children: Vec<RealtimeChild>,
+    children: Vec<ChainModel>,
     caps: RealtimeCapabilities,
     cooldown: f64,
     regenerate_on_swap: bool,
@@ -101,7 +101,7 @@ pub struct RealtimeFallbackModel {
 
 impl RealtimeFallbackModel {
     pub fn new(
-        children: Vec<RealtimeChild>,
+        children: Vec<ChainModel>,
         cooldown: f64,
         regenerate_on_swap: bool,
         observer: Arc<dyn ChainObserver>,
@@ -117,7 +117,7 @@ impl RealtimeFallbackModel {
             );
         }
         let caps = merge_capabilities(
-            &children.iter().map(RealtimeChild::capabilities).collect::<Vec<_>>(),
+            &children.iter().map(ChainModel::capabilities).collect::<Vec<_>>(),
         )
         .map_err(|e| e.to_string())?;
         Ok(RealtimeFallbackModel {
@@ -173,7 +173,7 @@ impl Realtime for RealtimeFallbackModel {
             self.active.store(0, std::sync::atomic::Ordering::Relaxed);
             let session = Arc::new(FallbackSession {
                 children: self.children.clone(),
-                priority: self.children.iter().map(RealtimeChild::resource_id).collect(),
+                priority: self.children.iter().map(ChainModel::resource_id).collect(),
                 cooldown: std::time::Duration::from_secs_f64(self.cooldown),
                 caps: self.caps,
                 regenerate_on_swap: self.regenerate_on_swap,

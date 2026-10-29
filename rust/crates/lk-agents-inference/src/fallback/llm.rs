@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
-    RecoverySlot,
+    RecoveryMode,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
 use lk_agents_net::env::ProcessEnv;
@@ -69,7 +69,7 @@ impl Backend for LlmBackend {
         &self,
         req: &Self::Req,
         conn: &lk_agents_abi::ApiConnectOptions,
-        _slot: RecoverySlot,
+        _slot: RecoveryMode,
         stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         // Drain and discard: reaching the end without an error is LLM's recovery signal.
@@ -236,7 +236,7 @@ impl Llm for FallbackLlm {
             let call = ChainCall {
                 conn_options: req.conn_options,
                 accepted_at: self.chain.clock().now(),
-                slot: RecoverySlot::OneShot,
+                slot: RecoveryMode::OneShot,
             };
 
             let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());

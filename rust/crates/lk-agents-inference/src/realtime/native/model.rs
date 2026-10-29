@@ -6,13 +6,13 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime_native::{
-    NativeRealtimeConfig, NativeRealtimeModel, RealtimeConfigurationError, RealtimeJsonOption,
+    NativeRealtimeConfig, WebSocketRealtimeModel, RealtimeConfigurationError, RealtimeJsonOption,
     RealtimeOptions,
 };
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
 
-use super::session::{Auth, Connect, NativeRealtime};
+use super::session::{Auth, Connect, WebSocketRealtime};
 use super::wire::Azure;
 use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
@@ -53,7 +53,7 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl NativeRealtimeModel for NativeRealtime {
+impl WebSocketRealtimeModel for WebSocketRealtime {
     type Env = ProcessEnv;
 
     fn new(
@@ -132,7 +132,7 @@ impl NativeRealtimeModel for NativeRealtime {
         };
         let runtime =
             (env.runtime)().map_err(|error| ApiError::new(error).with_retryable(false))?;
-        let mut native = NativeRealtime::new(
+        let mut native = WebSocketRealtime::new(
             dialect,
             "",
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),

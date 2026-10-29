@@ -14,7 +14,7 @@ mod tts;
 
 pub use chain::{
     Attempt, AvailabilityChanged, Backend, ChainObserver, ChainOutcome, FallbackChain,
-    IgnoreEvents, NoBackends, Recovery, RecoverySlot,
+    IgnoreEvents, NoBackends, Recovery, RecoveryMode,
 };
 use lk_agents_abi::ApiConnectOptions;
 pub use llm::{FallbackLlm, LlmBackend};

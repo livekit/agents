@@ -19,12 +19,12 @@ pub(super) struct DeferredExtra {
     pub(super) pending: Mutex<Option<serde_json::Map<String, serde_json::Value>>>,
 }
 
-pub struct SttSinkHandle {
+pub struct RecognitionInput {
     pub(super) audio: mpsc::Sender<SinkCmd>,
     pub(super) control: Arc<StreamControl>,
 }
 
-impl lk_agents_abi::stt::inference::InferenceSttAudio for SttSinkHandle {
+impl lk_agents_abi::stt::inference::InferenceSttAudio for RecognitionInput {
     fn update_options(
         &self,
         model: Option<String>,
@@ -80,7 +80,7 @@ impl StreamControl {
     }
 }
 
-impl StreamSink<AudioFrame> for SttSinkHandle {
+impl StreamSink<AudioFrame> for RecognitionInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.send(SinkCmd::Frame(item))
     }
@@ -95,7 +95,7 @@ impl StreamSink<AudioFrame> for SttSinkHandle {
     }
 }
 
-impl SttSinkHandle {
+impl RecognitionInput {
     fn closed_error(&self) -> ProviderError {
         self.control
             .failure
@@ -119,7 +119,7 @@ impl SttSinkHandle {
 }
 
 /// The gateway stream's drain half, handed to the host as `InferenceSttStream` beside its sink.
-pub struct SttSourceHandle {
+pub struct RecognitionOutput {
     pub(super) events: mpsc::Receiver<Result<SpeechEvent, ApiError>>,
     pub(super) done: bool,
     pub(super) stop: tokio::sync::watch::Sender<bool>,
@@ -128,7 +128,7 @@ pub struct SttSourceHandle {
     pub(super) clock: Arc<dyn Clock>,
 }
 
-impl StreamSource<SpeechEvent> for SttSourceHandle {
+impl StreamSource<SpeechEvent> for RecognitionOutput {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             if self.done {

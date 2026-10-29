@@ -926,7 +926,7 @@ impl HostRealtimeModel {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
-type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
+type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::WebSocketRealtimeModel;
 
 #[pyclass(frozen, name = "NativeRealtimeModel", module = "livekit.agents._core")]
 pub struct NativeRealtimeModel(::std::sync::Arc<NativeRealtimeModelImpl>);
@@ -939,34 +939,34 @@ impl NativeRealtimeModel {
         ::lk_agents_abi::python::check_pid()?;
         let env = crate::process::env();
         let config = crate::generated::records::realtime_options::native_realtime_config_from_py(&config)?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::new(&env, config).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(NativeRealtimeModel(::std::sync::Arc::new(out)))
     }
 
     #[getter]
     fn provider(&self) -> PyResult<::std::string::String> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::provider(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::provider(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn model(&self) -> PyResult<::std::string::String> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::model(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::model(&self.0);
         Ok(out)
     }
 
     #[getter]
     fn label(&self) -> PyResult<::std::string::String> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::label(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::label(&self.0);
         Ok(out)
     }
 
     fn capabilities(&self) -> PyResult<::lk_agents_abi::llm::realtime::RealtimeCapabilities> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::capabilities(&self.0);
+        let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::capabilities(&self.0);
         Ok(out)
     }
 
@@ -974,14 +974,14 @@ impl NativeRealtimeModel {
     fn update_options(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         let options = crate::generated::records::realtime_options::realtime_options_from_py(&options)?;
-        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::update_options(&self.0, options);
+        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::update_options(&self.0, options);
         Ok(())
     }
 
     #[pyo3(signature = (headers))]
     fn bind_identification(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
-        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::bind_identification(&self.0, headers);
+        <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::WebSocketRealtimeModel>::bind_identification(&self.0, headers);
         Ok(())
     }
 }

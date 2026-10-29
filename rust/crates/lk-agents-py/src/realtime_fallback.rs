@@ -8,7 +8,7 @@ use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
 use lk_agents_abi::python::native;
 use lk_agents_abi::{HostRef, Realtime, RealtimeSession};
-use lk_agents_runtime::inference::fallback::realtime::{RealtimeChild, RealtimeFallbackModel};
+use lk_agents_runtime::inference::fallback::realtime::{ChainModel, RealtimeFallbackModel};
 use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
 use lk_agents_runtime::net::env::ProcessEnv;
 use pyo3::prelude::*;
@@ -31,10 +31,10 @@ impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFall
                 .map(|model| {
                     let model = model.into_pyobject(py)?;
                     match native::<dyn Realtime>(&model) {
-                        Some(native) => Ok(RealtimeChild::Native(native)),
+                        Some(native) => Ok(ChainModel::Native(native)),
                         None => crate::generated::llm::HostRealtimeProxy::from_host(&model)
                             .and_then(|host| {
-                                Ok(RealtimeChild::Host(host, crate::host::host_spawner()?))
+                                Ok(ChainModel::Host(host, crate::host::host_spawner()?))
                             }),
                     }
                 })

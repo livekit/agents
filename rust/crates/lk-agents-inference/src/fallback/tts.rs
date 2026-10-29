@@ -20,7 +20,7 @@ use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use tokio::sync::{mpsc, watch};
 
 use crate::fallback::chain::{
-    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoverySlot,
+    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
 use crate::fallback::{ChainPolicy, resampling_plan};
@@ -273,7 +273,7 @@ impl Backend for TtsBackend {
         &self,
         req: &Self::Req,
         conn: &ApiConnectOptions,
-        _slot: RecoverySlot,
+        _slot: RecoveryMode,
         stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         let tts = self.provider(conn);
@@ -390,7 +390,7 @@ impl FallbackTts {
         self.needs_resampling.get(index).copied().unwrap_or(false)
     }
 
-    fn spawn_pump(&self, req: TtsReq, slot: RecoverySlot, log: Option<Arc<TokenLog>>) -> TtsSource {
+    fn spawn_pump(&self, req: TtsReq, slot: RecoveryMode, log: Option<Arc<TokenLog>>) -> TtsSource {
         let (tx, rx) = mpsc::channel::<Result<SynthesizedAudio, ProviderError>>(32);
         let chain = Arc::clone(&self.chain);
         let drain_chain = Arc::clone(&self.chain);
@@ -654,7 +654,7 @@ impl Tts for FallbackTts {
         Box::pin(async move {
             Ok(self.spawn_pump(
                 TtsReq::OneShot { text: Arc::from(text) },
-                RecoverySlot::OneShot,
+                RecoveryMode::OneShot,
                 None,
             ))
         })
@@ -665,7 +665,7 @@ impl Tts for FallbackTts {
             let log = TokenLog::new();
             let source = self.spawn_pump(
                 TtsReq::Stream { log: Arc::clone(&log) },
-                RecoverySlot::Streaming,
+                RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );
             Ok((Box::new(LoggingSink(log)) as TtsSink, source))

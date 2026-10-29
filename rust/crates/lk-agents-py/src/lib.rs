@@ -110,7 +110,7 @@ impl generated::Implementations for Selected {
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
-    type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime;
+    type WebSocketRealtimeModel = lk_agents_runtime::inference::realtime::native::WebSocketRealtime;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
     type HostRealtimeModel = lk_agents_runtime::inference::realtime::host::HostRealtimeModel;
     type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient;
@@ -161,7 +161,7 @@ impl generated::Implementations for Selected {
     type FallbackStt = lk_agents_runtime::inference::fallback::FallbackStt;
     type SttStreamAdapter = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;
     type InferenceVad = lk_agents_runtime::inference::vad::LocalVad;
-    type InferenceEot = lk_agents_runtime::inference::eot::NativeEot;
+    type InferenceEot = lk_agents_runtime::inference::eot::AudioEot;
     type EotStream = lk_agents_runtime::inference::eot::DetectorStream;
     type FixedGate = lk_agents_runtime::inference::duplex::GateClass<
         lk_agents_runtime::inference::duplex::FixedGate,
@@ -172,7 +172,7 @@ impl generated::Implementations for Selected {
     type DuplexRealtimeModel = lk_agents_runtime::inference::duplex::DuplexAdapterModel;
     type InterruptionDetector =
         lk_agents_runtime::inference::interruption::NativeInterruptionDetector;
-    type InferenceStt = lk_agents_runtime::inference::stt::NativeStt;
+    type InferenceStt = lk_agents_runtime::inference::stt::GatewayStt;
     type ChoiceParser = lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_runtime::inference::llm::parse::CompletionWire;
     type Storage = lk_agents_runtime::storage::host::HostStorage;

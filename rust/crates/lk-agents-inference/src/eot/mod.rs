@@ -24,7 +24,7 @@ use livekit_protocol::agent as proto;
 mod tests;
 
 pub use cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID, HeaderProvider};
-pub use detector::NativeEot;
+pub use detector::AudioEot;
 pub use eot::{
     CancelReason, DEFAULT_PREDICTION_TIMEOUT, DEFAULT_SAMPLE_RATE, EotRequestId, EotWarning,
 };
@@ -35,6 +35,6 @@ pub use session::{
     EotAction, EotDegrade, EotFlush, EotResolve, EotSession, EotStartInference, EotSwapToLocal,
     EotWarn, TransportPrediction,
 };
-pub use shell::{ChannelSink, PROVIDER, SinkEvent, TransportShell};
+pub use shell::{PredictionChannel, PROVIDER, SinkEvent, MountedTransport};
 pub use stream::{DetectorStream, EotStream, MetricsCallback, TransportFactory};
-pub use transport::{EotTransport, PredictionSink};
+pub use transport::{EotTransport, PredictionListener};

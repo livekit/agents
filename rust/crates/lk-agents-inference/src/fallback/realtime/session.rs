@@ -26,7 +26,7 @@ pub(super) struct SessionState {
 }
 
 pub struct FallbackSession {
-    pub(super) children: Vec<RealtimeChild>,
+    pub(super) children: Vec<ChainModel>,
     pub(super) priority: Vec<ResourceId>,
     pub(super) cooldown: std::time::Duration,
     pub(super) caps: RealtimeCapabilities,

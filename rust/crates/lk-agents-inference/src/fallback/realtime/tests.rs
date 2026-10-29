@@ -109,8 +109,8 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
     }
     let model = RealtimeFallbackModel::new(
         vec![
-            RealtimeChild::Native(Arc::new(Model(Arc::clone(&primary)))),
-            RealtimeChild::Native(Arc::new(Model(Arc::clone(&backup)))),
+            ChainModel::Native(Arc::new(Model(Arc::clone(&primary)))),
+            ChainModel::Native(Arc::new(Model(Arc::clone(&backup)))),
         ],
         10.0,
         true,
@@ -210,8 +210,8 @@ async fn cancellation_case(failed_open: bool) {
     let changes = Arc::new(AvailabilityLog::default());
     let model = RealtimeFallbackModel::new(
         vec![
-            RealtimeChild::Native(Arc::new(Model(primary.clone()))),
-            RealtimeChild::Native(backup),
+            ChainModel::Native(Arc::new(Model(primary.clone()))),
+            ChainModel::Native(backup),
         ],
         10.0,
         false,
@@ -284,9 +284,9 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
     let changes = Arc::new(AvailabilityLog::default());
     let model = RealtimeFallbackModel::new(
         vec![
-            RealtimeChild::Native(Arc::new(Model(scripted(vec![fatal()])))),
-            RealtimeChild::Native(Arc::new(BlockedOpen(entered.clone(), release.clone()))),
-            RealtimeChild::Native(Arc::new(Model(scripted(vec![])))),
+            ChainModel::Native(Arc::new(Model(scripted(vec![fatal()])))),
+            ChainModel::Native(Arc::new(BlockedOpen(entered.clone(), release.clone()))),
+            ChainModel::Native(Arc::new(Model(scripted(vec![])))),
         ],
         10.0,
         false,
@@ -318,7 +318,7 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
 async fn repeating_the_same_backend_does_not_create_a_second_fallback_identity() {
     let child: Arc<dyn Realtime> = Arc::new(Model(scripted(vec![fatal()])));
     let model = RealtimeFallbackModel::new(
-        vec![RealtimeChild::Native(child.clone()), RealtimeChild::Native(child)],
+        vec![ChainModel::Native(child.clone()), ChainModel::Native(child)],
         10.0,
         false,
         Arc::new(crate::fallback::IgnoreEvents),
@@ -363,8 +363,8 @@ async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_child
     let backup = Arc::new(FailsToOpen(Default::default()));
     let model = RealtimeFallbackModel::new(
         vec![
-            RealtimeChild::Native(Arc::new(Model(primary))),
-            RealtimeChild::Native(backup.clone()),
+            ChainModel::Native(Arc::new(Model(primary))),
+            ChainModel::Native(backup.clone()),
         ],
         0.0,
         false,
@@ -385,8 +385,8 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
     let backup = scripted(vec![]);
     let model = RealtimeFallbackModel::new(
         vec![
-            RealtimeChild::Native(Arc::new(Model(primary))),
-            RealtimeChild::Native(Arc::new(Model(backup.clone()))),
+            ChainModel::Native(Arc::new(Model(primary))),
+            ChainModel::Native(Arc::new(Model(backup.clone()))),
         ],
         10.0,
         false,

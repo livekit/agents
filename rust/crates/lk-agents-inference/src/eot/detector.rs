@@ -8,29 +8,29 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdOptions, ThresholdOverride, TurnDetectorModel,
 };
-use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModels};
+use lk_agents_abi::turn::inference::{EotMetricsObserver, EotModel, EotModelFactory};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 
 use super::{
     CloudOptions, CloudTransport, DetectorStream, EotRequestId, EotSession, EotStream,
-    EotTransport, LocalEotModel, LocalTransport, MetricsCallback, TransportFactory, TransportShell,
+    EotTransport, LocalEotModel, LocalTransport, MetricsCallback, TransportFactory, MountedTransport,
 };
 use lk_agents_net::env::ProcessEnv;
 
 /// `env` lends the runtime the streams run on.
-pub struct NativeEot {
+pub struct AudioEot {
     thresholds: Arc<Mutex<ThresholdOptions>>,
     local_fallback: bool,
     base_url: String,
     api_key: String,
     api_secret: String,
     sample_rate: u32,
-    local_model: Arc<dyn EotModels>,
+    local_model: Arc<dyn EotModelFactory>,
     on_metrics: Option<MetricsCallback>,
     env: ProcessEnv,
 }
 
-impl NativeEot {
+impl AudioEot {
     fn table(&self) -> MutexGuard<'_, ThresholdOptions> {
         self.thresholds.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -55,7 +55,7 @@ impl NativeEot {
         Arc::new(move |model| {
             if model == TurnDetectorModel::V1 {
                 let (cloud, clock) = (cloud.clone(), clock.clone());
-                return TransportShell::mount(model.as_str(), thresholds.clone(), move |sink| {
+                return MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| {
                     let socket = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
                     let transport = CloudTransport::new(cloud, sink, socket);
                     Arc::new(transport.with_clock(clock)) as Arc<dyn EotTransport>
@@ -67,7 +67,7 @@ impl NativeEot {
                     .create()
                     .map(|model| Arc::new(HostModel(model)) as Arc<dyn LocalEotModel>),
             };
-            TransportShell::mount(model.as_str(), thresholds.clone(), move |sink| match local {
+            MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| match local {
                 Ok(model) => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
                 Err(e) => Arc::new(FailedTransport(e.to_string())) as Arc<dyn EotTransport>,
             })
@@ -75,7 +75,7 @@ impl NativeEot {
     }
 }
 
-impl lk_agents_abi::turn::inference::InferenceEot for NativeEot {
+impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
     type Stream = DetectorStream;
     type Env = ProcessEnv;
 
@@ -89,7 +89,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for NativeEot {
         api_key: String,
         api_secret: String,
         sample_rate: u32,
-        local_model: Arc<dyn EotModels>,
+        local_model: Arc<dyn EotModelFactory>,
         on_metrics: Option<Arc<dyn EotMetricsObserver>>,
     ) -> Self {
         let on_metrics = on_metrics.map(|observer| {
@@ -99,7 +99,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for NativeEot {
                 }
             }) as MetricsCallback
         });
-        NativeEot {
+        AudioEot {
             thresholds: Arc::new(Mutex::new(ThresholdOptions::new(
                 model,
                 overrides,

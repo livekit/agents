@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, AvailabilityChanged, Backend, ChainObserver, ChainOutcome, FallbackChain, Recovery,
-    RecoverySlot,
+    RecoveryMode,
 };
 
 const LIMIT: Duration = Duration::from_secs(5);
@@ -89,7 +89,7 @@ struct Fake {
     label: String,
     script: Mutex<VecDeque<Step>>,
     opened: Mutex<Vec<ApiConnectOptions>>,
-    probes: Mutex<Vec<(RecoverySlot, ApiConnectOptions)>>,
+    probes: Mutex<Vec<(RecoveryMode, ApiConnectOptions)>>,
     probe_verdict: Mutex<VecDeque<Recovery>>,
     /// A probe on slot `i` waits here. Starts saturated, so probes complete immediately unless a
     /// test closes the gate.
@@ -122,7 +122,7 @@ impl Fake {
         Arc::clone(self)
     }
 
-    fn shut(self: &Arc<Self>, slot: RecoverySlot) -> Arc<Self> {
+    fn shut(self: &Arc<Self>, slot: RecoveryMode) -> Arc<Self> {
         // Drain the permits so the next probe on this slot parks.
         self.gate[slot as usize].forget_permits(usize::MAX >> 4);
         Arc::clone(self)
@@ -137,7 +137,7 @@ impl Fake {
         }
     }
 
-    fn probe_count(&self, slot: RecoverySlot) -> usize {
+    fn probe_count(&self, slot: RecoveryMode) -> usize {
         self.probes.lock().expect("probes").iter().filter(|(s, _)| *s == slot).count()
     }
 }
@@ -175,7 +175,7 @@ impl Backend for Fake {
         &self,
         _req: &Self::Req,
         conn: &ApiConnectOptions,
-        slot: RecoverySlot,
+        slot: RecoveryMode,
         _stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         self.probes.lock().expect("probes").push((slot, *conn));
@@ -226,7 +226,7 @@ fn caller() -> ApiConnectOptions {
 /// output, as a real adapter does.
 async fn run_once(
     rig: &Rig,
-    slot: RecoverySlot,
+    slot: RecoveryMode,
 ) -> (Result<ChainOutcome<usize>, ProviderError>, Vec<usize>) {
     let mut drained: Vec<usize> = Vec::new();
     let chain = Arc::clone(&rig.chain);
@@ -268,19 +268,19 @@ async fn run_once(
 async fn recovery_returns_traffic_to_an_earlier_entry() {
     let primary = Fake::new("primary", &[Step::FailCold, Step::Serve])
         .recovers(&[Recovery::Recovered])
-        .shut(RecoverySlot::OneShot);
+        .shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&primary), backup], ChainPolicy::llm_defaults());
 
-    let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
+    let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
     assert_eq!(out.expect("the backup serves"), ChainOutcome::Served(1));
     assert_eq!(drained, vec![0, 1], "the primary is tried first, then the backup");
     assert!(!rig.chain.is_available(0));
 
-    primary.gate[RecoverySlot::OneShot as usize].add_permits(1);
+    primary.gate[RecoveryMode::OneShot as usize].add_permits(1);
     until("the primary's probe to succeed", || rig.chain.is_available(0)).await;
 
-    let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
+    let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
     assert_eq!(out.expect("the primary serves again"), ChainOutcome::Served(0));
     assert_eq!(drained, vec![0], "the backup must not be reached once the primary is back");
     assert_eq!(rig.chain.active_index(), 0);
@@ -293,14 +293,14 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
     let primary = Fake::new("primary", &[Step::FailCold]).recovers(&[Recovery::NotYet]);
     let rig = rig(vec![Arc::clone(&primary)], ChainPolicy::tts_defaults());
 
-    let _ = run_once(&rig, RecoverySlot::Streaming).await;
+    let _ = run_once(&rig, RecoveryMode::Streaming).await;
     let opened = primary.opened.lock().expect("opened").clone();
     assert_eq!(opened.len(), 1);
     let limits =
         ApiConnectOptions { max_retry: 0, retry_interval: opened[0].retry_interval, ..caller() };
     assert_eq!(opened[0], limits, "the chain owns every retry; TTS keeps the caller's limits");
 
-    until("the probe to run", || primary.probe_count(RecoverySlot::Streaming) == 1).await;
+    until("the probe to run", || primary.probe_count(RecoveryMode::Streaming) == 1).await;
     let probes = primary.probes.lock().expect("probes").clone();
     assert_eq!(probes[0].1.max_retry, 0, "a probe must never retry internally");
 }
@@ -310,22 +310,22 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
 async fn the_two_recovery_slots_do_not_suppress_or_clobber_each_other() {
     let primary = Fake::new("primary", &[Step::FailCold])
         .recovers(&[Recovery::NotYet, Recovery::NotYet])
-        .shut(RecoverySlot::OneShot)
-        .shut(RecoverySlot::Streaming);
+        .shut(RecoveryMode::OneShot)
+        .shut(RecoveryMode::Streaming);
     let rig = rig(vec![Arc::clone(&primary)], ChainPolicy::stt_defaults());
 
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
-    until("the batch probe to park", || primary.probe_count(RecoverySlot::OneShot) == 1).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
+    until("the batch probe to park", || primary.probe_count(RecoveryMode::OneShot) == 1).await;
 
     // A batch probe is parked. The streaming path must still be probeable.
-    let _ = run_once(&rig, RecoverySlot::Streaming).await;
-    until("the streaming probe to park", || primary.probe_count(RecoverySlot::Streaming) == 1)
+    let _ = run_once(&rig, RecoveryMode::Streaming).await;
+    until("the streaming probe to park", || primary.probe_count(RecoveryMode::Streaming) == 1)
         .await;
 
     // A second request on the batch path must not start a second batch probe: one is live.
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
     tokio::task::yield_now().await;
-    assert_eq!(primary.probe_count(RecoverySlot::OneShot), 1, "one live probe per slot");
+    assert_eq!(primary.probe_count(RecoveryMode::OneShot), 1, "one live probe per slot");
 
     // Both handles must still be reachable, i.e. neither slot overwrote the other.
     rig.chain.aclose();
@@ -340,12 +340,12 @@ async fn when_everything_is_unavailable_every_entry_is_tried_anyway() {
     let b = Fake::new("b", &[Step::FailCold]).recovers(&[Recovery::NotYet]);
     let rig = rig(vec![Arc::clone(&a), b], ChainPolicy::llm_defaults());
 
-    let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
+    let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
     assert!(out.is_err());
     assert_eq!(drained, vec![0, 1]);
     assert_eq!(rig.rec.all_unavailable.load(Ordering::SeqCst), 0, "not yet: they were up on entry");
 
-    let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
+    let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
     assert_eq!(out.expect("a recovered on the retry-everything pass"), ChainOutcome::Served(0));
     assert_eq!(drained, vec![0], "a serves, so b is never reached");
     assert_eq!(rig.rec.all_unavailable.load(Ordering::SeqCst), 1);
@@ -358,13 +358,13 @@ async fn a_skipped_entry_is_still_probed() {
     let b = Fake::new("b", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&a), b], ChainPolicy::llm_defaults());
 
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
-    until("the first probe", || a.probe_count(RecoverySlot::OneShot) == 1).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
+    until("the first probe", || a.probe_count(RecoveryMode::OneShot) == 1).await;
 
     // `a` is now unavailable and will be skipped, not opened -- but must still be probed.
     let opens_before = a.opened.lock().expect("opened").len();
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
-    until("the second probe", || a.probe_count(RecoverySlot::OneShot) == 2).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
+    until("the second probe", || a.probe_count(RecoveryMode::OneShot) == 2).await;
     assert_eq!(a.opened.lock().expect("opened").len(), opens_before, "skipped means not opened");
 }
 
@@ -375,9 +375,9 @@ async fn aclose_refuses_later_probes() {
     let rig = rig(vec![Arc::clone(&a)], ChainPolicy::llm_defaults());
 
     rig.chain.aclose();
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
     tokio::task::yield_now().await;
-    assert_eq!(a.probe_count(RecoverySlot::OneShot), 0);
+    assert_eq!(a.probe_count(RecoveryMode::OneShot), 0);
 }
 
 // Catches: reading wall time for the exhaustion error's elapsed figure.
@@ -393,7 +393,7 @@ async fn the_exhaustion_error_measures_the_injected_clock() {
         rig.chain.run(
             &"req".to_string(),
             &caller(),
-            RecoverySlot::OneShot,
+            RecoveryMode::OneShot,
             &mut drained,
             move |i, _b, s, d| {
                 clock.advance(Duration::from_millis(1500));
@@ -424,12 +424,12 @@ async fn a_provider_that_fails_again_while_already_down_emits_nothing() {
     let b = Fake::new("b", &[Step::FailCold]).recovers(&verdicts);
     let rig = rig(vec![a, b], ChainPolicy::llm_defaults());
 
-    let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
+    let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
     assert!(out.is_err());
     assert_eq!(drained, vec![0, 1]);
 
     // Everything is down now, so this pass re-opens both and both fail a second time.
-    let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
+    let (out, drained) = run_once(&rig, RecoveryMode::OneShot).await;
     assert!(out.is_err());
     assert_eq!(drained, vec![0, 1], "all_failed tries everything again");
     assert_eq!(rig.rec.all_unavailable.load(Ordering::SeqCst), 1);
@@ -446,21 +446,21 @@ async fn a_provider_that_fails_again_while_already_down_emits_nothing() {
 async fn a_probe_that_finds_the_provider_already_back_announces_nothing() {
     let primary = Fake::new("primary", &[Step::FailCold])
         .recovers(&[Recovery::Recovered, Recovery::Recovered])
-        .shut(RecoverySlot::OneShot);
+        .shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&primary), backup], ChainPolicy::stt_defaults());
 
     // The batch path fails, so a batch probe is spawned -- and parks on its closed gate.
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
-    until("the batch probe to park", || primary.probe_count(RecoverySlot::OneShot) == 1).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
+    until("the batch probe to park", || primary.probe_count(RecoveryMode::OneShot) == 1).await;
     assert!(!rig.chain.is_available(0));
 
     // The streaming path probes the same provider and recovers it: that is the one transition.
-    let _ = run_once(&rig, RecoverySlot::Streaming).await;
+    let _ = run_once(&rig, RecoveryMode::Streaming).await;
     until("the streaming probe to bring the primary back", || rig.chain.is_available(0)).await;
 
     // Now release the parked batch probe. It also succeeds, against a flag already true.
-    primary.gate[RecoverySlot::OneShot as usize].add_permits(1);
+    primary.gate[RecoveryMode::OneShot as usize].add_permits(1);
     until("the batch probe to finish", || primary.probes_done.load(Ordering::SeqCst) == 2).await;
 
     assert_eq!(rig.rec.transitions(), vec![(0, false), (0, true)]);
@@ -533,7 +533,7 @@ async fn cancellation_is_not_a_backend_health_penalty() {
     let rig = rig(vec![primary.clone()], ChainPolicy::llm_defaults());
     let out: Result<ChainOutcome<()>, _> = rig
         .chain
-        .run(&"req".to_string(), &caller(), RecoverySlot::OneShot, &mut (), |_, _, _, _| {
+        .run(&"req".to_string(), &caller(), RecoveryMode::OneShot, &mut (), |_, _, _, _| {
             Box::pin(async {
                 Attempt::Failed {
                     error: ProviderError::Local(ApiError::status("cancelled", 499, None, None)),
@@ -560,7 +560,7 @@ async fn every_modality_fails_after_partial_output_without_replay() {
     {
         let backup = Fake::new("backup", &[Step::Serve]);
         let rig = rig(vec![Fake::new("primary", &[Step::FailHot]), backup.clone()], policy);
-        let (out, drained) = run_once(&rig, RecoverySlot::Streaming).await;
+        let (out, drained) = run_once(&rig, RecoveryMode::Streaming).await;
         assert!(out.is_err(), "partial output must retain its failure");
         assert_eq!(drained, vec![0]);
         assert!(backup.opened.lock().expect("opened").is_empty());
@@ -579,7 +579,7 @@ async fn recovery_probes_inherit_the_remaining_operation_deadline() {
         .run(
             &"request".to_owned(),
             &caller,
-            RecoverySlot::OneShot,
+            RecoveryMode::OneShot,
             &mut (),
             move |index, _, _, _| {
                 let clock = clock.clone();
@@ -605,12 +605,12 @@ async fn recovery_probes_inherit_the_remaining_operation_deadline() {
 async fn a_recovery_result_after_its_request_deadline_cannot_restore_health() {
     let primary = Fake::new("primary", &[Step::FailCold])
         .recovers(&[Recovery::Recovered])
-        .shut(RecoverySlot::OneShot);
+        .shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![primary.clone(), backup], ChainPolicy::tts_defaults());
     let caller = ApiConnectOptions { total_timeout: Some(1.0), ..caller() };
     rig.chain
-        .run(&"request".to_owned(), &caller, RecoverySlot::OneShot, &mut (), |index, _, _, _| {
+        .run(&"request".to_owned(), &caller, RecoveryMode::OneShot, &mut (), |index, _, _, _| {
             Box::pin(async move {
                 if index == 0 {
                     Attempt::Failed { error: boom(), produced_output: false }
@@ -682,7 +682,7 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
             ChainCall {
                 conn_options: ApiConnectOptions { total_timeout: Some(1.0), ..caller() },
                 accepted_at: clock.now(),
-                slot: RecoverySlot::OneShot,
+                slot: RecoveryMode::OneShot,
             },
             &mut state,
             stopped,
@@ -720,18 +720,18 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
 
 #[tokio::test]
 async fn repeated_backend_entries_share_one_recovery_probe() {
-    let primary = Fake::new("primary", &[Step::FailCold]).shut(RecoverySlot::OneShot);
+    let primary = Fake::new("primary", &[Step::FailCold]).shut(RecoveryMode::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![primary.clone(), primary.clone(), backup], ChainPolicy::llm_defaults());
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
-    until("the primary probe to park", || primary.probe_count(RecoverySlot::OneShot) == 1).await;
-    let _ = run_once(&rig, RecoverySlot::OneShot).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
+    until("the primary probe to park", || primary.probe_count(RecoveryMode::OneShot) == 1).await;
+    let _ = run_once(&rig, RecoveryMode::OneShot).await;
     tokio::task::yield_now().await;
     assert_eq!(
-        primary.probe_count(RecoverySlot::OneShot),
+        primary.probe_count(RecoveryMode::OneShot),
         1,
         "a backend has one probe per recovery slot, independent of list occurrences"
     );
-    primary.gate[RecoverySlot::OneShot as usize].add_permits(1);
+    primary.gate[RecoveryMode::OneShot as usize].add_permits(1);
     rig.chain.close().await;
 }

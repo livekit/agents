@@ -21,7 +21,7 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::RealClock;
 use lk_agents_inference::realtime::native::{
-    AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, NativeRealtime, OPENAI,
+    AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, WebSocketRealtime, OPENAI,
     OptionsPatch, SeqIds, XAI,
 };
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
@@ -32,7 +32,7 @@ use serde_json::json;
 /// rather than as a hung CI job.
 const BOUND: Duration = Duration::from_secs(5);
 
-async fn next_event(session: &lk_agents_inference::realtime::native::SessionHandle) -> Event {
+async fn next_event(session: &lk_agents_inference::realtime::native::WebSocketRealtimeSession) -> Event {
     tokio::time::timeout(BOUND, session.next_event())
         .await
         .expect("the driver produced no event within the bound")
@@ -55,8 +55,8 @@ async fn frames(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
     .unwrap_or_else(|_| panic!("expected {n} frames, saw {:?}", ws.sent()))
 }
 
-fn model(ws: Arc<FakeWs>, dialect: lk_agents_inference::realtime::Dialect) -> NativeRealtime {
-    <NativeRealtime>::new(
+fn model(ws: Arc<FakeWs>, dialect: lk_agents_inference::realtime::Dialect) -> WebSocketRealtime {
+    <WebSocketRealtime>::new(
         dialect,
         "sk-test",
         ws,
@@ -229,7 +229,7 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
     let ws = Arc::new(FakeWs::hanging());
     let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
     connect.conn.max_retry = 0;
-    let realtime = <NativeRealtime>::new(
+    let realtime = <WebSocketRealtime>::new(
         OPENAI,
         "sk-test",
         ws.clone(),
@@ -264,7 +264,7 @@ async fn a_send_that_stalls_fails_the_connection_within_the_write_timeout() {
     let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
     connect.conn.max_retry = 0;
     connect.conn.write_timeout = Some(3.0);
-    let realtime = <NativeRealtime>::new(
+    let realtime = <WebSocketRealtime>::new(
         OPENAI,
         "sk-test",
         ws.clone(),
@@ -299,7 +299,7 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     // Drop one established socket after the provider received its opening update.
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let realtime = <NativeRealtime>::new(
+    let realtime = <WebSocketRealtime>::new(
         OPENAI,
         "sk-test",
         ws.clone(),
@@ -434,7 +434,7 @@ async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_t
     connect.conn.max_retry = 0;
     connect.conn.write_timeout = Some(3.0);
     connect.conn.read_timeout = Some(1.0);
-    let realtime = <NativeRealtime>::new(
+    let realtime = <WebSocketRealtime>::new(
         OPENAI,
         "sk-test",
         ws,
@@ -523,7 +523,7 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
     let (release, wait) = std::sync::mpsc::channel();
     let (settled, done) = tokio::sync::oneshot::channel();
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let model = <NativeRealtime>::new(
+    let model = <WebSocketRealtime>::new(
         OPENAI,
         "sk",
         ws.clone(),
@@ -575,7 +575,7 @@ async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
     let mut connect = Connect::openai("sk", "https://api.openai.com/v1");
     connect.conn.total_timeout = Some(3.0);
     connect.conn.connect_timeout = Some(30.0);
-    let model = <NativeRealtime>::new(
+    let model = <WebSocketRealtime>::new(
         OPENAI,
         "sk",
         Arc::new(FakeWs::hanging()),
@@ -658,7 +658,7 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
         settled: Arc::default(),
         owner: Default::default(),
     });
-    let model = <NativeRealtime>::new(
+    let model = <WebSocketRealtime>::new(
         OPENAI,
         "sk",
         transport.clone(),
@@ -725,7 +725,7 @@ fn realtime_fallback_byte_budget_counts_retained_string_allocations() {
 #[tokio::test]
 async fn realtime_unsent_say_never_claims_a_proactive_server_response() {
     let ws = Arc::new(FakeWs::stalling_sends());
-    let model = <NativeRealtime>::new(
+    let model = <WebSocketRealtime>::new(
         XAI,
         "sk",
         ws.clone(),

@@ -33,7 +33,7 @@ use pump::Pump;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use stream::{DeferredExtra, SinkCmd, StreamControl};
-pub use stream::{SttSinkHandle, SttSourceHandle};
+pub use stream::{RecognitionInput, RecognitionOutput};
 
 use lk_agents_net::env::ProcessEnv;
 use tokio::sync::mpsc;
@@ -83,17 +83,17 @@ impl Default for SttOptions {
 /// One gateway STT client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job). `E` is the
 /// hosting process a host-constructed client takes its executor and clock from.
-pub struct NativeStt {
-    shared: Arc<SttShared>,
+pub struct GatewayStt {
+    shared: Arc<SttClient>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
     /// The host provider this view serves: its `error` event is each failure the core reports.
     reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
 }
 
-impl Clone for NativeStt {
+impl Clone for GatewayStt {
     fn clone(&self) -> Self {
-        NativeStt {
+        GatewayStt {
             shared: Arc::clone(&self.shared),
             identity: Arc::clone(&self.identity),
             conn_options: self.conn_options,
@@ -103,7 +103,7 @@ impl Clone for NativeStt {
 }
 
 /// What every session's view of one client shares: its options, connections and open streams.
-pub struct SttShared {
+pub struct SttClient {
     opts: Mutex<SttOptions>,
     capabilities: Mutex<SttCapabilities>,
     /// Framework-managed keyterms, merged into `extra` at connect and by `session.update`.
@@ -120,7 +120,7 @@ pub struct SttShared {
     live: Mutex<Vec<Weak<StreamControl>>>,
 }
 
-impl NativeStt {
+impl GatewayStt {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
@@ -128,7 +128,7 @@ impl NativeStt {
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let capabilities =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
-        let shared = SttShared {
+        let shared = SttClient {
             opts: Mutex::new(opts),
             capabilities: Mutex::new(capabilities),
             session_keyterms: Mutex::new(Vec::new()),
@@ -140,7 +140,7 @@ impl NativeStt {
             vad: Mutex::new(None),
             live: Mutex::new(Vec::new()),
         };
-        NativeStt {
+        GatewayStt {
             shared: Arc::new(shared),
             identity: Arc::default(),
             conn_options: None,
@@ -156,7 +156,7 @@ impl NativeStt {
         headers: Headers,
         reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
     ) -> Self {
-        let view = NativeStt {
+        let view = GatewayStt {
             shared: Arc::clone(&self.shared),
             identity: Arc::default(),
             conn_options: self.conn_options,
@@ -299,7 +299,7 @@ impl NativeStt {
         &self,
         language: Option<&str>,
         start_time_offset: f64,
-    ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
+    ) -> Result<(RecognitionInput, RecognitionOutput), ProviderError> {
         let opts = self.sanitize(language);
         opts.conn_options
             .validate()
@@ -349,8 +349,8 @@ impl NativeStt {
         });
 
         Ok((
-            SttSinkHandle { audio: audio_tx, control },
-            SttSourceHandle {
+            RecognitionInput { audio: audio_tx, control },
+            RecognitionOutput {
                 events: event_rx,
                 done: false,
                 stop,
@@ -363,9 +363,9 @@ impl NativeStt {
 }
 
 /// `_core.InferenceStt`: the generated adapter calls this.
-impl lk_agents_abi::stt::inference::InferenceStt for NativeStt {
-    type Audio = SttSinkHandle;
-    type Events = SttSourceHandle;
+impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
+    type Audio = RecognitionInput;
+    type Events = RecognitionOutput;
     type Env = ProcessEnv;
 
     fn new(
@@ -398,18 +398,18 @@ impl lk_agents_abi::stt::inference::InferenceStt for NativeStt {
             conn_options,
         };
         let stt =
-            NativeStt::new(opts, Arc::new(lk_agents_net::websocket::TungsteniteTransport), spawner)
+            GatewayStt::new(opts, Arc::new(lk_agents_net::websocket::TungsteniteTransport), spawner)
                 .with_clock(env.clock.clone());
         stt.set_vad(vad);
         Ok(stt)
     }
 
     fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
-        NativeStt::set_vad(self, vad);
+        GatewayStt::set_vad(self, vad);
     }
 
     fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Stt>>) -> Self {
-        NativeStt::identified(self, headers.into_iter().collect(), reporter)
+        GatewayStt::identified(self, headers.into_iter().collect(), reporter)
     }
 
     fn update_options(
@@ -418,7 +418,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for NativeStt {
         language: Option<String>,
         extra: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
-        NativeStt::update_options(self, model.as_deref(), language.as_deref(), extra.as_ref());
+        GatewayStt::update_options(self, model.as_deref(), language.as_deref(), extra.as_ref());
     }
 
     fn stream(
@@ -426,13 +426,13 @@ impl lk_agents_abi::stt::inference::InferenceStt for NativeStt {
         language: Option<String>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
+    ) -> Result<(RecognitionInput, RecognitionOutput), ProviderError> {
         self.configured(conn_options)
             .stream_native(language.as_deref(), start_time_offset.unwrap_or(0.0))
     }
 }
 
-impl Stt for NativeStt {
+impl Stt for GatewayStt {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

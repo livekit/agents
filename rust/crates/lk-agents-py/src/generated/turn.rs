@@ -35,7 +35,7 @@ impl InferenceEot {
         let model = crate::generated::records::turn_events::turn_detector_model_from_py(&model)?;
         let overrides = overrides.map(|v| crate::generated::records::turn_events::threshold_override_from_py(&v)).transpose()?;
         let backchannel_overrides = backchannel_overrides.map(|v| crate::generated::records::turn_events::threshold_override_from_py(&v)).transpose()?;
-        let local_model = crate::generated::turn::EotModelsProxy::from_host(&local_model)?;
+        let local_model = crate::generated::turn::EotModelFactoryProxy::from_host(&local_model)?;
         let on_metrics = on_metrics.map(|v| crate::generated::turn::EotMetricsObserverProxy::from_host(&v)).transpose()?;
         let out = <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::new(&env, model, overrides, backchannel_overrides, local_fallback, base_url, api_key, api_secret, sample_rate, local_model, on_metrics);
         Ok(InferenceEot(::std::sync::Arc::new(out)))
@@ -420,45 +420,45 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/turn/inference.rs.
 
-/// [`::lk_agents_abi::turn::inference::EotModels`] over a host `collections.abc.Callable`.
+/// [`::lk_agents_abi::turn::inference::EotModelFactory`] over a host `collections.abc.Callable`.
 #[derive(Clone)]
-pub struct EotModelsProxy {
+pub struct EotModelFactoryProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
 }
 
-impl EotModelsProxy {
+impl EotModelFactoryProxy {
     /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModels>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModels>(obj) {
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
     }
 
     /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModels>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModels>(obj) {
+    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
     }
 
     /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModels>> {
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
     fn take(obj: &Bound<'_, PyAny>, context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>) -> PyResult<Self> {
         let _ = context;
-        Ok(EotModelsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+        Ok(EotModelFactoryProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 
 ::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::turn::inference::EotModels>(|obj| EotModelsProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(|obj| EotModelFactoryProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-impl ::lk_agents_abi::turn::inference::EotModels for EotModelsProxy {
+impl ::lk_agents_abi::turn::inference::EotModelFactory for EotModelFactoryProxy {
     fn create(&self) -> ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>, ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {

@@ -87,7 +87,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
                 entered.send(()).unwrap();
                 with_host_lock(|| ());
             }
-            TransportShell::mount(model.as_str(), thresholds.clone(), |sink| {
+            MountedTransport::mount(model.as_str(), thresholds.clone(), |sink| {
                 if model == TurnDetectorModel::V1 {
                     Arc::new(CloudFailure(trigger.clone())) as Arc<dyn EotTransport>
                 } else {
@@ -215,7 +215,7 @@ async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_n
     let model = Arc::new(Model(Arc::clone(&seen)));
     let make: TransportFactory = Arc::new(move |m: TurnDetectorModel| {
         let model = Arc::clone(&model) as Arc<dyn LocalEotModel>;
-        TransportShell::mount(m.as_str(), Arc::clone(&shared), move |sink| match m {
+        MountedTransport::mount(m.as_str(), Arc::clone(&shared), move |sink| match m {
             TurnDetectorModel::V1 => Arc::new(DyingTransport) as Arc<dyn EotTransport>,
             _ => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
         })
@@ -272,7 +272,7 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
         let constructed = constructions.clone();
         let make: TransportFactory = Arc::new(move |model| {
             constructed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            TransportShell::mount(model.as_str(), shared.clone(), |sink| {
+            MountedTransport::mount(model.as_str(), shared.clone(), |sink| {
                 Arc::new(LocalTransport::new(Arc::new(Model(Arc::default())), sink))
             })
         });

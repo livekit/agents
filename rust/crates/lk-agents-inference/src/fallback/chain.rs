@@ -52,7 +52,7 @@ pub trait Backend: Send + Sync + 'static {
         &self,
         req: &Self::Req,
         conn: &ApiConnectOptions,
-        slot: RecoverySlot,
+        slot: RecoveryMode,
         stop: watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError>;
 }
@@ -64,7 +64,7 @@ pub enum Recovery {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RecoverySlot {
+pub enum RecoveryMode {
     OneShot = 0,
     Streaming = 1,
 }
@@ -73,7 +73,7 @@ pub enum RecoverySlot {
 pub(crate) struct ChainCall {
     pub conn_options: ApiConnectOptions,
     pub accepted_at: Ts,
-    pub slot: RecoverySlot,
+    pub slot: RecoveryMode,
 }
 
 pub enum Attempt<T> {
@@ -255,7 +255,7 @@ impl<B: Backend> FallbackChain<B> {
         &self,
         req: &B::Req,
         caller_conn: &ApiConnectOptions,
-        slot: RecoverySlot,
+        slot: RecoveryMode,
         state: &mut S,
         attempt: F,
     ) -> Result<ChainOutcome<T>, ProviderError>
@@ -523,7 +523,7 @@ impl<B: Backend> FallbackChain<B> {
     pub fn try_recovery(
         &self,
         index: usize,
-        slot: RecoverySlot,
+        slot: RecoveryMode,
         req: &B::Req,
         conn: &ApiConnectOptions,
         deadline: Option<Ts>,

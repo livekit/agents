@@ -1,7 +1,7 @@
 //! `stt/fallback_adapter.py`. Streaming recovery is a live tee, not a replayed request: the probe
 //! hears a copy of the live audio (`stt:341-361`) and recovers on a non-empty `FINAL_TRANSCRIPT`
 //! (`stt:456-466`), so [`Backend::Req`] carries an [`InputTee`]. One availability flag serves two
-//! recovery slots, hence one [`FallbackChain`] with a [`RecoverySlot`] argument. Each attempt binds the resolved policy immediately before opening its provider.
+//! recovery slots, hence one [`FallbackChain`] with a [`RecoveryMode`] argument. Each attempt binds the resolved policy immediately before opening its provider.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
-    RecoverySlot,
+    RecoveryMode,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next};
 
@@ -269,7 +269,7 @@ impl Backend for SttBackend {
         &self,
         req: &Self::Req,
         conn: &ApiConnectOptions,
-        slot: RecoverySlot,
+        slot: RecoveryMode,
         mut stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
@@ -538,7 +538,7 @@ impl Stt for FallbackStt {
                 .run(
                     &req,
                     &self.caller_conn,
-                    RecoverySlot::OneShot,
+                    RecoveryMode::OneShot,
                     &mut unused,
                     |_i, _b, session, _s| {
                         Box::pin(async move {
@@ -578,7 +578,7 @@ impl Stt for FallbackStt {
             let call = ChainCall {
                 conn_options: self.caller_conn,
                 accepted_at: opened,
-                slot: RecoverySlot::Streaming,
+                slot: RecoveryMode::Streaming,
             };
             let tee_for_task = Arc::clone(&tee);
 

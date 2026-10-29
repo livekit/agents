@@ -13,7 +13,7 @@ use crate::{ApiConnectOptions, AudioFrame, EotPrediction};
 /// The host's mini model factory (`livekit.local_inference.EOT`), called when a stream mounts the
 /// mini model. Never called when the model is native.
 #[crate::host(proxy(host = "collections.abc.Callable"))]
-pub trait EotModels: Send + Sync {
+pub trait EotModelFactory: Send + Sync {
     #[host(call, name = "__call__")]
     fn create(&self) -> Result<Arc<dyn EotModel>, HostError>;
 }
@@ -59,7 +59,7 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
         api_key: String,
         api_secret: String,
         sample_rate: u32,
-        local_model: Arc<dyn EotModels>,
+        local_model: Arc<dyn EotModelFactory>,
         #[host(default = None)] on_metrics: Option<Arc<dyn EotMetricsObserver>>,
     ) -> Self;
 

@@ -434,7 +434,7 @@ mod tests {
 
 /// A session is a socket that outlives every turn, so the driver opens one per agent frame.
 /// `async fn session` because the reference's session starts running in its constructor.
-#[crate::host(native(refused = "expected NativeRealtime"))]
+#[crate::host(native(refused = "expected NativeRealtimeModel"))]
 pub trait Realtime: Send + Sync + 'static {
     /// The host model's identity; `None` for a native model.
     fn instance_id(&self) -> Option<usize> {

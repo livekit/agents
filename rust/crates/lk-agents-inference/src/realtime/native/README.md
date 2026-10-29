@@ -38,5 +38,5 @@ Admission defaults:
 Codec and image work uses the process worker service. The state machine performs no
 serialization, image resolution, base64 conversion, resampling, or transport I/O.
 
-`SessionHandle.cleanup_observation()` reads the reserved typed cleanup diagnostic. An incomplete
+`WebSocketRealtimeSession.cleanup_observation()` reads the reserved typed cleanup diagnostic. An incomplete
 close keeps ownership until transport settlement and does not raise a provider error.
