@@ -62,6 +62,11 @@ A TTS stream (`tts.stream()`) takes text through `push_text()`, `flush()` and
 without ending its input. Provider cancellation ends
 the request without retry or a provider-health penalty.
 
+After its input ends, an inference STT stream completes when the provider
+acknowledges the end, or after a quiet period: 3 seconds after a final
+transcript, 30 seconds after the input ended or after a later interim
+transcript. A transcript that arrives after the quiet period is dropped.
+
 A concurrent pull of a provider stream raises `StreamStateError` without
 disturbing its accepted pull. `aclose()` requests cancellation and waits for
 bounded cleanup. A cleanup deadline leaves the framework responsible for
